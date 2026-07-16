@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	agentmodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agent"
+	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentgrpc"
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/nativeagent"
 )
 
@@ -14,6 +15,29 @@ type NativeAgentRunner interface {
 	Apply(context.Context, string) error
 	Invoke(context.Context, string, map[string]any) (map[string]any, error)
 	Stream(context.Context, string, map[string]any, func(nativeagent.Event) error) error
+}
+
+type ClosableNativeAgentRunner interface {
+	NativeAgentRunner
+	Close() error
+}
+
+type AgentGRPCConfig struct {
+	Target         string
+	CAFile         string
+	ServerName     string
+	ServiceKeyFile string
+	OwnerID        string
+}
+
+// NewAgentGRPCChatRunner is the public construction seam for setup. The
+// implementation remains in p2p/internal and is routed only through the
+// dedicated NativeAgentChatRunner field.
+func NewAgentGRPCChatRunner(ctx context.Context, config AgentGRPCConfig) (ClosableNativeAgentRunner, error) {
+	return agentgrpc.New(ctx, agentgrpc.Config{
+		Target: config.Target, CAFile: config.CAFile, ServerName: config.ServerName,
+		ServiceKeyFile: config.ServiceKeyFile, OwnerID: config.OwnerID,
+	})
 }
 
 // serviceAgentAccountPort retains Service-owned locking, Matrix sessions and

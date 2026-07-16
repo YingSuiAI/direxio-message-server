@@ -24,22 +24,27 @@ type Runner interface {
 
 // Config contains the runtime dependencies owned outside the Agent module.
 type Config struct {
-	Runner  Runner
-	DataDir string
-	Store   nativeagent.ConfigStore
-	MCP     *dirextalkmcp.Service
-	Account AccountPort
-	Turns   agentturns.Store
-	OwnerID func() string
+	Runner Runner
+	// ChatRunner optionally moves only Chat/StreamChat to an isolated Agent
+	// service while the remaining runtime/config/Skill/Knowledge actions stay
+	// on Runner until their public contracts are migrated.
+	ChatRunner Runner
+	DataDir    string
+	Store      nativeagent.ConfigStore
+	MCP        *dirextalkmcp.Service
+	Account    AccountPort
+	Turns      agentturns.Store
+	OwnerID    func() string
 }
 
 // Module owns runtime-backed ProductCore actions and streaming invocation.
 type Module struct {
-	runner  Runner
-	account AccountPort
-	turns   *agentturns.Coordinator
-	turnErr error
-	ownerID func() string
+	runner     Runner
+	chatRunner Runner
+	account    AccountPort
+	turns      *agentturns.Coordinator
+	turnErr    error
+	ownerID    func() string
 }
 
 func New(cfg Config) *Module {
@@ -51,8 +56,15 @@ func New(cfg Config) *Module {
 			Tools:   Tools(cfg.MCP),
 		})}
 	}
+	chatRunner := cfg.ChatRunner
+	if chatRunner == nil {
+		chatRunner = runner
+	}
 	turns, turnErr := agentturns.NewCoordinator(context.Background(), cfg.Turns)
-	return &Module{runner: runner, account: cfg.Account, turns: turns, turnErr: turnErr, ownerID: cfg.OwnerID}
+	return &Module{
+		runner: runner, chatRunner: chatRunner, account: cfg.Account,
+		turns: turns, turnErr: turnErr, ownerID: cfg.OwnerID,
+	}
 }
 
 // Handlers returns the complete Agent ProductCore action surface.
@@ -81,14 +93,14 @@ func (m *Module) ReadyError() error {
 // Stream invokes a runtime streaming action after the websocket adapter has
 // established its connection-scoped cancellation and frame writer.
 func (m *Module) Stream(ctx context.Context, action string, params map[string]any, emit func(nativeagent.Event) error) error {
-	if m == nil || m.runner == nil {
+	if m == nil || m.chatRunner == nil {
 		return fmt.Errorf("native agent runtime is not configured")
 	}
-	return m.runner.Stream(ctx, strings.TrimSpace(action), cloneMap(params), emit)
+	return m.chatRunner.Stream(ctx, strings.TrimSpace(action), cloneMap(params), emit)
 }
 
 func (m *Module) DurableStream(ctx context.Context, ownerID, action string, params map[string]any, emit func(agentturns.StreamEvent) error) error {
-	if m == nil || m.runner == nil || m.turns == nil {
+	if m == nil || m.chatRunner == nil || m.turns == nil {
 		return fmt.Errorf("native agent turn coordinator is not configured")
 	}
 	turnID := actionbase.String(params["turn_id"])
@@ -104,7 +116,7 @@ func (m *Module) DurableStream(ctx context.Context, ownerID, action string, para
 	runParams := cloneMap(params)
 	delete(runParams, "after_seq")
 	return m.turns.Stream(ctx, request, func(runCtx context.Context, runtimeEmit func(agentturns.RuntimeEvent) error) error {
-		return m.runner.Stream(runCtx, request.Action, runParams, func(event nativeagent.Event) error {
+		return m.chatRunner.Stream(runCtx, request.Action, runParams, func(event nativeagent.Event) error {
 			return runtimeEmit(agentturns.RuntimeEvent{Event: event.Event, Data: event.Data})
 		})
 	}, emit)
@@ -173,15 +185,26 @@ func turnResponse(turn agentturns.Turn) map[string]any {
 
 func (m *Module) invoke(action string) actionbase.Handler {
 	return func(ctx context.Context, params map[string]any) (any, *actionbase.Error) {
-		if m == nil || m.runner == nil {
+		runner := m.runnerForAction(action)
+		if runner == nil {
 			return nil, actionbase.StatusError(http.StatusBadGateway, "native agent runtime is not configured")
 		}
-		result, err := m.runner.Invoke(ctx, strings.TrimSpace(action), cloneMap(params))
+		result, err := runner.Invoke(ctx, strings.TrimSpace(action), cloneMap(params))
 		if err != nil {
 			return nil, actionbase.StatusError(http.StatusBadGateway, err.Error())
 		}
 		return result, nil
 	}
+}
+
+func (m *Module) runnerForAction(action string) Runner {
+	if m == nil {
+		return nil
+	}
+	if strings.TrimSpace(action) == "agent.chat" {
+		return m.chatRunner
+	}
+	return m.runner
 }
 
 func streamOnly(context.Context, map[string]any) (any, *actionbase.Error) {

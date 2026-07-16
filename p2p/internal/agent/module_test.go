@@ -7,6 +7,7 @@ import (
 	"github.com/YingSuiAI/dirextalk-message-server/internal/dirextalkdomain"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/dirextalkmcp"
 	actionbase "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/action"
+	"github.com/YingSuiAI/dirextalk-message-server/p2p/nativeagent"
 )
 
 type recordingMCPInvoker struct {
@@ -49,6 +50,49 @@ func TestRuntimeActionsUseConfiguredMCPService(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDedicatedChatRunnerDoesNotTakeOverOtherRuntimeActions(t *testing.T) {
+	local := &recordingRunner{result: map[string]any{"source": "local"}}
+	remote := &recordingRunner{result: map[string]any{"source": "remote"}}
+	module := New(Config{Runner: local, ChatRunner: remote})
+
+	chat, actionErr := module.Handlers()["agent.chat"](context.Background(), map[string]any{"prompt": "hello"})
+	if actionErr != nil || chat.(map[string]any)["source"] != "remote" {
+		t.Fatalf("agent.chat = %#v, %v", chat, actionErr)
+	}
+	models, actionErr := module.Handlers()["agent.models.list"](context.Background(), nil)
+	if actionErr != nil || models.(map[string]any)["source"] != "local" {
+		t.Fatalf("agent.models.list = %#v, %v", models, actionErr)
+	}
+	if len(remote.invokes) != 1 || remote.invokes[0] != "agent.chat" || len(local.invokes) != 1 || local.invokes[0] != "agent.models.list" {
+		t.Fatalf("runner routing local=%v remote=%v", local.invokes, remote.invokes)
+	}
+
+	if err := module.Stream(context.Background(), "agent.chat.stream", map[string]any{"prompt": "hello"}, func(nativeagent.Event) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if len(remote.streams) != 1 || remote.streams[0] != "agent.chat.stream" || len(local.streams) != 0 {
+		t.Fatalf("stream routing local=%v remote=%v", local.streams, remote.streams)
+	}
+}
+
+type recordingRunner struct {
+	result  map[string]any
+	invokes []string
+	streams []string
+}
+
+func (*recordingRunner) Apply(context.Context, string) error { return nil }
+
+func (runner *recordingRunner) Invoke(_ context.Context, action string, _ map[string]any) (map[string]any, error) {
+	runner.invokes = append(runner.invokes, action)
+	return runner.result, nil
+}
+
+func (runner *recordingRunner) Stream(_ context.Context, action string, _ map[string]any, emit func(nativeagent.Event) error) error {
+	runner.streams = append(runner.streams, action)
+	return emit(nativeagent.Event{Event: "done", Data: runner.result})
 }
 
 type recordingAccountPort struct {

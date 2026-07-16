@@ -51,9 +51,13 @@ type Config struct {
 	RealtimeSessions                *realtime.SessionStore
 	PluginRunner                    PluginRunner
 	NativeAgentRunner               NativeAgentRunner
-	NativeAgentDataDir              string
-	ReleaseController               releasecontrol.Controller
-	CentralVersionSource            releasecontrol.CentralVersionSource
+	// NativeAgentChatRunner delegates only Chat/StreamChat to the independent
+	// Agent service. All other Agent actions continue to use NativeAgentRunner
+	// or the existing local runtime.
+	NativeAgentChatRunner NativeAgentRunner
+	NativeAgentDataDir    string
+	ReleaseController     releasecontrol.Controller
+	CentralVersionSource  releasecontrol.CentralVersionSource
 }
 
 const (
@@ -814,13 +818,14 @@ func newService(cfg Config, store Store, transport Transport, state portalState,
 	})
 	service.mcpCapabilities = service.mcpModule.Service()
 	service.agentModule = agentmodule.New(agentmodule.Config{
-		Runner:  cfg.NativeAgentRunner,
-		DataDir: cfg.NativeAgentDataDir,
-		Store:   nativeAgentConfigStore{service: service},
-		MCP:     service.mcpCapabilities,
-		Account: serviceAgentAccountPort{service: service},
-		Turns:   service.store,
-		OwnerID: service.OwnerMXID,
+		Runner:     cfg.NativeAgentRunner,
+		ChatRunner: cfg.NativeAgentChatRunner,
+		DataDir:    cfg.NativeAgentDataDir,
+		Store:      nativeAgentConfigStore{service: service},
+		MCP:        service.mcpCapabilities,
+		Account:    serviceAgentAccountPort{service: service},
+		Turns:      service.store,
+		OwnerID:    service.OwnerMXID,
 	})
 	service.actions = service.actionHandlers()
 	service.realtimeModule = realtimewsmodule.New(realtimewsmodule.Dependencies{

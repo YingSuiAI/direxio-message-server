@@ -73,6 +73,29 @@ func TestNativeAgentActionsAreOwnerOnlyAndCallNativeRuntimeDirectly(t *testing.T
 	}
 }
 
+func TestNativeAgentChatUsesDedicatedRemoteRunnerWithoutTakingOverRuntimeActions(t *testing.T) {
+	localRunner := &recordingNativeAgentRunner{}
+	chatRunner := &recordingNativeAgentRunner{}
+	service := NewService(Config{
+		ServerName:            "example.com",
+		NativeAgentRunner:     localRunner,
+		NativeAgentChatRunner: chatRunner,
+	})
+
+	if _, apiErr := service.Handle(context.Background(), "agent.chat", map[string]any{"prompt": "hello"}); apiErr != nil {
+		t.Fatalf("dedicated Chat Runner failed: %#v", apiErr)
+	}
+	if _, apiErr := service.Handle(context.Background(), "agent.models.list", nil); apiErr != nil {
+		t.Fatalf("local runtime action failed: %#v", apiErr)
+	}
+	if len(chatRunner.invokes) != 1 || chatRunner.invokes[0].Action != "agent.chat" {
+		t.Fatalf("Chat must use the dedicated Runner, got %#v", chatRunner.invokes)
+	}
+	if len(localRunner.invokes) != 1 || localRunner.invokes[0].Action != "agent.models.list" {
+		t.Fatalf("non-Chat action must remain local, got %#v", localRunner.invokes)
+	}
+}
+
 func TestNativeAgentIsNotManagedAsPlugin(t *testing.T) {
 	runner := &recordingPluginRunner{}
 	service := NewService(Config{ServerName: "example.com", PluginRunner: runner, NativeAgentRunner: &recordingNativeAgentRunner{}})
@@ -258,10 +281,14 @@ func hasNestedKey(value any, key string) bool {
 	return false
 }
 
-func TestNativeAgentRealtimeStreamFramesUseNativeRuntime(t *testing.T) {
+func TestNativeAgentRealtimeStreamFramesUseDedicatedChatRunner(t *testing.T) {
 	dockerRunner := &recordingPluginRunner{}
-	nativeRunner := &recordingNativeAgentRunner{}
-	service := NewService(Config{ServerName: "example.com", PluginRunner: dockerRunner, NativeAgentRunner: nativeRunner})
+	localRunner := &recordingNativeAgentRunner{}
+	chatRunner := &recordingNativeAgentRunner{}
+	service := NewService(Config{
+		ServerName: "example.com", PluginRunner: dockerRunner,
+		NativeAgentRunner: localRunner, NativeAgentChatRunner: chatRunner,
+	})
 	router := newP2PTestRouter(service)
 	server := httptest.NewServer(router)
 	defer server.Close()
@@ -289,8 +316,53 @@ func TestNativeAgentRealtimeStreamFramesUseNativeRuntime(t *testing.T) {
 	if len(dockerRunner.streams) != 0 {
 		t.Fatalf("native stream must not reach docker plugin runner, got %#v", dockerRunner.streams)
 	}
-	if len(nativeRunner.streams) != 1 || nativeRunner.streams[0].Action != "agent.chat.stream" {
-		t.Fatalf("expected direct native runtime stream call, got %#v", nativeRunner.streams)
+	if len(chatRunner.streams) != 1 || chatRunner.streams[0].Action != "agent.chat.stream" {
+		t.Fatalf("expected dedicated Chat stream call, got %#v", chatRunner.streams)
+	}
+	if len(localRunner.streams) != 0 {
+		t.Fatalf("remote Chat stream must not also execute locally, got %#v", localRunner.streams)
+	}
+}
+
+func TestNativeAgentDurableStreamUsesDedicatedChatRunner(t *testing.T) {
+	localRunner := &recordingNativeAgentRunner{}
+	chatRunner := &recordingNativeAgentRunner{}
+	service := NewService(Config{
+		ServerName: "example.com", NativeAgentRunner: localRunner, NativeAgentChatRunner: chatRunner,
+	})
+	router := newP2PTestRouter(service)
+	server := httptest.NewServer(router)
+	defer server.Close()
+	conn := dialRealtimeWS(t, server.URL, mustCreateRealtimeWSTicket(t, router, service.AccessToken()))
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	writeRealtimeFrame(t, conn, map[string]any{"type": "client.hello"})
+	if got := readRealtimeFrame(t, conn); got["type"] != "server.ready" {
+		t.Fatalf("expected ready, got %#v", got)
+	}
+	writeRealtimeFrame(t, conn, map[string]any{
+		"type": "client.native_agent_stream", "id": "durable-native-stream", "action": "agent.chat",
+		"params": map[string]any{
+			"prompt": "hello", "turn_id": "turn-remote-1", "conversation_id": "conversation-remote-1",
+		},
+	})
+	accepted := readRealtimeFrame(t, conn)
+	if accepted["type"] != "server.native_agent_stream.accepted" || accepted["turn_id"] != "turn-remote-1" {
+		t.Fatalf("expected durable stream acceptance, got %#v", accepted)
+	}
+	delta := readRealtimeFrame(t, conn)
+	if delta["type"] != "server.native_agent_stream.event" || delta["event"] != "delta" {
+		t.Fatalf("expected durable stream delta, got %#v", delta)
+	}
+	done := readRealtimeFrame(t, conn)
+	if done["type"] != "server.native_agent_stream.event" || done["event"] != "done" {
+		t.Fatalf("expected durable stream completion, got %#v", done)
+	}
+	if len(chatRunner.streams) != 1 || chatRunner.streams[0].Action != "agent.chat.stream" {
+		t.Fatalf("durable stream must use dedicated Chat Runner, got %#v", chatRunner.streams)
+	}
+	if len(localRunner.streams) != 0 {
+		t.Fatalf("durable remote Chat must not execute locally, got %#v", localRunner.streams)
 	}
 }
 
