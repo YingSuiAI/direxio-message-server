@@ -261,7 +261,7 @@ func (*Runner) requestFields(params map[string]any) (chatRequestFields, error) {
 func validateLegacyCompatibilityEnvelope(params map[string]any) error {
 	for key, value := range params {
 		switch key {
-		case "prompt", "message", "owner_id", "conversation_id", "idempotency_key", "model_profile_id":
+		case "prompt", "message", "owner_id", "conversation_id", "idempotency_key":
 			if _, ok := value.(string); !ok {
 				return errUnrepresentableChatParameters
 			}
@@ -271,15 +271,20 @@ func validateLegacyCompatibilityEnvelope(params map[string]any) error {
 			}
 		case "expected_conversation_revision":
 			// Parsed below without coercing strings or fractional JSON numbers.
-		case "conversation_context", "model_profile":
-			// These legacy envelopes may contain history or request-scoped model
-			// credentials. The independent Agent owns both concerns, so validate
-			// only the outer type and never inspect, copy, or serialize the values.
+		case "conversation_context":
+			// Legacy history remains a local-Runner compatibility input. The
+			// independent Agent owns durable conversation state, so validate only
+			// the outer type and never inspect, copy, or serialize the value.
 			if value != nil {
 				if _, ok := value.(map[string]any); !ok {
 					return errUnrepresentableChatParameters
 				}
 			}
+		case "model_profile_id", "model_profile":
+			// P3-R1 stores the selected immutable profile in Agent runtime config.
+			// Reject legacy request-scoped profiles at the Message Server boundary
+			// so model credentials never enter the remote Chat path.
+			return errUnrepresentableChatParameters
 		case "cloud_dialogue_mode", "knowledge_enabled":
 			enabled, ok := value.(bool)
 			if !ok || enabled {

@@ -23,6 +23,23 @@ func (*testAgentGRPCRunner) Stream(context.Context, string, map[string]any, func
 	return nil
 }
 func (*testAgentGRPCRunner) Close() error { return nil }
+func (*testAgentGRPCRunner) GetRuntimeProfile(context.Context) (p2p.AgentRuntimeProfileState, error) {
+	return p2p.AgentRuntimeProfileState{}, nil
+}
+func (*testAgentGRPCRunner) UpdateRuntimeProfile(context.Context, p2p.AgentRuntimeProfileUpdate) (p2p.AgentRuntimeProfileState, error) {
+	return p2p.AgentRuntimeProfileState{}, nil
+}
+
+type chatOnlyAgentGRPCRunner struct{}
+
+func (*chatOnlyAgentGRPCRunner) Apply(context.Context, string) error { return nil }
+func (*chatOnlyAgentGRPCRunner) Invoke(context.Context, string, map[string]any) (map[string]any, error) {
+	return map[string]any{}, nil
+}
+func (*chatOnlyAgentGRPCRunner) Stream(context.Context, string, map[string]any, func(nativeagent.Event) error) error {
+	return nil
+}
+func (*chatOnlyAgentGRPCRunner) Close() error { return nil }
 
 func TestP2PDatabaseOptionsUseGlobalDatabaseWhenConfigured(t *testing.T) {
 	cfg := &config.Dendrite{}
@@ -146,6 +163,10 @@ func TestP2PAgentGRPCBackendBuildsChatOnlyRunnerWithTrustedOwner(t *testing.T) {
 	if err != nil || runner != wantRunner {
 		t.Fatalf("remote Chat Runner=%v err=%v", runner, err)
 	}
+	runtimeProfileClient, err := p2pAgentRuntimeProfileClient(config, runner)
+	if err != nil || runtimeProfileClient != wantRunner {
+		t.Fatalf("remote runtime profile client=%v err=%v", runtimeProfileClient, err)
+	}
 	if received.Target != "dns:///agent.internal:7443" || received.CAFile != caFile || received.ServerName != "agent.internal" ||
 		received.ServiceKeyFile != serviceKeyFile || received.OwnerID != "dirextalk-project:example.com" {
 		t.Fatalf("Agent dial config=%#v", received)
@@ -157,6 +178,9 @@ func TestP2PAgentGRPCBackendBuildsChatOnlyRunnerWithTrustedOwner(t *testing.T) {
 	})
 	if err == nil || strings.Contains(err.Error(), factoryCanary) {
 		t.Fatalf("factory failure was not fail-closed and redacted: %v", err)
+	}
+	if _, err = p2pAgentRuntimeProfileClient(config, &chatOnlyAgentGRPCRunner{}); err == nil {
+		t.Fatal("enabled Agent backend accepted a Runner without runtime profile capability")
 	}
 }
 

@@ -9,7 +9,6 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
-	"fmt"
 	"math/big"
 	"net"
 	"os"
@@ -49,8 +48,6 @@ func TestRunnerChatUsesTLS13MountedAuthenticationAndBoundOwner(t *testing.T) {
 		},
 		"memory_disabled":                true,
 		"expected_conversation_revision": 7,
-		"model_profile_id":               "deepseek:deepseek-v4-pro",
-		"model_profile":                  map[string]any{"api_key": modelProfileCanary, "provider": "must-be-ignored"},
 		"cloud_dialogue_mode":            false,
 	})
 	if err != nil {
@@ -69,12 +66,8 @@ func TestRunnerChatUsesTLS13MountedAuthenticationAndBoundOwner(t *testing.T) {
 	if _, err := uuid.Parse(request.GetIdempotencyKey()); err != nil {
 		t.Fatalf("generated idempotency key is not a UUID: %q", request.GetIdempotencyKey())
 	}
-	if strings.Contains(request.String(), modelProfileCanary) || strings.Contains(request.String(), "must-be-ignored") ||
-		strings.Contains(request.String(), "legacy summary") || strings.Contains(request.String(), "legacy message") {
-		t.Fatal("legacy model profile crossed the Agent service boundary")
-	}
-	if strings.Contains(fmt.Sprint(result), modelProfileCanary) {
-		t.Fatal("legacy model credential was copied into the Agent result")
+	if strings.Contains(request.String(), "legacy summary") || strings.Contains(request.String(), "legacy message") {
+		t.Fatal("legacy conversation context crossed the Agent service boundary")
 	}
 	if authorization != "DTX-Service-Key "+testServiceKey {
 		t.Fatal("mounted service key was not sent as the required authorization metadata")
@@ -133,7 +126,7 @@ func TestRunnerRedactsServiceErrorsAndSecrets(t *testing.T) {
 	server := startRuntimeServer(t)
 	runner := newTestRunner(t, server, Config{})
 	_, err := runner.Invoke(context.Background(), "agent.chat", map[string]any{
-		"prompt": "fail", "model_profile": map[string]any{"api_key": modelProfileCanary},
+		"prompt": "fail",
 	})
 	if err == nil {
 		t.Fatal("expected service failure")
@@ -163,6 +156,8 @@ func TestRunnerFailsClosedForUnrepresentableLegacyParameters(t *testing.T) {
 		{"messages": []any{map[string]any{"role": "user", "content": "hello"}}},
 		{"prompt": "hello", "system_prompt": "override"},
 		{"prompt": "hello", "enabled_tools": []any{"all"}},
+		{"prompt": "hello", "model_profile_id": "deepseek:deepseek-v4-pro"},
+		{"prompt": "hello", "model_profile": map[string]any{"api_key": modelProfileCanary}},
 	} {
 		_, err := runner.Invoke(context.Background(), "agent.chat", params)
 		if err == nil || err.Error() != "agent chat parameters cannot be represented by the remote runtime contract" {
@@ -244,13 +239,18 @@ func TestNewFailsClosedForInvalidSecurityConfiguration(t *testing.T) {
 
 type runtimeTestService struct {
 	agentv1.UnimplementedRuntimeServiceServer
-	mu             sync.Mutex
-	chatRequest    *agentv1.ChatRequest
-	authorization  string
-	deadlineSet    bool
-	tlsVersion     uint16
-	cancelStarted  chan struct{}
-	cancelObserved chan struct{}
+	mu                   sync.Mutex
+	chatRequest          *agentv1.ChatRequest
+	runtimeConfigRequest *agentv1.GetRuntimeConfigRequest
+	putRuntimeRequest    *agentv1.PutRuntimeConfigRequest
+	getCapabilities      func(*agentv1.RuntimeServiceGetCapabilitiesRequest) (*agentv1.RuntimeServiceGetCapabilitiesResponse, error)
+	getRuntimeConfig     func(*agentv1.GetRuntimeConfigRequest) (*agentv1.GetRuntimeConfigResponse, error)
+	putRuntimeConfig     func(*agentv1.PutRuntimeConfigRequest) (*agentv1.PutRuntimeConfigResponse, error)
+	authorization        string
+	deadlineSet          bool
+	tlsVersion           uint16
+	cancelStarted        chan struct{}
+	cancelObserved       chan struct{}
 }
 
 func (service *runtimeTestService) Chat(ctx context.Context, request *agentv1.ChatRequest) (*agentv1.ChatResponse, error) {

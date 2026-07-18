@@ -108,6 +108,16 @@
       "transport": "http_and_ws_request"
     },
     {
+      "name": "agent.runtime.profile.get",
+      "auth": "owner",
+      "transport": "http_only"
+    },
+    {
+      "name": "agent.runtime.profile.update",
+      "auth": "owner",
+      "transport": "http_only"
+    },
+    {
       "name": "agent.config.propose_patch",
       "auth": "owner",
       "transport": "http_and_ws_request"

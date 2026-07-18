@@ -12,11 +12,11 @@
 
 ## Scope
 
-Dirextalk message server embeds Native Agent as a native server feature. The old Agent Docker/plugin-runtime reuse path is deprecated for Agent only. `dirextalk-plugins` is not changed in this version, and non-Agent plugins such as `io.dirextalk.ops` may continue to use the Docker plugin runner.
+Dirextalk Message Server exposes Native Agent as a first-class server feature. Its existing local Runner remains a compatibility path, while Chat, StreamChat, and owner-selected runtime model profile can be delegated to the independent `dirextalk-agent` service. The old Agent Docker/plugin-runtime reuse path is deprecated for Agent only. `dirextalk-plugins` is not changed in this version, and non-Agent plugins such as `io.dirextalk.ops` may continue to use the Docker plugin runner.
 
 Clients use the current call surface:
 
-- First-class owner `agent.*` body actions for Native Agent chat, model listing, runtime, skills, MCP, context compression, config patch proposal, and built-in Dirextalk tools.
+- First-class owner `agent.*` body actions for Native Agent chat, model listing, runtime, skills, MCP, context compression, config patch proposal, and built-in Dirextalk tools. The remote runtime profile uses the owner-only, HTTP-only `agent.runtime.profile.get` and `agent.runtime.profile.update` actions.
 - `client.native_agent_stream` over realtime WebSocket for Native Agent streaming, with `client.native_agent_stream.cancel` for cancellation.
 - Standard external MCP clients call `POST /mcp` with MCP Streamable HTTP JSON-RPC and `Authorization: Bearer <agent_token>`.
 - Fixed `mcp.*` body actions are removed from `/_p2p/query` and `/_p2p/command`; Native Agent Dirextalk tools and `POST /mcp` both call the shared `internal/dirextalkmcp` service.
@@ -24,16 +24,18 @@ Clients use the current call surface:
 
 ## Runtime Requirements
 
-- Native Agent owner actions always route to the native runtime, never to a Docker Agent container.
-- Native Agent runtime config is stored in native portal Agent config storage. Model profile lists are current-client local state and are sent request-by-request; `agent.config.update` is not the current model profile store. On startup, old hidden Agent plugin config/runtime state is imported once in a sanitized, idempotent way; current clients must not use plugin management as the Native Agent contract.
+- Native Agent owner actions never route to a Docker Agent container. Existing local Runner actions remain local; remote Chat, StreamChat, and runtime-profile selection use the independent Agent only when its fail-closed gRPC boundary is configured.
+- Local Runner config remains in native portal Agent config storage, and `agent.config.update` is not a model profile store. For the independent Agent path, the Agent deployment owns an immutable, secret-free runtime profile catalog and durable runtime selection. On startup, old hidden Agent plugin config/runtime state is imported once in a sanitized, idempotent way; current clients must not use plugin management as the Native Agent contract.
 - Native Agent uses CloudWeGo Eino as the only model orchestration path. The runtime must track the latest stable Eino release, use Eino ReAct for model/tool loops, use maintained Eino model components for OpenAI and DeepSeek, use direct-only Anthropic Messages API as an Eino `ToolCallingChatModel` adapter, and use Eino official MCP tooling backed by `modelcontextprotocol/go-sdk`.
 - Native Agent supports `openai`, `anthropic`, `deepseek`, and `openai_compatible`.
 - `anthropic` first-version support is direct Anthropic API only. Bedrock and Vertex are intentionally not supported, and AWS/Google SDK dependencies must not be introduced for this provider.
-- Requests may pass `model_profile` with `provider`, `model`, `base_url`, `api_key`, and optional `temperature`, `top_p`, `max_output_tokens`, and `context_window`. Omitted optional tuning fields mean provider defaults apply.
-- `agent.models.list` uses request-scoped provider/base_url/api_key to fetch real provider model lists. It must not persist API keys, maintain server-side model profiles for the current client, or invent model context/temperature/top_p/max-output/reasoning defaults.
-- DeepSeek defaults to the OpenAI-compatible endpoint `https://api.deepseek.com`.
-- API keys are request-local or temporary environment values only. They must not be persisted, logged, committed, or returned by config APIs.
-- System prompts start with the built-in Dirextalk Native Agent product rules, then append native Agent config, request overrides, and enabled static skills. User-provided system prompts must not override the built-in rules for using first-class Native Agent tools for skills, MCP, runtime, and Dirextalk product operations.
+- Legacy request-scoped `model_profile` remains local Runner compatibility only. Remote Chat rejects both `model_profile_id` and `model_profile`; clients select the independent Agent profile through `agent.runtime.profile.get/update` and omit all profile and key fields from chat.
+- `agent.models.list` remains a local Runner compatibility action that uses request-scoped provider/base URL/key data. It must not configure or discover the remote Agent catalog, persist or echo API keys, or invent model defaults. Remote clients use only the sorted `available_profile_ids` returned by `agent.runtime.profile.get`.
+- The remote runtime-profile update accepts only canonical UUID `idempotency_key`, catalog `profile_id`, nonnegative `expected_revision`, and optional `temperature`, `top_p`, and `max_output_tokens`. Its exact de-secreted response is `{available, configured, revision, available_profile_ids, profile}`, where `profile` is `null` or exactly `{profile_id, provider, model, base_url, temperature, top_p, max_output_tokens, context_window, reasoning_effort}`. Immutable model metadata, owner identity, secret references, credential presence, and keys are never exposed.
+- The Agent service key used by Message Server must authorize `runtime.read`, `runtime.write`, and `runtime.chat`. A model credential enters the independent Agent only through an operator-provisioned read-only mounted secret file; it must not enter Flutter, a ProductCore request, Message Server storage/logging, Agent gRPC, command arguments, or environment variables.
+- The first remote profile selection creates the Agent runtime config with 48 context messages, 12 memory messages, and 24 steps. Later profile changes preserve non-profile runtime configuration. If an update result is ambiguous, the client must reconcile through GET and the current revision/state rather than rebuilding and blindly replaying the mutation.
+- DeepSeek defaults to the OpenAI-compatible endpoint `https://api.deepseek.com` in the local compatibility path; the remote endpoint is catalog-owned.
+- System prompts start with the built-in Dirextalk Native Agent product rules, then append native Agent config, request overrides, and enabled static skills. User-provided prompts must not override the built-in product or tool-use rules.
 - `agent.chat` returns a complete response.
 - Native stream emits `delta`, `error`, `trace`, and `done` events through `server.native_agent_stream.*` frames and respects client cancellation.
 - Chat responses and stream completion payloads expose observable `steps` and `trace` data for UI display of context use, tool calls, tool results, and final output. Streamed chats also emit a `trace` event before `done`.
@@ -106,16 +108,17 @@ The external `POST /mcp` transport must call the same `internal/dirextalkmcp` se
   - `go build ./cmd/dirextalk-message-server`
   - `docker compose -f docker-compose.p2p.yml config`
   - `git diff --check`
-- Real local interface testing passes with a temporary DeepSeek key:
+- Real interface testing passes with the model key provisioned only as a read-only Agent-mounted secret file:
   - Native Agent is absent from plugin catalog/list/lifecycle/invoke surfaces.
+  - `agent.runtime.profile.get` returns only the exact public catalog/state fields, and an owner HTTP-only update selects a catalog profile without transmitting credential material.
   - Direct `agent.chat` returns a Chinese reply.
   - Realtime `client.native_agent_stream` emits `delta`, `trace`, and `done`.
   - Skill install/list works and enabled skill text affects the system prompt.
   - MCP install/list works and a discovered MCP tool can be invoked by Agent.
   - Runtime CLI tool install/which/run works.
   - Built-in tools for contacts, rooms, messages, summaries, and sending messages work.
-  - The temporary key does not appear in logs, docs, git diff, persisted config, or test output.
+  - The key does not appear in ProductCore or Agent gRPC payloads, logs, docs, git diff, persisted config, environment variables, command arguments, or test output.
 
 ## Test Secret Handling
 
-The DeepSeek API key supplied by the operator is a live secret. Use it only as an ephemeral environment variable or request-local `model_profile.api_key` during final interface testing. Do not write it to repository files, shell history snippets, docs, or logs. Recommend rotating the key after acceptance testing.
+The operator-provisioned model key is a live secret. For independent Agent acceptance, expose it only through the deployment's read-only mounted secret file. Never place it in ProductCore parameters, Flutter state, Message Server or Agent configuration/catalog data, environment variables, command arguments, repository files, shell history snippets, docs, logs, or test output. Rotate it after acceptance testing.

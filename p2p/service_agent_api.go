@@ -22,6 +22,13 @@ type ClosableNativeAgentRunner interface {
 	Close() error
 }
 
+// AgentRuntimeProfileClient exposes only the independent Agent's de-secreted
+// immutable catalog selection. ProductCore derives owner identity from its
+// authenticated configuration and never forwards model credentials.
+type AgentRuntimeProfileClient = agentmodule.RuntimeProfileClient
+type AgentRuntimeProfileState = agentmodule.RuntimeProfileState
+type AgentRuntimeProfile = agentmodule.RuntimeProfile
+type AgentRuntimeProfileUpdate = agentmodule.RuntimeProfileUpdate
 type AgentGRPCConfig struct {
 	Target         string
 	CAFile         string
@@ -31,8 +38,9 @@ type AgentGRPCConfig struct {
 }
 
 // NewAgentGRPCChatRunner is the public construction seam for setup. The
-// implementation remains in p2p/internal and is routed only through the
-// dedicated NativeAgentChatRunner field.
+// same narrow transport implements Chat and runtime-profile configuration.
+// Each capability is wired through a separate interface so startup fails
+// closed when an enabled backend does not implement both.
 func NewAgentGRPCChatRunner(ctx context.Context, config AgentGRPCConfig) (ClosableNativeAgentRunner, error) {
 	return agentgrpc.New(ctx, agentgrpc.Config{
 		Target: config.Target, CAFile: config.CAFile, ServerName: config.ServerName,

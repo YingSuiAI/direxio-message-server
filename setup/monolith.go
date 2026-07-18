@@ -120,6 +120,13 @@ func (m *Monolith) AddAllPublicRoutes(
 	if err != nil {
 		logrus.Fatal("P2P Agent gRPC backend is unavailable")
 	}
+	agentRuntimeProfileClient, err := p2pAgentRuntimeProfileClient(agentBackend, agentChatRunner)
+	if err != nil {
+		if agentChatRunner != nil {
+			_ = agentChatRunner.Close()
+		}
+		logrus.Fatal("P2P Agent gRPC runtime profile backend is unavailable")
+	}
 	if agentChatRunner != nil {
 		startAgentGRPCRunnerLifecycle(processCtx, agentChatRunner)
 	}
@@ -131,6 +138,7 @@ func (m *Monolith) AddAllPublicRoutes(
 		P2PEventRetentionMaxRows:        p2pEventRetentionMaxRowsFromEnv(),
 		P2PEventRetentionPruneOnWrite:   p2pEventRetentionPruneOnWriteFromEnv(),
 		NativeAgentChatRunner:           agentChatRunner,
+		AgentRuntimeProfileClient:       agentRuntimeProfileClient,
 		PushRules:                       m.UserAPI,
 		ReleaseController:               releasecontrol.NewUnixController(releasecontrol.UnixControllerConfig{}),
 	}
@@ -306,6 +314,16 @@ func newP2PAgentChatRunner(ctx context.Context, serverName string, config p2pAge
 	return runner, nil
 }
 
+func p2pAgentRuntimeProfileClient(config p2pAgentGRPCBackendConfig, runner AgentGRPCRunner) (p2p.AgentRuntimeProfileClient, error) {
+	if !config.Enabled {
+		return nil, nil
+	}
+	client, ok := runner.(p2p.AgentRuntimeProfileClient)
+	if !ok || client == nil {
+		return nil, errors.New("enabled Agent gRPC backend does not support runtime profile configuration")
+	}
+	return client, nil
+}
 func startAgentGRPCRunnerLifecycle(processCtx *process.ProcessContext, runner AgentGRPCRunner) {
 	processCtx.ComponentStarted()
 	go func() {

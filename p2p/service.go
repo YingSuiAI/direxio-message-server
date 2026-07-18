@@ -55,9 +55,13 @@ type Config struct {
 	// Agent service. All other Agent actions continue to use NativeAgentRunner
 	// or the existing local runtime.
 	NativeAgentChatRunner NativeAgentRunner
-	NativeAgentDataDir    string
-	ReleaseController     releasecontrol.Controller
-	CentralVersionSource  releasecontrol.CentralVersionSource
+	// AgentRuntimeProfileClient delegates only the owner-selected immutable
+	// model profile to the independent Agent. It never exposes credential
+	// references or bytes to ProductCore.
+	AgentRuntimeProfileClient AgentRuntimeProfileClient
+	NativeAgentDataDir        string
+	ReleaseController         releasecontrol.Controller
+	CentralVersionSource      releasecontrol.CentralVersionSource
 }
 
 const (
@@ -818,14 +822,15 @@ func newService(cfg Config, store Store, transport Transport, state portalState,
 	})
 	service.mcpCapabilities = service.mcpModule.Service()
 	service.agentModule = agentmodule.New(agentmodule.Config{
-		Runner:     cfg.NativeAgentRunner,
-		ChatRunner: cfg.NativeAgentChatRunner,
-		DataDir:    cfg.NativeAgentDataDir,
-		Store:      nativeAgentConfigStore{service: service},
-		MCP:        service.mcpCapabilities,
-		Account:    serviceAgentAccountPort{service: service},
-		Turns:      service.store,
-		OwnerID:    service.OwnerMXID,
+		Runner:          cfg.NativeAgentRunner,
+		ChatRunner:      cfg.NativeAgentChatRunner,
+		RuntimeProfiles: cfg.AgentRuntimeProfileClient,
+		DataDir:         cfg.NativeAgentDataDir,
+		Store:           nativeAgentConfigStore{service: service},
+		MCP:             service.mcpCapabilities,
+		Account:         serviceAgentAccountPort{service: service},
+		Turns:           service.store,
+		OwnerID:         service.OwnerMXID,
 	})
 	service.actions = service.actionHandlers()
 	service.realtimeModule = realtimewsmodule.New(realtimewsmodule.Dependencies{

@@ -28,23 +28,25 @@ type Config struct {
 	// ChatRunner optionally moves only Chat/StreamChat to an isolated Agent
 	// service while the remaining runtime/config/Skill/Knowledge actions stay
 	// on Runner until their public contracts are migrated.
-	ChatRunner Runner
-	DataDir    string
-	Store      nativeagent.ConfigStore
-	MCP        *dirextalkmcp.Service
-	Account    AccountPort
-	Turns      agentturns.Store
-	OwnerID    func() string
+	ChatRunner      Runner
+	RuntimeProfiles RuntimeProfileClient
+	DataDir         string
+	Store           nativeagent.ConfigStore
+	MCP             *dirextalkmcp.Service
+	Account         AccountPort
+	Turns           agentturns.Store
+	OwnerID         func() string
 }
 
 // Module owns runtime-backed ProductCore actions and streaming invocation.
 type Module struct {
-	runner     Runner
-	chatRunner Runner
-	account    AccountPort
-	turns      *agentturns.Coordinator
-	turnErr    error
-	ownerID    func() string
+	runner          Runner
+	chatRunner      Runner
+	runtimeProfiles RuntimeProfileClient
+	account         AccountPort
+	turns           *agentturns.Coordinator
+	turnErr         error
+	ownerID         func() string
 }
 
 func New(cfg Config) *Module {
@@ -62,14 +64,14 @@ func New(cfg Config) *Module {
 	}
 	turns, turnErr := agentturns.NewCoordinator(context.Background(), cfg.Turns)
 	return &Module{
-		runner: runner, chatRunner: chatRunner, account: cfg.Account,
+		runner: runner, chatRunner: chatRunner, runtimeProfiles: cfg.RuntimeProfiles, account: cfg.Account,
 		turns: turns, turnErr: turnErr, ownerID: cfg.OwnerID,
 	}
 }
 
 // Handlers returns the complete Agent ProductCore action surface.
 func (m *Module) Handlers() map[string]actionbase.Handler {
-	handlers := make(map[string]actionbase.Handler, len(runtimeActions)+7)
+	handlers := make(map[string]actionbase.Handler, len(runtimeActions)+9)
 	for _, action := range runtimeActions {
 		handlers[action] = m.invoke(action)
 	}
@@ -77,6 +79,8 @@ func (m *Module) Handlers() map[string]actionbase.Handler {
 	handlers[actionMatrixSessionCreate] = m.createMatrixSession
 	handlers[actionConfigGet] = m.getConfig
 	handlers[actionConfigUpdate] = m.updateConfig
+	handlers[actionRuntimeProfileGet] = m.getRuntimeProfile
+	handlers[actionRuntimeProfileUpdate] = m.updateRuntimeProfile
 	handlers["agent.chat.stream"] = streamOnly
 	handlers["agent.chat.turn.stop"] = m.stopTurn
 	handlers["agent.chat.turns.list"] = m.listTurns

@@ -9,8 +9,8 @@ func TestActionSpecsReturnsStableOrderedCopy(t *testing.T) {
 	first := ActionSpecs()
 	second := ActionSpecs()
 
-	if len(first) != 150 {
-		t.Fatalf("ActionSpecs() returned %d actions, want 150", len(first))
+	if len(first) != 152 {
+		t.Fatalf("ActionSpecs() returned %d actions, want 152", len(first))
 	}
 	if !reflect.DeepEqual(first, second) {
 		t.Fatal("ActionSpecs() did not preserve action order")
@@ -25,6 +25,14 @@ func TestActionSpecsReturnsStableOrderedCopy(t *testing.T) {
 	}
 }
 
+func TestAgentRuntimeProfileActionsAreOwnerHTTPOnly(t *testing.T) {
+	for _, action := range []string{AgentRuntimeProfileGetAction, AgentRuntimeProfileUpdateAction} {
+		spec, ok := ActionSpecFor(action)
+		if !ok || spec.Auth != ActionAuthOwner || spec.Transport != ActionTransportHTTPOnly {
+			t.Fatalf("%s spec=%#v found=%v", action, spec, ok)
+		}
+	}
+}
 func TestActionSpecForFindsEveryRegisteredAction(t *testing.T) {
 	for _, want := range ActionSpecs() {
 		got, ok := ActionSpecFor(" \t" + want.Name + "\n")
