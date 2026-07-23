@@ -158,16 +158,29 @@ func TestDefaultVoiceChatTemplateUsesNoiseTolerantVAD(t *testing.T) {
 		t.Fatalf("LLMConfig must route to Dirextalk CustomLLM only: %#v", llmConfig)
 	}
 	fields := summarizeVoiceChatPayload(template)
-	if fields["vad_silence_time"] != "900" || fields["interrupt_speech_duration"] != "700" {
+	if fields["vad_silence_time"] != "900" ||
+		fields["interrupt_speech_duration"] != "700" ||
+		fields["tts_resource"] != defaultVolcVoiceTTSResourceID ||
+		fields["tts_speaker"] != defaultVolcVoiceTTSSpeaker ||
+		fields["tts_speech_rate"] != "18" ||
+		fields["tts_loudness_rate"] != "2" ||
+		fields["tts_pitch"] != "1" {
 		t.Fatalf("summary should include VAD/interrupt values, got %#v", fields)
 	}
 	ttsConfig := config["TTSConfig"].(map[string]any)
 	providerParams := ttsConfig["ProviderParams"].(map[string]any)
+	credential := providerParams["Credential"].(map[string]any)
+	if credential["ResourceId"] != defaultVolcVoiceTTSResourceID {
+		t.Fatalf("unexpected tts resource: %#v", credential)
+	}
 	var ttsParams map[string]any
 	if err := json.Unmarshal([]byte(providerParams["VolcanoTTSParameters"].(string)), &ttsParams); err != nil {
 		t.Fatalf("decode VolcanoTTSParameters: %v", err)
 	}
 	reqParams := ttsParams["req_params"].(map[string]any)
+	if reqParams["speaker"] != defaultVolcVoiceTTSSpeaker {
+		t.Fatalf("unexpected default speaker: %#v", reqParams)
+	}
 	audioParams := reqParams["audio_params"].(map[string]any)
 	if audioParams["speech_rate"] != float64(18) || audioParams["loudness_rate"] != float64(2) {
 		t.Fatalf("unexpected tts audio params: %#v", audioParams)
@@ -175,6 +188,43 @@ func TestDefaultVoiceChatTemplateUsesNoiseTolerantVAD(t *testing.T) {
 	postProcess := reqParams["additions"].(map[string]any)["post_process"].(map[string]any)
 	if postProcess["pitch"] != float64(1) {
 		t.Fatalf("unexpected tts post process: %#v", postProcess)
+	}
+}
+
+func TestDefaultVoiceChatTemplateUsesTTSConfigOverrides(t *testing.T) {
+	template := defaultVoiceChatTemplate(voiceConfig{
+		TTSSpeaker:      "zh_female_vv_uranus_bigtts",
+		TTSResourceID:   "custom-resource",
+		TTSSpeechRate:   "12",
+		TTSLoudnessRate: "3",
+		TTSPitch:        "-1",
+	})
+	fields := summarizeVoiceChatPayload(template)
+	if fields["tts_resource"] != "custom-resource" ||
+		fields["tts_speaker"] != "zh_female_vv_uranus_bigtts" ||
+		fields["tts_speech_rate"] != "12" ||
+		fields["tts_loudness_rate"] != "3" ||
+		fields["tts_pitch"] != "-1" {
+		t.Fatalf("summary should include configured tts values, got %#v", fields)
+	}
+	config := template["Config"].(map[string]any)
+	ttsConfig := config["TTSConfig"].(map[string]any)
+	providerParams := ttsConfig["ProviderParams"].(map[string]any)
+	if credential := providerParams["Credential"].(map[string]any); credential["ResourceId"] != "custom-resource" {
+		t.Fatalf("unexpected credential: %#v", credential)
+	}
+	var ttsParams map[string]any
+	if err := json.Unmarshal([]byte(providerParams["VolcanoTTSParameters"].(string)), &ttsParams); err != nil {
+		t.Fatalf("decode VolcanoTTSParameters: %v", err)
+	}
+	reqParams := ttsParams["req_params"].(map[string]any)
+	audioParams := reqParams["audio_params"].(map[string]any)
+	postProcess := reqParams["additions"].(map[string]any)["post_process"].(map[string]any)
+	if reqParams["speaker"] != "zh_female_vv_uranus_bigtts" ||
+		audioParams["speech_rate"] != float64(12) ||
+		audioParams["loudness_rate"] != float64(3) ||
+		postProcess["pitch"] != float64(-1) {
+		t.Fatalf("unexpected configured tts params: %#v", ttsParams)
 	}
 }
 

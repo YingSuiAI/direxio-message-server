@@ -63,8 +63,18 @@ spec:
           - name: http
             containerPort: 8008
             protocol: TCP
-        {{- if $.Values.dendrite_config.global.profiling.enabled }}
         env:
+          - name: VOLC_VOICE_TTS_SPEAKER
+            value: "zh_female_qingxinnvsheng_mars_bigtts"
+          - name: VOLC_VOICE_TTS_RESOURCE_ID
+            value: "seed-tts-1.0"
+          - name: VOLC_VOICE_TTS_SPEECH_RATE
+            value: "18"
+          - name: VOLC_VOICE_TTS_LOUDNESS_RATE
+            value: "2"
+          - name: VOLC_VOICE_TTS_PITCH
+            value: "1"
+        {{- if $.Values.dendrite_config.global.profiling.enabled }}
           - name: PPROFLISTEN
             value: "localhost:{{- $.Values.dendrite_config.global.profiling.port -}}"
         {{- end }}

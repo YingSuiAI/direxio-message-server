@@ -1,6 +1,30 @@
 # API Interface Change Record
 
-Last updated: 2026-07-21
+Last updated: 2026-07-23
+
+## 2026-07-23 Native Agent Voice Same-Session Turns And TTS Overrides
+
+`agent.voice.session.create` preserves the request `conversation_context`
+alongside `conversation_id`, request-scoped `model_profile`, and `api_key`.
+CustomLLM voice runs forward that context unchanged into the existing
+`agent.chat.stream` path, so voice follow-ups share the same Native Agent
+session memory as text chat. `client_transcript_submit_enabled=false` remains
+the CustomLLM rule; Flutter should not submit final subtitles separately.
+
+`agent.voice.session.stream` now treats a `done` event as one voice turn
+completion, not stream termination. The stream stays open for additional voice
+turns until `agent.voice.session.end`, transport close, or an error. Clients
+should deduplicate completed turns with `voice_session_id + turn_index` before
+writing user/assistant messages into the Native Agent chat history.
+
+The default Volc VoiceChat TTS template is configurable through
+`VOLC_VOICE_TTS_SPEAKER`, `VOLC_VOICE_TTS_RESOURCE_ID`,
+`VOLC_VOICE_TTS_SPEECH_RATE`, `VOLC_VOICE_TTS_LOUDNESS_RATE`, and
+`VOLC_VOICE_TTS_PITCH`. The default speaker is
+`zh_female_qingxinnvsheng_mars_bigtts` with resource `seed-tts-1.0`.
+`VOLC_VOICE_CHAT_CONFIG_JSON` still replaces the full template when present.
+VoiceChat startup logs include sanitized speaker/resource/rate/pitch summary
+fields but never include RTC tokens, OpenAPI secrets, or API keys.
 
 ## 2026-07-22 Native Agent Voice CustomLLM Single-Brain Routing
 

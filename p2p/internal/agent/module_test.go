@@ -266,7 +266,14 @@ func TestVoiceWebhookRunsNativeAgentAndPublishesReferences(t *testing.T) {
 		"room_id":         "!product:example.com",
 		"room_type":       "group",
 		"model_profile":   map[string]any{"provider": "openai_compatible", "model": "mock"},
-		"api_key":         "request-scoped-key",
+		"conversation_context": map[string]any{
+			"summary": "用户上一轮确认了产品群。",
+			"messages": []any{
+				map[string]any{"role": "user", "text": "我昨天建的群是什么"},
+				map[string]any{"role": "assistant", "text": "产品群"},
+			},
+		},
+		"api_key": "request-scoped-key",
 	})
 	if actionErr != nil {
 		t.Fatalf("create voice session: %v", actionErr)
@@ -313,14 +320,11 @@ func TestVoiceWebhookRunsNativeAgentAndPublishesReferences(t *testing.T) {
 		runner.params["room_type"] != "group" {
 		t.Fatalf("native agent params not preserved: %#v", runner.params)
 	}
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("voice stream returned error: %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("voice stream did not finish after done event")
+	if contextParams, ok := runner.params["conversation_context"].(map[string]any); !ok || contextParams["summary"] != "用户上一轮确认了产品群。" {
+		t.Fatalf("conversation context not forwarded: %#v", runner.params["conversation_context"])
 	}
+	assertVoiceStreamOpenAfterTurn(t, done)
+	endVoiceStream(t, module, sessionID, done)
 }
 
 func TestVoiceCustomLLMRunsNativeAgentAndStreamsTTSChunks(t *testing.T) {
@@ -394,14 +398,8 @@ func TestVoiceCustomLLMRunsNativeAgentAndStreamsTTSChunks(t *testing.T) {
 		runner.params["conversation_id"] != "voice-conversation" {
 		t.Fatalf("native agent params not preserved: %#v", runner.params)
 	}
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("voice stream returned error: %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("voice stream did not finish after done event")
-	}
+	assertVoiceStreamOpenAfterTurn(t, done)
+	endVoiceStream(t, module, sessionID, done)
 }
 
 func TestVoiceCustomLLMUsesAccumulatedDeltaAsSummaryWhenDoneTextMissing(t *testing.T) {
@@ -457,14 +455,8 @@ func TestVoiceCustomLLMUsesAccumulatedDeltaAsSummaryWhenDoneTextMissing(t *testi
 	if doneEvent.Event != "done" || doneEvent.Data["summary"] != "第一段第二段" {
 		t.Fatalf("done event should include accumulated summary: %#v", doneEvent)
 	}
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("voice stream returned error: %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("voice stream did not finish after done event")
-	}
+	assertVoiceStreamOpenAfterTurn(t, done)
+	endVoiceStream(t, module, sessionID, done)
 }
 
 func TestVoiceCustomLLMRejectsBadSecret(t *testing.T) {
@@ -543,14 +535,8 @@ func TestVoiceTranscriptActionRunsNativeAgent(t *testing.T) {
 		runner.params["room_type"] != "channel" {
 		t.Fatalf("native agent params not preserved: %#v", runner.params)
 	}
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("voice stream returned error: %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("voice stream did not finish after done event")
-	}
+	assertVoiceStreamOpenAfterTurn(t, done)
+	endVoiceStream(t, module, sessionID, done)
 }
 
 func TestVoiceSessionDeduplicatesFinalTranscript(t *testing.T) {
@@ -582,6 +568,30 @@ func nextVoiceEvent(t *testing.T, events <-chan nativeagent.Event) nativeagent.E
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for voice event")
 		return nativeagent.Event{}
+	}
+}
+
+func assertVoiceStreamOpenAfterTurn(t *testing.T, done <-chan error) {
+	t.Helper()
+	select {
+	case err := <-done:
+		t.Fatalf("voice stream returned before session end: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+}
+
+func endVoiceStream(t *testing.T, module *Module, sessionID string, done <-chan error) {
+	t.Helper()
+	if _, actionErr := module.endVoiceSession(context.Background(), map[string]any{"session_id": sessionID}); actionErr != nil {
+		t.Fatalf("end voice session: %v", actionErr)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("voice stream returned error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("voice stream did not finish after session end")
 	}
 }
 

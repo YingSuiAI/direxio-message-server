@@ -35,6 +35,11 @@ type voiceConfig struct {
 	OpenAPIRegion          string
 	OpenAPIVersion         string
 	VoiceChatConfigJSON    string
+	TTSSpeaker             string
+	TTSResourceID          string
+	TTSSpeechRate          string
+	TTSLoudnessRate        string
+	TTSPitch               string
 }
 
 func voiceConfigFromEnv() voiceConfig {
@@ -52,6 +57,11 @@ func voiceConfigFromEnv() voiceConfig {
 		OpenAPIRegion:          strings.TrimSpace(os.Getenv("VOLC_RTC_OPENAPI_REGION")),
 		OpenAPIVersion:         strings.TrimSpace(os.Getenv("VOLC_VOICE_CHAT_OPENAPI_VERSION")),
 		VoiceChatConfigJSON:    strings.TrimSpace(os.Getenv("VOLC_VOICE_CHAT_CONFIG_JSON")),
+		TTSSpeaker:             strings.TrimSpace(os.Getenv("VOLC_VOICE_TTS_SPEAKER")),
+		TTSResourceID:          strings.TrimSpace(os.Getenv("VOLC_VOICE_TTS_RESOURCE_ID")),
+		TTSSpeechRate:          strings.TrimSpace(os.Getenv("VOLC_VOICE_TTS_SPEECH_RATE")),
+		TTSLoudnessRate:        strings.TrimSpace(os.Getenv("VOLC_VOICE_TTS_LOUDNESS_RATE")),
+		TTSPitch:               strings.TrimSpace(os.Getenv("VOLC_VOICE_TTS_PITCH")),
 	}
 }
 
@@ -592,7 +602,7 @@ func (v *voiceCoordinator) stream(ctx context.Context, params map[string]any, em
 			if err := emit(event); err != nil {
 				return err
 			}
-			if event.Event == "done" || event.Event == "error" {
+			if event.Event == "error" {
 				return nil
 			}
 		}

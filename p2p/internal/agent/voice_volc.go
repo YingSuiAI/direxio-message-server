@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,6 +27,14 @@ const (
 	volcRTCOpenAPIRegion  = "cn-north-1"
 	volcRTCOpenAPIService = "rtc"
 	volcVoiceChatVersion  = "2024-12-01"
+)
+
+const (
+	defaultVolcVoiceTTSResourceID   = "seed-tts-1.0"
+	defaultVolcVoiceTTSSpeaker      = "zh_female_qingxinnvsheng_mars_bigtts"
+	defaultVolcVoiceTTSSpeechRate   = 18
+	defaultVolcVoiceTTSLoudnessRate = 2
+	defaultVolcVoiceTTSPitch        = 1
 )
 
 type voiceTokenSigner interface {
@@ -180,7 +189,7 @@ func newVolcVoiceChatOpenAPIClient(cfg voiceConfig) *volcVoiceChatOpenAPIClient 
 		webhookURL:      strings.TrimSpace(cfg.WebhookURL),
 		customLLMURL:    resolveCustomLLMURL(cfg.CustomLLMURL, cfg.WebhookURL),
 		webhookSecret:   strings.TrimSpace(cfg.WebhookSecret),
-		configTemplate:  parseVoiceChatTemplate(cfg.VoiceChatConfigJSON),
+		configTemplate:  parseVoiceChatTemplate(cfg.VoiceChatConfigJSON, cfg),
 	}
 }
 
@@ -481,6 +490,28 @@ func summarizeVoiceChatPayload(payload map[string]any) logrus.Fields {
 		}
 		if ttsConfig := mapValue(config["TTSConfig"]); ttsConfig != nil {
 			fields["tts_provider"] = logString(ttsConfig["Provider"])
+			if providerParams := mapValue(ttsConfig["ProviderParams"]); providerParams != nil {
+				if credential := mapValue(providerParams["Credential"]); credential != nil {
+					fields["tts_resource"] = logString(credential["ResourceId"])
+				}
+				if raw := strings.TrimSpace(logString(providerParams["VolcanoTTSParameters"])); raw != "" {
+					var ttsPayload map[string]any
+					if err := json.Unmarshal([]byte(raw), &ttsPayload); err == nil {
+						if reqParams := mapValue(ttsPayload["req_params"]); reqParams != nil {
+							fields["tts_speaker"] = logString(reqParams["speaker"])
+							if audioParams := mapValue(reqParams["audio_params"]); audioParams != nil {
+								fields["tts_speech_rate"] = logString(audioParams["speech_rate"])
+								fields["tts_loudness_rate"] = logString(audioParams["loudness_rate"])
+							}
+							if additions := mapValue(reqParams["additions"]); additions != nil {
+								if postProcess := mapValue(additions["post_process"]); postProcess != nil {
+									fields["tts_pitch"] = logString(postProcess["pitch"])
+								}
+							}
+						}
+					}
+				}
+			}
 		}
 		if subtitleConfig := mapValue(config["SubtitleConfig"]); subtitleConfig != nil {
 			fields["subtitle_mode"] = logString(subtitleConfig["SubtitleMode"])
@@ -490,13 +521,17 @@ func summarizeVoiceChatPayload(payload map[string]any) logrus.Fields {
 	return fields
 }
 
-func parseVoiceChatTemplate(raw string) map[string]any {
+func parseVoiceChatTemplate(raw string, configs ...voiceConfig) map[string]any {
+	cfg := voiceConfig{}
+	if len(configs) > 0 {
+		cfg = configs[0]
+	}
 	if strings.TrimSpace(raw) == "" {
-		return defaultVoiceChatTemplate()
+		return defaultVoiceChatTemplate(cfg)
 	}
 	var template map[string]any
 	if err := json.Unmarshal([]byte(raw), &template); err != nil || template == nil {
-		return defaultVoiceChatTemplate()
+		return defaultVoiceChatTemplate(cfg)
 	}
 	return template
 }
@@ -596,8 +631,12 @@ func tuneVolcanoTTSParameters(raw string) string {
 		audioParams = map[string]any{}
 		reqParams["audio_params"] = audioParams
 	}
-	audioParams["speech_rate"] = 18
-	audioParams["loudness_rate"] = 2
+	if _, ok := audioParams["speech_rate"]; !ok {
+		audioParams["speech_rate"] = defaultVolcVoiceTTSSpeechRate
+	}
+	if _, ok := audioParams["loudness_rate"]; !ok {
+		audioParams["loudness_rate"] = defaultVolcVoiceTTSLoudnessRate
+	}
 	additions := mapValue(reqParams["additions"])
 	if additions == nil {
 		additions = map[string]any{}
@@ -608,7 +647,9 @@ func tuneVolcanoTTSParameters(raw string) string {
 		postProcess = map[string]any{}
 		additions["post_process"] = postProcess
 	}
-	postProcess["pitch"] = 1
+	if _, ok := postProcess["pitch"]; !ok {
+		postProcess["pitch"] = defaultVolcVoiceTTSPitch
+	}
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return raw
@@ -661,7 +702,16 @@ func replaceVoiceChatString(value string, replacements map[string]string) string
 	return result
 }
 
-func defaultVoiceChatTemplate() map[string]any {
+func defaultVoiceChatTemplate(configs ...voiceConfig) map[string]any {
+	cfg := voiceConfig{}
+	if len(configs) > 0 {
+		cfg = configs[0]
+	}
+	speaker := fallback(cfg.TTSSpeaker, defaultVolcVoiceTTSSpeaker)
+	resourceID := fallback(cfg.TTSResourceID, defaultVolcVoiceTTSResourceID)
+	speechRate := voiceConfigInt(cfg.TTSSpeechRate, defaultVolcVoiceTTSSpeechRate)
+	loudnessRate := voiceConfigInt(cfg.TTSLoudnessRate, defaultVolcVoiceTTSLoudnessRate)
+	pitch := voiceConfigInt(cfg.TTSPitch, defaultVolcVoiceTTSPitch)
 	return map[string]any{
 		"Config": map[string]any{
 			"CallbackUrl": "${VOLC_VOICE_WEBHOOK_URL}",
@@ -690,9 +740,9 @@ func defaultVoiceChatTemplate() map[string]any {
 				"Provider": "volcano_bidirection",
 				"ProviderParams": map[string]any{
 					"Credential": map[string]any{
-						"ResourceId": "seed-tts-1.0",
+						"ResourceId": resourceID,
 					},
-					"VolcanoTTSParameters": "{\"req_params\":{\"speaker\":\"zh_female_yuanqinvyou_moon_bigtts\",\"audio_params\":{\"speech_rate\":18,\"loudness_rate\":2},\"additions\":{\"post_process\":{\"pitch\":1}}}}",
+					"VolcanoTTSParameters": volcanoTTSParametersJSON(speaker, speechRate, loudnessRate, pitch),
 				},
 			},
 			"InterruptMode": 0,
@@ -714,6 +764,40 @@ func defaultVoiceChatTemplate() map[string]any {
 			},
 		},
 	}
+}
+
+func voiceConfigInt(raw string, fallback int) int {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func volcanoTTSParametersJSON(speaker string, speechRate, loudnessRate, pitch int) string {
+	payload := map[string]any{
+		"req_params": map[string]any{
+			"speaker": speaker,
+			"audio_params": map[string]any{
+				"speech_rate":   speechRate,
+				"loudness_rate": loudnessRate,
+			},
+			"additions": map[string]any{
+				"post_process": map[string]any{
+					"pitch": pitch,
+				},
+			},
+		},
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return "{}"
+	}
+	return string(encoded)
 }
 
 func mapValue(value any) map[string]any {
