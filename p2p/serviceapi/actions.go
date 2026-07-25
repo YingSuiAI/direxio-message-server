@@ -28,6 +28,7 @@ type ActionSpec struct {
 	Name      string
 	Auth      ActionAuth
 	Transport ActionTransport
+	Schema    *ActionSchema
 }
 
 var actionSpecs = []ActionSpec{
@@ -55,6 +56,44 @@ var actionSpecs = []ActionSpec{
 	{Name: "agent.config.get", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
 	{Name: "agent.config.update", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
 	{Name: "agent.config.propose_patch", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
+	{Name: "agent.backends.get", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
+	{Name: "agent.core.status.get", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
+	{Name: "agent.core.model_profiles.sync", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: modelProfileSyncSchema()},
+	{Name: "agent.core.model_profiles.list", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: modelProfileListSchema()},
+	{Name: "agent.core.model_profiles.get", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: modelProfileGetSchema()},
+	{Name: "agent.core.model_profiles.delete", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: modelProfileDeleteSchema()},
+	{Name: "agent.core.tasks.get", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: coreTaskGetSchema()},
+	{Name: "agent.core.tasks.list", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: coreTaskListSchema()},
+	{Name: "agent.core.tasks.cancel", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: coreTaskMutationSchema()},
+	{Name: "agent.core.tasks.retry", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: coreTaskMutationSchema()},
+	{Name: "agent.core.tasks.events", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: coreTaskEventsSchema()},
+	{Name: "agent.core.schedules.create", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: coreScheduleCreateSchema()},
+	{Name: "agent.core.schedules.get", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: coreScheduleGetSchema()},
+	{Name: "agent.core.schedules.list", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: coreScheduleListSchema()},
+	{Name: "agent.core.schedules.update", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: coreScheduleUpdateSchema()},
+	{Name: "agent.core.schedules.pause", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: coreScheduleMutationSchema()},
+	{Name: "agent.core.schedules.resume", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: coreScheduleMutationSchema()},
+	{Name: "agent.core.schedules.trigger", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: coreScheduleTriggerSchema()},
+	{Name: "agent.core.schedules.delete", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: coreScheduleDeleteSchema()},
+	{Name: "agent.core.confirmations.get", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: coreConfirmationGetSchema()},
+	{Name: "agent.core.confirmations.list", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: coreConfirmationListSchema()},
+	{Name: "agent.core.confirmations.confirm", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: coreConfirmationMutationSchema()},
+	{Name: "agent.core.confirmations.reject", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: coreConfirmationMutationSchema()},
+	{Name: "agent.core.mcp.discover", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: coreExtensionDiscoverSchema()},
+	{Name: "agent.core.mcp.get", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: coreExtensionGetSchema()},
+	{Name: "agent.core.mcp.list", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: coreExtensionListSchema()},
+	{Name: "agent.core.mcp.install", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: coreExtensionMutationSchema()},
+	{Name: "agent.core.mcp.update", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: coreExtensionMutationSchema()},
+	{Name: "agent.core.mcp.remove", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: coreExtensionRemoveSchema()},
+	{Name: "agent.core.mcp.list_tools", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: coreMCPToolsSchema()},
+	{Name: "agent.core.mcp.execute", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: coreExtensionExecuteSchema()},
+	{Name: "agent.core.skills.discover", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: coreExtensionDiscoverSchema()},
+	{Name: "agent.core.skills.get", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: coreExtensionGetSchema()},
+	{Name: "agent.core.skills.list", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: coreExtensionListSchema()},
+	{Name: "agent.core.skills.install", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: coreExtensionMutationSchema()},
+	{Name: "agent.core.skills.update", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: coreExtensionMutationSchema()},
+	{Name: "agent.core.skills.remove", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: coreExtensionRemoveSchema()},
+	{Name: "agent.core.skills.execute", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: coreExtensionExecuteSchema()},
 	{Name: "agent.chat", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
 	{Name: "agent.chat.stream", Auth: ActionAuthOwner, Transport: ActionTransportWSStreamOnly},
 	{Name: "agent.chat.turn.stop", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
@@ -194,14 +233,19 @@ var actionSpecIndex = mustBuildActionSpecIndex(actionSpecs)
 
 func ActionSpecs() []ActionSpec {
 	specs := make([]ActionSpec, len(actionSpecs))
-	copy(specs, actionSpecs)
+	for i, spec := range actionSpecs {
+		specs[i] = cloneActionSpec(spec)
+	}
 	return specs
 }
 
 func ActionSpecFor(action string) (ActionSpec, bool) {
 	action = strings.TrimSpace(action)
 	spec, ok := actionSpecIndex[action]
-	return spec, ok
+	if !ok {
+		return ActionSpec{}, false
+	}
+	return cloneActionSpec(spec), true
 }
 
 func buildActionSpecIndex(specs []ActionSpec) (map[string]ActionSpec, error) {

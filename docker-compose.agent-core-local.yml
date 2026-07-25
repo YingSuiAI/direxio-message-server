@@ -1,0 +1,155 @@
+name: ${DIREXTALK_MESSAGE_SERVER_PROJECT:?set the per-run Message Server project name}
+
+x-message-server-local: &message-server-local
+  image: ${DIREXTALK_MESSAGE_SERVER_IMAGE:-dirextalk/message-server:agent-core-local}
+  build:
+    context: .
+    dockerfile: Dockerfile
+
+services:
+  # Message Server's sole database. Agent Core owns a separate PostgreSQL in
+  # its own Compose project and no service crosses either private network.
+  postgres:
+    image: ${DIREXTALK_POSTGRES_IMAGE:-docker.io/library/postgres:18-alpine}
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DIREXTALK_MESSAGE_POSTGRES_USER:-dirextalk_message_server}
+      POSTGRES_PASSWORD: ${DIREXTALK_MESSAGE_POSTGRES_PASSWORD:-dirextalk_message_server}
+      POSTGRES_DB: ${DIREXTALK_MESSAGE_POSTGRES_DB:-dirextalk_message_server}
+    volumes:
+      - message_server_postgres_data:/var/lib/postgresql
+    networks: [message_server_private]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  message-server-init:
+    <<: *message-server-local
+    environment:
+      MESSAGE_SERVER_NAME: ${MESSAGE_SERVER_NAME:-localhost}
+      MESSAGE_CLIENT_BASE_URL: ${MESSAGE_CLIENT_BASE_URL:-http://localhost:8008}
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        mkdir -p /etc/dirextalk-message-server /var/dirextalk-message-server
+        if [ ! -f /etc/dirextalk-message-server/matrix_key.pem ]; then
+          /usr/bin/generate-keys -private-key /etc/dirextalk-message-server/matrix_key.pem
+        fi
+        if [ ! -f /etc/dirextalk-message-server/server.crt ] || [ ! -f /etc/dirextalk-message-server/server.key ]; then
+          /usr/bin/generate-keys \
+            -tls-cert /etc/dirextalk-message-server/server.crt \
+            -tls-key /etc/dirextalk-message-server/server.key \
+            -server "${MESSAGE_SERVER_NAME:-localhost}"
+        fi
+        if [ ! -f /etc/dirextalk-message-server/message-server.yaml ]; then
+          /usr/bin/generate-config \
+            -dir /var/dirextalk-message-server \
+            -db "postgres://${DIREXTALK_MESSAGE_POSTGRES_USER:-dirextalk_message_server}:${DIREXTALK_MESSAGE_POSTGRES_PASSWORD:-dirextalk_message_server}@postgres/${DIREXTALK_MESSAGE_POSTGRES_DB:-dirextalk_message_server}?sslmode=disable" \
+            -server "${MESSAGE_SERVER_NAME:-localhost}" \
+            > /etc/dirextalk-message-server/message-server.yaml
+        fi
+        sed -i 's|well_known_client_name: .*|well_known_client_name: "'"${MESSAGE_CLIENT_BASE_URL:-http://localhost:8008}"'"|' /etc/dirextalk-message-server/message-server.yaml
+    volumes:
+      - message_server_config:/etc/dirextalk-message-server
+      - message_server_data:/var/dirextalk-message-server
+    networks: [message_server_private]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Compose host secret mounts do not guarantee the UID/mode expected by the
+  # server adapter. This one-shot copies exact bytes into a named volume.
+  agent-core-secret-init:
+    <<: *message-server-local
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        test "$(wc -c < /run/secrets/agent_core_service_token)" -eq 43
+        install -d -m 0700 /out
+        install -o 0 -g 0 -m 0400 /run/secrets/agent_core_service_token /out/service-token
+        install -o 0 -g 0 -m 0444 /run/secrets/agent_core_ca /out/ca-cert
+    secrets:
+      - source: agent_core_service_token
+        target: agent_core_service_token
+      - source: agent_core_ca
+        target: agent_core_ca
+    volumes:
+      - message_server_agent_core_material:/out
+    network_mode: "none"
+    restart: "no"
+
+  message-server:
+    <<: *message-server-local
+    restart: unless-stopped
+    environment:
+      P2P_PORTAL_CREDENTIALS_FILE: /var/dirextalk-message-server/p2p/bootstrap.json
+      P2P_PLUGIN_DOCKER_ENABLED: "false"
+      P2P_PLUGIN_BACKEND_BASE_URL: http://message-server:8008
+      P2P_NATIVE_AGENT_DATA_DIR: /var/dirextalk-message-server/agent
+      P2P_AGENT_CORE_ENABLED: "true"
+      P2P_AGENT_CORE_ADDRESS: ${P2P_AGENT_CORE_ADDRESS:-core:9443}
+      P2P_AGENT_CORE_SERVER_NAME: ${P2P_AGENT_CORE_SERVER_NAME:?set the Agent Core TLS SNI}
+      P2P_AGENT_CORE_CA_FILE: /run/agent-core/ca-cert
+      P2P_AGENT_CORE_TOKEN_FILE: /run/agent-core/service-token
+      P2P_AGENT_CORE_EXPECTED_INSTANCE_ID: ${P2P_AGENT_CORE_EXPECTED_INSTANCE_ID:?set the Agent Core instance ID}
+      P2P_AGENT_CORE_PROBE_TIMEOUT: ${P2P_AGENT_CORE_PROBE_TIMEOUT:-5s}
+    command:
+      - --config
+      - /etc/dirextalk-message-server/message-server.yaml
+      - --http-bind-address
+      - :8008
+      - --https-bind-address
+      - :8448
+    ports:
+      - "127.0.0.1::8008"
+      - "127.0.0.1::8448"
+    volumes:
+      - message_server_config:/etc/dirextalk-message-server
+      - message_server_data:/var/dirextalk-message-server
+      - message_server_agent_core_material:/run/agent-core:ro
+    networks: [message_server_private, agent_caller, message_server_public]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      message-server-init:
+        condition: service_completed_successfully
+      agent-core-secret-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:8008/_p2p/health >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+networks:
+  message_server_private:
+    name: ${DIREXTALK_MESSAGE_SERVER_PRIVATE_NETWORK:?set the per-run Message Server private network}
+    internal: true
+  # Created first by Agent Core's project; this caller network is the only
+  # cross-project edge. Agent PostgreSQL never joins it.
+  agent_caller:
+    name: ${DIREXTALK_AGENT_CALLER_NETWORK_NAME:?set the per-run Agent caller network}
+    external: true
+  message_server_public:
+    name: ${DIREXTALK_MESSAGE_SERVER_PUBLIC_NETWORK:?set the per-run Message Server public network}
+
+volumes:
+  message_server_postgres_data:
+    name: ${DIREXTALK_MESSAGE_POSTGRES_VOLUME:?set the per-run Message Server PostgreSQL volume}
+  message_server_config:
+    name: ${DIREXTALK_MESSAGE_SERVER_CONFIG_VOLUME:?set the per-run Message Server config volume}
+  message_server_data:
+    name: ${DIREXTALK_MESSAGE_SERVER_DATA_VOLUME:?set the per-run Message Server data volume}
+  message_server_agent_core_material:
+    name: ${DIREXTALK_MESSAGE_AGENT_CORE_MATERIAL_VOLUME:?set the per-run Agent Core material volume}
+
+secrets:
+  agent_core_service_token:
+    file: ${DIREXTALK_AGENT_SERVICE_TOKEN_FILE:?set the Agent bootstrap service-token path}
+  agent_core_ca:
+    file: ${DIREXTALK_AGENT_TLS_CERT_FILE:?set the Agent bootstrap tls-cert path}

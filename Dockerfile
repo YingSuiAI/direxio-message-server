@@ -62,3 +62,6 @@ WORKDIR /etc/dirextalk-message-server
 
 ENTRYPOINT ["/usr/bin/dirextalk-message-server"]
 EXPOSE 8008 8448
+# Keep the image self-describing for Compose callers; the local integration
+# Compose file still probes the public P2P health route after Core readiness.
+HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=30 CMD wget -q -O - http://127.0.0.1:8008/_p2p/health >/dev/null || exit 1

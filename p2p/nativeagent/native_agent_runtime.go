@@ -2,6 +2,7 @@ package nativeagent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -9,6 +10,18 @@ import (
 	"strings"
 	"time"
 )
+
+const embeddedExtensionsForbiddenMessage = "embedded native agent extensions are forbidden"
+
+var errEmbeddedExtensionsForbidden = errors.New(embeddedExtensionsForbiddenMessage)
+
+func embeddedExtensionsForbidden() error { return errEmbeddedExtensionsForbidden }
+
+// IsEmbeddedExtensionsForbidden identifies the stable compatibility error for
+// runtime extension actions that embedded Native Agent no longer supports.
+func IsEmbeddedExtensionsForbidden(err error) bool {
+	return errors.Is(err, errEmbeddedExtensionsForbidden)
+}
 
 const (
 	defaultNativeAgentDataDir = "/var/dirextalk-message-server/agent"
@@ -81,35 +94,35 @@ func (r *Runtime) Invoke(ctx context.Context, action string, params map[string]a
 	case "agent.runtime.inspect":
 		return r.runtimeInspect(ctx)
 	case "agent.runtime.install":
-		return r.runtimeInstall(ctx, params)
+		return nil, embeddedExtensionsForbidden()
 	case "agent.runtime.which":
-		return r.runtimeWhich(ctx, params)
+		return nil, embeddedExtensionsForbidden()
 	case "agent.runtime.run":
-		return r.runtimeRun(ctx, params)
+		return nil, embeddedExtensionsForbidden()
 	case "agent.skills.list":
 		return r.skillsList(ctx)
 	case "agent.skills.install":
-		return r.skillInstall(ctx, params)
+		return nil, embeddedExtensionsForbidden()
 	case "agent.skills.enable":
-		return r.skillSetEnabled(ctx, params, true)
+		return nil, embeddedExtensionsForbidden()
 	case "agent.skills.disable":
-		return r.skillSetEnabled(ctx, params, false)
+		return nil, embeddedExtensionsForbidden()
 	case "agent.skills.uninstall":
-		return r.skillUninstall(ctx, params)
+		return nil, embeddedExtensionsForbidden()
 	case "agent.skills.registry.search":
-		return map[string]any{"skills": []any{}}, nil
+		return nil, embeddedExtensionsForbidden()
 	case "agent.mcp.servers.list":
 		return r.mcpServersList(ctx)
 	case "agent.mcp.servers.install":
-		return r.mcpServerInstall(ctx, params)
+		return nil, embeddedExtensionsForbidden()
 	case "agent.mcp.servers.enable":
-		return r.mcpServerSetEnabled(ctx, params, true)
+		return nil, embeddedExtensionsForbidden()
 	case "agent.mcp.servers.disable":
-		return r.mcpServerSetEnabled(ctx, params, false)
+		return nil, embeddedExtensionsForbidden()
 	case "agent.mcp.servers.uninstall":
-		return r.mcpServerUninstall(ctx, params)
+		return nil, embeddedExtensionsForbidden()
 	case "agent.mcp.registry.search":
-		return map[string]any{"servers": []any{}}, nil
+		return nil, embeddedExtensionsForbidden()
 	case "agent.knowledge.config.get", "agent.knowledge.config.update", "agent.knowledge.sources.list",
 		"agent.knowledge.sources.delete", "agent.knowledge.upload.start", "agent.knowledge.upload.chunk",
 		"agent.knowledge.upload.finish", "agent.knowledge.memory.create", "agent.knowledge.search",
@@ -217,7 +230,7 @@ func (r *Runtime) ensureDataDirs() error {
 }
 
 func (r *Runtime) runtimeInspect(ctx context.Context) (map[string]any, error) {
-	config, exists, err := r.agentConfig(ctx)
+	_, exists, err := r.agentConfig(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -227,9 +240,9 @@ func (r *Runtime) runtimeInspect(ctx context.Context) (map[string]any, error) {
 		"framework":     "eino",
 		"configured":    exists,
 		"data_dir":      r.dataDir,
-		"skills":        configList(config, "skills"),
-		"mcp_servers":   configList(config, "mcp_servers"),
-		"runtime_tools": configList(config, "runtime_tools"),
+		"skills":        []map[string]any{},
+		"mcp_servers":   []map[string]any{},
+		"runtime_tools": []map[string]any{},
 		"time":          time.Now().UTC().Format(time.RFC3339),
 	}, nil
 }

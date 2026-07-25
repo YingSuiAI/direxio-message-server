@@ -2,6 +2,7 @@ package p2p
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"net/http"
 	"strings"
@@ -15,6 +16,8 @@ import (
 	"github.com/YingSuiAI/dirextalk-message-server/internal/realtime"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/releasecontrol"
 	agentmodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agent"
+	agentcoremodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcore"
+	coreturns "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcoreturns"
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentturns"
 	blocksmodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/blocks"
 	callsmodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/calls"
@@ -52,6 +55,7 @@ type Config struct {
 	PluginRunner                    PluginRunner
 	NativeAgentRunner               NativeAgentRunner
 	NativeAgentDataDir              string
+	AgentCore                       AgentCoreConfig
 	ReleaseController               releasecontrol.Controller
 	CentralVersionSource            releasecontrol.CentralVersionSource
 }
@@ -103,6 +107,9 @@ type Service struct {
 	storeMode                 string
 	projectorStarted          bool
 	agentModule               *agentmodule.Module
+	agentCore                 *agentcoremodule.Client
+	coreTurns                 *coreturns.Ledger
+	agentCoreInitErr          error
 	mcpModule                 *mcpmodule.Module
 	mcpCapabilities           *dirextalkmcp.Service
 	releaseController         releasecontrol.Controller
@@ -221,6 +228,15 @@ func NewServiceWithStoreAndTransport(ctx context.Context, cfg Config, store Stor
 	if err := service.agentModule.ReadyError(); err != nil {
 		return nil, err
 	}
+	if service.agentCoreInitErr != nil {
+		return nil, service.agentCoreInitErr
+	}
+	if err := service.agentCore.ReadyError(); err != nil {
+		return nil, err
+	}
+	// A temporarily unreachable Core is represented as unavailable; it must not
+	// prevent Message Server startup.
+	_ = service.agentCore.Probe(ctx)
 	if err := service.pluginsModule.CheckStore(ctx); err != nil {
 		return nil, err
 	}
@@ -822,6 +838,16 @@ func newService(cfg Config, store Store, transport Transport, state portalState,
 		Turns:   service.store,
 		OwnerID: service.OwnerMXID,
 	})
+	// Agent Core config is deployment-owned and never persisted in portal state.
+	service.agentCore, service.agentCoreInitErr = agentcoremodule.New(cfg.AgentCore)
+	if service.agentCore == nil {
+		service.agentCore, _ = agentcoremodule.New(agentcoremodule.Config{})
+	}
+	var coreDB *sql.DB
+	if dbStore, ok := store.(interface{ DB() *sql.DB }); ok {
+		coreDB = dbStore.DB()
+	}
+	service.coreTurns = coreturns.New(coreDB)
 	service.actions = service.actionHandlers()
 	service.realtimeModule = realtimewsmodule.New(realtimewsmodule.Dependencies{
 		Actions:      serviceRealtimeActionPort{service: service},
@@ -829,6 +855,7 @@ func newService(cfg Config, store Store, transport Transport, state portalState,
 		Sessions:     realtimeSessions,
 		Plugins:      service.pluginsModule,
 		Agent:        service.agentModule,
+		Core:         &agentCoreStreamAdapter{core: service.agentCore, ledger: service.coreTurns},
 		TicketActive: service.realtimeWSTicketActive,
 	}, realtimewsmodule.Config{
 		Now:               time.Now,

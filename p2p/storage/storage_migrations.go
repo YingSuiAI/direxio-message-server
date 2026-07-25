@@ -813,6 +813,36 @@ func (s *DatabaseStore) migrate(ctx context.Context) error {
 		},
 	})
 	m.AddMigrations(sqlutil.Migration{
+		Version: "p2p: durable agent core turns v78",
+		Up: func(ctx context.Context, txn *sql.Tx) error {
+			return execMigrationStatements(ctx, txn, []string{
+				`CREATE TABLE IF NOT EXISTS p2p_agent_core_turns (
+					owner_id TEXT NOT NULL CHECK (owner_id <> ''),
+					client_turn_id TEXT NOT NULL CHECK (client_turn_id <> ''),
+					core_turn_id TEXT NOT NULL DEFAULT '',
+					core_profile_id TEXT NOT NULL DEFAULT '',
+					conversation_id TEXT NOT NULL DEFAULT '',
+					request_digest BYTEA NOT NULL CHECK (octet_length(request_digest) = 32),
+					status TEXT NOT NULL CHECK (status <> ''),
+					last_sequence BIGINT NOT NULL DEFAULT 0 CHECK (last_sequence >= 0),
+					core_revision BIGINT NOT NULL DEFAULT 0,
+					model_profile_revision BIGINT NOT NULL DEFAULT 0,
+					last_event_kind TEXT NOT NULL DEFAULT '',
+					terminal_code TEXT NOT NULL DEFAULT '',
+					terminal_summary TEXT NOT NULL DEFAULT '',
+					created_at TIMESTAMPTZ NOT NULL,
+					updated_at TIMESTAMPTZ NOT NULL,
+					PRIMARY KEY (owner_id, client_turn_id)
+				)`,
+				`CREATE INDEX IF NOT EXISTS p2p_agent_core_turns_owner_conversation_idx ON p2p_agent_core_turns(owner_id, conversation_id, created_at, client_turn_id)`,
+				`ALTER TABLE p2p_agent_core_turns ADD COLUMN IF NOT EXISTS core_revision BIGINT NOT NULL DEFAULT 0`,
+				`ALTER TABLE p2p_agent_core_turns ADD COLUMN IF NOT EXISTS core_profile_id TEXT NOT NULL DEFAULT ''`,
+				`ALTER TABLE p2p_agent_core_turns ADD COLUMN IF NOT EXISTS model_profile_revision BIGINT NOT NULL DEFAULT 0`,
+				`ALTER TABLE p2p_agent_core_turns ADD COLUMN IF NOT EXISTS last_event_kind TEXT NOT NULL DEFAULT ''`,
+			})
+		},
+	})
+	m.AddMigrations(sqlutil.Migration{
 		Version: "p2p: canonical Matrix member membership v76",
 		Up: func(ctx context.Context, txn *sql.Tx) error {
 			exists, err := productTableExists(ctx, txn, "p2p_members")

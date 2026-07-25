@@ -96,6 +96,11 @@ func (m *Monolith) AddAllPublicRoutes(
 		PushRules:                       m.UserAPI,
 		ReleaseController:               releasecontrol.NewUnixController(releasecontrol.UnixControllerConfig{}),
 	}
+	if agentCoreConfig, err := p2p.AgentCoreConfigFromEnv(); err != nil {
+		logrus.WithError(err).Fatal("invalid P2P Agent Core configuration")
+	} else {
+		p2pConfig.AgentCore = agentCoreConfig
+	}
 	matrixHistoryBaseURL := matrixHistoryReaderBaseURL(p2pConfig.Homeserver)
 	matrixProfileResolver := p2p.NewHTTPMatrixProfileResolver(matrixHistoryBaseURL, nil)
 	p2pTransport := p2p.NewDendriteTransport(cfg.Global.ServerName, cfg.Global.KeyID, cfg.Global.PrivateKey, m.RoomserverAPI)

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/YingSuiAI/dirextalk-message-server/internal/dirextalkmcp"
 )
 
 type Tool struct {
@@ -47,7 +49,6 @@ func (r *Runtime) enabledTools(ctx context.Context, config map[string]any, param
 			}
 		}
 	}
-	enableNativeAgentManagementTools(enabled, availableTools)
 	tools := make([]Tool, 0, len(availableTools))
 	for _, tool := range availableTools {
 		if enabled[tool.Name] {
@@ -141,9 +142,23 @@ func nativeToolAlias(value string) string {
 }
 
 func (r *Runtime) availableTools() []Tool {
-	tools := append([]Tool{}, r.tools...)
-	tools = append(tools, r.managementTools()...)
+	tools := make([]Tool, 0, len(r.tools))
+	for _, tool := range r.tools {
+		if embeddedDirextalkTool(tool.Name) {
+			tools = append(tools, tool)
+		}
+	}
 	return tools
+}
+
+// embeddedDirextalkTool is a positive allowlist anchored to the compiled MCP
+// capability registry. Configuration may select from it, but cannot add tools.
+func embeddedDirextalkTool(name string) bool {
+	if name == "dirextalk_summarize" {
+		return true
+	}
+	_, ok := dirextalkmcp.NativeToolAction(name)
+	return ok
 }
 
 func (r *Runtime) invokeDirectTool(ctx context.Context, action string, params map[string]any) (map[string]any, error) {

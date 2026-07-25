@@ -113,6 +113,1375 @@
       "transport": "http_and_ws_request"
     },
     {
+      "name": "agent.backends.get",
+      "auth": "owner",
+      "transport": "http_and_ws_request"
+    },
+    {
+      "name": "agent.core.status.get",
+      "auth": "owner",
+      "transport": "http_and_ws_request"
+    },
+    {
+      "name": "agent.core.model_profiles.sync",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "default_client_profile_id": {
+            "type": "string",
+            "presence": {
+              "omitted": "no_default_reference",
+              "present": "exact_nonempty_client_profile_id",
+              "empty": "rejected"
+            }
+          },
+          "entries": {
+            "type": "array",
+            "required": true,
+            "items": {
+              "type": "object",
+              "properties": {
+                "api_key": {
+                  "type": "string",
+                  "write_only": true,
+                  "presence": {
+                    "omitted": "preserve_existing",
+                    "present": "rotate_write_only",
+                    "empty": "rejected"
+                  }
+                },
+                "base_url": {
+                  "type": "string"
+                },
+                "client_profile_id": {
+                  "type": "string",
+                  "required": true,
+                  "presence": {
+                    "present": "exact_nonempty_bytes",
+                    "empty": "rejected"
+                  }
+                },
+                "context_window": {
+                  "type": "integer"
+                },
+                "display_name": {
+                  "type": "string"
+                },
+                "expected_revision": {
+                  "type": "integer",
+                  "presence": {
+                    "omitted": "no_revision_check",
+                    "present": "must_match_current_revision"
+                  }
+                },
+                "max_output_tokens": {
+                  "type": "integer"
+                },
+                "model": {
+                  "type": "string"
+                },
+                "provider": {
+                  "type": "string",
+                  "required": true
+                },
+                "reasoning_effort": {
+                  "type": "string"
+                },
+                "system_prompt": {
+                  "type": "string"
+                },
+                "temperature": {
+                  "type": "number"
+                },
+                "top_p": {
+                  "type": "number"
+                }
+              }
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "default_client_profile_id": {
+            "type": "string"
+          },
+          "profiles": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "api_key_configured": {
+                  "type": "boolean"
+                },
+                "base_url": {
+                  "type": "string"
+                },
+                "client_profile_id": {
+                  "type": "string"
+                },
+                "context_window": {
+                  "type": "integer"
+                },
+                "created_at": {
+                  "type": "string"
+                },
+                "display_name": {
+                  "type": "string"
+                },
+                "max_output_tokens": {
+                  "type": "integer"
+                },
+                "model": {
+                  "type": "string"
+                },
+                "profile_id": {
+                  "type": "string"
+                },
+                "provider": {
+                  "type": "string"
+                },
+                "reasoning_effort": {
+                  "type": "string"
+                },
+                "revision": {
+                  "type": "integer"
+                },
+                "system_prompt": {
+                  "type": "string"
+                },
+                "temperature": {
+                  "type": "number"
+                },
+                "top_p": {
+                  "type": "number"
+                },
+                "updated_at": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.model_profiles.list",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "page_size": {
+            "type": "integer",
+            "presence": {
+              "omitted": "server_default"
+            }
+          },
+          "page_token": {
+            "type": "string",
+            "presence": {
+              "omitted": "first_page"
+            }
+          }
+        },
+        "response": {
+          "next_page_token": {
+            "type": "string"
+          },
+          "profiles": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "api_key_configured": {
+                  "type": "boolean"
+                },
+                "base_url": {
+                  "type": "string"
+                },
+                "client_profile_id": {
+                  "type": "string"
+                },
+                "context_window": {
+                  "type": "integer"
+                },
+                "created_at": {
+                  "type": "string"
+                },
+                "display_name": {
+                  "type": "string"
+                },
+                "max_output_tokens": {
+                  "type": "integer"
+                },
+                "model": {
+                  "type": "string"
+                },
+                "profile_id": {
+                  "type": "string"
+                },
+                "provider": {
+                  "type": "string"
+                },
+                "reasoning_effort": {
+                  "type": "string"
+                },
+                "revision": {
+                  "type": "integer"
+                },
+                "system_prompt": {
+                  "type": "string"
+                },
+                "temperature": {
+                  "type": "number"
+                },
+                "top_p": {
+                  "type": "number"
+                },
+                "updated_at": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.model_profiles.get",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "profile_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "profile": {
+            "type": "object",
+            "properties": {
+              "api_key_configured": {
+                "type": "boolean"
+              },
+              "base_url": {
+                "type": "string"
+              },
+              "client_profile_id": {
+                "type": "string"
+              },
+              "context_window": {
+                "type": "integer"
+              },
+              "created_at": {
+                "type": "string"
+              },
+              "display_name": {
+                "type": "string"
+              },
+              "max_output_tokens": {
+                "type": "integer"
+              },
+              "model": {
+                "type": "string"
+              },
+              "profile_id": {
+                "type": "string"
+              },
+              "provider": {
+                "type": "string"
+              },
+              "reasoning_effort": {
+                "type": "string"
+              },
+              "revision": {
+                "type": "integer"
+              },
+              "system_prompt": {
+                "type": "string"
+              },
+              "temperature": {
+                "type": "number"
+              },
+              "top_p": {
+                "type": "number"
+              },
+              "updated_at": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.model_profiles.delete",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "expected_revision": {
+            "type": "integer",
+            "presence": {
+              "omitted": "no_revision_check",
+              "present": "must_match_current_revision"
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          },
+          "profile_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "deleted": {
+            "type": "boolean"
+          },
+          "profile_id": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.tasks.get",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "task_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "task": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.tasks.list",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "page_size": {
+            "type": "integer",
+            "presence": {
+              "omitted": "server_default"
+            }
+          },
+          "page_token": {
+            "type": "string",
+            "presence": {
+              "omitted": "first_page"
+            }
+          },
+          "status": {
+            "type": "string",
+            "presence": {
+              "omitted": "all_statuses",
+              "present": "normalized_core_task_status"
+            }
+          }
+        },
+        "response": {
+          "next_page_token": {
+            "type": "string"
+          },
+          "tasks": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.tasks.cancel",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "expected_revision": {
+            "type": "integer",
+            "presence": {
+              "omitted": "no_revision_check",
+              "present": "must_match_current_revision"
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          },
+          "task_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "task": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.tasks.retry",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "expected_revision": {
+            "type": "integer",
+            "presence": {
+              "omitted": "no_revision_check",
+              "present": "must_match_current_revision"
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          },
+          "task_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "task": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.tasks.events",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "after_sequence": {
+            "type": "integer",
+            "presence": {
+              "omitted": "from_beginning"
+            }
+          },
+          "limit": {
+            "type": "integer",
+            "presence": {
+              "omitted": "bounded_default"
+            }
+          },
+          "task_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.schedules.create",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          },
+          "name": {
+            "type": "string",
+            "required": true
+          },
+          "task_template": {
+            "type": "string",
+            "required": true
+          },
+          "trigger": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "schedule": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.schedules.get",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "schedule_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "schedule": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.schedules.list",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "page_size": {
+            "type": "integer",
+            "presence": {
+              "omitted": "server_default"
+            }
+          },
+          "page_token": {
+            "type": "string",
+            "presence": {
+              "omitted": "first_page"
+            }
+          }
+        },
+        "response": {
+          "next_page_token": {
+            "type": "string"
+          },
+          "schedules": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.schedules.update",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "expected_revision": {
+            "type": "integer",
+            "presence": {
+              "omitted": "no_revision_check",
+              "present": "must_match_current_revision"
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          },
+          "schedule_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "schedule": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.schedules.pause",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "expected_revision": {
+            "type": "integer",
+            "presence": {
+              "omitted": "no_revision_check",
+              "present": "must_match_current_revision"
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          },
+          "schedule_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "schedule": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.schedules.resume",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "expected_revision": {
+            "type": "integer",
+            "presence": {
+              "omitted": "no_revision_check",
+              "present": "must_match_current_revision"
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          },
+          "schedule_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "schedule": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.schedules.trigger",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          },
+          "schedule_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "occurrence_id": {
+            "type": "string"
+          },
+          "schedule": {
+            "type": "object"
+          },
+          "task_id": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.schedules.delete",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "expected_revision": {
+            "type": "integer",
+            "presence": {
+              "omitted": "no_revision_check",
+              "present": "must_match_current_revision"
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          },
+          "schedule_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "deleted": {
+            "type": "boolean"
+          },
+          "schedule_id": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.confirmations.get",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "confirmation_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "confirmation": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.confirmations.list",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "operation_domain": {
+            "type": "string"
+          },
+          "page_size": {
+            "type": "integer",
+            "presence": {
+              "omitted": "server_default"
+            }
+          },
+          "page_token": {
+            "type": "string",
+            "presence": {
+              "omitted": "first_page"
+            }
+          },
+          "states": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "target_id": {
+            "type": "string"
+          }
+        },
+        "response": {
+          "confirmations": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "next_page_token": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.confirmations.confirm",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "confirmation_id": {
+            "type": "string",
+            "required": true
+          },
+          "expected_revision": {
+            "type": "integer",
+            "presence": {
+              "omitted": "no_revision_check",
+              "present": "must_match_current_revision"
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "confirmation": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.confirmations.reject",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "confirmation_id": {
+            "type": "string",
+            "required": true
+          },
+          "expected_revision": {
+            "type": "integer",
+            "presence": {
+              "omitted": "no_revision_check",
+              "present": "must_match_current_revision"
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "confirmation": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.mcp.discover",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "page_size": {
+            "type": "integer",
+            "presence": {
+              "omitted": "server_default"
+            }
+          },
+          "page_token": {
+            "type": "string",
+            "presence": {
+              "omitted": "first_page"
+            }
+          },
+          "query": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          }
+        },
+        "response": {
+          "candidates": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "next_page_token": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.mcp.get",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "installation_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "installation": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.mcp.list",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "page_size": {
+            "type": "integer",
+            "presence": {
+              "omitted": "server_default"
+            }
+          },
+          "page_token": {
+            "type": "string",
+            "presence": {
+              "omitted": "first_page"
+            }
+          },
+          "source": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "response": {
+          "installations": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "next_page_token": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.mcp.install",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "candidate": {
+            "type": "object",
+            "required": true
+          },
+          "expected_revision": {
+            "type": "integer",
+            "presence": {
+              "omitted": "no_revision_check",
+              "present": "must_match_current_revision"
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          },
+          "secret_inputs": {
+            "type": "array",
+            "write_only": true,
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        "response": {
+          "confirmation_id": {
+            "type": "string"
+          },
+          "installation": {
+            "type": "object"
+          },
+          "task_id": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.mcp.update",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "candidate": {
+            "type": "object",
+            "required": true
+          },
+          "expected_revision": {
+            "type": "integer",
+            "presence": {
+              "omitted": "no_revision_check",
+              "present": "must_match_current_revision"
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          },
+          "secret_inputs": {
+            "type": "array",
+            "write_only": true,
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        "response": {
+          "confirmation_id": {
+            "type": "string"
+          },
+          "installation": {
+            "type": "object"
+          },
+          "task_id": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.mcp.remove",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "expected_revision": {
+            "type": "integer",
+            "presence": {
+              "omitted": "no_revision_check",
+              "present": "must_match_current_revision"
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          },
+          "installation_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "confirmation_id": {
+            "type": "string"
+          },
+          "installation": {
+            "type": "object"
+          },
+          "task_id": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.mcp.list_tools",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "expected_revision": {
+            "type": "integer",
+            "presence": {
+              "omitted": "no_revision_check",
+              "present": "must_match_current_revision"
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          },
+          "installation_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "tools": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.mcp.execute",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "expected_revision": {
+            "type": "integer",
+            "presence": {
+              "omitted": "no_revision_check",
+              "present": "must_match_current_revision"
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          },
+          "input": {
+            "type": "object"
+          },
+          "installation_id": {
+            "type": "string",
+            "required": true
+          },
+          "tool_name": {
+            "type": "string",
+            "presence": {
+              "omitted": "skill_execution",
+              "present": "MCP_tool_name"
+            }
+          }
+        },
+        "response": {
+          "task_id": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.skills.discover",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "page_size": {
+            "type": "integer",
+            "presence": {
+              "omitted": "server_default"
+            }
+          },
+          "page_token": {
+            "type": "string",
+            "presence": {
+              "omitted": "first_page"
+            }
+          },
+          "query": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          }
+        },
+        "response": {
+          "candidates": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "next_page_token": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.skills.get",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "installation_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "installation": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.skills.list",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "page_size": {
+            "type": "integer",
+            "presence": {
+              "omitted": "server_default"
+            }
+          },
+          "page_token": {
+            "type": "string",
+            "presence": {
+              "omitted": "first_page"
+            }
+          },
+          "source": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "response": {
+          "installations": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "next_page_token": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.skills.install",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "candidate": {
+            "type": "object",
+            "required": true
+          },
+          "expected_revision": {
+            "type": "integer",
+            "presence": {
+              "omitted": "no_revision_check",
+              "present": "must_match_current_revision"
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          },
+          "secret_inputs": {
+            "type": "array",
+            "write_only": true,
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        "response": {
+          "confirmation_id": {
+            "type": "string"
+          },
+          "installation": {
+            "type": "object"
+          },
+          "task_id": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.skills.update",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "candidate": {
+            "type": "object",
+            "required": true
+          },
+          "expected_revision": {
+            "type": "integer",
+            "presence": {
+              "omitted": "no_revision_check",
+              "present": "must_match_current_revision"
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          },
+          "secret_inputs": {
+            "type": "array",
+            "write_only": true,
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        "response": {
+          "confirmation_id": {
+            "type": "string"
+          },
+          "installation": {
+            "type": "object"
+          },
+          "task_id": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.skills.remove",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "expected_revision": {
+            "type": "integer",
+            "presence": {
+              "omitted": "no_revision_check",
+              "present": "must_match_current_revision"
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          },
+          "installation_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "confirmation_id": {
+            "type": "string"
+          },
+          "installation": {
+            "type": "object"
+          },
+          "task_id": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.skills.execute",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "expected_revision": {
+            "type": "integer",
+            "presence": {
+              "omitted": "no_revision_check",
+              "present": "must_match_current_revision"
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          },
+          "input": {
+            "type": "object"
+          },
+          "installation_id": {
+            "type": "string",
+            "required": true
+          },
+          "tool_name": {
+            "type": "string",
+            "presence": {
+              "omitted": "skill_execution",
+              "present": "MCP_tool_name"
+            }
+          }
+        },
+        "response": {
+          "task_id": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
       "name": "agent.chat",
       "auth": "owner",
       "transport": "http_and_ws_request"

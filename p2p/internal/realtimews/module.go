@@ -74,12 +74,35 @@ type DurableAgentStreamPort interface {
 	DurableStream(context.Context, string, string, map[string]any, func(agentturns.StreamEvent) error) error
 }
 
+// CoreStreamEvent is the sanitized projection emitted by the deployment-bound
+// Agent Core adapter. It contains no upstream error text or request body.
+type CoreStreamEvent struct {
+	Kind, TurnID, CoreTurnID, ConversationID, Event, Code, Summary string
+	Retryable                                                      bool
+	Seq, FirstSeq, LastSeq                                         int64
+	Data                                                           map[string]any
+}
+
+// CoreTerminalProjectionError carries the authoritative terminal projection
+// when a cancel races with a turn that has already completed upstream.
+// Callers must render the projection rather than synthesize a seq-zero event.
+type CoreTerminalProjectionError interface {
+	error
+	CoreTerminalEvent() CoreStreamEvent
+}
+
+type CoreStreamPort interface {
+	StartCoreStream(context.Context, string, string, map[string]any, int64, func(CoreStreamEvent) error) error
+	CancelCoreStream(context.Context, string, string) error
+}
+
 type Dependencies struct {
 	Actions  ActionPort
 	Events   EventPort
 	Sessions SessionPort
 	Plugins  PluginStreamPort
 	Agent    AgentStreamPort
+	Core     CoreStreamPort
 	// TicketActive fences a consumed ticket against root account lifecycle
 	// changes after the module releases its ticket lock.
 	TicketActive func(Ticket) bool
@@ -97,6 +120,7 @@ type Module struct {
 	sessions     SessionPort
 	plugins      PluginStreamPort
 	agent        AgentStreamPort
+	core         CoreStreamPort
 	ticketActive func(Ticket) bool
 	now          func() time.Time
 	newToken     func(string) string
@@ -117,6 +141,7 @@ func New(deps Dependencies, cfg Config) *Module {
 		sessions:     deps.Sessions,
 		plugins:      deps.Plugins,
 		agent:        deps.Agent,
+		core:         deps.Core,
 		ticketActive: deps.TicketActive,
 		now:          cfg.Now,
 		newToken:     cfg.NewToken,

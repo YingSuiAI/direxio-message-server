@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	einotool "github.com/cloudwego/eino/components/tool"
 )
 
 func TestModelLoopCallsToolThenFinalizesAndStoresMemory(t *testing.T) {
@@ -101,60 +99,16 @@ func TestModelLoopCallsToolThenFinalizesAndStoresMemory(t *testing.T) {
 	}
 }
 
-func TestModelLoopCanCallInstalledRuntimeCLITool(t *testing.T) {
-	var requestCount int
-	var sawRuntimeOutput bool
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requestCount++
-		var payload map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			t.Fatalf("decode model request: %v", err)
-		}
-		messages, _ := payload["messages"].([]any)
-		for _, raw := range messages {
-			message, _ := raw.(map[string]any)
-			if message["role"] == "tool" && strings.Contains(trimString(message["content"]), "runtime-eino from-model") {
-				sawRuntimeOutput = true
-			}
-		}
-		w.Header().Set("Content-Type", "application/json")
-		if requestCount == 1 {
-			_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"call_runtime","type":"function","function":{"name":"runtime__hello_agent","arguments":"{\"args\":[\"from-model\"]}"}}]}}]}`))
-			return
-		}
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"CLI 已执行并返回结果。"}}]}`))
-	}))
-	defer server.Close()
-
-	store := &testConfigStore{config: map[string]any{}}
-	runtime := New(Config{DataDir: filepath.Join(t.TempDir(), "agent"), Store: store})
-	if _, err := runtime.Invoke(context.Background(), "agent.runtime.install", map[string]any{
-		"id":       "hello-agent",
-		"filename": runtimeTestToolFilename("hello-agent"),
-		"content":  runtimeTestToolContent("runtime-eino", true),
-	}); err != nil {
-		t.Fatalf("install runtime tool: %v", err)
-	}
-	result, err := runtime.Invoke(context.Background(), "agent.chat", map[string]any{
-		"prompt": "调用 hello-agent 工具并总结",
-		"model_profile": map[string]any{
-			"provider": "openai_compatible",
-			"model":    "mock-model",
-			"base_url": server.URL,
-			"api_key":  "test-key",
-		},
-	})
-	if err != nil {
-		t.Fatalf("agent chat failed: %v", err)
-	}
-	if requestCount != 2 || !sawRuntimeOutput || result["text"] != "CLI 已执行并返回结果。" {
-		t.Fatalf("expected runtime CLI tool loop, requestCount=%d sawRuntimeOutput=%v result=%#v", requestCount, sawRuntimeOutput, result)
+func TestModelRuntimeCLIActionIsForbidden(t *testing.T) {
+	runtime := New(Config{})
+	if _, err := runtime.Invoke(context.Background(), "agent.runtime.install", nil); err == nil || err.Error() != embeddedExtensionsForbiddenMessage {
+		t.Fatalf("runtime install = %v, want stable forbidden error", err)
 	}
 }
 
-func TestModelLoopCanCallBuiltInRuntimeShellTool(t *testing.T) {
+func TestModelRequestedRuntimeShellIsDeniedWithoutExecution(t *testing.T) {
 	var requestCount int
-	var sawShellOutput bool
+	var denied bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestCount++
 		var payload map[string]any
@@ -164,8 +118,9 @@ func TestModelLoopCanCallBuiltInRuntimeShellTool(t *testing.T) {
 		messages, _ := payload["messages"].([]any)
 		for _, raw := range messages {
 			message, _ := raw.(map[string]any)
-			if message["role"] == "tool" && strings.Contains(trimString(message["content"]), "shell-eino") {
-				sawShellOutput = true
+			content := trimString(message["content"])
+			if message["role"] == "tool" && strings.Contains(content, "runtime__shell") && strings.Contains(content, "not available") {
+				denied = true
 			}
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -173,13 +128,13 @@ func TestModelLoopCanCallBuiltInRuntimeShellTool(t *testing.T) {
 			_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"call_shell","type":"function","function":{"name":"runtime__shell","arguments":"{\"command\":\"printf shell-eino\"}"}}]}}]}`))
 			return
 		}
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"Shell 已执行并返回结果。"}}]}`))
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"嵌入式运行时不提供 shell 命令执行。"}}]}`))
 	}))
 	defer server.Close()
 
 	runtime := New(Config{DataDir: filepath.Join(t.TempDir(), "agent"), Store: &testConfigStore{config: map[string]any{}}})
 	result, err := runtime.Invoke(context.Background(), "agent.chat", map[string]any{
-		"prompt": "执行 shell 命令并总结",
+		"prompt": "执行 shell 命令",
 		"model_profile": map[string]any{
 			"provider": "openai_compatible",
 			"model":    "mock-model",
@@ -190,14 +145,14 @@ func TestModelLoopCanCallBuiltInRuntimeShellTool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("agent chat failed: %v", err)
 	}
-	if requestCount != 2 || !sawShellOutput || result["text"] != "Shell 已执行并返回结果。" {
-		t.Fatalf("expected runtime shell tool loop, requestCount=%d sawShellOutput=%v result=%#v", requestCount, sawShellOutput, result)
+	if requestCount != 2 || !denied || result["text"] != "嵌入式运行时不提供 shell 命令执行。" {
+		t.Fatalf("shell must be denied, requestCount=%d denied=%v result=%#v", requestCount, denied, result)
 	}
 }
 
-func TestRuntimeShellToolCanBeDisabled(t *testing.T) {
+func TestRuntimeShellIsAbsentFromEinoRegistry(t *testing.T) {
 	runtime := New(Config{DataDir: filepath.Join(t.TempDir(), "agent")})
-	tools, cleanup, err := runtime.enabledEinoTools(context.Background(), map[string]any{"runtime_shell_enabled": false}, map[string]any{})
+	tools, cleanup, err := runtime.enabledEinoTools(context.Background(), map[string]any{"runtime_shell_enabled": true}, map[string]any{})
 	if err != nil {
 		t.Fatalf("enabled Eino tools: %v", err)
 	}
@@ -208,12 +163,12 @@ func TestRuntimeShellToolCanBeDisabled(t *testing.T) {
 			t.Fatalf("tool info: %v", err)
 		}
 		if info.Name == "runtime__shell" {
-			t.Fatalf("runtime__shell should be disabled")
+			t.Fatalf("runtime__shell must be absent")
 		}
 	}
 }
 
-func TestRuntimeShellEinoToolRunsCommand(t *testing.T) {
+func TestRuntimeShellEinoToolIsAbsent(t *testing.T) {
 	runtime := New(Config{DataDir: filepath.Join(t.TempDir(), "agent")})
 	tools, cleanup, err := runtime.enabledEinoTools(context.Background(), map[string]any{}, nil)
 	if err != nil {
@@ -228,28 +183,15 @@ func TestRuntimeShellEinoToolRunsCommand(t *testing.T) {
 		if info.Name != "runtime__shell" {
 			continue
 		}
-		invokable, ok := tool.(interface {
-			InvokableRun(context.Context, string, ...einotool.Option) (string, error)
-		})
-		if !ok {
-			t.Fatalf("runtime__shell is not invokable")
-		}
-		result, err := invokable.InvokableRun(context.Background(), `{"command":"printf shell-direct"}`)
-		if err != nil {
-			t.Fatalf("run runtime shell tool: %v", err)
-		}
-		if !strings.Contains(result, "shell-direct") {
-			t.Fatalf("expected shell output, got %s", result)
-		}
-		return
+		t.Fatal("runtime__shell must be absent from the Eino registry")
 	}
-	t.Fatalf("expected runtime__shell tool")
+	// Reaching here proves the complete Eino registry contains no shell tool.
 }
 
 func TestModelLoopHonorsConfiguredMaxToolCalls(t *testing.T) {
-	const shellCalls = 8
+	const toolCalls = 8
 	var requestCount int
-	var observedShellResults int
+	var observedToolResults int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestCount++
 		var payload map[string]any
@@ -259,29 +201,32 @@ func TestModelLoopHonorsConfiguredMaxToolCalls(t *testing.T) {
 		messages, _ := payload["messages"].([]any)
 		for _, raw := range messages {
 			message, _ := raw.(map[string]any)
-			if message["role"] == "tool" && strings.Contains(trimString(message["content"]), "shell-loop-") {
-				observedShellResults++
+			if message["role"] == "tool" && strings.Contains(trimString(message["content"]), "compiled-loop-") {
+				observedToolResults++
 			}
 		}
 		w.Header().Set("Content-Type", "application/json")
-		if requestCount <= shellCalls {
-			callID := "call_shell_" + string(rune('0'+requestCount))
-			body := `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"` + callID + `","type":"function","function":{"name":"runtime__shell","arguments":"{\"command\":\"printf shell-loop-` + callID + `\"}"}}]}}]}`
+		if requestCount <= toolCalls {
+			callID := "call_tool_" + string(rune('0'+requestCount))
+			body := `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"` + callID + `","type":"function","function":{"name":"dirextalk_contacts_list","arguments":"{\"query\":\"compiled-loop-` + callID + `\"}"}}]}}]}`
 			_, _ = w.Write([]byte(body))
 			return
 		}
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"所有 shell 步骤已完成。"}}]}`))
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"所有编译内工具步骤已完成。"}}]}`))
 	}))
 	defer server.Close()
 
 	runtime := New(Config{
 		DataDir: filepath.Join(t.TempDir(), "agent"),
 		Store: &testConfigStore{config: map[string]any{
-			"max_tool_calls": shellCalls,
+			"max_tool_calls": toolCalls,
 		}},
+		Tools: []Tool{{Name: "dirextalk_contacts_list", Handler: func(_ context.Context, args map[string]any) (any, error) {
+			return map[string]any{"result": trimString(args["query"])}, nil
+		}}},
 	})
 	result, err := runtime.Invoke(context.Background(), "agent.chat", map[string]any{
-		"prompt": "连续执行多个 shell 步骤",
+		"prompt": "连续执行多个编译内工具步骤",
 		"model_profile": map[string]any{
 			"provider": "openai_compatible",
 			"model":    "mock-model",
@@ -292,12 +237,12 @@ func TestModelLoopHonorsConfiguredMaxToolCalls(t *testing.T) {
 	if err != nil {
 		t.Fatalf("agent chat failed: %v", err)
 	}
-	if requestCount != shellCalls+1 || observedShellResults < shellCalls || result["text"] != "所有 shell 步骤已完成。" {
-		t.Fatalf("expected configured shell loop to finish, requestCount=%d observedShellResults=%d result=%#v", requestCount, observedShellResults, result)
+	if requestCount != toolCalls+1 || observedToolResults < toolCalls || result["text"] != "所有编译内工具步骤已完成。" {
+		t.Fatalf("expected configured compiled-tool loop to finish, requestCount=%d observedToolResults=%d result=%#v", requestCount, observedToolResults, result)
 	}
 }
 
-func TestModelLoopCanInstallSkillFromDialogue(t *testing.T) {
+func TestModelRequestedSkillInstallIsDenied(t *testing.T) {
 	var requestCount int
 	var sawInstallResult bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -318,7 +263,7 @@ func TestModelLoopCanInstallSkillFromDialogue(t *testing.T) {
 			_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"call_skill_install","type":"function","function":{"name":"native_agent_skills_install","arguments":"{\"id\":\"dialogue-skill\",\"content\":\"# Skill\\n\\nWhen installed, say DIALOGUE_SKILL_READY.\"}"}}]}}]}`))
 			return
 		}
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"Skill 已安装，下一轮对话会启用。"}}]}`))
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"嵌入式运行时不支持安装 Skill。"}}]}`))
 	}))
 	defer server.Close()
 
@@ -335,27 +280,27 @@ func TestModelLoopCanInstallSkillFromDialogue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("agent chat failed: %v", err)
 	}
-	if requestCount != 2 || !sawInstallResult || result["text"] != "Skill 已安装，下一轮对话会启用。" {
-		t.Fatalf("expected dialogue skill install loop, requestCount=%d sawInstallResult=%v result=%#v", requestCount, sawInstallResult, result)
+	if requestCount != 2 || !sawInstallResult || result["text"] != "嵌入式运行时不支持安装 Skill。" || strings.Contains(trimString(result["text"]), "已安装") {
+		t.Fatalf("model must receive a denied mutable-skill result and reject success claims, requestCount=%d sawInstallResult=%v result=%#v", requestCount, sawInstallResult, result)
 	}
 	steps, ok := result["steps"].([]map[string]any)
 	if !ok || !traceHasStep(steps, "tool_call", "native_agent_skills_install") {
-		t.Fatalf("expected skill install trace step, got %#v", result["steps"])
+		t.Fatalf("model tool request should remain observable while execution is denied, got %#v", result["steps"])
 	}
 	list, err := runtime.skillsList(context.Background())
 	if err != nil {
 		t.Fatalf("list skills: %v", err)
 	}
 	skills := list["skills"].([]map[string]any)
-	if len(skills) != 1 || skills[0]["id"] != "dialogue-skill" {
-		t.Fatalf("expected dialogue skill installed, got %#v", list)
+	if len(skills) != 0 {
+		t.Fatalf("mutable skill must not be installed, got %#v", list)
 	}
 	config, _, err := runtime.agentConfig(context.Background())
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	if prompt := runtime.enabledSkillsPrompt(context.Background(), config); !strings.Contains(prompt, "DIALOGUE_SKILL_READY") {
-		t.Fatalf("expected installed skill in next prompt, got %q", prompt)
+	if prompt := runtime.enabledSkillsPrompt(context.Background(), config); strings.Contains(prompt, "DIALOGUE_SKILL_READY") {
+		t.Fatalf("mutable skill must not reach next prompt, got %q", prompt)
 	}
 }
 
@@ -379,8 +324,8 @@ func TestConfigEnabledToolsStillExposeDialogueManagementTools(t *testing.T) {
 		}
 		names[info.Name] = true
 	}
-	if !names["native_agent_skills_install"] || !names["native_agent_mcp_servers_install"] {
-		t.Fatalf("expected config-level enabled_tools to keep dialogue management tools, got %#v", names)
+	if names["native_agent_skills_install"] || names["native_agent_mcp_servers_install"] {
+		t.Fatalf("config-level enabled_tools must not add management tools, got %#v", names)
 	}
 
 	requestTools, requestCleanup, err := runtime.enabledEinoTools(context.Background(), map[string]any{
@@ -400,8 +345,8 @@ func TestConfigEnabledToolsStillExposeDialogueManagementTools(t *testing.T) {
 		}
 		requestNames[info.Name] = true
 	}
-	if !requestNames["native_agent_skills_install"] || !requestNames["native_agent_mcp_servers_install"] {
-		t.Fatalf("request-level enabled_tools must keep dialogue management tools, got %#v", requestNames)
+	if requestNames["native_agent_skills_install"] || requestNames["native_agent_mcp_servers_install"] {
+		t.Fatalf("request-level enabled_tools must not add management tools, got %#v", requestNames)
 	}
 }
 

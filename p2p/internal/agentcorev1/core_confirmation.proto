@@ -1,0 +1,98 @@
+syntax = "proto3";
+
+package dirextalk.agent.v1;
+
+option go_package = "github.com/YingSuiAI/dirextalk-agent/api/gen/dirextalk/agent/v1;agentv1";
+
+import "google/protobuf/timestamp.proto";
+
+enum CoreConfirmationState {
+  CORE_CONFIRMATION_STATE_UNSPECIFIED = 0;
+  CORE_CONFIRMATION_STATE_PENDING = 1;
+  CORE_CONFIRMATION_STATE_CONFIRMED = 2;
+  CORE_CONFIRMATION_STATE_CONSUMED = 3;
+  CORE_CONFIRMATION_STATE_REJECTED = 4;
+  CORE_CONFIRMATION_STATE_EXPIRED = 5;
+}
+
+// Binding contains only public, immutable facts and digests. Secret bytes and
+// arbitrary credentials are intentionally not representable in this message.
+message CoreConfirmationBinding {
+  string operation_domain = 1;
+  string target_id = 2;
+  int64 target_revision = 3;
+  string source_version = 4;
+  string source_commit = 5;
+  string content_digest = 6;
+  string parameter_digest = 7;
+  string network_digest = 8;
+  string secret_grant_digest = 9;
+  repeated string network_grants = 10;
+  repeated CoreSecretGrantDescriptor secret_grants = 11;
+}
+
+message CoreSecretGrantDescriptor {
+  string reference_id = 1;
+  CoreSecretGrantPurpose purpose = 2;
+  string binding_digest = 3;
+}
+
+enum CoreSecretGrantPurpose {
+  CORE_SECRET_GRANT_PURPOSE_UNSPECIFIED = 0;
+  CORE_SECRET_GRANT_PURPOSE_MODEL_API_KEY = 1;
+  CORE_SECRET_GRANT_PURPOSE_MCP_CREDENTIAL = 2;
+  CORE_SECRET_GRANT_PURPOSE_SKILL_SECRET = 3;
+  CORE_SECRET_GRANT_PURPOSE_AWS_CREDENTIAL = 4;
+  CORE_SECRET_GRANT_PURPOSE_OTHER_EXTENSION_SECRET = 5;
+}
+
+message CoreConfirmation {
+  string confirmation_id = 1;
+  CoreConfirmationBinding binding = 2;
+  string task_id = 3;
+  CoreConfirmationState state = 4;
+  int64 revision = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp updated_at = 7;
+  google.protobuf.Timestamp expires_at = 8;
+  string terminal_reason = 9;
+  string terminal_code = 10;
+  string terminal_note = 11;
+}
+
+message ConfirmationServiceGetRequest { string confirmation_id = 1; }
+message ConfirmationServiceGetResponse { CoreConfirmation confirmation = 1; }
+
+message ConfirmationServiceListRequest {
+  int32 page_size = 1;
+  string page_token = 2;
+  string operation_domain = 3;
+  string target_id = 4;
+  repeated CoreConfirmationState states = 5;
+}
+message ConfirmationServiceListResponse {
+  repeated CoreConfirmation confirmations = 1;
+  string next_page_token = 2;
+}
+
+message ConfirmationServiceConfirmRequest {
+  string confirmation_id = 1;
+  string idempotency_key = 2;
+  int64 expected_revision = 3;
+}
+message ConfirmationServiceConfirmResponse { CoreConfirmation confirmation = 1; }
+
+message ConfirmationServiceRejectRequest {
+  string confirmation_id = 1;
+  string idempotency_key = 2;
+  int64 expected_revision = 3;
+  string reason = 4;
+}
+message ConfirmationServiceRejectResponse { CoreConfirmation confirmation = 1; }
+
+service ConfirmationService {
+  rpc Get(ConfirmationServiceGetRequest) returns (ConfirmationServiceGetResponse);
+  rpc List(ConfirmationServiceListRequest) returns (ConfirmationServiceListResponse);
+  rpc Confirm(ConfirmationServiceConfirmRequest) returns (ConfirmationServiceConfirmResponse);
+  rpc Reject(ConfirmationServiceRejectRequest) returns (ConfirmationServiceRejectResponse);
+}

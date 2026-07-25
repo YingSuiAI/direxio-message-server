@@ -1,0 +1,101 @@
+syntax = "proto3";
+
+package dirextalk.agent.v1;
+
+option go_package = "github.com/YingSuiAI/dirextalk-agent/api/gen/dirextalk/agent/v1;agentv1";
+
+import "google/protobuf/timestamp.proto";
+import "dirextalk/agent/v1/core_task.proto";
+
+enum CoreScheduleState {
+  CORE_SCHEDULE_STATE_UNSPECIFIED = 0;
+  CORE_SCHEDULE_STATE_ACTIVE = 1;
+  CORE_SCHEDULE_STATE_PAUSED = 2;
+  CORE_SCHEDULE_STATE_DELETED = 3;
+}
+
+message CoreSchedule {
+  string schedule_id = 1;
+  string name = 2;
+  CoreTaskTemplate task_template = 3;
+  CoreScheduleTrigger trigger = 4;
+  CoreScheduleState state = 7;
+  google.protobuf.Timestamp next_run_at = 8;
+  google.protobuf.Timestamp last_scheduled_for = 9;
+  int64 revision = 10;
+  google.protobuf.Timestamp created_at = 11;
+  google.protobuf.Timestamp updated_at = 12;
+}
+
+message CoreCronTrigger {
+  string expression = 1;
+  string timezone = 2;
+}
+message CoreScheduleTrigger {
+  oneof trigger {
+    google.protobuf.Timestamp run_at = 1;
+    CoreCronTrigger cron = 2;
+  }
+}
+
+message ScheduleServiceCreateRequest {
+  string idempotency_key = 1;
+  string name = 2;
+  CoreTaskTemplate task_template = 3;
+  CoreScheduleTrigger trigger = 4;
+}
+message ScheduleServiceCreateResponse { CoreSchedule schedule = 1; }
+message ScheduleServiceGetRequest { string schedule_id = 1; }
+message ScheduleServiceGetResponse { CoreSchedule schedule = 1; }
+message ScheduleServiceListRequest { int32 page_size = 1; string page_token = 2; }
+message ScheduleServiceListResponse {
+  repeated CoreSchedule schedules = 1;
+  string next_page_token = 2;
+}
+message ScheduleServiceUpdateRequest {
+  string idempotency_key = 1;
+  string schedule_id = 2;
+  int64 expected_revision = 3;
+  optional string name = 4;
+  CoreTaskTemplate task_template = 5;
+  CoreScheduleTrigger trigger = 6;
+}
+message ScheduleServiceUpdateResponse { CoreSchedule schedule = 1; }
+message ScheduleServicePauseRequest {
+  string idempotency_key = 1;
+  string schedule_id = 2;
+  int64 expected_revision = 3;
+}
+message ScheduleServicePauseResponse { CoreSchedule schedule = 1; }
+message ScheduleServiceResumeRequest {
+  string idempotency_key = 1;
+  string schedule_id = 2;
+  int64 expected_revision = 3;
+}
+message ScheduleServiceResumeResponse { CoreSchedule schedule = 1; }
+message ScheduleServiceTriggerNowRequest {
+  string idempotency_key = 1;
+  string schedule_id = 2;
+}
+message ScheduleServiceTriggerNowResponse {
+  CoreSchedule schedule = 1;
+  string occurrence_id = 2;
+  string task_id = 3;
+}
+message ScheduleServiceDeleteRequest {
+  string idempotency_key = 1;
+  string schedule_id = 2;
+  int64 expected_revision = 3;
+}
+message ScheduleServiceDeleteResponse {}
+
+service ScheduleService {
+  rpc Create(ScheduleServiceCreateRequest) returns (ScheduleServiceCreateResponse);
+  rpc Get(ScheduleServiceGetRequest) returns (ScheduleServiceGetResponse);
+  rpc List(ScheduleServiceListRequest) returns (ScheduleServiceListResponse);
+  rpc Update(ScheduleServiceUpdateRequest) returns (ScheduleServiceUpdateResponse);
+  rpc Pause(ScheduleServicePauseRequest) returns (ScheduleServicePauseResponse);
+  rpc Resume(ScheduleServiceResumeRequest) returns (ScheduleServiceResumeResponse);
+  rpc TriggerNow(ScheduleServiceTriggerNowRequest) returns (ScheduleServiceTriggerNowResponse);
+  rpc Delete(ScheduleServiceDeleteRequest) returns (ScheduleServiceDeleteResponse);
+}

@@ -178,6 +178,9 @@ func (m *Module) invoke(action string) actionbase.Handler {
 		}
 		result, err := m.runner.Invoke(ctx, strings.TrimSpace(action), cloneMap(params))
 		if err != nil {
+			if nativeagent.IsEmbeddedExtensionsForbidden(err) {
+				return nil, actionbase.StatusError(http.StatusForbidden, err.Error())
+			}
 			return nil, actionbase.StatusError(http.StatusBadGateway, err.Error())
 		}
 		return result, nil

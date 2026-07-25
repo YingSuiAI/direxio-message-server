@@ -1,5 +1,10 @@
 # Current Agent and MCP Contract
 
+> The approved, not-yet-implemented Agent Core reconnection target is defined in
+> [`agent-core-integration-development-contract.md`](agent-core-integration-development-contract.md).
+> This file continues to describe the implemented baseline until the integration
+> passes its acceptance gates.
+
 This document is the backend-owned current contract for Dirextalk Agent state, Native Agent, and external MCP access. It describes existing behavior; it does not add a compatibility surface.
 
 ## External MCP

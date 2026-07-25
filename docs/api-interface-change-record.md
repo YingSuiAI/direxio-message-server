@@ -2,6 +2,50 @@
 
 Last updated: 2026-07-23
 
+## 2026-07-25 Agent Core control-plane bridge
+
+Added owner-only `agent.core.tasks.*`, `agent.core.schedules.*`,
+`agent.core.confirmations.*`, `agent.core.mcp.*`, and `agent.core.skills.*`
+actions over the deployment-bound Agent v1 TLS/token channel. Task events are
+bounded replay reads; mutation requests carry idempotency keys and optional
+revision preconditions, and all pagination, enum, and timestamp values are
+normalized at the ProductCore boundary. Core status capabilities gate every
+optional family, so absent token capabilities return a precondition result.
+Projections omit upstream errors, credentials, token/endpoint values,
+secret bytes, install material, and runtime/artifact paths; summaries are
+bounded and sanitized. Core gRPC statuses use the stable
+`agent_core_*` mapping documented by the integration contract. The
+versioned Schedule, Confirmation, Task, and Extension protobuf snapshots are
+copied from Agent baseline `11eed51e2a9e6431f28039a542f2424f290e6fff`.
+
+## 2026-07-25 Agent Core model profiles
+
+Added owner-only `agent.core.model_profiles.sync`, `.list`, `.get`, and
+`.delete` actions. The adapter calls the versioned Core `ModelProfileService`
+over authenticated TLS with bounded unary deadlines. Sync forwards one atomic
+batch, complete non-secret settings, optional expected revisions, the selected
+default client profile, and API-key presence only when explicitly supplied;
+keys are write-only and are never persisted, logged, echoed, or included in
+responses. Profile projections expose only safe metadata and
+`api_key_configured`. Core gRPC statuses map to stable ProductCore status/code
+pairs (`agent_core_invalid_argument`, `agent_core_trust_failed`,
+`agent_core_not_found`, `agent_core_conflict`,
+`agent_core_precondition_failed`, `agent_core_unavailable`, and
+`agent_core_upstream_failed`) without forwarding upstream text. The
+`model.profile` capability is now implemented; Core remains incompatible until
+the required conversation adapter is present.
+
+## 2026-07-25 Agent Core Discovery
+
+Owner-only `agent.backends.get` and `agent.core.status.get` expose the
+deployment-bound Agent Core discovery projection. Core is configured only by
+protected `P2P_AGENT_CORE_*` deployment inputs and is probed over authenticated
+TLS 1.3 gRPC `AgentService` v1. An incomplete enabled configuration fails
+startup; an unreachable peer is reported as `unavailable` without blocking
+startup. Responses contain only the fixed capability intersection and model
+provider identifiers and never expose Core addresses, certificate/token paths,
+tokens, or upstream error text. Backend selection remains client-local.
+
 ## 2026-07-23 Native Agent Anthropic, Gemini, And xAI Model Lists
 
 `agent.models.list` now fetches Anthropic's real `GET /v1/models` endpoint with the request-scoped `x-api-key` and `anthropic-version` headers. `gemini` and `xai` are now supported Native Agent providers. Gemini exposes `https://generativelanguage.googleapis.com/v1beta` as its client-visible provider base and uses its native `/models`, `generateContent`, and `streamGenerateContent` routes with `x-goog-api-key`; custom Gemini-native gateways use the same contract and a root URL is normalized to `/v1beta`. xAI uses `https://api.x.ai/v1`. Provider API keys remain request-scoped on the server and are never returned.
