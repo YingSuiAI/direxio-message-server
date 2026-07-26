@@ -80,6 +80,52 @@ func (CoreConfirmationState) EnumDescriptor() ([]byte, []int) {
 	return file_dirextalk_agent_v1_core_confirmation_proto_rawDescGZIP(), []int{0}
 }
 
+type CoreExtensionExecutionUncertainResolution int32
+
+const (
+	CoreExtensionExecutionUncertainResolution_CORE_EXTENSION_EXECUTION_UNCERTAIN_RESOLUTION_UNSPECIFIED                   CoreExtensionExecutionUncertainResolution = 0
+	CoreExtensionExecutionUncertainResolution_CORE_EXTENSION_EXECUTION_UNCERTAIN_RESOLUTION_ACKNOWLEDGED_UNKNOWN_NO_RETRY CoreExtensionExecutionUncertainResolution = 1
+)
+
+// Enum value maps for CoreExtensionExecutionUncertainResolution.
+var (
+	CoreExtensionExecutionUncertainResolution_name = map[int32]string{
+		0: "CORE_EXTENSION_EXECUTION_UNCERTAIN_RESOLUTION_UNSPECIFIED",
+		1: "CORE_EXTENSION_EXECUTION_UNCERTAIN_RESOLUTION_ACKNOWLEDGED_UNKNOWN_NO_RETRY",
+	}
+	CoreExtensionExecutionUncertainResolution_value = map[string]int32{
+		"CORE_EXTENSION_EXECUTION_UNCERTAIN_RESOLUTION_UNSPECIFIED":                   0,
+		"CORE_EXTENSION_EXECUTION_UNCERTAIN_RESOLUTION_ACKNOWLEDGED_UNKNOWN_NO_RETRY": 1,
+	}
+)
+
+func (x CoreExtensionExecutionUncertainResolution) Enum() *CoreExtensionExecutionUncertainResolution {
+	p := new(CoreExtensionExecutionUncertainResolution)
+	*p = x
+	return p
+}
+
+func (x CoreExtensionExecutionUncertainResolution) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (CoreExtensionExecutionUncertainResolution) Descriptor() protoreflect.EnumDescriptor {
+	return file_dirextalk_agent_v1_core_confirmation_proto_enumTypes[1].Descriptor()
+}
+
+func (CoreExtensionExecutionUncertainResolution) Type() protoreflect.EnumType {
+	return &file_dirextalk_agent_v1_core_confirmation_proto_enumTypes[1]
+}
+
+func (x CoreExtensionExecutionUncertainResolution) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use CoreExtensionExecutionUncertainResolution.Descriptor instead.
+func (CoreExtensionExecutionUncertainResolution) EnumDescriptor() ([]byte, []int) {
+	return file_dirextalk_agent_v1_core_confirmation_proto_rawDescGZIP(), []int{1}
+}
+
 type CoreSecretGrantPurpose int32
 
 const (
@@ -122,11 +168,11 @@ func (x CoreSecretGrantPurpose) String() string {
 }
 
 func (CoreSecretGrantPurpose) Descriptor() protoreflect.EnumDescriptor {
-	return file_dirextalk_agent_v1_core_confirmation_proto_enumTypes[1].Descriptor()
+	return file_dirextalk_agent_v1_core_confirmation_proto_enumTypes[2].Descriptor()
 }
 
 func (CoreSecretGrantPurpose) Type() protoreflect.EnumType {
-	return &file_dirextalk_agent_v1_core_confirmation_proto_enumTypes[1]
+	return &file_dirextalk_agent_v1_core_confirmation_proto_enumTypes[2]
 }
 
 func (x CoreSecretGrantPurpose) Number() protoreflect.EnumNumber {
@@ -135,7 +181,7 @@ func (x CoreSecretGrantPurpose) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use CoreSecretGrantPurpose.Descriptor instead.
 func (CoreSecretGrantPurpose) EnumDescriptor() ([]byte, []int) {
-	return file_dirextalk_agent_v1_core_confirmation_proto_rawDescGZIP(), []int{1}
+	return file_dirextalk_agent_v1_core_confirmation_proto_rawDescGZIP(), []int{2}
 }
 
 // Binding contains only public, immutable facts and digests. Secret bytes and
@@ -153,6 +199,13 @@ type CoreConfirmationBinding struct {
 	SecretGrantDigest string                       `protobuf:"bytes,9,opt,name=secret_grant_digest,json=secretGrantDigest,proto3" json:"secret_grant_digest,omitempty"`
 	NetworkGrants     []string                     `protobuf:"bytes,10,rep,name=network_grants,json=networkGrants,proto3" json:"network_grants,omitempty"`
 	SecretGrants      []*CoreSecretGrantDescriptor `protobuf:"bytes,11,rep,name=secret_grants,json=secretGrants,proto3" json:"secret_grants,omitempty"`
+	OwnerId           string                       `protobuf:"bytes,12,opt,name=owner_id,json=ownerId,proto3" json:"owner_id,omitempty"`
+	TargetKind        string                       `protobuf:"bytes,13,opt,name=target_kind,json=targetKind,proto3" json:"target_kind,omitempty"`
+	ManifestDigest    string                       `protobuf:"bytes,14,opt,name=manifest_digest,json=manifestDigest,proto3" json:"manifest_digest,omitempty"`
+	ExecutionDigest   string                       `protobuf:"bytes,15,opt,name=execution_digest,json=executionDigest,proto3" json:"execution_digest,omitempty"`
+	PermissionDigest  string                       `protobuf:"bytes,16,opt,name=permission_digest,json=permissionDigest,proto3" json:"permission_digest,omitempty"`
+	SelectedTool      string                       `protobuf:"bytes,17,opt,name=selected_tool,json=selectedTool,proto3" json:"selected_tool,omitempty"`
+	SelectedCommand   []string                     `protobuf:"bytes,18,rep,name=selected_command,json=selectedCommand,proto3" json:"selected_command,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -260,6 +313,55 @@ func (x *CoreConfirmationBinding) GetNetworkGrants() []string {
 func (x *CoreConfirmationBinding) GetSecretGrants() []*CoreSecretGrantDescriptor {
 	if x != nil {
 		return x.SecretGrants
+	}
+	return nil
+}
+
+func (x *CoreConfirmationBinding) GetOwnerId() string {
+	if x != nil {
+		return x.OwnerId
+	}
+	return ""
+}
+
+func (x *CoreConfirmationBinding) GetTargetKind() string {
+	if x != nil {
+		return x.TargetKind
+	}
+	return ""
+}
+
+func (x *CoreConfirmationBinding) GetManifestDigest() string {
+	if x != nil {
+		return x.ManifestDigest
+	}
+	return ""
+}
+
+func (x *CoreConfirmationBinding) GetExecutionDigest() string {
+	if x != nil {
+		return x.ExecutionDigest
+	}
+	return ""
+}
+
+func (x *CoreConfirmationBinding) GetPermissionDigest() string {
+	if x != nil {
+		return x.PermissionDigest
+	}
+	return ""
+}
+
+func (x *CoreConfirmationBinding) GetSelectedTool() string {
+	if x != nil {
+		return x.SelectedTool
+	}
+	return ""
+}
+
+func (x *CoreConfirmationBinding) GetSelectedCommand() []string {
+	if x != nil {
+		return x.SelectedCommand
 	}
 	return nil
 }
@@ -880,11 +982,171 @@ func (x *ConfirmationServiceRejectResponse) GetConfirmation() *CoreConfirmation 
 	return nil
 }
 
+type ConfirmationServiceAcknowledgeExtensionExecutionUncertainRequest struct {
+	state                        protoimpl.MessageState                    `protogen:"open.v1"`
+	ConfirmationId               string                                    `protobuf:"bytes,1,opt,name=confirmation_id,json=confirmationId,proto3" json:"confirmation_id,omitempty"`
+	TaskId                       string                                    `protobuf:"bytes,2,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
+	InstallationId               string                                    `protobuf:"bytes,3,opt,name=installation_id,json=installationId,proto3" json:"installation_id,omitempty"`
+	ExpectedTaskRevision         int64                                     `protobuf:"varint,4,opt,name=expected_task_revision,json=expectedTaskRevision,proto3" json:"expected_task_revision,omitempty"`
+	ExpectedConfirmationRevision int64                                     `protobuf:"varint,5,opt,name=expected_confirmation_revision,json=expectedConfirmationRevision,proto3" json:"expected_confirmation_revision,omitempty"`
+	Resolution                   CoreExtensionExecutionUncertainResolution `protobuf:"varint,6,opt,name=resolution,proto3,enum=dirextalk.agent.v1.CoreExtensionExecutionUncertainResolution" json:"resolution,omitempty"`
+	IdempotencyKey               string                                    `protobuf:"bytes,7,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
+	unknownFields                protoimpl.UnknownFields
+	sizeCache                    protoimpl.SizeCache
+}
+
+func (x *ConfirmationServiceAcknowledgeExtensionExecutionUncertainRequest) Reset() {
+	*x = ConfirmationServiceAcknowledgeExtensionExecutionUncertainRequest{}
+	mi := &file_dirextalk_agent_v1_core_confirmation_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConfirmationServiceAcknowledgeExtensionExecutionUncertainRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConfirmationServiceAcknowledgeExtensionExecutionUncertainRequest) ProtoMessage() {}
+
+func (x *ConfirmationServiceAcknowledgeExtensionExecutionUncertainRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_dirextalk_agent_v1_core_confirmation_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConfirmationServiceAcknowledgeExtensionExecutionUncertainRequest.ProtoReflect.Descriptor instead.
+func (*ConfirmationServiceAcknowledgeExtensionExecutionUncertainRequest) Descriptor() ([]byte, []int) {
+	return file_dirextalk_agent_v1_core_confirmation_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *ConfirmationServiceAcknowledgeExtensionExecutionUncertainRequest) GetConfirmationId() string {
+	if x != nil {
+		return x.ConfirmationId
+	}
+	return ""
+}
+
+func (x *ConfirmationServiceAcknowledgeExtensionExecutionUncertainRequest) GetTaskId() string {
+	if x != nil {
+		return x.TaskId
+	}
+	return ""
+}
+
+func (x *ConfirmationServiceAcknowledgeExtensionExecutionUncertainRequest) GetInstallationId() string {
+	if x != nil {
+		return x.InstallationId
+	}
+	return ""
+}
+
+func (x *ConfirmationServiceAcknowledgeExtensionExecutionUncertainRequest) GetExpectedTaskRevision() int64 {
+	if x != nil {
+		return x.ExpectedTaskRevision
+	}
+	return 0
+}
+
+func (x *ConfirmationServiceAcknowledgeExtensionExecutionUncertainRequest) GetExpectedConfirmationRevision() int64 {
+	if x != nil {
+		return x.ExpectedConfirmationRevision
+	}
+	return 0
+}
+
+func (x *ConfirmationServiceAcknowledgeExtensionExecutionUncertainRequest) GetResolution() CoreExtensionExecutionUncertainResolution {
+	if x != nil {
+		return x.Resolution
+	}
+	return CoreExtensionExecutionUncertainResolution_CORE_EXTENSION_EXECUTION_UNCERTAIN_RESOLUTION_UNSPECIFIED
+}
+
+func (x *ConfirmationServiceAcknowledgeExtensionExecutionUncertainRequest) GetIdempotencyKey() string {
+	if x != nil {
+		return x.IdempotencyKey
+	}
+	return ""
+}
+
+type ConfirmationServiceAcknowledgeExtensionExecutionUncertainResponse struct {
+	state               protoimpl.MessageState                    `protogen:"open.v1"`
+	Confirmation        *CoreConfirmation                         `protobuf:"bytes,1,opt,name=confirmation,proto3" json:"confirmation,omitempty"`
+	Task                *CoreTask                                 `protobuf:"bytes,2,opt,name=task,proto3" json:"task,omitempty"`
+	Resolution          CoreExtensionExecutionUncertainResolution `protobuf:"varint,3,opt,name=resolution,proto3,enum=dirextalk.agent.v1.CoreExtensionExecutionUncertainResolution" json:"resolution,omitempty"`
+	ReservationReleased bool                                      `protobuf:"varint,4,opt,name=reservation_released,json=reservationReleased,proto3" json:"reservation_released,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
+}
+
+func (x *ConfirmationServiceAcknowledgeExtensionExecutionUncertainResponse) Reset() {
+	*x = ConfirmationServiceAcknowledgeExtensionExecutionUncertainResponse{}
+	mi := &file_dirextalk_agent_v1_core_confirmation_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConfirmationServiceAcknowledgeExtensionExecutionUncertainResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConfirmationServiceAcknowledgeExtensionExecutionUncertainResponse) ProtoMessage() {}
+
+func (x *ConfirmationServiceAcknowledgeExtensionExecutionUncertainResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_dirextalk_agent_v1_core_confirmation_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConfirmationServiceAcknowledgeExtensionExecutionUncertainResponse.ProtoReflect.Descriptor instead.
+func (*ConfirmationServiceAcknowledgeExtensionExecutionUncertainResponse) Descriptor() ([]byte, []int) {
+	return file_dirextalk_agent_v1_core_confirmation_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *ConfirmationServiceAcknowledgeExtensionExecutionUncertainResponse) GetConfirmation() *CoreConfirmation {
+	if x != nil {
+		return x.Confirmation
+	}
+	return nil
+}
+
+func (x *ConfirmationServiceAcknowledgeExtensionExecutionUncertainResponse) GetTask() *CoreTask {
+	if x != nil {
+		return x.Task
+	}
+	return nil
+}
+
+func (x *ConfirmationServiceAcknowledgeExtensionExecutionUncertainResponse) GetResolution() CoreExtensionExecutionUncertainResolution {
+	if x != nil {
+		return x.Resolution
+	}
+	return CoreExtensionExecutionUncertainResolution_CORE_EXTENSION_EXECUTION_UNCERTAIN_RESOLUTION_UNSPECIFIED
+}
+
+func (x *ConfirmationServiceAcknowledgeExtensionExecutionUncertainResponse) GetReservationReleased() bool {
+	if x != nil {
+		return x.ReservationReleased
+	}
+	return false
+}
+
 var File_dirextalk_agent_v1_core_confirmation_proto protoreflect.FileDescriptor
 
 const file_dirextalk_agent_v1_core_confirmation_proto_rawDesc = "" +
 	"\n" +
-	"*dirextalk/agent/v1/core_confirmation.proto\x12\x12dirextalk.agent.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xfa\x03\n" +
+	"*dirextalk/agent/v1/core_confirmation.proto\x12\x12dirextalk.agent.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\"dirextalk/agent/v1/core_task.proto\"\x87\x06\n" +
 	"\x17CoreConfirmationBinding\x12)\n" +
 	"\x10operation_domain\x18\x01 \x01(\tR\x0foperationDomain\x12\x1b\n" +
 	"\ttarget_id\x18\x02 \x01(\tR\btargetId\x12'\n" +
@@ -897,7 +1159,15 @@ const file_dirextalk_agent_v1_core_confirmation_proto_rawDesc = "" +
 	"\x13secret_grant_digest\x18\t \x01(\tR\x11secretGrantDigest\x12%\n" +
 	"\x0enetwork_grants\x18\n" +
 	" \x03(\tR\rnetworkGrants\x12R\n" +
-	"\rsecret_grants\x18\v \x03(\v2-.dirextalk.agent.v1.CoreSecretGrantDescriptorR\fsecretGrants\"\xab\x01\n" +
+	"\rsecret_grants\x18\v \x03(\v2-.dirextalk.agent.v1.CoreSecretGrantDescriptorR\fsecretGrants\x12\x19\n" +
+	"\bowner_id\x18\f \x01(\tR\aownerId\x12\x1f\n" +
+	"\vtarget_kind\x18\r \x01(\tR\n" +
+	"targetKind\x12'\n" +
+	"\x0fmanifest_digest\x18\x0e \x01(\tR\x0emanifestDigest\x12)\n" +
+	"\x10execution_digest\x18\x0f \x01(\tR\x0fexecutionDigest\x12+\n" +
+	"\x11permission_digest\x18\x10 \x01(\tR\x10permissionDigest\x12#\n" +
+	"\rselected_tool\x18\x11 \x01(\tR\fselectedTool\x12)\n" +
+	"\x10selected_command\x18\x12 \x03(\tR\x0fselectedCommand\"\xab\x01\n" +
 	"\x19CoreSecretGrantDescriptor\x12!\n" +
 	"\freference_id\x18\x01 \x01(\tR\vreferenceId\x12D\n" +
 	"\apurpose\x18\x02 \x01(\x0e2*.dirextalk.agent.v1.CoreSecretGrantPurposeR\apurpose\x12%\n" +
@@ -944,26 +1214,47 @@ const file_dirextalk_agent_v1_core_confirmation_proto_rawDesc = "" +
 	"\x11expected_revision\x18\x03 \x01(\x03R\x10expectedRevision\x12\x16\n" +
 	"\x06reason\x18\x04 \x01(\tR\x06reason\"m\n" +
 	"!ConfirmationServiceRejectResponse\x12H\n" +
-	"\fconfirmation\x18\x01 \x01(\v2$.dirextalk.agent.v1.CoreConfirmationR\fconfirmation*\xfd\x01\n" +
+	"\fconfirmation\x18\x01 \x01(\v2$.dirextalk.agent.v1.CoreConfirmationR\fconfirmation\"\xb1\x03\n" +
+	"@ConfirmationServiceAcknowledgeExtensionExecutionUncertainRequest\x12'\n" +
+	"\x0fconfirmation_id\x18\x01 \x01(\tR\x0econfirmationId\x12\x17\n" +
+	"\atask_id\x18\x02 \x01(\tR\x06taskId\x12'\n" +
+	"\x0finstallation_id\x18\x03 \x01(\tR\x0einstallationId\x124\n" +
+	"\x16expected_task_revision\x18\x04 \x01(\x03R\x14expectedTaskRevision\x12D\n" +
+	"\x1eexpected_confirmation_revision\x18\x05 \x01(\x03R\x1cexpectedConfirmationRevision\x12]\n" +
+	"\n" +
+	"resolution\x18\x06 \x01(\x0e2=.dirextalk.agent.v1.CoreExtensionExecutionUncertainResolutionR\n" +
+	"resolution\x12'\n" +
+	"\x0fidempotency_key\x18\a \x01(\tR\x0eidempotencyKey\"\xd1\x02\n" +
+	"AConfirmationServiceAcknowledgeExtensionExecutionUncertainResponse\x12H\n" +
+	"\fconfirmation\x18\x01 \x01(\v2$.dirextalk.agent.v1.CoreConfirmationR\fconfirmation\x120\n" +
+	"\x04task\x18\x02 \x01(\v2\x1c.dirextalk.agent.v1.CoreTaskR\x04task\x12]\n" +
+	"\n" +
+	"resolution\x18\x03 \x01(\x0e2=.dirextalk.agent.v1.CoreExtensionExecutionUncertainResolutionR\n" +
+	"resolution\x121\n" +
+	"\x14reservation_released\x18\x04 \x01(\bR\x13reservationReleased*\xfd\x01\n" +
 	"\x15CoreConfirmationState\x12'\n" +
 	"#CORE_CONFIRMATION_STATE_UNSPECIFIED\x10\x00\x12#\n" +
 	"\x1fCORE_CONFIRMATION_STATE_PENDING\x10\x01\x12%\n" +
 	"!CORE_CONFIRMATION_STATE_CONFIRMED\x10\x02\x12$\n" +
 	" CORE_CONFIRMATION_STATE_CONSUMED\x10\x03\x12$\n" +
 	" CORE_CONFIRMATION_STATE_REJECTED\x10\x04\x12#\n" +
-	"\x1fCORE_CONFIRMATION_STATE_EXPIRED\x10\x05*\xae\x02\n" +
+	"\x1fCORE_CONFIRMATION_STATE_EXPIRED\x10\x05*\xbb\x01\n" +
+	")CoreExtensionExecutionUncertainResolution\x12=\n" +
+	"9CORE_EXTENSION_EXECUTION_UNCERTAIN_RESOLUTION_UNSPECIFIED\x10\x00\x12O\n" +
+	"KCORE_EXTENSION_EXECUTION_UNCERTAIN_RESOLUTION_ACKNOWLEDGED_UNKNOWN_NO_RETRY\x10\x01*\xae\x02\n" +
 	"\x16CoreSecretGrantPurpose\x12)\n" +
 	"%CORE_SECRET_GRANT_PURPOSE_UNSPECIFIED\x10\x00\x12+\n" +
 	"'CORE_SECRET_GRANT_PURPOSE_MODEL_API_KEY\x10\x01\x12,\n" +
 	"(CORE_SECRET_GRANT_PURPOSE_MCP_CREDENTIAL\x10\x02\x12*\n" +
 	"&CORE_SECRET_GRANT_PURPOSE_SKILL_SECRET\x10\x03\x12,\n" +
 	"(CORE_SECRET_GRANT_PURPOSE_AWS_CREDENTIAL\x10\x04\x124\n" +
-	"0CORE_SECRET_GRANT_PURPOSE_OTHER_EXTENSION_SECRET\x10\x052\xe5\x03\n" +
+	"0CORE_SECRET_GRANT_PURPOSE_OTHER_EXTENSION_SECRET\x10\x052\xbd\x05\n" +
 	"\x13ConfirmationService\x12l\n" +
 	"\x03Get\x121.dirextalk.agent.v1.ConfirmationServiceGetRequest\x1a2.dirextalk.agent.v1.ConfirmationServiceGetResponse\x12o\n" +
 	"\x04List\x122.dirextalk.agent.v1.ConfirmationServiceListRequest\x1a3.dirextalk.agent.v1.ConfirmationServiceListResponse\x12x\n" +
 	"\aConfirm\x125.dirextalk.agent.v1.ConfirmationServiceConfirmRequest\x1a6.dirextalk.agent.v1.ConfirmationServiceConfirmResponse\x12u\n" +
-	"\x06Reject\x124.dirextalk.agent.v1.ConfirmationServiceRejectRequest\x1a5.dirextalk.agent.v1.ConfirmationServiceRejectResponseBIZGgithub.com/YingSuiAI/dirextalk-agent/api/gen/dirextalk/agent/v1;agentv1b\x06proto3"
+	"\x06Reject\x124.dirextalk.agent.v1.ConfirmationServiceRejectRequest\x1a5.dirextalk.agent.v1.ConfirmationServiceRejectResponse\x12\xd5\x01\n" +
+	"&AcknowledgeExtensionExecutionUncertain\x12T.dirextalk.agent.v1.ConfirmationServiceAcknowledgeExtensionExecutionUncertainRequest\x1aU.dirextalk.agent.v1.ConfirmationServiceAcknowledgeExtensionExecutionUncertainResponseBIZGgithub.com/YingSuiAI/dirextalk-agent/api/gen/dirextalk/agent/v1;agentv1b\x06proto3"
 
 var (
 	file_dirextalk_agent_v1_core_confirmation_proto_rawDescOnce sync.Once
@@ -977,50 +1268,60 @@ func file_dirextalk_agent_v1_core_confirmation_proto_rawDescGZIP() []byte {
 	return file_dirextalk_agent_v1_core_confirmation_proto_rawDescData
 }
 
-var file_dirextalk_agent_v1_core_confirmation_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_dirextalk_agent_v1_core_confirmation_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
+var file_dirextalk_agent_v1_core_confirmation_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
+var file_dirextalk_agent_v1_core_confirmation_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_dirextalk_agent_v1_core_confirmation_proto_goTypes = []any{
-	(CoreConfirmationState)(0),                 // 0: dirextalk.agent.v1.CoreConfirmationState
-	(CoreSecretGrantPurpose)(0),                // 1: dirextalk.agent.v1.CoreSecretGrantPurpose
-	(*CoreConfirmationBinding)(nil),            // 2: dirextalk.agent.v1.CoreConfirmationBinding
-	(*CoreSecretGrantDescriptor)(nil),          // 3: dirextalk.agent.v1.CoreSecretGrantDescriptor
-	(*CoreConfirmation)(nil),                   // 4: dirextalk.agent.v1.CoreConfirmation
-	(*ConfirmationServiceGetRequest)(nil),      // 5: dirextalk.agent.v1.ConfirmationServiceGetRequest
-	(*ConfirmationServiceGetResponse)(nil),     // 6: dirextalk.agent.v1.ConfirmationServiceGetResponse
-	(*ConfirmationServiceListRequest)(nil),     // 7: dirextalk.agent.v1.ConfirmationServiceListRequest
-	(*ConfirmationServiceListResponse)(nil),    // 8: dirextalk.agent.v1.ConfirmationServiceListResponse
-	(*ConfirmationServiceConfirmRequest)(nil),  // 9: dirextalk.agent.v1.ConfirmationServiceConfirmRequest
-	(*ConfirmationServiceConfirmResponse)(nil), // 10: dirextalk.agent.v1.ConfirmationServiceConfirmResponse
-	(*ConfirmationServiceRejectRequest)(nil),   // 11: dirextalk.agent.v1.ConfirmationServiceRejectRequest
-	(*ConfirmationServiceRejectResponse)(nil),  // 12: dirextalk.agent.v1.ConfirmationServiceRejectResponse
-	(*timestamppb.Timestamp)(nil),              // 13: google.protobuf.Timestamp
+	(CoreConfirmationState)(0),                                                // 0: dirextalk.agent.v1.CoreConfirmationState
+	(CoreExtensionExecutionUncertainResolution)(0),                            // 1: dirextalk.agent.v1.CoreExtensionExecutionUncertainResolution
+	(CoreSecretGrantPurpose)(0),                                               // 2: dirextalk.agent.v1.CoreSecretGrantPurpose
+	(*CoreConfirmationBinding)(nil),                                           // 3: dirextalk.agent.v1.CoreConfirmationBinding
+	(*CoreSecretGrantDescriptor)(nil),                                         // 4: dirextalk.agent.v1.CoreSecretGrantDescriptor
+	(*CoreConfirmation)(nil),                                                  // 5: dirextalk.agent.v1.CoreConfirmation
+	(*ConfirmationServiceGetRequest)(nil),                                     // 6: dirextalk.agent.v1.ConfirmationServiceGetRequest
+	(*ConfirmationServiceGetResponse)(nil),                                    // 7: dirextalk.agent.v1.ConfirmationServiceGetResponse
+	(*ConfirmationServiceListRequest)(nil),                                    // 8: dirextalk.agent.v1.ConfirmationServiceListRequest
+	(*ConfirmationServiceListResponse)(nil),                                   // 9: dirextalk.agent.v1.ConfirmationServiceListResponse
+	(*ConfirmationServiceConfirmRequest)(nil),                                 // 10: dirextalk.agent.v1.ConfirmationServiceConfirmRequest
+	(*ConfirmationServiceConfirmResponse)(nil),                                // 11: dirextalk.agent.v1.ConfirmationServiceConfirmResponse
+	(*ConfirmationServiceRejectRequest)(nil),                                  // 12: dirextalk.agent.v1.ConfirmationServiceRejectRequest
+	(*ConfirmationServiceRejectResponse)(nil),                                 // 13: dirextalk.agent.v1.ConfirmationServiceRejectResponse
+	(*ConfirmationServiceAcknowledgeExtensionExecutionUncertainRequest)(nil),  // 14: dirextalk.agent.v1.ConfirmationServiceAcknowledgeExtensionExecutionUncertainRequest
+	(*ConfirmationServiceAcknowledgeExtensionExecutionUncertainResponse)(nil), // 15: dirextalk.agent.v1.ConfirmationServiceAcknowledgeExtensionExecutionUncertainResponse
+	(*timestamppb.Timestamp)(nil),                                             // 16: google.protobuf.Timestamp
+	(*CoreTask)(nil),                                                          // 17: dirextalk.agent.v1.CoreTask
 }
 var file_dirextalk_agent_v1_core_confirmation_proto_depIdxs = []int32{
-	3,  // 0: dirextalk.agent.v1.CoreConfirmationBinding.secret_grants:type_name -> dirextalk.agent.v1.CoreSecretGrantDescriptor
-	1,  // 1: dirextalk.agent.v1.CoreSecretGrantDescriptor.purpose:type_name -> dirextalk.agent.v1.CoreSecretGrantPurpose
-	2,  // 2: dirextalk.agent.v1.CoreConfirmation.binding:type_name -> dirextalk.agent.v1.CoreConfirmationBinding
+	4,  // 0: dirextalk.agent.v1.CoreConfirmationBinding.secret_grants:type_name -> dirextalk.agent.v1.CoreSecretGrantDescriptor
+	2,  // 1: dirextalk.agent.v1.CoreSecretGrantDescriptor.purpose:type_name -> dirextalk.agent.v1.CoreSecretGrantPurpose
+	3,  // 2: dirextalk.agent.v1.CoreConfirmation.binding:type_name -> dirextalk.agent.v1.CoreConfirmationBinding
 	0,  // 3: dirextalk.agent.v1.CoreConfirmation.state:type_name -> dirextalk.agent.v1.CoreConfirmationState
-	13, // 4: dirextalk.agent.v1.CoreConfirmation.created_at:type_name -> google.protobuf.Timestamp
-	13, // 5: dirextalk.agent.v1.CoreConfirmation.updated_at:type_name -> google.protobuf.Timestamp
-	13, // 6: dirextalk.agent.v1.CoreConfirmation.expires_at:type_name -> google.protobuf.Timestamp
-	4,  // 7: dirextalk.agent.v1.ConfirmationServiceGetResponse.confirmation:type_name -> dirextalk.agent.v1.CoreConfirmation
+	16, // 4: dirextalk.agent.v1.CoreConfirmation.created_at:type_name -> google.protobuf.Timestamp
+	16, // 5: dirextalk.agent.v1.CoreConfirmation.updated_at:type_name -> google.protobuf.Timestamp
+	16, // 6: dirextalk.agent.v1.CoreConfirmation.expires_at:type_name -> google.protobuf.Timestamp
+	5,  // 7: dirextalk.agent.v1.ConfirmationServiceGetResponse.confirmation:type_name -> dirextalk.agent.v1.CoreConfirmation
 	0,  // 8: dirextalk.agent.v1.ConfirmationServiceListRequest.states:type_name -> dirextalk.agent.v1.CoreConfirmationState
-	4,  // 9: dirextalk.agent.v1.ConfirmationServiceListResponse.confirmations:type_name -> dirextalk.agent.v1.CoreConfirmation
-	4,  // 10: dirextalk.agent.v1.ConfirmationServiceConfirmResponse.confirmation:type_name -> dirextalk.agent.v1.CoreConfirmation
-	4,  // 11: dirextalk.agent.v1.ConfirmationServiceRejectResponse.confirmation:type_name -> dirextalk.agent.v1.CoreConfirmation
-	5,  // 12: dirextalk.agent.v1.ConfirmationService.Get:input_type -> dirextalk.agent.v1.ConfirmationServiceGetRequest
-	7,  // 13: dirextalk.agent.v1.ConfirmationService.List:input_type -> dirextalk.agent.v1.ConfirmationServiceListRequest
-	9,  // 14: dirextalk.agent.v1.ConfirmationService.Confirm:input_type -> dirextalk.agent.v1.ConfirmationServiceConfirmRequest
-	11, // 15: dirextalk.agent.v1.ConfirmationService.Reject:input_type -> dirextalk.agent.v1.ConfirmationServiceRejectRequest
-	6,  // 16: dirextalk.agent.v1.ConfirmationService.Get:output_type -> dirextalk.agent.v1.ConfirmationServiceGetResponse
-	8,  // 17: dirextalk.agent.v1.ConfirmationService.List:output_type -> dirextalk.agent.v1.ConfirmationServiceListResponse
-	10, // 18: dirextalk.agent.v1.ConfirmationService.Confirm:output_type -> dirextalk.agent.v1.ConfirmationServiceConfirmResponse
-	12, // 19: dirextalk.agent.v1.ConfirmationService.Reject:output_type -> dirextalk.agent.v1.ConfirmationServiceRejectResponse
-	16, // [16:20] is the sub-list for method output_type
-	12, // [12:16] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	5,  // 9: dirextalk.agent.v1.ConfirmationServiceListResponse.confirmations:type_name -> dirextalk.agent.v1.CoreConfirmation
+	5,  // 10: dirextalk.agent.v1.ConfirmationServiceConfirmResponse.confirmation:type_name -> dirextalk.agent.v1.CoreConfirmation
+	5,  // 11: dirextalk.agent.v1.ConfirmationServiceRejectResponse.confirmation:type_name -> dirextalk.agent.v1.CoreConfirmation
+	1,  // 12: dirextalk.agent.v1.ConfirmationServiceAcknowledgeExtensionExecutionUncertainRequest.resolution:type_name -> dirextalk.agent.v1.CoreExtensionExecutionUncertainResolution
+	5,  // 13: dirextalk.agent.v1.ConfirmationServiceAcknowledgeExtensionExecutionUncertainResponse.confirmation:type_name -> dirextalk.agent.v1.CoreConfirmation
+	17, // 14: dirextalk.agent.v1.ConfirmationServiceAcknowledgeExtensionExecutionUncertainResponse.task:type_name -> dirextalk.agent.v1.CoreTask
+	1,  // 15: dirextalk.agent.v1.ConfirmationServiceAcknowledgeExtensionExecutionUncertainResponse.resolution:type_name -> dirextalk.agent.v1.CoreExtensionExecutionUncertainResolution
+	6,  // 16: dirextalk.agent.v1.ConfirmationService.Get:input_type -> dirextalk.agent.v1.ConfirmationServiceGetRequest
+	8,  // 17: dirextalk.agent.v1.ConfirmationService.List:input_type -> dirextalk.agent.v1.ConfirmationServiceListRequest
+	10, // 18: dirextalk.agent.v1.ConfirmationService.Confirm:input_type -> dirextalk.agent.v1.ConfirmationServiceConfirmRequest
+	12, // 19: dirextalk.agent.v1.ConfirmationService.Reject:input_type -> dirextalk.agent.v1.ConfirmationServiceRejectRequest
+	14, // 20: dirextalk.agent.v1.ConfirmationService.AcknowledgeExtensionExecutionUncertain:input_type -> dirextalk.agent.v1.ConfirmationServiceAcknowledgeExtensionExecutionUncertainRequest
+	7,  // 21: dirextalk.agent.v1.ConfirmationService.Get:output_type -> dirextalk.agent.v1.ConfirmationServiceGetResponse
+	9,  // 22: dirextalk.agent.v1.ConfirmationService.List:output_type -> dirextalk.agent.v1.ConfirmationServiceListResponse
+	11, // 23: dirextalk.agent.v1.ConfirmationService.Confirm:output_type -> dirextalk.agent.v1.ConfirmationServiceConfirmResponse
+	13, // 24: dirextalk.agent.v1.ConfirmationService.Reject:output_type -> dirextalk.agent.v1.ConfirmationServiceRejectResponse
+	15, // 25: dirextalk.agent.v1.ConfirmationService.AcknowledgeExtensionExecutionUncertain:output_type -> dirextalk.agent.v1.ConfirmationServiceAcknowledgeExtensionExecutionUncertainResponse
+	21, // [21:26] is the sub-list for method output_type
+	16, // [16:21] is the sub-list for method input_type
+	16, // [16:16] is the sub-list for extension type_name
+	16, // [16:16] is the sub-list for extension extendee
+	0,  // [0:16] is the sub-list for field type_name
 }
 
 func init() { file_dirextalk_agent_v1_core_confirmation_proto_init() }
@@ -1028,13 +1329,14 @@ func file_dirextalk_agent_v1_core_confirmation_proto_init() {
 	if File_dirextalk_agent_v1_core_confirmation_proto != nil {
 		return
 	}
+	file_dirextalk_agent_v1_core_task_proto_init()
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_dirextalk_agent_v1_core_confirmation_proto_rawDesc), len(file_dirextalk_agent_v1_core_confirmation_proto_rawDesc)),
-			NumEnums:      2,
-			NumMessages:   11,
+			NumEnums:      3,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

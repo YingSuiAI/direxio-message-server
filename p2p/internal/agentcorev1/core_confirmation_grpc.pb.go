@@ -19,10 +19,11 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	ConfirmationService_Get_FullMethodName     = "/dirextalk.agent.v1.ConfirmationService/Get"
-	ConfirmationService_List_FullMethodName    = "/dirextalk.agent.v1.ConfirmationService/List"
-	ConfirmationService_Confirm_FullMethodName = "/dirextalk.agent.v1.ConfirmationService/Confirm"
-	ConfirmationService_Reject_FullMethodName  = "/dirextalk.agent.v1.ConfirmationService/Reject"
+	ConfirmationService_Get_FullMethodName                                    = "/dirextalk.agent.v1.ConfirmationService/Get"
+	ConfirmationService_List_FullMethodName                                   = "/dirextalk.agent.v1.ConfirmationService/List"
+	ConfirmationService_Confirm_FullMethodName                                = "/dirextalk.agent.v1.ConfirmationService/Confirm"
+	ConfirmationService_Reject_FullMethodName                                 = "/dirextalk.agent.v1.ConfirmationService/Reject"
+	ConfirmationService_AcknowledgeExtensionExecutionUncertain_FullMethodName = "/dirextalk.agent.v1.ConfirmationService/AcknowledgeExtensionExecutionUncertain"
 )
 
 // ConfirmationServiceClient is the client API for ConfirmationService service.
@@ -33,6 +34,7 @@ type ConfirmationServiceClient interface {
 	List(ctx context.Context, in *ConfirmationServiceListRequest, opts ...grpc.CallOption) (*ConfirmationServiceListResponse, error)
 	Confirm(ctx context.Context, in *ConfirmationServiceConfirmRequest, opts ...grpc.CallOption) (*ConfirmationServiceConfirmResponse, error)
 	Reject(ctx context.Context, in *ConfirmationServiceRejectRequest, opts ...grpc.CallOption) (*ConfirmationServiceRejectResponse, error)
+	AcknowledgeExtensionExecutionUncertain(ctx context.Context, in *ConfirmationServiceAcknowledgeExtensionExecutionUncertainRequest, opts ...grpc.CallOption) (*ConfirmationServiceAcknowledgeExtensionExecutionUncertainResponse, error)
 }
 
 type confirmationServiceClient struct {
@@ -83,6 +85,16 @@ func (c *confirmationServiceClient) Reject(ctx context.Context, in *Confirmation
 	return out, nil
 }
 
+func (c *confirmationServiceClient) AcknowledgeExtensionExecutionUncertain(ctx context.Context, in *ConfirmationServiceAcknowledgeExtensionExecutionUncertainRequest, opts ...grpc.CallOption) (*ConfirmationServiceAcknowledgeExtensionExecutionUncertainResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ConfirmationServiceAcknowledgeExtensionExecutionUncertainResponse)
+	err := c.cc.Invoke(ctx, ConfirmationService_AcknowledgeExtensionExecutionUncertain_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ConfirmationServiceServer is the server API for ConfirmationService service.
 // All implementations must embed UnimplementedConfirmationServiceServer
 // for forward compatibility.
@@ -91,6 +103,7 @@ type ConfirmationServiceServer interface {
 	List(context.Context, *ConfirmationServiceListRequest) (*ConfirmationServiceListResponse, error)
 	Confirm(context.Context, *ConfirmationServiceConfirmRequest) (*ConfirmationServiceConfirmResponse, error)
 	Reject(context.Context, *ConfirmationServiceRejectRequest) (*ConfirmationServiceRejectResponse, error)
+	AcknowledgeExtensionExecutionUncertain(context.Context, *ConfirmationServiceAcknowledgeExtensionExecutionUncertainRequest) (*ConfirmationServiceAcknowledgeExtensionExecutionUncertainResponse, error)
 	mustEmbedUnimplementedConfirmationServiceServer()
 }
 
@@ -112,6 +125,9 @@ func (UnimplementedConfirmationServiceServer) Confirm(context.Context, *Confirma
 }
 func (UnimplementedConfirmationServiceServer) Reject(context.Context, *ConfirmationServiceRejectRequest) (*ConfirmationServiceRejectResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Reject not implemented")
+}
+func (UnimplementedConfirmationServiceServer) AcknowledgeExtensionExecutionUncertain(context.Context, *ConfirmationServiceAcknowledgeExtensionExecutionUncertainRequest) (*ConfirmationServiceAcknowledgeExtensionExecutionUncertainResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method AcknowledgeExtensionExecutionUncertain not implemented")
 }
 func (UnimplementedConfirmationServiceServer) mustEmbedUnimplementedConfirmationServiceServer() {}
 func (UnimplementedConfirmationServiceServer) testEmbeddedByValue()                             {}
@@ -206,6 +222,24 @@ func _ConfirmationService_Reject_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ConfirmationService_AcknowledgeExtensionExecutionUncertain_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ConfirmationServiceAcknowledgeExtensionExecutionUncertainRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ConfirmationServiceServer).AcknowledgeExtensionExecutionUncertain(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ConfirmationService_AcknowledgeExtensionExecutionUncertain_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ConfirmationServiceServer).AcknowledgeExtensionExecutionUncertain(ctx, req.(*ConfirmationServiceAcknowledgeExtensionExecutionUncertainRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ConfirmationService_ServiceDesc is the grpc.ServiceDesc for ConfirmationService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -228,6 +262,10 @@ var ConfirmationService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Reject",
 			Handler:    _ConfirmationService_Reject_Handler,
+		},
+		{
+			MethodName: "AcknowledgeExtensionExecutionUncertain",
+			Handler:    _ConfirmationService_AcknowledgeExtensionExecutionUncertain_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

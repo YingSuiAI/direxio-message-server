@@ -92,15 +92,15 @@ func TestExistingControlSnapshotChecksumsAndOptionalAgentSource(t *testing.T) {
 		"core_task.proto":              "cb1cd42ab5aeb1cc229671aa1b524c351418053f752629fd7d7a1344861fa434",
 		"core_task.pb.go":              "557e753cdb431f914f82875764b11e28e3ca7394e8d6aa81e387e13e80bb48de",
 		"core_task_grpc.pb.go":         "c9946050dd5975cc5a1a673d7fea54d521b9a00c93566b15938dc190f8888bf6",
-		"core_extension.proto":         "485ae631f7096e71a3830e76f10cf85f3c0a3f5d310193b88ed3c721f88522fe",
-		"core_extension.pb.go":         "4bab907985ccadb99a48d7362a18030104d9775f64c0a5d31949b2d69aca6d2a",
+		"core_extension.proto":         "ed231ed784c2a3f6676a0bbb9920fc2a8f29c9b2426c213726f525755a34a483",
+		"core_extension.pb.go":         "b4052eff92afb2b4d3a3adb8ba1ec78ab64375dc6fd77886d932922fde659d10",
 		"core_extension_grpc.pb.go":    "034ecf64aa7019745a899f963de5d925f18286b98922c7f2de16ca00ecf40847",
 		"core_schedule.proto":          "f8ebd4326d16e10e0869d747bf8b0978b0dc8ece9467f61f0a3c07ef40291de9",
 		"core_schedule.pb.go":          "be498b2304cf8848a50cd747aa1684f6b6b80f86d7451fd6983082c44d2ecd1e",
 		"core_schedule_grpc.pb.go":     "e12d5080f302e8b483e95985c7a2de52b72d7a1ea87464e1fb6682467cd48cd0",
-		"core_confirmation.proto":      "1e1f5222fe7ef1ebf2d2ef6f9c1ce650bab572c483fe5c7263bad3d060ae6a6e",
-		"core_confirmation.pb.go":      "c1b50aebe54eef820e503dbf6ecad475575dbe6329c33a91c573a076c4e126ab",
-		"core_confirmation_grpc.pb.go": "6f1c3752506af39c9d7fad11072cb997f5a3815d5df542a86bce2f5d00a309f3",
+		"core_confirmation.proto":      "190df5544a9c5eb36c89f9c93472e15dae15129452d4986abe7944ca96f4cd2e",
+		"core_confirmation.pb.go":      "7752560233cd408798f7b85d8c66113eade22b251cbf44d1e3f6166c2854a904",
+		"core_confirmation_grpc.pb.go": "81cc04cc452c52d79e3edb8ac1ec4b699b921124dde92dea6aa72ddbcc9b2024",
 	}
 	for name, want := range checksums {
 		if got := fileSHA256(t, name); got != want {

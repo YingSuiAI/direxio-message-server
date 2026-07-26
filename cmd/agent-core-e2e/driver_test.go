@@ -212,6 +212,7 @@ func TestDeepSeekContractFixture(t *testing.T) {
 
 func TestDualExtensionContractFixture(t *testing.T) {
 	confirmed := map[string]bool{"mcp-install": false, "skill-install": false}
+	executionConfirmed := map[string]bool{"mcp-execute": false, "skill-execute": false}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req map[string]any
 		if json.NewDecoder(r.Body).Decode(&req) != nil {
@@ -232,7 +233,11 @@ func TestDualExtensionContractFixture(t *testing.T) {
 		cid := kind + "-confirmation"
 		tid := kind + "-task"
 		candidate := map[string]any{"id": kind + "-candidate", "kind": kind, "source": "github", "name": kind, "description": "fixture", "transport": "streamable-http", "pin": map[string]any{"registry_version": "v1", "registry_sha256": strings.Repeat("a", 64), "git_commit": strings.Repeat("b", 40), "git_sha256": strings.Repeat("c", 64)}}
-		inspection := map[string]any{"candidate": candidate, "content_digest": strings.Repeat("d", 64), "manifest_digest": strings.Repeat("e", 64), "execution_digest": strings.Repeat("f", 64), "network_schema_digest": strings.Repeat("1", 64), "secret_schema_digest": strings.Repeat("2", 64), "execution": map[string]any{}, "network_grants": []any{}, "secret_grants": []any{}}
+		execution := map[string]any{"remote": map[string]any{"url": "https://mcp.example"}}
+		if kind == "skill" {
+			execution = map[string]any{"skill": map[string]any{"argv": []any{"run"}}}
+		}
+		inspection := map[string]any{"candidate": candidate, "content_digest": strings.Repeat("d", 64), "manifest_digest": strings.Repeat("e", 64), "execution_digest": strings.Repeat("f", 64), "network_schema_digest": strings.Repeat("1", 64), "secret_schema_digest": strings.Repeat("2", 64), "execution": execution, "network_grants": []any{}, "secret_grants": []any{}}
 		installation := func() map[string]any {
 			state := "installing"
 			active := ""
@@ -260,20 +265,53 @@ func TestDualExtensionContractFixture(t *testing.T) {
 			}
 			_, _ = w.Write(mustJSONValue(map[string]any{"tools": tools}))
 		case "agent.core.mcp.execute", "agent.core.skills.execute":
-			_, _ = w.Write(mustJSONValue(map[string]any{"task_id": tid + "-execute"}))
+			if revision, ok := req["params"].(map[string]any)["expected_revision"].(float64); !ok || int64(revision) != 1 {
+				t.Fatalf("execution expected_revision drift: %#v", req["params"])
+			}
+			_, _ = w.Write(mustJSONValue(map[string]any{"task_id": tid + "-execute", "confirmation_id": kind + "-execute-confirmation"}))
 		case "agent.core.confirmations.get":
+			confirmationID := fmt.Sprint(req["params"].(map[string]any)["confirmation_id"])
+			isExecution := strings.Contains(confirmationID, "-execute-confirmation")
 			state := "pending"
 			rev := int64(1)
-			if confirmed[id] {
+			if (!isExecution && confirmed[id]) || (isExecution && executionConfirmed[kind+"-execute"]) {
 				state, rev = "confirmed", 2
 			}
-			_, _ = w.Write(mustJSONValue(map[string]any{"confirmation": map[string]any{"confirmation_id": cid, "task_id": tid, "state": state, "revision": rev, "binding": map[string]any{"operation_domain": "extension", "target_id": id, "target_revision": 1, "content_digest": inspection["content_digest"], "parameter_digest": strings.Repeat("3", 64), "network_digest": strings.Repeat("4", 64), "secret_grant_digest": strings.Repeat("5", 64), "network_grants": []any{}, "secret_grants": []any{}}}}))
+			binding := map[string]any{"operation_domain": "extension", "target_id": id, "target_revision": 1, "content_digest": inspection["content_digest"], "parameter_digest": strings.Repeat("3", 64), "network_digest": strings.Repeat("4", 64), "secret_grant_digest": strings.Repeat("5", 64), "network_grants": []any{}, "secret_grants": []any{}}
+			responseTask, responseConfirmation := tid, cid
+			if isExecution {
+				responseTask, responseConfirmation = tid+"-execute", confirmationID
+				selectedTool := ""
+				if kind == "mcp" {
+					selectedTool = "ping"
+				}
+				selectedCommand := []any{"remote", "https://mcp.example"}
+				if kind == "skill" {
+					selectedCommand = []any{"run"}
+				}
+				binding = map[string]any{"operation_domain": "extension.execute", "target_id": id, "target_revision": 1, "target_kind": kind, "owner_id": "owner", "content_digest": inspection["content_digest"], "manifest_digest": inspection["manifest_digest"], "execution_digest": inspection["execution_digest"], "permission_digest": strings.Repeat("6", 64), "parameter_digest": strings.Repeat("3", 64), "network_digest": strings.Repeat("4", 64), "secret_grant_digest": strings.Repeat("5", 64), "selected_tool": selectedTool, "selected_command": selectedCommand, "network_grants": []any{}, "secret_grants": []any{}}
+			}
+			_, _ = w.Write(mustJSONValue(map[string]any{"confirmation": map[string]any{"confirmation_id": responseConfirmation, "task_id": responseTask, "state": state, "revision": rev, "binding": binding}}))
 		case "agent.core.confirmations.confirm":
-			confirmed[id] = true
-			_, _ = w.Write(mustJSONValue(map[string]any{"confirmation": map[string]any{"confirmation_id": cid, "task_id": tid, "state": "confirmed", "revision": 2}}))
+			confirmationID := fmt.Sprint(req["params"].(map[string]any)["confirmation_id"])
+			if strings.Contains(confirmationID, "-execute-confirmation") {
+				executionConfirmed[kind+"-execute"] = true
+				_, _ = w.Write(mustJSONValue(map[string]any{"confirmation": map[string]any{"confirmation_id": confirmationID, "task_id": tid + "-execute", "state": "confirmed", "revision": 2}}))
+			} else {
+				confirmed[id] = true
+				_, _ = w.Write(mustJSONValue(map[string]any{"confirmation": map[string]any{"confirmation_id": confirmationID, "task_id": tid, "state": "confirmed", "revision": 2}}))
+			}
 		case "agent.core.tasks.get":
 			taskID, _ := req["params"].(map[string]any)["task_id"].(string)
-			_, _ = w.Write([]byte(`{"task":{"task_id":"` + taskID + `","status":"succeeded"}}`))
+			taskKind := kind
+			if strings.Contains(taskID, "skill") {
+				taskKind = "skill"
+			}
+			status := "succeeded"
+			if strings.Contains(taskID, "-execute") && !executionConfirmed[taskKind+"-execute"] {
+				status = "waiting-user"
+			}
+			_, _ = w.Write(mustJSONValue(map[string]any{"task": map[string]any{"task_id": taskID, "status": status}}))
 		case "agent.core.tasks.events":
 			taskID, _ := req["params"].(map[string]any)["task_id"].(string)
 			_, _ = w.Write([]byte(`{"events":[{"task_id":"` + taskID + `","sequence":1}]}`))

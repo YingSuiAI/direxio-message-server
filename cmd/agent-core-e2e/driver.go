@@ -508,7 +508,7 @@ func (d *Driver) extensions(ctx context.Context, secretFile string) (int, error)
 			if err != nil {
 				return count, err
 			}
-			exec, err := d.action(ctx, "agent.core.mcp.execute", map[string]any{"idempotency_key": newID(), "installation_id": installationID, "tool_name": toolName, "input": map[string]any{}})
+			exec, err := d.action(ctx, "agent.core.mcp.execute", map[string]any{"idempotency_key": newID(), "installation_id": installationID, "expected_revision": readbackRevision, "tool_name": toolName, "input": map[string]any{}})
 			if err != nil {
 				return count, err
 			}
@@ -516,11 +516,19 @@ func (d *Driver) extensions(ctx context.Context, secretFile string) (int, error)
 			if err != nil {
 				return count, err
 			}
-			if err := d.pollTask(ctx, execTask); err != nil {
+			execConfirmation, err := stringValue(exec, "confirmation_id")
+			if err != nil {
+				return count, err
+			}
+			if err := d.assertTaskWaitingUser(ctx, execTask, execConfirmation); err != nil {
+				return count, err
+			}
+			if err := d.confirmExecutionTask(ctx, execConfirmation, execTask, installationID, readbackRevision, kind, toolName, inspection); err != nil {
 				return count, err
 			}
 		} else {
-			exec, err := d.action(ctx, "agent.core.skills.execute", map[string]any{"idempotency_key": newID(), "installation_id": installationID, "input": map[string]any{}})
+			readbackRevision, _ := intValue(readbackInstallation, "revision")
+			exec, err := d.action(ctx, "agent.core.skills.execute", map[string]any{"idempotency_key": newID(), "installation_id": installationID, "expected_revision": readbackRevision, "input": map[string]any{}})
 			if err != nil {
 				return count, err
 			}
@@ -528,7 +536,14 @@ func (d *Driver) extensions(ctx context.Context, secretFile string) (int, error)
 			if err != nil {
 				return count, err
 			}
-			if err := d.pollTask(ctx, execTask); err != nil {
+			execConfirmation, err := stringValue(exec, "confirmation_id")
+			if err != nil {
+				return count, err
+			}
+			if err := d.assertTaskWaitingUser(ctx, execTask, execConfirmation); err != nil {
+				return count, err
+			}
+			if err := d.confirmExecutionTask(ctx, execConfirmation, execTask, installationID, readbackRevision, kind, "", inspection); err != nil {
 				return count, err
 			}
 		}
@@ -546,6 +561,146 @@ func (d *Driver) confirmTask(ctx context.Context, confirmationID, taskID string,
 		fields = expected[0]
 	}
 	return d.confirmTaskChecked(ctx, confirmationID, taskID, fields, nil, nil)
+}
+
+func (d *Driver) assertTaskWaitingUser(ctx context.Context, taskID, confirmationID string) error {
+	result, err := d.action(ctx, "agent.core.tasks.get", map[string]any{"task_id": taskID})
+	if err != nil {
+		return err
+	}
+	task, err := mapValue(result, "task")
+	if err != nil {
+		return err
+	}
+	if got, _ := task["task_id"].(string); got != taskID {
+		return errors.New("execution task linkage drift")
+	}
+	if status, _ := task["status"].(string); status != "waiting-user" {
+		return fmt.Errorf("execution task was runnable before confirmation: task=%s status=%v", taskID, task["status"])
+	}
+	if got, _ := task["confirmation_id"].(string); got != "" && got != confirmationID {
+		return errors.New("execution task confirmation linkage drift")
+	}
+	return nil
+}
+
+func (d *Driver) confirmExecutionTask(ctx context.Context, confirmationID, taskID, installationID string, expectedRevision int64, kind, tool string, inspection map[string]any) error {
+	first, err := d.action(ctx, "agent.core.confirmations.get", map[string]any{"confirmation_id": confirmationID})
+	if err != nil {
+		return err
+	}
+	confirmation, err := mapValue(first, "confirmation")
+	if err != nil {
+		return err
+	}
+	if got, _ := confirmation["confirmation_id"].(string); got != confirmationID {
+		return errors.New("execution confirmation linkage drift")
+	}
+	if state, _ := confirmation["state"].(string); state != "pending" {
+		return errors.New("execution confirmation is not pending")
+	}
+	if got, _ := confirmation["task_id"].(string); got != taskID {
+		return errors.New("execution confirmation task linkage drift")
+	}
+	binding, err := mapValue(confirmation, "binding")
+	if err != nil {
+		return err
+	}
+	if err := validateExecutionBinding(binding, inspection, installationID, expectedRevision, kind, tool); err != nil {
+		return err
+	}
+	revision, err := intValue(confirmation, "revision")
+	if err != nil {
+		return err
+	}
+	confirmed, err := d.action(ctx, "agent.core.confirmations.confirm", map[string]any{"confirmation_id": confirmationID, "idempotency_key": newID(), "expected_revision": revision})
+	if err != nil {
+		return err
+	}
+	confirmedObject, err := mapValue(confirmed, "confirmation")
+	if err != nil {
+		return err
+	}
+	if got, _ := confirmedObject["confirmation_id"].(string); got != confirmationID {
+		return errors.New("execution confirmation response linkage drift")
+	}
+	if state, _ := confirmedObject["state"].(string); state != "confirmed" && state != "consumed" {
+		return errors.New("execution confirmation response is not confirmed")
+	}
+	if confirmedRevision, revErr := intValue(confirmedObject, "revision"); revErr != nil || confirmedRevision <= revision {
+		return errors.New("execution confirmation response revision drift")
+	}
+	return d.pollTask(ctx, taskID)
+}
+
+func validateExecutionBinding(binding, inspection map[string]any, installationID string, expectedRevision int64, kind, tool string) error {
+	if got, _ := binding["operation_domain"].(string); got != "extension.execute" {
+		return errors.New("execution binding domain drift")
+	}
+	if got, _ := binding["target_id"].(string); got != installationID {
+		return errors.New("execution binding target drift")
+	}
+	if got, ok := binding["target_revision"].(float64); !ok || int64(got) != expectedRevision {
+		return errors.New("execution binding revision drift")
+	}
+	if got, _ := binding["target_kind"].(string); got != kind {
+		return errors.New("execution binding kind drift")
+	}
+	for _, key := range []string{"owner_id", "content_digest", "manifest_digest", "execution_digest", "permission_digest", "parameter_digest", "network_digest", "secret_grant_digest"} {
+		value, _ := binding[key].(string)
+		if !validHexDigest(value) && key != "owner_id" {
+			return errors.New("execution binding digest drift")
+		}
+		if key == "owner_id" && strings.TrimSpace(value) == "" {
+			return errors.New("execution binding owner drift")
+		}
+	}
+	for _, key := range []string{"content_digest", "manifest_digest", "execution_digest"} {
+		want, _ := inspection[key].(string)
+		got, _ := binding[key].(string)
+		if want == "" || got != want {
+			return errors.New("execution binding inspect digest drift")
+		}
+	}
+	if got, _ := binding["selected_tool"].(string); got != tool {
+		return errors.New("execution binding selected tool drift")
+	}
+	commands, ok := binding["selected_command"].([]any)
+	if !ok || len(commands) == 0 {
+		return errors.New("execution binding selected command drift")
+	}
+	for _, raw := range commands {
+		if value, ok := raw.(string); !ok || strings.TrimSpace(value) == "" {
+			return errors.New("execution binding command is invalid")
+		}
+	}
+	if expectedCommand, ok := expectedExecutionCommand(inspection); ok && !sameJSON(commands, expectedCommand) {
+		return errors.New("execution binding selected command drift")
+	}
+	return validateBindingDescriptors(binding, inspection)
+}
+
+func expectedExecutionCommand(inspection map[string]any) ([]any, bool) {
+	execution, ok := inspection["execution"].(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	for _, key := range []string{"stdio", "skill"} {
+		descriptor, ok := execution[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		argv, ok := descriptor["argv"].([]any)
+		if ok && len(argv) > 0 {
+			return argv, true
+		}
+	}
+	if remote, ok := execution["remote"].(map[string]any); ok {
+		if endpoint, ok := remote["url"].(string); ok && strings.TrimSpace(endpoint) != "" {
+			return []any{"remote", endpoint}, true
+		}
+	}
+	return nil, false
 }
 
 func (d *Driver) confirmTaskChecked(ctx context.Context, confirmationID, taskID string, expected map[string]string, inspection map[string]any, initialBinding map[string]any) error {

@@ -955,6 +955,28 @@
       }
     },
     {
+      "name": "agent.core.confirmations.acknowledge_extension_execution_uncertain",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "confirmation_id": {"type": "string", "required": true},
+          "task_id": {"type": "string", "required": true},
+          "installation_id": {"type": "string", "required": true},
+          "expected_task_revision": {"type": "integer", "required": true},
+          "expected_confirmation_revision": {"type": "integer", "required": true},
+          "resolution": {"type": "string", "required": true},
+          "idempotency_key": {"type": "string", "required": true}
+        },
+        "response": {
+          "confirmation": {"type": "object", "required": true},
+          "task": {"type": "object", "required": true},
+          "resolution": {"type": "string", "required": true},
+          "reservation_released": {"type": "boolean", "required": true}
+        }
+      }
+    },
+    {
       "name": "agent.core.mcp.discover",
       "auth": "owner",
       "transport": "http_and_ws_request",
@@ -2044,8 +2066,13 @@
           }
         },
         "response": {
+          "confirmation_id": {
+            "type": "string",
+            "required": true
+          },
           "task_id": {
-            "type": "string"
+            "type": "string",
+            "required": true
           }
         }
       }
@@ -3111,8 +3138,13 @@
           }
         },
         "response": {
+          "confirmation_id": {
+            "type": "string",
+            "required": true
+          },
           "task_id": {
-            "type": "string"
+            "type": "string",
+            "required": true
           }
         }
       }

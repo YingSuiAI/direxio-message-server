@@ -73,7 +73,7 @@ message MCPServiceGetResponse { CoreInstallation installation = 1; }
 message MCPServiceListToolsRequest { string installation_id = 1; int64 expected_revision = 2; }
 message MCPServiceListToolsResponse { repeated CoreTool tools = 1; }
 message MCPServiceExecuteToolRequest { string idempotency_key = 1; string installation_id = 2; int64 expected_revision = 3; string tool_name = 4; google.protobuf.Struct input = 5; }
-message MCPServiceExecuteToolResponse { string task_id = 1; }
+message MCPServiceExecuteToolResponse { string task_id = 1; string confirmation_id = 2; }
 message SkillServiceSearchRequest { CoreExtensionKind kind = 1; CoreExtensionSource source = 2; string text = 3; int32 page_size = 4; string page_token = 5; }
 message SkillServiceSearchResponse { repeated CoreExtensionCandidate candidates = 1; string next_page_token = 2; }
 message SkillServiceInspectRequest { CoreExtensionKind kind = 1; CoreExtensionSource source = 2; string id = 3; CoreSourcePin pin = 4; }
@@ -89,7 +89,7 @@ message SkillServiceListResponse { repeated CoreInstallation installations = 1; 
 message SkillServiceGetRequest { string installation_id = 1; }
 message SkillServiceGetResponse { CoreInstallation installation = 1; }
 message SkillServiceExecuteRequest { string idempotency_key = 1; string installation_id = 2; int64 expected_revision = 3; google.protobuf.Struct input = 4; }
-message SkillServiceExecuteResponse { string task_id = 1; }
+message SkillServiceExecuteResponse { string task_id = 1; string confirmation_id = 2; }
 
 // buf:lint:ignore RPC_REQUEST_RESPONSE_UNIQUE RPC_REQUEST_STANDARD_NAME
 service MCPService {

@@ -5,6 +5,7 @@ package dirextalk.agent.v1;
 option go_package = "github.com/YingSuiAI/dirextalk-agent/api/gen/dirextalk/agent/v1;agentv1";
 
 import "google/protobuf/timestamp.proto";
+import "dirextalk/agent/v1/core_task.proto";
 
 enum CoreConfirmationState {
   CORE_CONFIRMATION_STATE_UNSPECIFIED = 0;
@@ -14,6 +15,12 @@ enum CoreConfirmationState {
   CORE_CONFIRMATION_STATE_REJECTED = 4;
   CORE_CONFIRMATION_STATE_EXPIRED = 5;
 }
+
+enum CoreExtensionExecutionUncertainResolution {
+  CORE_EXTENSION_EXECUTION_UNCERTAIN_RESOLUTION_UNSPECIFIED = 0;
+  CORE_EXTENSION_EXECUTION_UNCERTAIN_RESOLUTION_ACKNOWLEDGED_UNKNOWN_NO_RETRY = 1;
+}
+
 
 // Binding contains only public, immutable facts and digests. Secret bytes and
 // arbitrary credentials are intentionally not representable in this message.
@@ -29,6 +36,13 @@ message CoreConfirmationBinding {
   string secret_grant_digest = 9;
   repeated string network_grants = 10;
   repeated CoreSecretGrantDescriptor secret_grants = 11;
+  string owner_id = 12;
+  string target_kind = 13;
+  string manifest_digest = 14;
+  string execution_digest = 15;
+  string permission_digest = 16;
+  string selected_tool = 17;
+  repeated string selected_command = 18;
 }
 
 message CoreSecretGrantDescriptor {
@@ -90,9 +104,27 @@ message ConfirmationServiceRejectRequest {
 }
 message ConfirmationServiceRejectResponse { CoreConfirmation confirmation = 1; }
 
+message ConfirmationServiceAcknowledgeExtensionExecutionUncertainRequest {
+  string confirmation_id = 1;
+  string task_id = 2;
+  string installation_id = 3;
+  int64 expected_task_revision = 4;
+  int64 expected_confirmation_revision = 5;
+  CoreExtensionExecutionUncertainResolution resolution = 6;
+  string idempotency_key = 7;
+}
+message ConfirmationServiceAcknowledgeExtensionExecutionUncertainResponse {
+  CoreConfirmation confirmation = 1;
+  CoreTask task = 2;
+  CoreExtensionExecutionUncertainResolution resolution = 3;
+  bool reservation_released = 4;
+}
+
+
 service ConfirmationService {
   rpc Get(ConfirmationServiceGetRequest) returns (ConfirmationServiceGetResponse);
   rpc List(ConfirmationServiceListRequest) returns (ConfirmationServiceListResponse);
   rpc Confirm(ConfirmationServiceConfirmRequest) returns (ConfirmationServiceConfirmResponse);
   rpc Reject(ConfirmationServiceRejectRequest) returns (ConfirmationServiceRejectResponse);
+  rpc AcknowledgeExtensionExecutionUncertain(ConfirmationServiceAcknowledgeExtensionExecutionUncertainRequest) returns (ConfirmationServiceAcknowledgeExtensionExecutionUncertainResponse);
 }

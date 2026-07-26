@@ -9,8 +9,8 @@ func TestActionSpecsReturnsStableOrderedCopy(t *testing.T) {
 	first := ActionSpecs()
 	second := ActionSpecs()
 
-	if len(first) != 210 {
-		t.Fatalf("ActionSpecs() returned %d actions, want 210", len(first))
+	if len(first) != 211 {
+		t.Fatalf("ActionSpecs() returned %d actions, want 211", len(first))
 	}
 	if !reflect.DeepEqual(first, second) {
 		t.Fatal("ActionSpecs() did not preserve action order")

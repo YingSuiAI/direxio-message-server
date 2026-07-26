@@ -88,6 +88,20 @@ func coreConfirmationListSchema() *ActionSchema {
 func coreConfirmationMutationSchema() *ActionSchema {
 	return coreActionSchema(coreMutationFields("confirmation_id"), coreObjectResponse("confirmation"))
 }
+func coreConfirmationExtensionUncertainAcknowledgeSchema() *ActionSchema {
+	return coreActionSchema(map[string]ActionFieldSchema{
+		"confirmation_id":                {Type: "string", Required: true},
+		"task_id":                        {Type: "string", Required: true},
+		"installation_id":                {Type: "string", Required: true},
+		"expected_task_revision":         {Type: "integer", Required: true},
+		"expected_confirmation_revision": {Type: "integer", Required: true},
+		"resolution":                     {Type: "string", Required: true},
+		"idempotency_key":                {Type: "string", Required: true},
+	}, map[string]ActionFieldSchema{
+		"confirmation": {Type: "object", Required: true}, "task": {Type: "object", Required: true},
+		"resolution": {Type: "string", Required: true}, "reservation_released": {Type: "boolean", Required: true},
+	})
+}
 func coreExtensionDiscoverSchema() *ActionSchema {
 	request := corePageFields()
 	request["query"] = ActionFieldSchema{Type: "string"}
@@ -154,7 +168,7 @@ func coreExtensionExecuteSchema() *ActionSchema {
 	request := coreMutationFields("installation_id")
 	request["input"] = ActionFieldSchema{Type: "object"}
 	request["tool_name"] = ActionFieldSchema{Type: "string", Presence: &ActionPresenceSchema{Omitted: "skill_execution", Present: "MCP_tool_name"}}
-	return coreActionSchema(request, map[string]ActionFieldSchema{"task_id": {Type: "string"}})
+	return coreActionSchema(request, map[string]ActionFieldSchema{"confirmation_id": {Type: "string", Required: true}, "task_id": {Type: "string", Required: true}})
 }
 func coreMCPExecuteSchema() *ActionSchema {
 	s := coreExtensionExecuteSchema()

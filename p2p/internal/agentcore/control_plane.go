@@ -114,6 +114,8 @@ func (c *Client) controlActionError(err error, family string) *actionbase.Error 
 		return actionbase.CodedError(http.StatusNotFound, "agent_core_not_found", "agent core "+family+" was not found")
 	case codes.Aborted:
 		return actionbase.CodedError(http.StatusConflict, "agent_core_conflict", "agent core "+family+" revision conflict")
+	case codes.AlreadyExists:
+		return actionbase.CodedError(http.StatusConflict, "agent_core_idempotency_conflict", "agent core "+family+" idempotency conflict")
 	case codes.FailedPrecondition:
 		return actionbase.CodedError(http.StatusConflict, "agent_core_precondition_failed", "agent core "+family+" precondition failed")
 	case codes.DeadlineExceeded, codes.Unavailable:
@@ -224,7 +226,7 @@ func confirmationMap(item *agentv1.CoreConfirmation) map[string]any {
 				grants = append(grants, map[string]any{"reference_id": grant.GetReferenceId(), "purpose": enumName(grant.GetPurpose().String()), "binding_digest": grant.GetBindingDigest()})
 			}
 		}
-		out["binding"] = map[string]any{"operation_domain": safeText(binding.GetOperationDomain()), "target_id": binding.GetTargetId(), "target_revision": binding.GetTargetRevision(), "source_version": safeText(binding.GetSourceVersion()), "source_commit": safeText(binding.GetSourceCommit()), "content_digest": binding.GetContentDigest(), "parameter_digest": binding.GetParameterDigest(), "network_digest": binding.GetNetworkDigest(), "secret_grant_digest": binding.GetSecretGrantDigest(), "network_grants": append([]string(nil), binding.GetNetworkGrants()...), "secret_grants": grants}
+		out["binding"] = map[string]any{"operation_domain": safeText(binding.GetOperationDomain()), "target_id": binding.GetTargetId(), "target_revision": binding.GetTargetRevision(), "source_version": safeText(binding.GetSourceVersion()), "source_commit": safeText(binding.GetSourceCommit()), "content_digest": binding.GetContentDigest(), "parameter_digest": binding.GetParameterDigest(), "network_digest": binding.GetNetworkDigest(), "secret_grant_digest": binding.GetSecretGrantDigest(), "network_grants": append([]string(nil), binding.GetNetworkGrants()...), "secret_grants": grants, "owner_id": binding.GetOwnerId(), "target_kind": safeText(binding.GetTargetKind()), "manifest_digest": binding.GetManifestDigest(), "execution_digest": binding.GetExecutionDigest(), "permission_digest": binding.GetPermissionDigest(), "selected_tool": safeText(binding.GetSelectedTool()), "selected_command": append([]string(nil), binding.GetSelectedCommand()...)}
 	}
 	return out
 }
@@ -941,7 +943,7 @@ func parseConfirmationState(value string) (agentv1.CoreConfirmationState, bool) 
 }
 
 func (c *Client) confirmationHandlers() map[string]actionbase.Handler {
-	return map[string]actionbase.Handler{"agent.core.confirmations.get": c.confirmationGet, "agent.core.confirmations.list": c.confirmationList, "agent.core.confirmations.confirm": c.confirmationConfirm, "agent.core.confirmations.reject": c.confirmationReject}
+	return map[string]actionbase.Handler{"agent.core.confirmations.get": c.confirmationGet, "agent.core.confirmations.list": c.confirmationList, "agent.core.confirmations.confirm": c.confirmationConfirm, "agent.core.confirmations.reject": c.confirmationReject, "agent.core.confirmations.acknowledge_extension_execution_uncertain": c.confirmationAcknowledgeExtensionExecutionUncertain}
 }
 func (c *Client) confirmationGet(ctx context.Context, params map[string]any) (any, *actionbase.Error) {
 	if e := c.capability(ctx, "confirmation"); e != nil {
@@ -1081,6 +1083,97 @@ func (c *Client) confirmationReject(ctx context.Context, params map[string]any) 
 		return nil, e
 	}
 	return map[string]any{"confirmation": confirmationMap(response.GetConfirmation())}, nil
+}
+
+func (c *Client) confirmationAcknowledgeExtensionExecutionUncertain(ctx context.Context, params map[string]any) (any, *actionbase.Error) {
+	if e := c.capability(ctx, "confirmation"); e != nil {
+		return nil, e
+	}
+	if e := c.capability(ctx, "extension.execution_reconciliation"); e != nil {
+		return nil, e
+	}
+	if e := strictKeys(params, "confirmation_id", "task_id", "installation_id", "expected_task_revision", "expected_confirmation_revision", "resolution", "idempotency_key"); e != nil {
+		return nil, e
+	}
+	confirmationID, e := requiredCanonicalUUID(params, "confirmation_id")
+	if e != nil {
+		return nil, e
+	}
+	taskID, e := requiredCanonicalUUID(params, "task_id")
+	if e != nil {
+		return nil, e
+	}
+	installationID, e := requiredCanonicalUUID(params, "installation_id")
+	if e != nil {
+		return nil, e
+	}
+	idempotencyKey, e := requiredCanonicalUUID(params, "idempotency_key")
+	if e != nil {
+		return nil, e
+	}
+	taskRevision, e := requiredPositiveInt64(params, "expected_task_revision")
+	if e != nil {
+		return nil, e
+	}
+	confirmationRevision, e := requiredPositiveInt64(params, "expected_confirmation_revision")
+	if e != nil {
+		return nil, e
+	}
+	resolution, e := requiredString(params, "resolution")
+	if e != nil {
+		return nil, e
+	}
+	if resolution != "acknowledged_unknown_no_retry" {
+		return nil, actionbase.BadRequest("resolution is unsupported")
+	}
+	var response *agentv1.ConfirmationServiceAcknowledgeExtensionExecutionUncertainResponse
+	err := c.controlPlaneUnary(ctx, func(callCtx context.Context, conn *grpc.ClientConn) error {
+		var err error
+		response, err = agentv1.NewConfirmationServiceClient(conn).AcknowledgeExtensionExecutionUncertain(callCtx, &agentv1.ConfirmationServiceAcknowledgeExtensionExecutionUncertainRequest{
+			ConfirmationId: confirmationID, TaskId: taskID, InstallationId: installationID,
+			ExpectedTaskRevision: taskRevision, ExpectedConfirmationRevision: confirmationRevision,
+			Resolution:     agentv1.CoreExtensionExecutionUncertainResolution_CORE_EXTENSION_EXECUTION_UNCERTAIN_RESOLUTION_ACKNOWLEDGED_UNKNOWN_NO_RETRY,
+			IdempotencyKey: idempotencyKey,
+		})
+		return err
+	})
+	if err != nil {
+		return nil, c.controlActionError(err, "confirmation reconciliation")
+	}
+	if response == nil || response.GetConfirmation() == nil || response.GetTask() == nil {
+		return nil, actionbase.CodedError(http.StatusBadGateway, "agent_core_incompatible", "agent core reconciliation readback is incompatible")
+	}
+	binding := response.GetConfirmation().GetBinding()
+	if binding == nil || response.GetConfirmation().GetConfirmationId() != confirmationID || response.GetConfirmation().GetTaskId() != taskID || response.GetConfirmation().GetState() != agentv1.CoreConfirmationState_CORE_CONFIRMATION_STATE_CONSUMED || response.GetConfirmation().GetRevision() != confirmationRevision+1 || response.GetConfirmation().GetTerminalCode() != "acknowledged_unknown_no_retry" || binding.GetOperationDomain() != "extension.execute" || binding.GetTargetId() != installationID || response.GetTask().GetTaskId() != taskID || response.GetTask().GetStatus() != agentv1.CoreTaskStatus_CORE_TASK_STATUS_FAILED || response.GetTask().GetFailureCode() != "extension_execution_uncertain" || response.GetTask().GetRevision() != taskRevision+1 || response.GetResolution() != agentv1.CoreExtensionExecutionUncertainResolution_CORE_EXTENSION_EXECUTION_UNCERTAIN_RESOLUTION_ACKNOWLEDGED_UNKNOWN_NO_RETRY || !response.GetReservationReleased() {
+		return nil, actionbase.CodedError(http.StatusBadGateway, "agent_core_incompatible", "agent core reconciliation readback is incompatible")
+	}
+	return map[string]any{"confirmation": confirmationMap(response.GetConfirmation()), "task": taskMap(response.GetTask()), "resolution": "acknowledged_unknown_no_retry", "reservation_released": true}, nil
+}
+
+func requiredCanonicalUUID(params map[string]any, key string) (string, *actionbase.Error) {
+	value, e := requiredString(params, key)
+	if e != nil {
+		return "", e
+	}
+	parsed, err := uuid.Parse(value)
+	if err != nil || parsed.String() != value {
+		return "", actionbase.BadRequest(key + " must be a canonical UUID")
+	}
+	return value, nil
+}
+
+func requiredPositiveInt64(params map[string]any, key string) (int64, *actionbase.Error) {
+	if _, ok := params[key]; !ok {
+		return 0, actionbase.BadRequest(key + " is required")
+	}
+	value, e := optionalInt64(params, key)
+	if e != nil {
+		return 0, e
+	}
+	if value < 1 {
+		return 0, actionbase.BadRequest(key + " must be positive")
+	}
+	return value, nil
 }
 
 func candidateFromParams(params map[string]any, key string, kind agentv1.CoreExtensionKind) (*agentv1.CoreExtensionCandidate, *actionbase.Error) {
@@ -1922,28 +2015,36 @@ func (c *Client) extensionExecute(kind agentv1.CoreExtensionKind) actionbase.Han
 				return nil, e
 			}
 		}
-		var taskID string
+		var taskID, confirmationID string
 		err := c.controlPlaneUnary(ctx, func(callCtx context.Context, conn *grpc.ClientConn) error {
 			if kind == agentv1.CoreExtensionKind_CORE_EXTENSION_KIND_MCP {
 				response, err := agentv1.NewMCPServiceClient(conn).ExecuteTool(callCtx, &agentv1.MCPServiceExecuteToolRequest{IdempotencyKey: idem, InstallationId: id, ExpectedRevision: revision, ToolName: tool, Input: input})
 				if err != nil {
 					return err
 				}
-				taskID = response.GetTaskId()
+				taskID, confirmationID = response.GetTaskId(), response.GetConfirmationId()
 				return nil
 			}
 			response, err := agentv1.NewSkillServiceClient(conn).Execute(callCtx, &agentv1.SkillServiceExecuteRequest{IdempotencyKey: idem, InstallationId: id, ExpectedRevision: revision, Input: input})
 			if err != nil {
 				return err
 			}
-			taskID = response.GetTaskId()
+			taskID, confirmationID = response.GetTaskId(), response.GetConfirmationId()
 			return nil
 		})
 		if err != nil {
 			return nil, c.controlActionError(err, "extension execution")
 		}
-		return map[string]any{"task_id": taskID}, nil
+		if !validCanonicalResponseUUID(taskID) || !validCanonicalResponseUUID(confirmationID) {
+			return nil, c.controlActionError(errIncompatible, "extension execution")
+		}
+		return map[string]any{"confirmation_id": confirmationID, "task_id": taskID}, nil
 	}
+}
+
+func validCanonicalResponseUUID(value string) bool {
+	parsed, err := uuid.Parse(value)
+	return err == nil && parsed.String() == value
 }
 
 func (c *Client) extensionListTools(ctx context.Context, params map[string]any) (any, *actionbase.Error) {

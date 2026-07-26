@@ -3289,10 +3289,11 @@ func (x *MCPServiceExecuteToolRequest) GetInput() *structpb.Struct {
 }
 
 type MCPServiceExecuteToolResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	TaskId        string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	TaskId         string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
+	ConfirmationId string                 `protobuf:"bytes,2,opt,name=confirmation_id,json=confirmationId,proto3" json:"confirmation_id,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *MCPServiceExecuteToolResponse) Reset() {
@@ -3328,6 +3329,13 @@ func (*MCPServiceExecuteToolResponse) Descriptor() ([]byte, []int) {
 func (x *MCPServiceExecuteToolResponse) GetTaskId() string {
 	if x != nil {
 		return x.TaskId
+	}
+	return ""
+}
+
+func (x *MCPServiceExecuteToolResponse) GetConfirmationId() string {
+	if x != nil {
+		return x.ConfirmationId
 	}
 	return ""
 }
@@ -4225,10 +4233,11 @@ func (x *SkillServiceExecuteRequest) GetInput() *structpb.Struct {
 }
 
 type SkillServiceExecuteResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	TaskId        string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	TaskId         string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
+	ConfirmationId string                 `protobuf:"bytes,2,opt,name=confirmation_id,json=confirmationId,proto3" json:"confirmation_id,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *SkillServiceExecuteResponse) Reset() {
@@ -4264,6 +4273,13 @@ func (*SkillServiceExecuteResponse) Descriptor() ([]byte, []int) {
 func (x *SkillServiceExecuteResponse) GetTaskId() string {
 	if x != nil {
 		return x.TaskId
+	}
+	return ""
+}
+
+func (x *SkillServiceExecuteResponse) GetConfirmationId() string {
+	if x != nil {
+		return x.ConfirmationId
 	}
 	return ""
 }
@@ -4513,9 +4529,10 @@ const file_dirextalk_agent_v1_core_extension_proto_rawDesc = "" +
 	"\x0finstallation_id\x18\x02 \x01(\tR\x0einstallationId\x12+\n" +
 	"\x11expected_revision\x18\x03 \x01(\x03R\x10expectedRevision\x12\x1b\n" +
 	"\ttool_name\x18\x04 \x01(\tR\btoolName\x12-\n" +
-	"\x05input\x18\x05 \x01(\v2\x17.google.protobuf.StructR\x05input\"8\n" +
+	"\x05input\x18\x05 \x01(\v2\x17.google.protobuf.StructR\x05input\"a\n" +
 	"\x1dMCPServiceExecuteToolResponse\x12\x17\n" +
-	"\atask_id\x18\x01 \x01(\tR\x06taskId\"\xe7\x01\n" +
+	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12'\n" +
+	"\x0fconfirmation_id\x18\x02 \x01(\tR\x0econfirmationId\"\xe7\x01\n" +
 	"\x19SkillServiceSearchRequest\x129\n" +
 	"\x04kind\x18\x01 \x01(\x0e2%.dirextalk.agent.v1.CoreExtensionKindR\x04kind\x12?\n" +
 	"\x06source\x18\x02 \x01(\x0e2'.dirextalk.agent.v1.CoreExtensionSourceR\x06source\x12\x12\n" +
@@ -4582,9 +4599,10 @@ const file_dirextalk_agent_v1_core_extension_proto_rawDesc = "" +
 	"\x0fidempotency_key\x18\x01 \x01(\tR\x0eidempotencyKey\x12'\n" +
 	"\x0finstallation_id\x18\x02 \x01(\tR\x0einstallationId\x12+\n" +
 	"\x11expected_revision\x18\x03 \x01(\x03R\x10expectedRevision\x12-\n" +
-	"\x05input\x18\x04 \x01(\v2\x17.google.protobuf.StructR\x05input\"6\n" +
+	"\x05input\x18\x04 \x01(\v2\x17.google.protobuf.StructR\x05input\"_\n" +
 	"\x1bSkillServiceExecuteResponse\x12\x17\n" +
-	"\atask_id\x18\x01 \x01(\tR\x06taskId*t\n" +
+	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12'\n" +
+	"\x0fconfirmation_id\x18\x02 \x01(\tR\x0econfirmationId*t\n" +
 	"\x11CoreExtensionKind\x12#\n" +
 	"\x1fCORE_EXTENSION_KIND_UNSPECIFIED\x10\x00\x12\x1b\n" +
 	"\x17CORE_EXTENSION_KIND_MCP\x10\x01\x12\x1d\n" +

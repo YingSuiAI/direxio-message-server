@@ -19,6 +19,21 @@ func TestControlPlaneCapabilityGateHidesAbsentOptionalToken(t *testing.T) {
 	}
 }
 
+func TestValidCanonicalResponseUUIDRejectsIncompatibleIDs(t *testing.T) {
+	if !validCanonicalResponseUUID("00000000-0000-4000-8000-000000000001") {
+		t.Fatal("canonical UUID rejected")
+	}
+	for _, value := range []string{"task-1", "00000000000040008000000000000001", "00000000-0000-4000-8000-00000000000A"} {
+		if validCanonicalResponseUUID(value) {
+			t.Fatalf("incompatible UUID accepted: %q", value)
+		}
+	}
+	client, _ := New(Config{})
+	if mapped := client.controlActionError(errIncompatible, "extension execution"); mapped == nil || mapped.Code != "agent_core_incompatible" {
+		t.Fatalf("incompatible upstream error mapped incorrectly: %#v", mapped)
+	}
+}
+
 func TestControlPlaneProjectionsNormalizeEnumsAndOmitSensitiveFields(t *testing.T) {
 	task := taskMap(&agentv1.CoreTask{TaskId: "task-1", Status: agentv1.CoreTaskStatus_CORE_TASK_STATUS_WAITING_USER, Kind: agentv1.CoreTaskKind_CORE_TASK_KIND_EXTENSION, FailureSummary: "  safe\nsummary ", Revision: 3})
 	if task["status"] != "waiting-user" || task["kind"] != "extension" || task["failure_summary"] != "safe summary" {

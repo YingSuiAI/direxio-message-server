@@ -79,6 +79,7 @@ var actionSpecs = []ActionSpec{
 	{Name: "agent.core.confirmations.list", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: coreConfirmationListSchema()},
 	{Name: "agent.core.confirmations.confirm", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: coreConfirmationMutationSchema()},
 	{Name: "agent.core.confirmations.reject", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: coreConfirmationMutationSchema()},
+	{Name: "agent.core.confirmations.acknowledge_extension_execution_uncertain", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: coreConfirmationExtensionUncertainAcknowledgeSchema()},
 	{Name: "agent.core.mcp.discover", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: coreExtensionDiscoverSchema()},
 	{Name: "agent.core.mcp.get", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: coreExtensionGetSchema()},
 	{Name: "agent.core.mcp.list", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: coreExtensionListSchema()},
