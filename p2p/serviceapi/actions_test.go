@@ -84,6 +84,28 @@ func TestWorkloadPlanSchemaNestedFields(t *testing.T) {
 		t.Fatal("command_steps items missing")
 	}
 }
+func TestAgentCoreFamilySchemaDrift(t *testing.T) {
+	c, _ := ActionSpecFor("agent.core.schedules.create")
+	if c.Schema.Request["task_template"].Type != "object" || c.Schema.Request["trigger"].Type != "object" {
+		t.Fatal("schedule create schema")
+	}
+	u, _ := ActionSpecFor("agent.core.mcp.update")
+	if !u.Schema.Request["installation_id"].Required {
+		t.Fatal("mcp update installation_id")
+	}
+	i, _ := ActionSpecFor("agent.core.mcp.install")
+	if i.Schema.Request["installation_id"].Required {
+		t.Fatal("mcp install installation_id")
+	}
+	m, _ := ActionSpecFor("agent.core.mcp.execute")
+	if !m.Schema.Request["tool_name"].Required {
+		t.Fatal("mcp tool_name")
+	}
+	s, _ := ActionSpecFor("agent.core.skills.execute")
+	if s.Schema.Request["tool_name"].Required {
+		t.Fatal("skill tool_name")
+	}
+}
 
 func TestBuildActionSpecIndexRejectsDuplicateNames(t *testing.T) {
 	specs := []ActionSpec{

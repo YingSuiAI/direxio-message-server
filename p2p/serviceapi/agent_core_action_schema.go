@@ -48,7 +48,10 @@ func coreTaskEventsSchema() *ActionSchema {
 	return coreActionSchema(request, map[string]ActionFieldSchema{"events": {Type: "array", Items: &ActionFieldSchema{Type: "object"}}})
 }
 func coreScheduleCreateSchema() *ActionSchema {
-	return coreActionSchema(coreRequired("idempotency_key", "name", "task_template", "trigger"), coreObjectResponse("schedule"))
+	req := coreRequired("idempotency_key", "name")
+	req["task_template"] = ActionFieldSchema{Type: "object", Required: true}
+	req["trigger"] = ActionFieldSchema{Type: "object", Required: true}
+	return coreActionSchema(req, coreObjectResponse("schedule"))
 }
 func coreScheduleGetSchema() *ActionSchema {
 	return coreActionSchema(coreRequired("schedule_id"), coreObjectResponse("schedule"))
@@ -57,7 +60,11 @@ func coreScheduleListSchema() *ActionSchema {
 	return coreActionSchema(corePageFields(), map[string]ActionFieldSchema{"schedules": {Type: "array", Items: &ActionFieldSchema{Type: "object"}}, "next_page_token": {Type: "string"}})
 }
 func coreScheduleUpdateSchema() *ActionSchema {
-	return coreActionSchema(coreMutationFields("schedule_id"), coreObjectResponse("schedule"))
+	req := coreMutationFields("schedule_id")
+	req["name"] = ActionFieldSchema{Type: "string"}
+	req["task_template"] = ActionFieldSchema{Type: "object"}
+	req["trigger"] = ActionFieldSchema{Type: "object"}
+	return coreActionSchema(req, coreObjectResponse("schedule"))
 }
 func coreScheduleMutationSchema() *ActionSchema {
 	return coreActionSchema(coreMutationFields("schedule_id"), coreObjectResponse("schedule"))
@@ -102,6 +109,17 @@ func coreExtensionMutationSchema() *ActionSchema {
 	request["secret_inputs"] = ActionFieldSchema{Type: "array", WriteOnly: true, Items: &ActionFieldSchema{Type: "object"}}
 	return coreActionSchema(request, map[string]ActionFieldSchema{"installation": {Type: "object"}, "confirmation_id": {Type: "string"}, "task_id": {Type: "string"}})
 }
+func coreExtensionInstallSchema() *ActionSchema {
+	req := coreMutationFields()
+	req["candidate"] = ActionFieldSchema{Type: "object", Required: true}
+	req["secret_inputs"] = ActionFieldSchema{Type: "array", WriteOnly: true, Items: &ActionFieldSchema{Type: "object"}}
+	return coreActionSchema(req, map[string]ActionFieldSchema{"installation": {Type: "object"}, "confirmation_id": {Type: "string"}, "task_id": {Type: "string"}})
+}
+func coreExtensionUpdateSchema() *ActionSchema {
+	s := coreExtensionInstallSchema()
+	s.Request["installation_id"] = ActionFieldSchema{Type: "string", Required: true}
+	return s
+}
 func coreExtensionRemoveSchema() *ActionSchema {
 	return coreActionSchema(coreMutationFields("installation_id"), map[string]ActionFieldSchema{"installation": {Type: "object"}, "confirmation_id": {Type: "string"}, "task_id": {Type: "string"}})
 }
@@ -111,6 +129,12 @@ func coreExtensionExecuteSchema() *ActionSchema {
 	request["tool_name"] = ActionFieldSchema{Type: "string", Presence: &ActionPresenceSchema{Omitted: "skill_execution", Present: "MCP_tool_name"}}
 	return coreActionSchema(request, map[string]ActionFieldSchema{"task_id": {Type: "string"}})
 }
+func coreMCPExecuteSchema() *ActionSchema {
+	s := coreExtensionExecuteSchema()
+	s.Request["tool_name"] = ActionFieldSchema{Type: "string", Required: true}
+	return s
+}
+func coreSkillExecuteSchema() *ActionSchema { return coreExtensionExecuteSchema() }
 func coreMCPToolsSchema() *ActionSchema {
 	return coreActionSchema(coreMutationFields("installation_id"), map[string]ActionFieldSchema{"tools": {Type: "array", Items: &ActionFieldSchema{Type: "object"}}})
 }

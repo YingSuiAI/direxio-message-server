@@ -613,11 +613,11 @@
             "required": true
           },
           "task_template": {
-            "type": "string",
+            "type": "object",
             "required": true
           },
           "trigger": {
-            "type": "string",
+            "type": "object",
             "required": true
           }
         },
@@ -695,9 +695,18 @@
             "type": "string",
             "required": true
           },
+          "name": {
+            "type": "string"
+          },
           "schedule_id": {
             "type": "string",
             "required": true
+          },
+          "task_template": {
+            "type": "object"
+          },
+          "trigger": {
+            "type": "object"
           }
         },
         "response": {
@@ -1102,6 +1111,10 @@
             "type": "string",
             "required": true
           },
+          "installation_id": {
+            "type": "string",
+            "required": true
+          },
           "secret_inputs": {
             "type": "array",
             "write_only": true,
@@ -1216,10 +1229,7 @@
           },
           "tool_name": {
             "type": "string",
-            "presence": {
-              "omitted": "skill_execution",
-              "present": "MCP_tool_name"
-            }
+            "required": true
           }
         },
         "response": {
@@ -1383,6 +1393,10 @@
             }
           },
           "idempotency_key": {
+            "type": "string",
+            "required": true
+          },
+          "installation_id": {
             "type": "string",
             "required": true
           },
