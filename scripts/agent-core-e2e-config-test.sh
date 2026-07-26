@@ -25,6 +25,7 @@ contains 'down --volumes --remove-orphans' "$script"
 contains 'refusing cleanup' "$script"
 contains 'docker compose' "$script"
 contains 'message-server loopback port' "$script"
+[ "$(rg -c 'verify_cgroup_parent_mapping' "$script" | awk -F: '{print $NF}')" -ge 6 ] || fail 'cgroup parent/root mapping is not repeated before healthcheck and driver'
 
 if rg -n 'docker (rm|volume rm|network rm)|docker system prune|docker compose down$' "$script" >/dev/null; then
   fail 'orchestrator contains a broad Docker deletion path'
@@ -84,6 +85,13 @@ export DIREXTALK_CORE_RUNNER_IMAGE_IMMUTABLE=example/core-runner@sha256:33333333
 export DIREXTALK_POSTGRES_IMAGE_IMMUTABLE=postgres@sha256:4444444444444444444444444444444444444444444444444444444444444444
 export DIREXTALK_MESSAGE_SERVER_IMAGE_IMMUTABLE=example/server@sha256:5555555555555555555555555555555555555555555555555555555555555555
 for id in alpha beta; do
+  if [ "$id" = beta ]; then
+    export DIREXTALK_AGENT_IMAGE_IMMUTABLE=127.0.0.1:5009/example/agent@sha256:1111111111111111111111111111111111111111111111111111111111111111
+    export DIREXTALK_EXTENSION_RUNNER_IMAGE_IMMUTABLE=127.0.0.1:5009/example/runner@sha256:2222222222222222222222222222222222222222222222222222222222222222
+    export DIREXTALK_CORE_RUNNER_IMAGE_IMMUTABLE=127.0.0.1:5009/example/core-runner@sha256:3333333333333333333333333333333333333333333333333333333333333333
+    export DIREXTALK_POSTGRES_IMAGE_IMMUTABLE=127.0.0.1:5009/postgres@sha256:4444444444444444444444444444444444444444444444444444444444444444
+    export DIREXTALK_MESSAGE_SERVER_IMAGE_IMMUTABLE=127.0.0.1:5009/example/server@sha256:5555555555555555555555555555555555555555555555555555555555555555
+  fi
   "$script" prepare "$id" >/dev/null 2>&1
   "$script" config "$id" >/dev/null 2>&1
   [ -r "$tmp/runs/$id/agent/.env" ] || fail "missing Agent env for $id"

@@ -9,12 +9,12 @@
 set -eu
 
 usage() {
-  echo "usage: $0 prepare|config|up|status|down|cleanup [STACK_ID]" >&2
+  echo "usage: $0 prepare|config|up|status|verify|down|cleanup [STACK_ID]" >&2
   exit 2
 }
 
 action=${1:-}
-case "$action" in prepare|config|up|status|down|cleanup) ;; *) usage ;; esac
+case "$action" in prepare|config|up|status|verify|down|cleanup) ;; *) usage ;; esac
 
 die() { echo "agent-core-e2e: $*" >&2; exit 1; }
 
@@ -36,6 +36,13 @@ validate_path_value() {
     *'//'*) die "path must be clean" ;;
     *'/../'*|*/..|../*) die "path must not contain parent traversal" ;;
   esac
+}
+
+validate_cgroup_parent_value() {
+  value=$1
+  validate_text "$value"
+  case "$value" in *.slice) ;; *) die "cgroup parent must be a safe .slice name" ;; esac
+  case "$value" in *[!A-Za-z0-9_.-]*) die "cgroup parent must be a safe .slice name" ;; esac
 }
 
 script_dir=$(CDPATH= cd -- "$(dirname "$0")" && pwd -P)
@@ -91,8 +98,18 @@ compose() {
 validate_image_ref() {
   value=$1
   validate_text "$value"
-  printf '%s' "$value" | grep -Eq '^[A-Za-z0-9._/-]+@sha256:[0-9a-fA-F]{64}$' ||
+  printf '%s' "$value" | grep -Eq '^[A-Za-z0-9._-]+(:[0-9]{1,5})?(/[A-Za-z0-9._-]+)*@sha256:[0-9a-f]{64}$' ||
     die "all image references must be immutable digests"
+  case "$value" in *'//'*) die "all image references must use clean paths" ;; esac
+  name=${value%@sha256:*}
+  case "$name" in *'/./'*|*/./|*'/../'*|*/..|../*) die "all image references must use clean paths" ;; esac
+  hostport=${name%%/*}
+  case "$hostport" in
+    *:*)
+      port=${hostport##*:}
+      awk -v p="$port" 'BEGIN { exit !(p + 0 >= 1 && p + 0 <= 65535) }' || die "invalid image registry port"
+      ;;
+  esac
 }
 
 validate_secret_ref() {
@@ -251,13 +268,20 @@ prepare() {
   workload_enabled=${DIREXTALK_E2E_CORE_WORKLOAD_ENABLED:-true}
   extension_cgroup=${DIREXTALK_E2E_EXTENSION_CGROUP_ROOT:-$run_dir/cgroup/extension}
   workload_cgroup=${DIREXTALK_E2E_CORE_RUNNER_CGROUP_ROOT:-$run_dir/cgroup/core-runner}
+  extension_parent=${DIREXTALK_E2E_EXTENSION_CGROUP_PARENT:-${agent_stack_name}-extension.slice}
+  workload_parent=${DIREXTALK_E2E_CORE_RUNNER_CGROUP_PARENT:-${agent_stack_name}-core-runner.slice}
   validate_path_value "$extension_cgroup"
   validate_path_value "$workload_cgroup"
+  validate_cgroup_parent_value "$extension_parent"
+  validate_cgroup_parent_value "$workload_parent"
+  [ "$extension_parent" != "$workload_parent" ] || die "runner cgroup parents must be distinct"
   DIREXTALK_CORE_EXTENSION_ENABLED="$extension_enabled" \
     DIREXTALK_CORE_WORKLOAD_ENABLED="$workload_enabled" \
     DIREXTALK_AGENT_STACK_NAME="dirextalk-agent-e2e-$stack_id" \
     DIREXTALK_EXTENSION_CGROUP_ROOT="$extension_cgroup" \
     DIREXTALK_CORE_RUNNER_CGROUP_ROOT="$workload_cgroup" \
+    DIREXTALK_EXTENSION_CGROUP_PARENT="$extension_parent" \
+    DIREXTALK_CORE_RUNNER_CGROUP_PARENT="$workload_parent" \
     DIREXTALK_CORE_RUNNER_IMAGE_IMMUTABLE="$core_runner_image" \
     "$bootstrap" "$run_dir/agent" "$core_image" "$runner_image" "$postgres_image" "$tls_name" >/dev/null
   grep -Fqx "core_extension_enabled: $extension_enabled" "$run_dir/agent/config.yaml" ||
@@ -272,6 +296,8 @@ prepare() {
   require_env_line DIREXTALK_CORE_RUNNER_IMAGE_IMMUTABLE "$core_runner_image"
   require_env_line DIREXTALK_EXTENSION_CGROUP_ROOT "$extension_cgroup"
   require_env_line DIREXTALK_CORE_RUNNER_CGROUP_ROOT "$workload_cgroup"
+  require_env_line DIREXTALK_EXTENSION_CGROUP_PARENT "$extension_parent"
+  require_env_line DIREXTALK_CORE_RUNNER_CGROUP_PARENT "$workload_parent"
   write_server_env
   echo "prepared isolated Agent Core stack $stack_id" >&2
 }
@@ -297,9 +323,23 @@ cgroup_root_from_env() {
   [ "$owner" = "$3" ] || die "$key must be owned by runner UID $3"
   [ -n "$mode" ] || die "$key mode is unavailable"
   [ $((0$mode & 18)) -eq 0 ] || die "$key must not be group/world writable"
-  [ -e "$value/cgroup.procs" ] && [ -w "$value/cgroup.procs" ] || die "$key cgroup.procs is not writable"
-  [ -s "$value/cgroup.controllers" ] || die "$key has no delegated controllers"
-  [ -e "$value/cgroup.subtree_control" ] && [ -w "$value/cgroup.subtree_control" ] || die "$key subtree control is not writable"
+  # The host-side orchestrator normally runs as the deployment user, while
+  # the delegated subtree is intentionally owned by the unprivileged runner
+  # UID.  Testing `-w` here would therefore reject every correctly-owned
+  # subtree.  Verify the runner-owned control files and their owner-write bit
+  # instead; the runner itself is the process that will exercise them.
+  for control in cgroup.procs cgroup.subtree_control; do
+    [ -e "$value/$control" ] || die "$key $control is unavailable"
+    control_owner=$(stat -c '%u' "$value/$control" 2>/dev/null || true)
+    control_mode=$(stat -c '%a' "$value/$control" 2>/dev/null || true)
+    [ "$control_owner" = "$3" ] || die "$key $control must be owned by runner UID $3"
+    [ -n "$control_mode" ] && [ $((0$control_mode & 128)) -ne 0 ] ||
+      die "$key $control must be owner-writable"
+  done
+  # cgroupfs pseudo-files report a zero inode size even when they contain
+  # delegated controller names, so `-s` is not a valid capability check.
+  controllers=$(cat "$value/cgroup.controllers" 2>/dev/null || true)
+  [ -n "$controllers" ] || die "$key has no delegated controllers"
 }
 
 preflight_cgroups() {
@@ -310,6 +350,18 @@ preflight_cgroups() {
   [ "$extension_cgroup" != "$workload_cgroup" ] || die "runner cgroup roots must be distinct"
   cgroup_root_from_env DIREXTALK_E2E_EXTENSION_CGROUP_ROOT "$extension_cgroup" 65531
   cgroup_root_from_env DIREXTALK_E2E_CORE_RUNNER_CGROUP_ROOT "$workload_cgroup" 65530
+}
+
+verify_cgroup_parent_mapping() {
+  parent=$1
+  root=$2
+  root_real=$(realpath -e -- "$root" 2>/dev/null || true)
+  [ -n "$root_real" ] || die "delegated cgroup root cannot be resolved"
+  matches=$(find /sys/fs/cgroup -type d -name "$parent" -print 2>/dev/null || true)
+  count=$(printf '%s\n' "$matches" | sed '/^$/d' | wc -l)
+  [ "$count" -eq 1 ] || die "cgroup parent must resolve to exactly one host slice"
+  slice_real=$(realpath -e -- "$matches" 2>/dev/null || true)
+  case "$root_real" in "$slice_real"/*) ;; *) die "delegated cgroup root is outside its configured parent slice" ;; esac
 }
 
 wait_service() {
@@ -390,6 +442,12 @@ up() {
     --require-capability workload.core_runner
   compose "$server_project" "$server_env" "$server_compose" up -d
   wait_service "$server_project" "$server_env" "$server_compose" message-server
+  extension_parent=$(awk -F= '$1 == "DIREXTALK_EXTENSION_CGROUP_PARENT" { print $2 }' "$agent_env")
+  workload_parent=$(awk -F= '$1 == "DIREXTALK_CORE_RUNNER_CGROUP_PARENT" { print $2 }' "$agent_env")
+  extension_root=$(awk -F= '$1 == "DIREXTALK_EXTENSION_CGROUP_ROOT" { print $2 }' "$agent_env")
+  workload_root=$(awk -F= '$1 == "DIREXTALK_CORE_RUNNER_CGROUP_ROOT" { print $2 }' "$agent_env")
+  verify_cgroup_parent_mapping "$extension_parent" "$extension_root"
+  verify_cgroup_parent_mapping "$workload_parent" "$workload_root"
   status
   trap - EXIT INT TERM
 }
@@ -403,6 +461,63 @@ status() {
     port=$(docker inspect --format '{{(index (index .NetworkSettings.Ports "8008/tcp") 0).HostPort}}' "$container" 2>/dev/null || true)
     [ -n "$port" ] && echo "message-server loopback port: $port" >&2 || true
   fi
+}
+
+verify() {
+  require_prepared
+  assert_project_ownership "$server_project" "$server_env" "$server_compose"
+  assert_project_ownership "$agent_project" "$agent_env" "$agent_compose"
+  for service in postgres extension-runner core-runner core; do
+    wait_service "$agent_project" "$agent_env" "$agent_compose" "$service"
+  done
+  wait_service "$server_project" "$server_env" "$server_compose" message-server
+  extension_parent=$(awk -F= '$1 == "DIREXTALK_EXTENSION_CGROUP_PARENT" { print $2 }' "$agent_env")
+  workload_parent=$(awk -F= '$1 == "DIREXTALK_CORE_RUNNER_CGROUP_PARENT" { print $2 }' "$agent_env")
+  extension_root=$(awk -F= '$1 == "DIREXTALK_EXTENSION_CGROUP_ROOT" { print $2 }' "$agent_env")
+  workload_root=$(awk -F= '$1 == "DIREXTALK_CORE_RUNNER_CGROUP_ROOT" { print $2 }' "$agent_env")
+  verify_cgroup_parent_mapping "$extension_parent" "$extension_root"
+  verify_cgroup_parent_mapping "$workload_parent" "$workload_root"
+  expected_instance_id=$(tr -d '\r\n' < "$run_dir/agent/instance-id")
+  compose "$agent_project" "$agent_env" "$agent_compose" exec -T core \
+    /usr/local/bin/dirextalk-agent healthcheck \
+    --expect-instance-id "$expected_instance_id" \
+    --require-capability agent.info \
+    --require-capability model.profile \
+    --require-capability conversation \
+    --require-capability mcp \
+    --require-capability skill \
+    --require-capability task \
+    --require-capability confirmation \
+    --require-capability workload.core_runner
+  container=$(compose "$server_project" "$server_env" "$server_compose" ps -q message-server || true)
+  [ -n "$container" ] || die "verify requires an already running message-server; run up first"
+  running=$(docker inspect --format '{{.State.Status}}' "$container" 2>/dev/null || true)
+  [ "$running" = running ] || die "verify requires an already running message-server; run up first"
+  port=$(docker inspect --format '{{(index (index .NetworkSettings.Ports "8008/tcp") 0).HostPort}}' "$container" 2>/dev/null || true)
+  [ -n "$port" ] || die "verify could not resolve the message-server loopback port"
+  owner_file=${DIREXTALK_E2E_OWNER_SECRET_FILE:-}
+  [ -n "$owner_file" ] || die "verify requires DIREXTALK_E2E_OWNER_SECRET_FILE"
+  api_key_file=${DIREXTALK_E2E_DEEPSEEK_API_KEY_FILE:-}
+  flow=${DIREXTALK_E2E_FLOW:-full}
+  case "$flow" in full|deepseek|extensions|workload) ;; *) die "DIREXTALK_E2E_FLOW must be full, deepseek, extensions, or workload" ;; esac
+  runner=${DIREXTALK_AGENT_CORE_E2E_BIN:-}
+  if [ -n "$runner" ]; then
+    [ -x "$runner" ] || die "DIREXTALK_AGENT_CORE_E2E_BIN must be executable"
+    command_args="$runner"
+  else
+    command_args="go run ./cmd/agent-core-e2e"
+  fi
+  # Secret values are never interpolated; only caller-owned file paths cross
+  # this boundary. The driver prints only its sanitized JSON summary.
+  set -- $command_args "$flow" --base-url "http://127.0.0.1:$port" --owner-secret-file "$owner_file"
+  if [ -n "$api_key_file" ]; then set -- "$@" --deepseek-api-key-file "$api_key_file"; fi
+  if [ -n "${DIREXTALK_E2E_EXTENSION_SECRET_INPUT_FILE:-}" ]; then set -- "$@" --extension-secret-input-file "$DIREXTALK_E2E_EXTENSION_SECRET_INPUT_FILE"; fi
+  if [ -n "${DIREXTALK_E2E_WORKLOAD_PLAN_FILE:-}" ]; then set -- "$@" --workload-plan-file "$DIREXTALK_E2E_WORKLOAD_PLAN_FILE"; fi
+  # Re-check both host slice mappings immediately before executing the driver;
+  # a delegated subtree must not drift between healthcheck and acceptance.
+  verify_cgroup_parent_mapping "$extension_parent" "$extension_root"
+  verify_cgroup_parent_mapping "$workload_parent" "$workload_root"
+  "$@"
 }
 
 down() {
@@ -425,6 +540,7 @@ case "$action" in
   config) config ;;
   up) up ;;
   status) status ;;
+  verify) verify ;;
   down) down ;;
   cleanup) cleanup ;;
 esac
