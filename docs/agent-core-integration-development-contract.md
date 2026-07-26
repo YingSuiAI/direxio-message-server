@@ -1,12 +1,13 @@
 # Agent Core integration development contract
 
-Status: approved implementation target, not current production behavior  
+Status: source implementation recorded; production activation and live
+verification remain gated
 Approved: 2026-07-25  
-Server baseline: `origin/main` at `1d2e76d03273de5cc1225144dd1625c47ee88844`  
-Companion baselines:
+Implemented source behavior follows the `Agent Core v1 source contract`.
+Companion source contracts:
 
-- Flutter: `7c5cb1bc38a18f7ca11894dbac1df36fea784717`
-- Agent Core: `11eed51e2a9e6431f28039a542f2424f290e6fff`
+- Flutter: `AGENT_CORE_INTEGRATION.md`
+- Agent Core: `core-v1-development-spec.md`
 
 This document is the cross-repository contract authority for reconnecting the
 refactored Dirextalk Agent Core to Message Server and Flutter. The existing
@@ -151,7 +152,11 @@ they do not make basic Core chat incompatible.
 Capability tokens are boolean. For Core API `v1`, Message Server projects the
 fixed model-provider identifiers `openai_compatible`, `anthropic`, and `gemini`
 as `supported_model_providers`; they are not inferred from optional capability
-tokens.
+tokens. AWS SSM/ECS capability advertisement additionally requires an explicit
+readiness block naming one exact durable credential reference and target, then
+typed-provider proof of STS/account binding and configured target prerequisites.
+Missing, stale, partial, or failed proof keeps the capability disabled; there is
+no default target or broad account scan.
 
 ## 4. ProductCore adapter surface
 
@@ -160,7 +165,7 @@ Core operations use explicit owner-only ProductCore actions under
 the new client chooses the appropriate adapter and does not ask the server to
 guess a backend.
 
-The first implementation exposes these action families:
+The implemented source exposes these action families:
 
 | Family | ProductCore actions |
 | --- | --- |
@@ -171,7 +176,7 @@ The first implementation exposes these action families:
 | Confirmations | `agent.core.confirmations.get`, `.list`, `.confirm`, `.reject` |
 | MCP | `agent.core.mcp.discover`, `.get`, `.list`, `.install`, `.update`, `.remove`, `.execute` |
 | Skills | `agent.core.skills.discover`, `.get`, `.list`, `.install`, `.update`, `.remove`, `.execute` |
-| Workloads | `agent.core.workloads.plan`, `.get`, `.list`, `.quote`, `.apply`, `.destroy` |
+| Workloads | `agent.core.workloads.plan`, `.get`, `.list`, `.quote`, `.apply`, `.destroy`, `.operations.get`, `.operations.events`, `.actual.get` |
 | AWS | `agent.core.aws.credentials.create`, `.update`, `.delete`, `.list`, `.test`; existing typed plan/change reads needed by workloads |
 
 Exact request and response fields mirror the versioned Core Protobuf after
@@ -507,6 +512,9 @@ identity, AWS account/region, exact confirmed digest, resources created,
 independent read-back, explicit destruction, and a zero-resource residue audit.
 It requires separately supplied deployment targets, credentials, budget, and
 owner confirmations; no repository value is treated as deployment authority.
+The two isolated Compose projects, real DeepSeek conversation, extension
+installation/execution, and workload checks are release evidence. They do not
+by themselves activate production capabilities or claim live AWS readiness.
 
 ## 12. Implementation order
 

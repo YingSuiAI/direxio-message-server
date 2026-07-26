@@ -1,9 +1,10 @@
 # Current Agent and MCP Contract
 
-> The approved, not-yet-implemented Agent Core reconnection target is defined in
-> [`agent-core-integration-development-contract.md`](agent-core-integration-development-contract.md).
-> This file continues to describe the implemented baseline until the integration
-> passes its acceptance gates.
+> Agent Core integration source behavior is recorded in
+> [`agent-core-integration-development-contract.md`](agent-core-integration-development-contract.md)
+> and is capability/readiness gated. This document remains the backend-owned
+> contract for the currently active Agent room, Native Agent, and external MCP
+> paths; it does not claim live Core or AWS activation.
 
 This document is the backend-owned current contract for Dirextalk Agent state, Native Agent, and external MCP access. It describes existing behavior; it does not add a compatibility surface.
 
