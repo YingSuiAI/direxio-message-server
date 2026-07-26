@@ -5222,6 +5222,882 @@
       }
     },
     {
+      "name": "agent.core.workloads.operations.get",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "operation_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "operation": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "actual": {
+                "type": "object",
+                "properties": {
+                  "applied_plan_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "applied_plan_id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "identity": {
+                    "type": "object",
+                    "required": true,
+                    "properties": {
+                      "aws_account_id": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "aws_ec2_document_version": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "aws_ec2_required_instance_tags": {
+                        "type": "object",
+                        "required": true
+                      },
+                      "aws_ec2_systemd_service": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "aws_ecs_assign_public_ip": {
+                        "type": "boolean",
+                        "required": true
+                      },
+                      "aws_ecs_cluster_arn": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "aws_ecs_desired_count": {
+                        "type": "integer",
+                        "required": true
+                      },
+                      "aws_ecs_execution_role_arn": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "aws_ecs_image_uri": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "aws_ecs_platform_version": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "aws_ecs_security_group_ids": {
+                        "type": "array",
+                        "required": true,
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "aws_ecs_service_name": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "aws_ecs_subnet_ids": {
+                        "type": "array",
+                        "required": true,
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "aws_ecs_target_group_arn": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "aws_ecs_target_group_port": {
+                        "type": "integer",
+                        "required": true
+                      },
+                      "aws_ecs_task_family": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "aws_ecs_task_role_arn": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "aws_region": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "cluster": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "core_runner_id": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "core_runner_service": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "desired_count": {
+                        "type": "integer",
+                        "required": true
+                      },
+                      "endpoint": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "image_digest": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "instance_id": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "kind": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "service": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "task_definition_revision": {
+                        "type": "string",
+                        "required": true
+                      }
+                    }
+                  },
+                  "observed_at": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "provider_version": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "readback_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "revision": {
+                    "type": "integer",
+                    "required": true
+                  },
+                  "state": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "updated_at": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "workload_id": {
+                    "type": "string",
+                    "required": true
+                  }
+                }
+              },
+              "confirmation_id": {
+                "type": "string",
+                "required": true
+              },
+              "created_at": {
+                "type": "string",
+                "required": true
+              },
+              "desired_plan": {
+                "type": "object",
+                "required": true,
+                "properties": {
+                  "plan_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "plan_id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "plan_revision": {
+                    "type": "integer",
+                    "required": true
+                  },
+                  "resource_limits": {
+                    "type": "object",
+                    "required": true,
+                    "properties": {
+                      "cpu": {
+                        "type": "integer",
+                        "required": true
+                      },
+                      "disk_mb": {
+                        "type": "integer",
+                        "required": true
+                      },
+                      "memory_mb": {
+                        "type": "integer",
+                        "required": true
+                      },
+                      "output_mb": {
+                        "type": "integer",
+                        "required": true
+                      },
+                      "processes": {
+                        "type": "integer",
+                        "required": true
+                      },
+                      "timeout_seconds": {
+                        "type": "integer",
+                        "required": true
+                      }
+                    }
+                  },
+                  "secret_grants": {
+                    "type": "array",
+                    "required": true,
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "binding_digest": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "purpose": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "reference_id": {
+                          "type": "string",
+                          "required": true
+                        }
+                      }
+                    }
+                  },
+                  "target": {
+                    "type": "object",
+                    "required": true,
+                    "properties": {
+                      "identity": {
+                        "type": "object",
+                        "required": true,
+                        "properties": {
+                          "aws_account_id": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "aws_ec2_document_version": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "aws_ec2_required_instance_tags": {
+                            "type": "object",
+                            "required": true
+                          },
+                          "aws_ec2_systemd_service": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "aws_ecs_assign_public_ip": {
+                            "type": "boolean",
+                            "required": true
+                          },
+                          "aws_ecs_cluster_arn": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "aws_ecs_desired_count": {
+                            "type": "integer",
+                            "required": true
+                          },
+                          "aws_ecs_execution_role_arn": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "aws_ecs_image_uri": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "aws_ecs_platform_version": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "aws_ecs_security_group_ids": {
+                            "type": "array",
+                            "required": true,
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "aws_ecs_service_name": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "aws_ecs_subnet_ids": {
+                            "type": "array",
+                            "required": true,
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "aws_ecs_target_group_arn": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "aws_ecs_target_group_port": {
+                            "type": "integer",
+                            "required": true
+                          },
+                          "aws_ecs_task_family": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "aws_ecs_task_role_arn": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "aws_region": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "cluster": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "core_runner_id": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "core_runner_service": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "desired_count": {
+                            "type": "integer",
+                            "required": true
+                          },
+                          "endpoint": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "image_digest": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "instance_id": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "kind": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "service": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "task_definition_revision": {
+                            "type": "string",
+                            "required": true
+                          }
+                        }
+                      },
+                      "labels": {
+                        "type": "object",
+                        "required": true
+                      },
+                      "network_grants": {
+                        "type": "array",
+                        "required": true,
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "required": true
+                            },
+                            "reference_id": {
+                              "type": "string",
+                              "required": true
+                            }
+                          }
+                        }
+                      },
+                      "ports": {
+                        "type": "array",
+                        "required": true,
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "port": {
+                              "type": "integer",
+                              "required": true
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "dispatch_epoch": {
+                "type": "integer",
+                "required": true
+              },
+              "dispatch_lease_until": {
+                "type": "string",
+                "required": true
+              },
+              "failure_code": {
+                "type": "string",
+                "required": true
+              },
+              "failure_summary": {
+                "type": "string",
+                "required": true
+              },
+              "kind": {
+                "type": "string",
+                "required": true
+              },
+              "operation_id": {
+                "type": "string",
+                "required": true
+              },
+              "plan_digest": {
+                "type": "string",
+                "required": true
+              },
+              "plan_id": {
+                "type": "string",
+                "required": true
+              },
+              "plan_revision": {
+                "type": "integer",
+                "required": true
+              },
+              "revision": {
+                "type": "integer",
+                "required": true
+              },
+              "status": {
+                "type": "string",
+                "required": true
+              },
+              "target_kind": {
+                "type": "string",
+                "required": true
+              },
+              "task_id": {
+                "type": "string",
+                "required": true
+              },
+              "updated_at": {
+                "type": "string",
+                "required": true
+              },
+              "workload_id": {
+                "type": "string",
+                "required": true
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.workloads.operations.events",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "after_sequence": {
+            "type": "integer",
+            "presence": {
+              "omitted": "from_beginning",
+              "present": "nonnegative_sequence"
+            }
+          },
+          "operation_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "events": {
+            "type": "array",
+            "required": true,
+            "items": {
+              "type": "object",
+              "properties": {
+                "actual": {
+                  "type": "object",
+                  "properties": {
+                    "identity": {
+                      "type": "object",
+                      "required": true,
+                      "properties": {
+                        "aws_account_id": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "aws_ec2_document_version": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "aws_ec2_required_instance_tags": {
+                          "type": "object",
+                          "required": true
+                        },
+                        "aws_ec2_systemd_service": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "aws_ecs_assign_public_ip": {
+                          "type": "boolean",
+                          "required": true
+                        },
+                        "aws_ecs_cluster_arn": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "aws_ecs_desired_count": {
+                          "type": "integer",
+                          "required": true
+                        },
+                        "aws_ecs_execution_role_arn": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "aws_ecs_image_uri": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "aws_ecs_platform_version": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "aws_ecs_security_group_ids": {
+                          "type": "array",
+                          "required": true,
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "aws_ecs_service_name": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "aws_ecs_subnet_ids": {
+                          "type": "array",
+                          "required": true,
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "aws_ecs_target_group_arn": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "aws_ecs_target_group_port": {
+                          "type": "integer",
+                          "required": true
+                        },
+                        "aws_ecs_task_family": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "aws_ecs_task_role_arn": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "aws_region": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "cluster": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "core_runner_id": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "core_runner_service": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "desired_count": {
+                          "type": "integer",
+                          "required": true
+                        },
+                        "endpoint": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "image_digest": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "instance_id": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "kind": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "service": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "task_definition_revision": {
+                          "type": "string",
+                          "required": true
+                        }
+                      }
+                    },
+                    "observed_at": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "provider_version": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "readback_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "state": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "workload_id": {
+                      "type": "string",
+                      "required": true
+                    }
+                  },
+                  "presence": {
+                    "omitted": "no_event_readback",
+                    "present": "event_time_sparse_readback"
+                  }
+                },
+                "at": {
+                  "type": "string",
+                  "required": true
+                },
+                "kind": {
+                  "type": "string",
+                  "required": true
+                },
+                "message": {
+                  "type": "string",
+                  "required": true
+                },
+                "operation_id": {
+                  "type": "string",
+                  "required": true
+                },
+                "sequence": {
+                  "type": "integer",
+                  "required": true
+                },
+                "status": {
+                  "type": "string",
+                  "required": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.workloads.actual.get",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "workload_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "workload": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "applied_plan_digest": {
+                "type": "string",
+                "required": true
+              },
+              "applied_plan_id": {
+                "type": "string",
+                "required": true
+              },
+              "identity": {
+                "type": "object",
+                "required": true,
+                "properties": {
+                  "aws_account_id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "aws_ec2_document_version": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "aws_ec2_required_instance_tags": {
+                    "type": "object",
+                    "required": true
+                  },
+                  "aws_ec2_systemd_service": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "aws_ecs_assign_public_ip": {
+                    "type": "boolean",
+                    "required": true
+                  },
+                  "aws_ecs_cluster_arn": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "aws_ecs_desired_count": {
+                    "type": "integer",
+                    "required": true
+                  },
+                  "aws_ecs_execution_role_arn": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "aws_ecs_image_uri": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "aws_ecs_platform_version": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "aws_ecs_security_group_ids": {
+                    "type": "array",
+                    "required": true,
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "aws_ecs_service_name": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "aws_ecs_subnet_ids": {
+                    "type": "array",
+                    "required": true,
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "aws_ecs_target_group_arn": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "aws_ecs_target_group_port": {
+                    "type": "integer",
+                    "required": true
+                  },
+                  "aws_ecs_task_family": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "aws_ecs_task_role_arn": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "aws_region": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "cluster": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "core_runner_id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "core_runner_service": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "desired_count": {
+                    "type": "integer",
+                    "required": true
+                  },
+                  "endpoint": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "image_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "instance_id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "kind": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "service": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "task_definition_revision": {
+                    "type": "string",
+                    "required": true
+                  }
+                }
+              },
+              "observed_at": {
+                "type": "string",
+                "required": true
+              },
+              "provider_version": {
+                "type": "string",
+                "required": true
+              },
+              "readback_digest": {
+                "type": "string",
+                "required": true
+              },
+              "revision": {
+                "type": "integer",
+                "required": true
+              },
+              "state": {
+                "type": "string",
+                "required": true
+              },
+              "updated_at": {
+                "type": "string",
+                "required": true
+              },
+              "workload_id": {
+                "type": "string",
+                "required": true
+              }
+            }
+          }
+        }
+      }
+    },
+    {
       "name": "agent.core.aws.credentials.create",
       "auth": "owner",
       "transport": "http_and_ws_request",

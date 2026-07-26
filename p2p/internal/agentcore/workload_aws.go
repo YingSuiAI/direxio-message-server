@@ -60,6 +60,13 @@ func validateAWSQuote(v *agentv1.CoreAWSQuote, want string) *actionbase.Error {
 func validWorkloadOp(v agentv1.CoreWorkloadOperationKind) bool {
 	return v == agentv1.CoreWorkloadOperationKind_CORE_WORKLOAD_OPERATION_KIND_APPLY || v == agentv1.CoreWorkloadOperationKind_CORE_WORKLOAD_OPERATION_KIND_DESTROY
 }
+func validWorkloadOperationStatus(status string) bool {
+	switch status {
+	case "waiting_user", "running", "succeeded", "failed", "uncertain", "rejected", "expired", "canceled":
+		return true
+	}
+	return false
+}
 func validTimePair(created, updated *timestamppb.Timestamp) bool {
 	return created != nil && updated != nil && created.IsValid() && updated.IsValid() && !updated.AsTime().Before(created.AsTime())
 }
@@ -119,6 +126,27 @@ func validateWorkloadMutation(v *agentv1.CoreWorkloadOperation, plan string, des
 	}
 	if !destroy && v.GetKind() != agentv1.CoreWorkloadOperationKind_CORE_WORKLOAD_OPERATION_KIND_APPLY {
 		return upstreamInvalid("workload operation")
+	}
+	return nil
+}
+func validateWorkloadOperationReadback(v *agentv1.CoreWorkloadOperation, want string) *actionbase.Error {
+	if v == nil || checkRespUUID(v.GetOperationId(), want, "workload operation") != nil || !validRespUUID(v.GetWorkloadId()) || !validRespUUID(v.GetPlanId()) || !validWorkloadOp(v.GetKind()) || v.GetPlanRevision() < 1 || !validDigest(v.GetPlanDigest()) || !validTarget(v.GetTargetKind()) || !validRespUUID(v.GetTaskId()) || !validRespUUID(v.GetConfirmationId()) || !validWorkloadOperationStatus(v.GetStatus()) || v.GetRevision() < 1 || !validTimePair(v.GetCreatedAt(), v.GetUpdatedAt()) {
+		return upstreamInvalid("workload operation")
+	}
+	desired := v.GetDesiredPlan()
+	if desired == nil || desired.GetPlanId() != v.GetPlanId() || int64(desired.GetPlanRevision()) != v.GetPlanRevision() || desired.GetPlanDigest() != v.GetPlanDigest() || desired.GetTarget() == nil || desired.GetTarget().GetIdentity() == nil || desired.GetTarget().GetIdentity().GetKind() != v.GetTargetKind() {
+		return upstreamInvalid("workload operation")
+	}
+	if actual := v.GetActual(); actual != nil {
+		if e := validateWorkloadActualReadback(actual, actual.GetWorkloadId()); e != nil || actual.GetWorkloadId() != v.GetWorkloadId() {
+			return upstreamInvalid("workload operation")
+		}
+	}
+	return nil
+}
+func validateWorkloadActualReadback(v *agentv1.CoreWorkloadActualSnapshot, want string) *actionbase.Error {
+	if v == nil || checkRespUUID(v.GetWorkloadId(), want, "workload") != nil || v.GetRevision() < 1 || strings.TrimSpace(v.GetState()) == "" || v.GetIdentity() == nil || !validTarget(v.GetIdentity().GetKind()) || !validRespUUID(v.GetAppliedPlanId()) || !validDigest(v.GetAppliedPlanDigest()) || !validDigest(v.GetReadbackDigest()) || strings.TrimSpace(v.GetProviderVersion()) == "" || !validTimePair(v.GetObservedAt(), v.GetUpdatedAt()) {
+		return upstreamInvalid("workload")
 	}
 	return nil
 }
@@ -510,6 +538,18 @@ func actualMap(a *agentv1.CoreWorkloadActualSnapshot) map[string]any {
 	}
 	return map[string]any{"workload_id": a.GetWorkloadId(), "revision": a.GetRevision(), "state": safeText(a.GetState()), "identity": targetIdentityMap(a.GetIdentity()), "applied_plan_id": a.GetAppliedPlanId(), "applied_plan_digest": a.GetAppliedPlanDigest(), "readback_digest": a.GetReadbackDigest(), "provider_version": safeText(a.GetProviderVersion()), "observed_at": timestampMap(a.GetObservedAt()), "updated_at": timestampMap(a.GetUpdatedAt())}
 }
+func sparseEventActualMap(a *agentv1.CoreWorkloadActualSnapshot) map[string]any {
+	if a == nil {
+		return nil
+	}
+	return map[string]any{"workload_id": a.GetWorkloadId(), "state": safeText(a.GetState()), "identity": targetIdentityMap(a.GetIdentity()), "readback_digest": a.GetReadbackDigest(), "provider_version": safeText(a.GetProviderVersion()), "observed_at": timestampMap(a.GetObservedAt())}
+}
+func validateSparseEventActual(v *agentv1.CoreWorkloadActualSnapshot) *actionbase.Error {
+	if v == nil || !validRespUUID(v.GetWorkloadId()) || strings.TrimSpace(v.GetState()) == "" || v.GetIdentity() == nil || !validTarget(v.GetIdentity().GetKind()) || !validDigest(v.GetReadbackDigest()) || strings.TrimSpace(v.GetProviderVersion()) == "" || v.GetObservedAt() == nil || !v.GetObservedAt().IsValid() {
+		return upstreamInvalid("workload event readback")
+	}
+	return nil
+}
 
 func workloadTargetKind(kind agentv1.CoreWorkloadTargetKind) string {
 	switch kind {
@@ -609,7 +649,7 @@ func awsChangeMap(v *agentv1.CoreAWSChange) map[string]any {
 }
 
 func (c *Client) workloadHandlers() map[string]actionbase.Handler {
-	return map[string]actionbase.Handler{"agent.core.workloads.plan": c.workloadPlan, "agent.core.workloads.get": c.workloadGet, "agent.core.workloads.list": c.workloadList, "agent.core.workloads.quote": c.workloadQuote, "agent.core.workloads.apply": c.workloadApply, "agent.core.workloads.destroy": c.workloadDestroy}
+	return map[string]actionbase.Handler{"agent.core.workloads.plan": c.workloadPlan, "agent.core.workloads.get": c.workloadGet, "agent.core.workloads.list": c.workloadList, "agent.core.workloads.quote": c.workloadQuote, "agent.core.workloads.apply": c.workloadApply, "agent.core.workloads.destroy": c.workloadDestroy, "agent.core.workloads.operations.get": c.workloadOperationGet, "agent.core.workloads.operations.events": c.workloadOperationEvents, "agent.core.workloads.actual.get": c.workloadActualGet}
 }
 func (c *Client) workloadPlan(ctx context.Context, p map[string]any) (any, *actionbase.Error) {
 	if e := strictKeys(p, "idempotency_key", "summary", "artifact", "source", "command_steps", "image_digest", "image_uri", "target_kind", "expires_at", "typed_target", "typed_resource_limits", "typed_secret_grants"); e != nil {
@@ -866,6 +906,108 @@ func (c *Client) workloadApply(ctx context.Context, p map[string]any) (any, *act
 }
 func (c *Client) workloadDestroy(ctx context.Context, p map[string]any) (any, *actionbase.Error) {
 	return c.workloadMutation(ctx, p, true)
+}
+func (c *Client) workloadOperationGet(ctx context.Context, p map[string]any) (any, *actionbase.Error) {
+	if e := strictKeys(p, "operation_id"); e != nil {
+		return nil, e
+	}
+	if e := c.workloadGate(ctx); e != nil {
+		return nil, e
+	}
+	id, e := requiredUUID(p, "operation_id")
+	if e != nil {
+		return nil, e
+	}
+	var response *agentv1.WorkloadServiceGetOperationResponse
+	err := c.controlPlaneUnary(ctx, func(cc context.Context, conn *grpc.ClientConn) error {
+		var callErr error
+		response, callErr = agentv1.NewWorkloadServiceClient(conn).GetOperation(cc, &agentv1.WorkloadServiceGetOperationRequest{OperationId: id})
+		return callErr
+	})
+	if err != nil {
+		return nil, c.controlActionError(err, "workload operation")
+	}
+	if e := ensureResponse(response, "workload operation"); e != nil {
+		return nil, e
+	}
+	if e := validateWorkloadOperationReadback(response.GetOperation(), id); e != nil {
+		return nil, e
+	}
+	return map[string]any{"operation": operationMap(response.GetOperation())}, nil
+}
+func (c *Client) workloadOperationEvents(ctx context.Context, p map[string]any) (any, *actionbase.Error) {
+	if e := strictKeys(p, "operation_id", "after_sequence"); e != nil {
+		return nil, e
+	}
+	if e := c.workloadGate(ctx); e != nil {
+		return nil, e
+	}
+	id, e := requiredUUID(p, "operation_id")
+	if e != nil {
+		return nil, e
+	}
+	after, e := optionalInt64(p, "after_sequence")
+	if e != nil {
+		return nil, e
+	}
+	if after < 0 {
+		return nil, actionbase.BadRequest("after_sequence must be nonnegative")
+	}
+	var response *agentv1.WorkloadServiceListEventsResponse
+	err := c.controlPlaneUnary(ctx, func(cc context.Context, conn *grpc.ClientConn) error {
+		var callErr error
+		response, callErr = agentv1.NewWorkloadServiceClient(conn).ListEvents(cc, &agentv1.WorkloadServiceListEventsRequest{OperationId: id, AfterSequence: uint64(after)})
+		return callErr
+	})
+	if err != nil {
+		return nil, c.controlActionError(err, "workload operation events")
+	}
+	if e := ensureResponse(response, "workload operation events"); e != nil {
+		return nil, e
+	}
+	previous := after
+	events := make([]any, 0, len(response.GetEvents()))
+	for _, event := range response.GetEvents() {
+		if event == nil || event.GetOperationId() != id || event.GetSequence() <= previous || strings.TrimSpace(event.GetKind()) == "" || !validWorkloadOperationStatus(event.GetStatus()) || event.GetAt() == nil || !event.GetAt().IsValid() {
+			return nil, upstreamInvalid("workload operation events")
+		}
+		if actual := event.GetActual(); actual != nil {
+			if e := validateSparseEventActual(actual); e != nil {
+				return nil, upstreamInvalid("workload operation events")
+			}
+		}
+		events = append(events, map[string]any{"operation_id": event.GetOperationId(), "sequence": event.GetSequence(), "kind": safeText(event.GetKind()), "status": safeText(event.GetStatus()), "message": safeText(event.GetMessage()), "actual": sparseEventActualMap(event.GetActual()), "at": timestampMap(event.GetAt())})
+		previous = event.GetSequence()
+	}
+	return map[string]any{"events": events}, nil
+}
+func (c *Client) workloadActualGet(ctx context.Context, p map[string]any) (any, *actionbase.Error) {
+	if e := strictKeys(p, "workload_id"); e != nil {
+		return nil, e
+	}
+	if e := c.workloadGate(ctx); e != nil {
+		return nil, e
+	}
+	id, e := requiredUUID(p, "workload_id")
+	if e != nil {
+		return nil, e
+	}
+	var response *agentv1.WorkloadServiceGetWorkloadResponse
+	err := c.controlPlaneUnary(ctx, func(cc context.Context, conn *grpc.ClientConn) error {
+		var callErr error
+		response, callErr = agentv1.NewWorkloadServiceClient(conn).GetWorkload(cc, &agentv1.WorkloadServiceGetWorkloadRequest{WorkloadId: id})
+		return callErr
+	})
+	if err != nil {
+		return nil, c.controlActionError(err, "workload")
+	}
+	if e := ensureResponse(response, "workload"); e != nil {
+		return nil, e
+	}
+	if e := validateWorkloadActualReadback(response.GetWorkload(), id); e != nil {
+		return nil, e
+	}
+	return map[string]any{"workload": actualMap(response.GetWorkload())}, nil
 }
 
 func (c *Client) awsHandlers() map[string]actionbase.Handler {

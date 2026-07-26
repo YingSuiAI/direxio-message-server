@@ -14,7 +14,10 @@ import (
 
 	agentv1 "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcorev1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // The handler tests intentionally use the same authenticated TLS transport as
@@ -31,7 +34,7 @@ func (extensionProbeService) GetInstanceInfo(context.Context, *agentv1.GetInstan
 func (extensionProbeService) GetCapabilities(context.Context, *agentv1.GetCapabilitiesRequest) (*agentv1.GetCapabilitiesResponse, error) {
 	return &agentv1.GetCapabilitiesResponse{ApiVersion: "v1", Capabilities: []*agentv1.AgentCapability{
 		{Name: "agent.info", Enabled: true}, {Name: "model.profile", Enabled: true}, {Name: "conversation", Enabled: true},
-		{Name: "mcp", Enabled: true}, {Name: "skill", Enabled: true},
+		{Name: "mcp", Enabled: true}, {Name: "skill", Enabled: true}, {Name: "workload.core_runner", Enabled: true},
 	}}, nil
 }
 
@@ -74,6 +77,33 @@ type extensionSkillService struct {
 	updateReq  *agentv1.SkillServiceRequestUpdateRequest
 }
 
+type extensionWorkloadService struct {
+	agentv1.UnimplementedWorkloadServiceServer
+	operation *agentv1.CoreWorkloadOperation
+	workload  *agentv1.CoreWorkloadActualSnapshot
+	events    []*agentv1.CoreWorkloadEvent
+	notFound  bool
+}
+
+func (s *extensionWorkloadService) GetOperation(_ context.Context, req *agentv1.WorkloadServiceGetOperationRequest) (*agentv1.WorkloadServiceGetOperationResponse, error) {
+	if s.notFound {
+		return nil, status.Error(codes.NotFound, "missing")
+	}
+	return &agentv1.WorkloadServiceGetOperationResponse{Operation: s.operation}, nil
+}
+func (s *extensionWorkloadService) GetWorkload(_ context.Context, req *agentv1.WorkloadServiceGetWorkloadRequest) (*agentv1.WorkloadServiceGetWorkloadResponse, error) {
+	if s.notFound {
+		return nil, status.Error(codes.NotFound, "missing")
+	}
+	return &agentv1.WorkloadServiceGetWorkloadResponse{Workload: s.workload}, nil
+}
+func (s *extensionWorkloadService) ListEvents(_ context.Context, req *agentv1.WorkloadServiceListEventsRequest) (*agentv1.WorkloadServiceListEventsResponse, error) {
+	if s.notFound {
+		return nil, status.Error(codes.NotFound, "missing")
+	}
+	return &agentv1.WorkloadServiceListEventsResponse{Events: s.events}, nil
+}
+
 func (s *extensionSkillService) Inspect(_ context.Context, req *agentv1.SkillServiceInspectRequest) (*agentv1.SkillServiceInspectResponse, error) {
 	s.mu.Lock()
 	s.inspectReq = proto.Clone(req).(*agentv1.SkillServiceInspectRequest)
@@ -95,7 +125,7 @@ func (s *extensionSkillService) RequestUpdate(_ context.Context, req *agentv1.Sk
 	return &agentv1.SkillServiceRequestUpdateResponse{Installation: &agentv1.CoreInstallation{InstallationId: "skill-install", Kind: agentv1.CoreExtensionKind_CORE_EXTENSION_KIND_SKILL, State: agentv1.CoreExtensionState_CORE_EXTENSION_STATE_UPDATING}, ConfirmationId: "confirmation-skill-update", TaskId: "task-skill-update"}, nil
 }
 
-func newExtensionHandlerClient(t *testing.T, mcp *extensionMCPService, skill *extensionSkillService) *Client {
+func newExtensionHandlerClient(t *testing.T, mcp *extensionMCPService, skill *extensionSkillService, workloads ...agentv1.WorkloadServiceServer) *Client {
 	t.Helper()
 	caPEM, certPEM, keyPEM := testCertificate(t, "core.example")
 	dir := t.TempDir()
@@ -118,6 +148,9 @@ func newExtensionHandlerClient(t *testing.T, mcp *extensionMCPService, skill *ex
 	agentv1.RegisterAgentServiceServer(server, extensionProbeService{})
 	agentv1.RegisterMCPServiceServer(server, mcp)
 	agentv1.RegisterSkillServiceServer(server, skill)
+	if len(workloads) == 1 {
+		agentv1.RegisterWorkloadServiceServer(server, workloads[0])
+	}
 	tlsListener := tls.NewListener(ln, &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13, NextProtos: []string{"h2"}})
 	go server.Serve(tlsListener)
 	t.Cleanup(func() { server.Stop(); _ = ln.Close() })
@@ -311,5 +344,34 @@ func TestInspectionParserRejectsCandidatePinMismatchAndExecutionType(t *testing.
 	inspectionParams["execution"] = "remote"
 	if _, actionErr := inspectionFromParams(map[string]any{"inspection": inspectionParams}, "inspection", candidate.GetKind(), candidate); actionErr == nil {
 		t.Fatal("execution type mismatch accepted")
+	}
+}
+
+func TestWorkloadTerminalReadbackHandlersUseTLSAndPreserveNotFound(t *testing.T) {
+	id, digest := "00000000-0000-0000-0000-000000000001", strings.Repeat("a", 64)
+	now := timestamppb.New(time.Now().UTC())
+	identity := &agentv1.CoreWorkloadTargetIdentity{Kind: agentv1.CoreWorkloadTargetKind_CORE_WORKLOAD_TARGET_KIND_CORE_RUNNER}
+	actual := &agentv1.CoreWorkloadActualSnapshot{WorkloadId: id, Revision: 1, State: "destroyed", Identity: identity, AppliedPlanId: id, AppliedPlanDigest: digest, ReadbackDigest: digest, ProviderVersion: "v1", ObservedAt: now, UpdatedAt: now}
+	op := &agentv1.CoreWorkloadOperation{OperationId: id, WorkloadId: id, PlanId: id, Kind: agentv1.CoreWorkloadOperationKind_CORE_WORKLOAD_OPERATION_KIND_DESTROY, PlanRevision: 1, PlanDigest: digest, TargetKind: identity.GetKind(), TaskId: id, ConfirmationId: id, Status: "succeeded", Revision: 1, CreatedAt: now, UpdatedAt: now, DesiredPlan: &agentv1.CoreWorkloadOperationPlan{PlanId: id, PlanRevision: 1, PlanDigest: digest, Target: &agentv1.CoreWorkloadTargetSettings{Identity: identity}}, Actual: actual}
+	sparseEventActual := &agentv1.CoreWorkloadActualSnapshot{WorkloadId: id, State: "destroyed", Identity: identity, ReadbackDigest: digest, ProviderVersion: "v1", ObservedAt: now}
+	workloads := &extensionWorkloadService{operation: op, workload: actual, events: []*agentv1.CoreWorkloadEvent{{OperationId: id, Sequence: 1, Kind: "terminal", Status: "succeeded", Actual: sparseEventActual, At: now}}}
+	client := newExtensionHandlerClient(t, &extensionMCPService{}, &extensionSkillService{}, workloads)
+	handlers := client.Handlers()
+	if result, actionErr := handlers["agent.core.workloads.operations.get"](context.Background(), map[string]any{"operation_id": id}); actionErr != nil || result.(map[string]any)["operation"].(map[string]any)["kind"] != "destroy" {
+		t.Fatalf("operation get = %#v, %#v", result, actionErr)
+	}
+	if result, actionErr := handlers["agent.core.workloads.operations.events"](context.Background(), map[string]any{"operation_id": id, "after_sequence": int64(0)}); actionErr != nil || len(result.(map[string]any)["events"].([]any)) != 1 {
+		t.Fatalf("events = %#v, %#v", result, actionErr)
+	}
+	// The fake deliberately violates cursor filtering; the handler must reject it.
+	if result, actionErr := handlers["agent.core.workloads.operations.events"](context.Background(), map[string]any{"operation_id": id, "after_sequence": int64(1)}); actionErr == nil {
+		t.Fatalf("stale event cursor accepted: %#v", result)
+	}
+	if result, actionErr := handlers["agent.core.workloads.actual.get"](context.Background(), map[string]any{"workload_id": id}); actionErr != nil || result.(map[string]any)["workload"].(map[string]any)["state"] != "destroyed" {
+		t.Fatalf("actual = %#v, %#v", result, actionErr)
+	}
+	workloads.notFound = true
+	if _, actionErr := handlers["agent.core.workloads.actual.get"](context.Background(), map[string]any{"workload_id": id}); actionErr == nil || actionErr.Code != "agent_core_not_found" {
+		t.Fatalf("not found = %#v", actionErr)
 	}
 }

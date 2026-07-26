@@ -194,6 +194,12 @@ func workloadDesiredPlanFields() map[string]ActionFieldSchema {
 func workloadActualFields() map[string]ActionFieldSchema {
 	return map[string]ActionFieldSchema{"workload_id": {Type: "string", Required: true}, "revision": {Type: "integer", Required: true}, "state": {Type: "string", Required: true}, "identity": {Type: "object", Required: true, Properties: workloadIdentityFields(true)}, "applied_plan_id": {Type: "string", Required: true}, "applied_plan_digest": {Type: "string", Required: true}, "readback_digest": {Type: "string", Required: true}, "provider_version": {Type: "string", Required: true}, "observed_at": {Type: "string", Required: true}, "updated_at": {Type: "string", Required: true}}
 }
+
+// Event readbacks are provider observations captured at event time. They are
+// deliberately sparse and must not be presented as the current workload.
+func workloadEventActualFields() map[string]ActionFieldSchema {
+	return map[string]ActionFieldSchema{"workload_id": {Type: "string", Required: true}, "state": {Type: "string", Required: true}, "identity": {Type: "object", Required: true, Properties: workloadIdentityFields(true)}, "readback_digest": {Type: "string", Required: true}, "provider_version": {Type: "string", Required: true}, "observed_at": {Type: "string", Required: true}}
+}
 func workloadOperationFields() map[string]ActionFieldSchema {
 	return map[string]ActionFieldSchema{"operation_id": {Type: "string", Required: true}, "workload_id": {Type: "string", Required: true}, "plan_id": {Type: "string", Required: true}, "kind": {Type: "string", Required: true}, "plan_revision": {Type: "integer", Required: true}, "plan_digest": {Type: "string", Required: true}, "target_kind": {Type: "string", Required: true}, "task_id": {Type: "string", Required: true}, "confirmation_id": {Type: "string", Required: true}, "status": {Type: "string", Required: true}, "revision": {Type: "integer", Required: true}, "failure_code": {Type: "string", Required: true}, "failure_summary": {Type: "string", Required: true}, "created_at": {Type: "string", Required: true}, "updated_at": {Type: "string", Required: true}, "desired_plan": {Type: "object", Required: true, Properties: workloadDesiredPlanFields()}, "actual": {Type: "object", Properties: workloadActualFields()}, "dispatch_epoch": {Type: "integer", Required: true}, "dispatch_lease_until": {Type: "string", Required: true}}
 }
@@ -223,6 +229,18 @@ func coreWorkloadApplySchema() *ActionSchema {
 	return coreActionSchema(req, map[string]ActionFieldSchema{"operation": {Type: "object", Required: true, Properties: workloadOperationFields()}, "confirmation": {Type: "object", Required: true}, "task_id": {Type: "string", Required: true}})
 }
 func coreWorkloadDestroySchema() *ActionSchema { return coreWorkloadApplySchema() }
+func coreWorkloadOperationGetSchema() *ActionSchema {
+	return coreActionSchema(coreRequired("operation_id"), map[string]ActionFieldSchema{"operation": {Type: "object", Required: true, Properties: workloadOperationFields()}})
+}
+func coreWorkloadOperationEventsSchema() *ActionSchema {
+	req := coreRequired("operation_id")
+	req["after_sequence"] = ActionFieldSchema{Type: "integer", Presence: &ActionPresenceSchema{Omitted: "from_beginning", Present: "nonnegative_sequence"}}
+	event := map[string]ActionFieldSchema{"operation_id": {Type: "string", Required: true}, "sequence": {Type: "integer", Required: true}, "kind": {Type: "string", Required: true}, "status": {Type: "string", Required: true}, "message": {Type: "string", Required: true}, "actual": {Type: "object", Properties: workloadEventActualFields(), Presence: &ActionPresenceSchema{Omitted: "no_event_readback", Present: "event_time_sparse_readback"}}, "at": {Type: "string", Required: true}}
+	return coreActionSchema(req, map[string]ActionFieldSchema{"events": {Type: "array", Required: true, Items: &ActionFieldSchema{Type: "object", Properties: event}}})
+}
+func coreWorkloadActualGetSchema() *ActionSchema {
+	return coreActionSchema(coreRequired("workload_id"), map[string]ActionFieldSchema{"workload": {Type: "object", Required: true, Properties: workloadActualFields()}})
+}
 func coreAWSCredentialCreateSchema() *ActionSchema {
 	return coreActionSchema(map[string]ActionFieldSchema{"idempotency_key": {Type: "string", Required: true}, "name": {Type: "string", Required: true}, "region": {Type: "string", Required: true}, "access_key_id": {Type: "string", Required: true, WriteOnly: true}, "secret_access_key": {Type: "string", Required: true, WriteOnly: true}, "session_token": {Type: "string", WriteOnly: true}}, coreObjectResponse("credential"))
 }

@@ -139,6 +139,30 @@ func TestOperationReadbackProjectionIsPublicAndLinked(t *testing.T) {
 		}
 	}
 }
+
+func TestOperationReadbackAllowsNewerCurrentActualAndEventReadbackIsSparse(t *testing.T) {
+	id, oldDigest, newDigest := "00000000-0000-0000-0000-000000000001", strings.Repeat("a", 64), strings.Repeat("b", 64)
+	now := timestamppb.New(time.Now().UTC())
+	identity := &agentv1.CoreWorkloadTargetIdentity{Kind: agentv1.CoreWorkloadTargetKind_CORE_WORKLOAD_TARGET_KIND_CORE_RUNNER}
+	currentIdentity := &agentv1.CoreWorkloadTargetIdentity{Kind: agentv1.CoreWorkloadTargetKind_CORE_WORKLOAD_TARGET_KIND_AWS_ECS}
+	current := &agentv1.CoreWorkloadActualSnapshot{WorkloadId: id, Revision: 2, State: "running", Identity: currentIdentity, AppliedPlanId: id, AppliedPlanDigest: newDigest, ReadbackDigest: newDigest, ProviderVersion: "v2", ObservedAt: now, UpdatedAt: now}
+	op := &agentv1.CoreWorkloadOperation{OperationId: id, WorkloadId: id, PlanId: id, Kind: agentv1.CoreWorkloadOperationKind_CORE_WORKLOAD_OPERATION_KIND_APPLY, PlanRevision: 1, PlanDigest: oldDigest, TargetKind: identity.GetKind(), TaskId: id, ConfirmationId: id, Status: "succeeded", Revision: 1, CreatedAt: now, UpdatedAt: now, DesiredPlan: &agentv1.CoreWorkloadOperationPlan{PlanId: id, PlanRevision: 1, PlanDigest: oldDigest, Target: &agentv1.CoreWorkloadTargetSettings{Identity: identity}}, Actual: current}
+	if err := validateWorkloadOperationReadback(op, id); err != nil {
+		t.Fatalf("old core-runner operation with newer AWS current actual rejected: %#v", err)
+	}
+	sparse := &agentv1.CoreWorkloadActualSnapshot{WorkloadId: id, State: "running", Identity: identity, ReadbackDigest: oldDigest, ProviderVersion: "v1", ObservedAt: now}
+	if err := validateSparseEventActual(sparse); err != nil {
+		t.Fatalf("valid sparse event readback rejected: %#v", err)
+	}
+	mapped := sparseEventActualMap(sparse)
+	if _, found := mapped["revision"]; found {
+		t.Fatalf("sparse event readback fabricated current fields: %#v", mapped)
+	}
+	sparse.ReadbackDigest = "bad"
+	if err := validateSparseEventActual(sparse); err == nil {
+		t.Fatal("malformed sparse event readback accepted")
+	}
+}
 func TestAWSChangeValidatorCorruptions(t *testing.T) {
 	u := "00000000-0000-0000-0000-000000000001"
 	now := timestamppb.New(time.Now().UTC())
