@@ -74,5 +74,14 @@ audited without importing the Agent module:
 
 `provenance_test.go` verifies these checksums and, when
 `DIREXTALK_AGENT_WORKTREE` is mounted, compares every existing snapshot family
-byte-for-byte with its optional Agent source. No `core_workload` snapshot is
-copied or exposed by the Server adapter.
+byte-for-byte with its optional Agent source.
+
+Workload/AWS snapshots are copied from Agent commit
+`1a966efde8fcb1042a2647e60eb86f74de3214b4`:
+
+* `core_workload.proto`: `d36a42acd4e1410098c47853bd80eefe6f8d7cb737c920b23a31be38d5dd21e2`
+* `core_workload.pb.go`: `5bc18bea484ea731c7a74acf8fa413e76f3f88bab2f880b53f3dee7b69f1f3eb`
+* `core_workload_grpc.pb.go`: `b2c219aaeb810a63b44d3fbdde641deed7cbf4d36bb361f3e0fd943fdf21a87e`
+* `core_aws.proto`: `0b26e6ea760401ee91e79c2140f30fde59865e865d6974d642d01f03105fba5a`
+* `core_aws.pb.go`: `2e394c7f157c586f0fcfc3068ccd685d992fd70809de2128ceea8416e663ff2a`
+* `core_aws_grpc.pb.go`: `c9e2e7bfbe39d6a9c27abff72a5c8863c7c38821974ca972e27ede405ca86ef9`

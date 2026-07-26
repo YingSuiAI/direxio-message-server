@@ -142,6 +142,38 @@ func TestExistingControlSnapshotChecksumsAndOptionalAgentSource(t *testing.T) {
 	}
 }
 
+func TestWorkloadAWSSnapshotChecksumsAndOptionalAgentSource(t *testing.T) {
+	checksums := map[string]string{
+		"core_workload.proto":      "d36a42acd4e1410098c47853bd80eefe6f8d7cb737c920b23a31be38d5dd21e2",
+		"core_workload.pb.go":      "5bc18bea484ea731c7a74acf8fa413e76f3f88bab2f880b53f3dee7b69f1f3eb",
+		"core_workload_grpc.pb.go": "b2c219aaeb810a63b44d3fbdde641deed7cbf4d36bb361f3e0fd943fdf21a87e",
+		"core_aws.proto":           "0b26e6ea760401ee91e79c2140f30fde59865e865d6974d642d01f03105fba5a",
+		"core_aws.pb.go":           "2e394c7f157c586f0fcfc3068ccd685d992fd70809de2128ceea8416e663ff2a",
+		"core_aws_grpc.pb.go":      "c9e2e7bfbe39d6a9c27abff72a5c8863c7c38821974ca972e27ede405ca86ef9",
+	}
+	for name, want := range checksums {
+		if got := fileSHA256(t, name); got != want {
+			t.Fatalf("%s checksum = %s, want %s", name, got, want)
+		}
+	}
+	agentRoot := os.Getenv("DIREXTALK_AGENT_WORKTREE")
+	if agentRoot == "" {
+		if cwd, err := os.Getwd(); err == nil {
+			agentRoot = filepath.Join(cwd, "..", "..", "..", "..", "agent")
+		}
+	}
+	sources := map[string]string{"core_workload.proto": filepath.Join("api", "proto", "dirextalk", "agent", "v1", "core_workload.proto"), "core_workload.pb.go": filepath.Join("api", "gen", "dirextalk", "agent", "v1", "core_workload.pb.go"), "core_workload_grpc.pb.go": filepath.Join("api", "gen", "dirextalk", "agent", "v1", "core_workload_grpc.pb.go"), "core_aws.proto": filepath.Join("api", "proto", "dirextalk", "agent", "v1", "core_aws.proto"), "core_aws.pb.go": filepath.Join("api", "gen", "dirextalk", "agent", "v1", "core_aws.pb.go"), "core_aws_grpc.pb.go": filepath.Join("api", "gen", "dirextalk", "agent", "v1", "core_aws_grpc.pb.go")}
+	for snapshot, relative := range sources {
+		source := filepath.Join(agentRoot, relative)
+		if _, err := os.Stat(source); os.IsNotExist(err) {
+			continue
+		}
+		if got, want := fileSHA256(t, snapshot), fileSHA256Path(t, source); got != want {
+			t.Fatalf("snapshot %s differs from Agent source", snapshot)
+		}
+	}
+}
+
 func fileSHA256(t *testing.T, name string) string {
 	t.Helper()
 	return fileSHA256Path(t, name)

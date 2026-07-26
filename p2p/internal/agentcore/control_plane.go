@@ -150,7 +150,7 @@ func timestampMap(ts *timestamppb.Timestamp) string {
 
 func enumName(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))
-	for _, prefix := range []string{"core_task_status_", "core_task_kind_", "core_schedule_state_", "core_confirmation_state_", "core_extension_kind_", "core_extension_source_", "core_extension_transport_", "core_extension_state_", "core_secret_purpose_", "core_secret_grant_purpose_"} {
+	for _, prefix := range []string{"core_task_status_", "core_task_kind_", "core_schedule_state_", "core_confirmation_state_", "core_extension_kind_", "core_extension_source_", "core_extension_transport_", "core_extension_state_", "core_secret_purpose_", "core_secret_grant_purpose_", "core_workload_target_kind_", "core_workload_operation_kind_", "core_workload_secret_purpose_", "core_aws_operation_"} {
 		value = strings.TrimPrefix(value, prefix)
 	}
 	value = strings.TrimPrefix(value, "core_")

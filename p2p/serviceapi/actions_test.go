@@ -9,8 +9,8 @@ func TestActionSpecsReturnsStableOrderedCopy(t *testing.T) {
 	first := ActionSpecs()
 	second := ActionSpecs()
 
-	if len(first) != 188 {
-		t.Fatalf("ActionSpecs() returned %d actions, want 188", len(first))
+	if len(first) != 205 {
+		t.Fatalf("ActionSpecs() returned %d actions, want 205", len(first))
 	}
 	if !reflect.DeepEqual(first, second) {
 		t.Fatal("ActionSpecs() did not preserve action order")
@@ -72,6 +72,16 @@ func TestModelProfileActionSchemasDescribePresenceSensitiveFields(t *testing.T) 
 	refPresence := entry.Properties["client_profile_id"].Presence
 	if refPresence.Present != "exact_nonempty_bytes" || refPresence.Empty != "rejected" {
 		t.Fatalf("client_profile_id presence schema = %#v", refPresence)
+	}
+}
+func TestWorkloadPlanSchemaNestedFields(t *testing.T) {
+	s, _ := ActionSpecFor("agent.core.workloads.plan")
+	tt := s.Schema.Request["typed_target"]
+	if tt.Type != "object" || tt.Properties["identity"].Properties["aws_ecs_subnet_ids"].Items.Type != "string" || tt.Properties["ports"].Items.Properties["port"].Type != "integer" || tt.Properties["network_grants"].Items.Properties["reference_id"].Type != "string" {
+		t.Fatal("incomplete workload schema")
+	}
+	if s.Schema.Request["command_steps"].Items.Type != "string" {
+		t.Fatal("command_steps items missing")
 	}
 }
 

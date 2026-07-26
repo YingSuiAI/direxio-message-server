@@ -45,7 +45,7 @@ const (
 var requiredCapabilities = []string{"agent.info", "model.profile", "conversation"}
 
 // Keep this allowlist tied to actual server-side adapters.
-var implementedCapabilities = map[string]bool{"agent.info": true, "model.profile": true, "conversation": true, "task": true, "schedule": true, "confirmation": true, "mcp": true, "skill": true}
+var implementedCapabilities = map[string]bool{"agent.info": true, "model.profile": true, "conversation": true, "task": true, "schedule": true, "confirmation": true, "mcp": true, "skill": true, "aws.control": true, "workload.core_runner": true, "workload.aws_ssm": true, "workload.aws_ecs": true}
 
 // SupportedCapabilities is the complete capability vocabulary understood by
 // this Message Server build, in stable response order.
@@ -899,6 +899,12 @@ func (c *Client) Handlers() map[string]actionbase.Handler {
 		handlers[name] = handler
 	}
 	for name, handler := range c.confirmationHandlers() {
+		handlers[name] = handler
+	}
+	for name, handler := range c.workloadHandlers() {
+		handlers[name] = handler
+	}
+	for name, handler := range c.awsHandlers() {
 		handlers[name] = handler
 	}
 	for name, handler := range c.extensionHandlers(agentv1.CoreExtensionKind_CORE_EXTENSION_KIND_MCP, "mcp") {

@@ -114,3 +114,66 @@ func coreExtensionExecuteSchema() *ActionSchema {
 func coreMCPToolsSchema() *ActionSchema {
 	return coreActionSchema(coreMutationFields("installation_id"), map[string]ActionFieldSchema{"tools": {Type: "array", Items: &ActionFieldSchema{Type: "object"}}})
 }
+
+func coreWorkloadPlanSchema() *ActionSchema {
+	req := coreRequired("idempotency_key", "summary", "artifact", "source", "target_kind", "expires_at", "typed_target")
+	identity := map[string]ActionFieldSchema{"kind": {Type: "string", Required: true}, "core_runner_service": {Type: "string"}, "image_digest": {Type: "string"}, "aws_account_id": {Type: "string"}, "aws_region": {Type: "string"}, "instance_id": {Type: "string"}, "cluster": {Type: "string"}, "service": {Type: "string"}, "task_definition_revision": {Type: "string"}, "desired_count": {Type: "integer"}, "endpoint": {Type: "string"}, "core_runner_id": {Type: "string"}, "aws_ec2_document_version": {Type: "string"}, "aws_ec2_systemd_service": {Type: "string"}, "aws_ec2_required_instance_tags": {Type: "object"}, "aws_ecs_cluster_arn": {Type: "string"}, "aws_ecs_service_name": {Type: "string"}, "aws_ecs_task_family": {Type: "string"}, "aws_ecs_platform_version": {Type: "string"}, "aws_ecs_subnet_ids": {Type: "array", Items: &ActionFieldSchema{Type: "string"}}, "aws_ecs_security_group_ids": {Type: "array", Items: &ActionFieldSchema{Type: "string"}}, "aws_ecs_assign_public_ip": {Type: "boolean"}, "aws_ecs_target_group_arn": {Type: "string"}, "aws_ecs_target_group_port": {Type: "integer"}, "aws_ecs_task_role_arn": {Type: "string"}, "aws_ecs_execution_role_arn": {Type: "string"}, "aws_ecs_desired_count": {Type: "integer"}, "aws_ecs_image_uri": {Type: "string"}}
+	targetProps := map[string]ActionFieldSchema{"identity": {Type: "object", Required: true, Properties: identity}, "ports": {Type: "array", Items: &ActionFieldSchema{Type: "object", Properties: map[string]ActionFieldSchema{"port": {Type: "integer", Required: true}}}}, "network_grants": {Type: "array", Items: &ActionFieldSchema{Type: "object", Properties: map[string]ActionFieldSchema{"reference_id": {Type: "string", Required: true}, "kind": {Type: "string", Required: true}}}}, "labels": {Type: "object"}}
+	req["typed_target"] = ActionFieldSchema{Type: "object", Required: true, Properties: targetProps}
+	req["command_steps"] = ActionFieldSchema{Type: "array", Items: &ActionFieldSchema{Type: "string"}}
+	req["image_digest"] = ActionFieldSchema{Type: "string"}
+	req["image_uri"] = ActionFieldSchema{Type: "string"}
+	req["typed_resource_limits"] = ActionFieldSchema{Type: "object", Properties: map[string]ActionFieldSchema{"cpu": {Type: "integer"}, "memory_mb": {Type: "integer"}, "processes": {Type: "integer"}, "disk_mb": {Type: "integer"}, "timeout_seconds": {Type: "integer"}, "output_mb": {Type: "integer"}}}
+	req["typed_secret_grants"] = ActionFieldSchema{Type: "array", WriteOnly: true, Items: &ActionFieldSchema{Type: "object", Properties: map[string]ActionFieldSchema{"reference_id": {Type: "string", Required: true}, "purpose": {Type: "string", Required: true}, "binding_digest": {Type: "string", Required: true}}}}
+	return coreActionSchema(req, coreObjectResponse("plan"))
+}
+func coreWorkloadGetSchema() *ActionSchema {
+	return coreActionSchema(coreRequired("plan_id"), coreObjectResponse("plan"))
+}
+func coreWorkloadListSchema() *ActionSchema {
+	return coreActionSchema(corePageFields(), map[string]ActionFieldSchema{"plans": {Type: "array", Items: &ActionFieldSchema{Type: "object"}}, "next_page_token": {Type: "string"}})
+}
+func coreWorkloadQuoteSchema() *ActionSchema {
+	return coreActionSchema(coreRequired("plan_id"), coreObjectResponse("quote"))
+}
+func coreWorkloadApplySchema() *ActionSchema {
+	req := coreRequired("idempotency_key", "plan_id")
+	req["workload_id"] = ActionFieldSchema{Type: "string"}
+	return coreActionSchema(req, map[string]ActionFieldSchema{"operation": {Type: "object"}, "confirmation": {Type: "object"}, "task_id": {Type: "string"}})
+}
+func coreWorkloadDestroySchema() *ActionSchema { return coreWorkloadApplySchema() }
+func coreAWSCredentialCreateSchema() *ActionSchema {
+	return coreActionSchema(map[string]ActionFieldSchema{"idempotency_key": {Type: "string", Required: true}, "name": {Type: "string", Required: true}, "region": {Type: "string", Required: true}, "access_key_id": {Type: "string", Required: true, WriteOnly: true}, "secret_access_key": {Type: "string", Required: true, WriteOnly: true}, "session_token": {Type: "string", WriteOnly: true}}, coreObjectResponse("credential"))
+}
+func coreAWSCredentialUpdateSchema() *ActionSchema {
+	return coreActionSchema(map[string]ActionFieldSchema{"idempotency_key": {Type: "string", Required: true}, "credential_id": {Type: "string", Required: true}, "expected_revision": {Type: "integer", Required: true}, "name": {Type: "string"}, "region": {Type: "string"}, "access_key_id": {Type: "string", WriteOnly: true}, "secret_access_key": {Type: "string", WriteOnly: true}, "session_token": {Type: "string", WriteOnly: true}}, coreObjectResponse("credential"))
+}
+func coreAWSCredentialDeleteSchema() *ActionSchema {
+	return coreActionSchema(coreMutationFields("credential_id"), map[string]ActionFieldSchema{"deleted": {Type: "boolean"}, "credential_id": {Type: "string"}})
+}
+func coreAWSCredentialListSchema() *ActionSchema {
+	return coreActionSchema(corePageFields(), map[string]ActionFieldSchema{"credentials": {Type: "array", Items: &ActionFieldSchema{Type: "object"}}, "next_page_token": {Type: "string"}})
+}
+func coreAWSCredentialTestSchema() *ActionSchema {
+	return coreActionSchema(coreRequired("credential_id"), map[string]ActionFieldSchema{"credential_id": {Type: "string"}, "account_id": {Type: "string"}, "user_arn": {Type: "string"}, "principal_id": {Type: "string"}, "credential_revision": {Type: "integer"}, "tested_at": {Type: "string"}})
+}
+func coreAWSPlanReadSchema() *ActionSchema {
+	return coreActionSchema(coreRequired("plan_id"), coreObjectResponse("plan"))
+}
+func coreAWSPlanListSchema() *ActionSchema {
+	return coreActionSchema(corePageFields(), map[string]ActionFieldSchema{"plans": {Type: "array", Items: &ActionFieldSchema{Type: "object"}}, "next_page_token": {Type: "string"}})
+}
+func coreAWSQuoteSchema() *ActionSchema {
+	return coreActionSchema(coreRequired("plan_id"), coreObjectResponse("quote"))
+}
+func coreAWSChangeGetSchema() *ActionSchema {
+	return coreActionSchema(coreRequired("change_id"), coreObjectResponse("change"))
+}
+func coreAWSChangeListSchema() *ActionSchema {
+	req := corePageFields()
+	req["plan_id"] = ActionFieldSchema{Type: "string"}
+	return coreActionSchema(req, map[string]ActionFieldSchema{"changes": {Type: "array", Items: &ActionFieldSchema{Type: "object"}}, "next_page_token": {Type: "string"}})
+}
+func coreAWSChangeStatusSchema() *ActionSchema {
+	return coreActionSchema(coreRequired("change_id"), map[string]ActionFieldSchema{"change": {Type: "object"}, "status": {Type: "string"}, "stage": {Type: "string"}})
+}

@@ -1482,6 +1482,690 @@
       }
     },
     {
+      "name": "agent.core.workloads.plan",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "artifact": {
+            "type": "string",
+            "required": true
+          },
+          "command_steps": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "expires_at": {
+            "type": "string",
+            "required": true
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          },
+          "image_digest": {
+            "type": "string"
+          },
+          "image_uri": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string",
+            "required": true
+          },
+          "summary": {
+            "type": "string",
+            "required": true
+          },
+          "target_kind": {
+            "type": "string",
+            "required": true
+          },
+          "typed_resource_limits": {
+            "type": "object",
+            "properties": {
+              "cpu": {
+                "type": "integer"
+              },
+              "disk_mb": {
+                "type": "integer"
+              },
+              "memory_mb": {
+                "type": "integer"
+              },
+              "output_mb": {
+                "type": "integer"
+              },
+              "processes": {
+                "type": "integer"
+              },
+              "timeout_seconds": {
+                "type": "integer"
+              }
+            }
+          },
+          "typed_secret_grants": {
+            "type": "array",
+            "write_only": true,
+            "items": {
+              "type": "object",
+              "properties": {
+                "binding_digest": {
+                  "type": "string",
+                  "required": true
+                },
+                "purpose": {
+                  "type": "string",
+                  "required": true
+                },
+                "reference_id": {
+                  "type": "string",
+                  "required": true
+                }
+              }
+            }
+          },
+          "typed_target": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "identity": {
+                "type": "object",
+                "required": true,
+                "properties": {
+                  "aws_account_id": {
+                    "type": "string"
+                  },
+                  "aws_ec2_document_version": {
+                    "type": "string"
+                  },
+                  "aws_ec2_required_instance_tags": {
+                    "type": "object"
+                  },
+                  "aws_ec2_systemd_service": {
+                    "type": "string"
+                  },
+                  "aws_ecs_assign_public_ip": {
+                    "type": "boolean"
+                  },
+                  "aws_ecs_cluster_arn": {
+                    "type": "string"
+                  },
+                  "aws_ecs_desired_count": {
+                    "type": "integer"
+                  },
+                  "aws_ecs_execution_role_arn": {
+                    "type": "string"
+                  },
+                  "aws_ecs_image_uri": {
+                    "type": "string"
+                  },
+                  "aws_ecs_platform_version": {
+                    "type": "string"
+                  },
+                  "aws_ecs_security_group_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "aws_ecs_service_name": {
+                    "type": "string"
+                  },
+                  "aws_ecs_subnet_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "aws_ecs_target_group_arn": {
+                    "type": "string"
+                  },
+                  "aws_ecs_target_group_port": {
+                    "type": "integer"
+                  },
+                  "aws_ecs_task_family": {
+                    "type": "string"
+                  },
+                  "aws_ecs_task_role_arn": {
+                    "type": "string"
+                  },
+                  "aws_region": {
+                    "type": "string"
+                  },
+                  "cluster": {
+                    "type": "string"
+                  },
+                  "core_runner_id": {
+                    "type": "string"
+                  },
+                  "core_runner_service": {
+                    "type": "string"
+                  },
+                  "desired_count": {
+                    "type": "integer"
+                  },
+                  "endpoint": {
+                    "type": "string"
+                  },
+                  "image_digest": {
+                    "type": "string"
+                  },
+                  "instance_id": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "service": {
+                    "type": "string"
+                  },
+                  "task_definition_revision": {
+                    "type": "string"
+                  }
+                }
+              },
+              "labels": {
+                "type": "object"
+              },
+              "network_grants": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "reference_id": {
+                      "type": "string",
+                      "required": true
+                    }
+                  }
+                }
+              },
+              "ports": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "port": {
+                      "type": "integer",
+                      "required": true
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "response": {
+          "plan": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.workloads.get",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "plan_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "plan": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.workloads.list",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "page_size": {
+            "type": "integer",
+            "presence": {
+              "omitted": "server_default"
+            }
+          },
+          "page_token": {
+            "type": "string",
+            "presence": {
+              "omitted": "first_page"
+            }
+          }
+        },
+        "response": {
+          "next_page_token": {
+            "type": "string"
+          },
+          "plans": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.workloads.quote",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "plan_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "quote": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.workloads.apply",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          },
+          "plan_id": {
+            "type": "string",
+            "required": true
+          },
+          "workload_id": {
+            "type": "string"
+          }
+        },
+        "response": {
+          "confirmation": {
+            "type": "object"
+          },
+          "operation": {
+            "type": "object"
+          },
+          "task_id": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.workloads.destroy",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          },
+          "plan_id": {
+            "type": "string",
+            "required": true
+          },
+          "workload_id": {
+            "type": "string"
+          }
+        },
+        "response": {
+          "confirmation": {
+            "type": "object"
+          },
+          "operation": {
+            "type": "object"
+          },
+          "task_id": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.aws.credentials.create",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "access_key_id": {
+            "type": "string",
+            "required": true,
+            "write_only": true
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          },
+          "name": {
+            "type": "string",
+            "required": true
+          },
+          "region": {
+            "type": "string",
+            "required": true
+          },
+          "secret_access_key": {
+            "type": "string",
+            "required": true,
+            "write_only": true
+          },
+          "session_token": {
+            "type": "string",
+            "write_only": true
+          }
+        },
+        "response": {
+          "credential": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.aws.credentials.update",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "access_key_id": {
+            "type": "string",
+            "write_only": true
+          },
+          "credential_id": {
+            "type": "string",
+            "required": true
+          },
+          "expected_revision": {
+            "type": "integer",
+            "required": true
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          },
+          "name": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          },
+          "secret_access_key": {
+            "type": "string",
+            "write_only": true
+          },
+          "session_token": {
+            "type": "string",
+            "write_only": true
+          }
+        },
+        "response": {
+          "credential": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.aws.credentials.delete",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "credential_id": {
+            "type": "string",
+            "required": true
+          },
+          "expected_revision": {
+            "type": "integer",
+            "presence": {
+              "omitted": "no_revision_check",
+              "present": "must_match_current_revision"
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "credential_id": {
+            "type": "string"
+          },
+          "deleted": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.aws.credentials.list",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "page_size": {
+            "type": "integer",
+            "presence": {
+              "omitted": "server_default"
+            }
+          },
+          "page_token": {
+            "type": "string",
+            "presence": {
+              "omitted": "first_page"
+            }
+          }
+        },
+        "response": {
+          "credentials": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "next_page_token": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.aws.credentials.test",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "credential_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "account_id": {
+            "type": "string"
+          },
+          "credential_id": {
+            "type": "string"
+          },
+          "credential_revision": {
+            "type": "integer"
+          },
+          "principal_id": {
+            "type": "string"
+          },
+          "tested_at": {
+            "type": "string"
+          },
+          "user_arn": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.aws.plans.get",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "plan_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "plan": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.aws.plans.list",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "page_size": {
+            "type": "integer",
+            "presence": {
+              "omitted": "server_default"
+            }
+          },
+          "page_token": {
+            "type": "string",
+            "presence": {
+              "omitted": "first_page"
+            }
+          }
+        },
+        "response": {
+          "next_page_token": {
+            "type": "string"
+          },
+          "plans": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.aws.plans.quote",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "plan_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "quote": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.aws.changes.get",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "change_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "change": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.aws.changes.list",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "page_size": {
+            "type": "integer",
+            "presence": {
+              "omitted": "server_default"
+            }
+          },
+          "page_token": {
+            "type": "string",
+            "presence": {
+              "omitted": "first_page"
+            }
+          },
+          "plan_id": {
+            "type": "string"
+          }
+        },
+        "response": {
+          "changes": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "next_page_token": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.aws.changes.status",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "change_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "change": {
+            "type": "object"
+          },
+          "stage": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
       "name": "agent.chat",
       "auth": "owner",
       "transport": "http_and_ws_request"
