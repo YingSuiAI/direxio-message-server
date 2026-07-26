@@ -83,6 +83,15 @@ func TestWorkloadPlanSchemaNestedFields(t *testing.T) {
 	if s.Schema.Request["command_steps"].Items.Type != "string" {
 		t.Fatal("command_steps items missing")
 	}
+	plan := s.Schema.Response["plan"]
+	if !plan.Required || plan.Properties["typed_target"].Properties["identity"].Properties["kind"].Type != "string" || plan.Properties["typed_resource_limits"].Properties["output_mb"].Type != "integer" || plan.Properties["typed_secret_grants"].Items.Properties["binding_digest"].Type != "string" {
+		t.Fatal("workload plan response schema is incomplete")
+	}
+	apply, _ := ActionSpecFor("agent.core.workloads.apply")
+	op := apply.Schema.Response["operation"]
+	if !op.Required || op.Properties["target_kind"].Type != "string" || op.Properties["desired_plan"].Properties["target"].Properties["network_grants"].Items.Properties["reference_id"].Type != "string" || op.Properties["actual"].Properties["identity"].Properties["aws_ecs_image_uri"].Type != "string" {
+		t.Fatal("workload operation response schema is incomplete")
+	}
 }
 func TestAgentCoreFamilySchemaDrift(t *testing.T) {
 	c, _ := ActionSpecFor("agent.core.schedules.create")

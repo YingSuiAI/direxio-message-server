@@ -488,7 +488,7 @@ func workloadPlanMap(p *agentv1.CoreWorkloadPlan) map[string]any {
 	if p == nil {
 		return nil
 	}
-	out := map[string]any{"plan_id": p.GetPlanId(), "revision": p.GetRevision(), "digest": p.GetDigest(), "summary": safeText(p.GetSummary()), "artifact": safeText(p.GetArtifact()), "source": safeText(p.GetSource()), "command_steps": append([]string(nil), p.GetCommandSteps()...), "image_digest": p.GetImageDigest(), "image_uri": p.GetImageUri(), "target_kind": enumName(p.GetTargetKind().String()), "expires_at": timestampMap(p.GetExpiresAt()), "created_at": timestampMap(p.GetCreatedAt()), "typed_target": p.GetTypedTarget(), "typed_resource_limits": p.GetTypedResourceLimits()}
+	out := map[string]any{"plan_id": p.GetPlanId(), "revision": p.GetRevision(), "digest": p.GetDigest(), "summary": safeText(p.GetSummary()), "artifact": safeText(p.GetArtifact()), "source": safeText(p.GetSource()), "command_steps": append([]string(nil), p.GetCommandSteps()...), "image_digest": p.GetImageDigest(), "image_uri": p.GetImageUri(), "target_kind": workloadTargetKind(p.GetTargetKind()), "expires_at": timestampMap(p.GetExpiresAt()), "created_at": timestampMap(p.GetCreatedAt()), "typed_target": targetSettingsMap(p.GetTypedTarget()), "typed_resource_limits": resourceLimitsMap(p.GetTypedResourceLimits())}
 	refs := []any{}
 	for _, r := range p.GetTypedSecretGrants() {
 		if r != nil {
@@ -502,13 +502,86 @@ func operationMap(o *agentv1.CoreWorkloadOperation) map[string]any {
 	if o == nil {
 		return nil
 	}
-	return map[string]any{"operation_id": o.GetOperationId(), "workload_id": o.GetWorkloadId(), "plan_id": o.GetPlanId(), "kind": enumName(o.GetKind().String()), "plan_revision": o.GetPlanRevision(), "plan_digest": o.GetPlanDigest(), "target_kind": enumName(o.GetTargetKind().String()), "task_id": o.GetTaskId(), "confirmation_id": o.GetConfirmationId(), "status": safeText(o.GetStatus()), "revision": o.GetRevision(), "failure_code": safeText(o.GetFailureCode()), "failure_summary": safeText(o.GetFailureSummary()), "created_at": timestampMap(o.GetCreatedAt()), "updated_at": timestampMap(o.GetUpdatedAt()), "desired_plan": o.GetDesiredPlan(), "actual": o.GetActual(), "dispatch_epoch": o.GetDispatchEpoch(), "dispatch_lease_until": timestampMap(o.GetDispatchLeaseUntil())}
+	return map[string]any{"operation_id": o.GetOperationId(), "workload_id": o.GetWorkloadId(), "plan_id": o.GetPlanId(), "kind": enumName(o.GetKind().String()), "plan_revision": o.GetPlanRevision(), "plan_digest": o.GetPlanDigest(), "target_kind": workloadTargetKind(o.GetTargetKind()), "task_id": o.GetTaskId(), "confirmation_id": o.GetConfirmationId(), "status": safeText(o.GetStatus()), "revision": o.GetRevision(), "failure_code": safeText(o.GetFailureCode()), "failure_summary": safeText(o.GetFailureSummary()), "created_at": timestampMap(o.GetCreatedAt()), "updated_at": timestampMap(o.GetUpdatedAt()), "desired_plan": operationPlanMap(o.GetDesiredPlan()), "actual": actualMap(o.GetActual()), "dispatch_epoch": o.GetDispatchEpoch(), "dispatch_lease_until": timestampMap(o.GetDispatchLeaseUntil())}
 }
 func actualMap(a *agentv1.CoreWorkloadActualSnapshot) map[string]any {
 	if a == nil {
 		return nil
 	}
-	return map[string]any{"workload_id": a.GetWorkloadId(), "revision": a.GetRevision(), "state": safeText(a.GetState()), "identity": a.GetIdentity(), "applied_plan_id": a.GetAppliedPlanId(), "applied_plan_digest": a.GetAppliedPlanDigest(), "readback_digest": a.GetReadbackDigest(), "provider_version": safeText(a.GetProviderVersion()), "observed_at": timestampMap(a.GetObservedAt()), "updated_at": timestampMap(a.GetUpdatedAt())}
+	return map[string]any{"workload_id": a.GetWorkloadId(), "revision": a.GetRevision(), "state": safeText(a.GetState()), "identity": targetIdentityMap(a.GetIdentity()), "applied_plan_id": a.GetAppliedPlanId(), "applied_plan_digest": a.GetAppliedPlanDigest(), "readback_digest": a.GetReadbackDigest(), "provider_version": safeText(a.GetProviderVersion()), "observed_at": timestampMap(a.GetObservedAt()), "updated_at": timestampMap(a.GetUpdatedAt())}
+}
+
+func workloadTargetKind(kind agentv1.CoreWorkloadTargetKind) string {
+	switch kind {
+	case agentv1.CoreWorkloadTargetKind_CORE_WORKLOAD_TARGET_KIND_CORE_RUNNER:
+		return "core-runner"
+	case agentv1.CoreWorkloadTargetKind_CORE_WORKLOAD_TARGET_KIND_AWS_EC2_SSM:
+		return "aws-ec2-ssm"
+	case agentv1.CoreWorkloadTargetKind_CORE_WORKLOAD_TARGET_KIND_AWS_ECS:
+		return "aws-ecs"
+	default:
+		return ""
+	}
+}
+
+func targetIdentityMap(identity *agentv1.CoreWorkloadTargetIdentity) map[string]any {
+	if identity == nil {
+		return nil
+	}
+	return map[string]any{"kind": workloadTargetKind(identity.GetKind()), "core_runner_service": identity.GetCoreRunnerService(), "image_digest": identity.GetImageDigest(), "aws_account_id": identity.GetAwsAccountId(), "aws_region": identity.GetAwsRegion(), "instance_id": identity.GetInstanceId(), "cluster": identity.GetCluster(), "service": identity.GetService(), "task_definition_revision": identity.GetTaskDefinitionRevision(), "desired_count": identity.GetDesiredCount(), "endpoint": identity.GetEndpoint(), "core_runner_id": identity.GetCoreRunnerId(), "aws_ec2_document_version": identity.GetAwsEc2DocumentVersion(), "aws_ec2_systemd_service": identity.GetAwsEc2SystemdService(), "aws_ec2_required_instance_tags": copyStringMap(identity.GetAwsEc2RequiredInstanceTags()), "aws_ecs_cluster_arn": identity.GetAwsEcsClusterArn(), "aws_ecs_service_name": identity.GetAwsEcsServiceName(), "aws_ecs_task_family": identity.GetAwsEcsTaskFamily(), "aws_ecs_platform_version": identity.GetAwsEcsPlatformVersion(), "aws_ecs_subnet_ids": append([]string(nil), identity.GetAwsEcsSubnetIds()...), "aws_ecs_security_group_ids": append([]string(nil), identity.GetAwsEcsSecurityGroupIds()...), "aws_ecs_assign_public_ip": identity.GetAwsEcsAssignPublicIp(), "aws_ecs_target_group_arn": identity.GetAwsEcsTargetGroupArn(), "aws_ecs_target_group_port": identity.GetAwsEcsTargetGroupPort(), "aws_ecs_task_role_arn": identity.GetAwsEcsTaskRoleArn(), "aws_ecs_execution_role_arn": identity.GetAwsEcsExecutionRoleArn(), "aws_ecs_desired_count": identity.GetAwsEcsDesiredCount(), "aws_ecs_image_uri": identity.GetAwsEcsImageUri()}
+}
+
+func targetSettingsMap(target *agentv1.CoreWorkloadTargetSettings) map[string]any {
+	if target == nil {
+		return nil
+	}
+	ports, grants := make([]any, 0, len(target.GetPorts())), make([]any, 0, len(target.GetNetworkGrants()))
+	for _, port := range target.GetPorts() {
+		if port != nil {
+			ports = append(ports, map[string]any{"port": port.GetPort()})
+		}
+	}
+	for _, grant := range target.GetNetworkGrants() {
+		if grant != nil {
+			grants = append(grants, map[string]any{"reference_id": grant.GetReferenceId(), "kind": safeText(grant.GetKind())})
+		}
+	}
+	return map[string]any{"identity": targetIdentityMap(target.GetIdentity()), "ports": ports, "network_grants": grants, "labels": copyStringMap(target.GetLabels())}
+}
+
+func resourceLimitsMap(limits *agentv1.CoreWorkloadResourceLimits) map[string]any {
+	if limits == nil {
+		return nil
+	}
+	return map[string]any{"cpu": limits.GetCpu(), "memory_mb": limits.GetMemoryMb(), "processes": limits.GetProcesses(), "disk_mb": limits.GetDiskMb(), "timeout_seconds": limits.GetTimeoutSeconds(), "output_mb": limits.GetOutputMb()}
+}
+
+func secretGrantRefsMap(refs []*agentv1.CoreWorkloadSecretGrantRef) []any {
+	out := make([]any, 0, len(refs))
+	for _, ref := range refs {
+		if ref != nil {
+			out = append(out, map[string]any{"reference_id": ref.GetReferenceId(), "purpose": enumName(ref.GetPurpose().String()), "binding_digest": ref.GetBindingDigest()})
+		}
+	}
+	return out
+}
+
+func operationPlanMap(plan *agentv1.CoreWorkloadOperationPlan) map[string]any {
+	if plan == nil {
+		return nil
+	}
+	return map[string]any{"plan_id": plan.GetPlanId(), "plan_revision": plan.GetPlanRevision(), "plan_digest": plan.GetPlanDigest(), "target": targetSettingsMap(plan.GetTarget()), "resource_limits": resourceLimitsMap(plan.GetResourceLimits()), "secret_grants": secretGrantRefsMap(plan.GetSecretGrants())}
+}
+
+func copyStringMap(source map[string]string) map[string]string {
+	if source == nil {
+		return nil
+	}
+	out := make(map[string]string, len(source))
+	for key, value := range source {
+		out[key] = value
+	}
+	return out
 }
 func awsCredentialMap(v *agentv1.CoreAWSCredential) map[string]any {
 	if v == nil {

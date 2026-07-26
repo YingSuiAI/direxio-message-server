@@ -166,23 +166,53 @@ func coreMCPToolsSchema() *ActionSchema {
 	return coreActionSchema(coreMutationFields("installation_id"), map[string]ActionFieldSchema{"tools": {Type: "array", Items: &ActionFieldSchema{Type: "object"}}})
 }
 
+func workloadIdentityFields(required bool) map[string]ActionFieldSchema {
+	f := map[string]ActionFieldSchema{"kind": {Type: "string", Required: true}, "core_runner_service": {Type: "string"}, "image_digest": {Type: "string"}, "aws_account_id": {Type: "string"}, "aws_region": {Type: "string"}, "instance_id": {Type: "string"}, "cluster": {Type: "string"}, "service": {Type: "string"}, "task_definition_revision": {Type: "string"}, "desired_count": {Type: "integer"}, "endpoint": {Type: "string"}, "core_runner_id": {Type: "string"}, "aws_ec2_document_version": {Type: "string"}, "aws_ec2_systemd_service": {Type: "string"}, "aws_ec2_required_instance_tags": {Type: "object"}, "aws_ecs_cluster_arn": {Type: "string"}, "aws_ecs_service_name": {Type: "string"}, "aws_ecs_task_family": {Type: "string"}, "aws_ecs_platform_version": {Type: "string"}, "aws_ecs_subnet_ids": {Type: "array", Items: &ActionFieldSchema{Type: "string"}}, "aws_ecs_security_group_ids": {Type: "array", Items: &ActionFieldSchema{Type: "string"}}, "aws_ecs_assign_public_ip": {Type: "boolean"}, "aws_ecs_target_group_arn": {Type: "string"}, "aws_ecs_target_group_port": {Type: "integer"}, "aws_ecs_task_role_arn": {Type: "string"}, "aws_ecs_execution_role_arn": {Type: "string"}, "aws_ecs_desired_count": {Type: "integer"}, "aws_ecs_image_uri": {Type: "string"}}
+	if required {
+		for key, field := range f {
+			field.Required = true
+			f[key] = field
+		}
+	}
+	return f
+}
+func workloadTargetFields(required bool) map[string]ActionFieldSchema {
+	return map[string]ActionFieldSchema{"identity": {Type: "object", Required: true, Properties: workloadIdentityFields(required)}, "ports": {Type: "array", Required: required, Items: &ActionFieldSchema{Type: "object", Properties: map[string]ActionFieldSchema{"port": {Type: "integer", Required: true}}}}, "network_grants": {Type: "array", Required: required, Items: &ActionFieldSchema{Type: "object", Properties: map[string]ActionFieldSchema{"reference_id": {Type: "string", Required: true}, "kind": {Type: "string", Required: true}}}}, "labels": {Type: "object", Required: required}}
+}
+func workloadLimitsFields(required bool) map[string]ActionFieldSchema {
+	return map[string]ActionFieldSchema{"cpu": {Type: "integer", Required: required}, "memory_mb": {Type: "integer", Required: required}, "processes": {Type: "integer", Required: required}, "disk_mb": {Type: "integer", Required: required}, "timeout_seconds": {Type: "integer", Required: required}, "output_mb": {Type: "integer", Required: required}}
+}
+func workloadSecretGrantSchema() *ActionFieldSchema {
+	return &ActionFieldSchema{Type: "object", Properties: map[string]ActionFieldSchema{"reference_id": {Type: "string", Required: true}, "purpose": {Type: "string", Required: true}, "binding_digest": {Type: "string", Required: true}}}
+}
+func workloadPlanResponseFields() map[string]ActionFieldSchema {
+	return map[string]ActionFieldSchema{"plan_id": {Type: "string", Required: true}, "revision": {Type: "integer", Required: true}, "digest": {Type: "string", Required: true}, "summary": {Type: "string", Required: true}, "artifact": {Type: "string", Required: true}, "source": {Type: "string", Required: true}, "command_steps": {Type: "array", Required: true, Items: &ActionFieldSchema{Type: "string"}}, "image_digest": {Type: "string", Required: true}, "image_uri": {Type: "string", Required: true}, "target_kind": {Type: "string", Required: true}, "expires_at": {Type: "string", Required: true}, "created_at": {Type: "string", Required: true}, "typed_target": {Type: "object", Required: true, Properties: workloadTargetFields(true)}, "typed_resource_limits": {Type: "object", Properties: workloadLimitsFields(true)}, "typed_secret_grants": {Type: "array", Required: true, Items: workloadSecretGrantSchema()}}
+}
+func workloadDesiredPlanFields() map[string]ActionFieldSchema {
+	return map[string]ActionFieldSchema{"plan_id": {Type: "string", Required: true}, "plan_revision": {Type: "integer", Required: true}, "plan_digest": {Type: "string", Required: true}, "target": {Type: "object", Required: true, Properties: workloadTargetFields(true)}, "resource_limits": {Type: "object", Required: true, Properties: workloadLimitsFields(true)}, "secret_grants": {Type: "array", Required: true, Items: workloadSecretGrantSchema()}}
+}
+func workloadActualFields() map[string]ActionFieldSchema {
+	return map[string]ActionFieldSchema{"workload_id": {Type: "string", Required: true}, "revision": {Type: "integer", Required: true}, "state": {Type: "string", Required: true}, "identity": {Type: "object", Required: true, Properties: workloadIdentityFields(true)}, "applied_plan_id": {Type: "string", Required: true}, "applied_plan_digest": {Type: "string", Required: true}, "readback_digest": {Type: "string", Required: true}, "provider_version": {Type: "string", Required: true}, "observed_at": {Type: "string", Required: true}, "updated_at": {Type: "string", Required: true}}
+}
+func workloadOperationFields() map[string]ActionFieldSchema {
+	return map[string]ActionFieldSchema{"operation_id": {Type: "string", Required: true}, "workload_id": {Type: "string", Required: true}, "plan_id": {Type: "string", Required: true}, "kind": {Type: "string", Required: true}, "plan_revision": {Type: "integer", Required: true}, "plan_digest": {Type: "string", Required: true}, "target_kind": {Type: "string", Required: true}, "task_id": {Type: "string", Required: true}, "confirmation_id": {Type: "string", Required: true}, "status": {Type: "string", Required: true}, "revision": {Type: "integer", Required: true}, "failure_code": {Type: "string", Required: true}, "failure_summary": {Type: "string", Required: true}, "created_at": {Type: "string", Required: true}, "updated_at": {Type: "string", Required: true}, "desired_plan": {Type: "object", Required: true, Properties: workloadDesiredPlanFields()}, "actual": {Type: "object", Properties: workloadActualFields()}, "dispatch_epoch": {Type: "integer", Required: true}, "dispatch_lease_until": {Type: "string", Required: true}}
+}
+
 func coreWorkloadPlanSchema() *ActionSchema {
 	req := coreRequired("idempotency_key", "summary", "artifact", "source", "target_kind", "expires_at", "typed_target")
-	identity := map[string]ActionFieldSchema{"kind": {Type: "string", Required: true}, "core_runner_service": {Type: "string"}, "image_digest": {Type: "string"}, "aws_account_id": {Type: "string"}, "aws_region": {Type: "string"}, "instance_id": {Type: "string"}, "cluster": {Type: "string"}, "service": {Type: "string"}, "task_definition_revision": {Type: "string"}, "desired_count": {Type: "integer"}, "endpoint": {Type: "string"}, "core_runner_id": {Type: "string"}, "aws_ec2_document_version": {Type: "string"}, "aws_ec2_systemd_service": {Type: "string"}, "aws_ec2_required_instance_tags": {Type: "object"}, "aws_ecs_cluster_arn": {Type: "string"}, "aws_ecs_service_name": {Type: "string"}, "aws_ecs_task_family": {Type: "string"}, "aws_ecs_platform_version": {Type: "string"}, "aws_ecs_subnet_ids": {Type: "array", Items: &ActionFieldSchema{Type: "string"}}, "aws_ecs_security_group_ids": {Type: "array", Items: &ActionFieldSchema{Type: "string"}}, "aws_ecs_assign_public_ip": {Type: "boolean"}, "aws_ecs_target_group_arn": {Type: "string"}, "aws_ecs_target_group_port": {Type: "integer"}, "aws_ecs_task_role_arn": {Type: "string"}, "aws_ecs_execution_role_arn": {Type: "string"}, "aws_ecs_desired_count": {Type: "integer"}, "aws_ecs_image_uri": {Type: "string"}}
-	targetProps := map[string]ActionFieldSchema{"identity": {Type: "object", Required: true, Properties: identity}, "ports": {Type: "array", Items: &ActionFieldSchema{Type: "object", Properties: map[string]ActionFieldSchema{"port": {Type: "integer", Required: true}}}}, "network_grants": {Type: "array", Items: &ActionFieldSchema{Type: "object", Properties: map[string]ActionFieldSchema{"reference_id": {Type: "string", Required: true}, "kind": {Type: "string", Required: true}}}}, "labels": {Type: "object"}}
-	req["typed_target"] = ActionFieldSchema{Type: "object", Required: true, Properties: targetProps}
+	req["typed_target"] = ActionFieldSchema{Type: "object", Required: true, Properties: workloadTargetFields(false)}
 	req["command_steps"] = ActionFieldSchema{Type: "array", Items: &ActionFieldSchema{Type: "string"}}
 	req["image_digest"] = ActionFieldSchema{Type: "string"}
 	req["image_uri"] = ActionFieldSchema{Type: "string"}
-	req["typed_resource_limits"] = ActionFieldSchema{Type: "object", Properties: map[string]ActionFieldSchema{"cpu": {Type: "integer"}, "memory_mb": {Type: "integer"}, "processes": {Type: "integer"}, "disk_mb": {Type: "integer"}, "timeout_seconds": {Type: "integer"}, "output_mb": {Type: "integer"}}}
-	req["typed_secret_grants"] = ActionFieldSchema{Type: "array", WriteOnly: true, Items: &ActionFieldSchema{Type: "object", Properties: map[string]ActionFieldSchema{"reference_id": {Type: "string", Required: true}, "purpose": {Type: "string", Required: true}, "binding_digest": {Type: "string", Required: true}}}}
-	return coreActionSchema(req, coreObjectResponse("plan"))
+	req["typed_resource_limits"] = ActionFieldSchema{Type: "object", Properties: workloadLimitsFields(false)}
+	req["typed_secret_grants"] = ActionFieldSchema{Type: "array", WriteOnly: true, Items: workloadSecretGrantSchema()}
+	return coreActionSchema(req, map[string]ActionFieldSchema{"plan": {Type: "object", Required: true, Properties: workloadPlanResponseFields()}})
 }
 func coreWorkloadGetSchema() *ActionSchema {
-	return coreActionSchema(coreRequired("plan_id"), coreObjectResponse("plan"))
+	return coreActionSchema(coreRequired("plan_id"), map[string]ActionFieldSchema{"plan": {Type: "object", Required: true, Properties: workloadPlanResponseFields()}})
 }
 func coreWorkloadListSchema() *ActionSchema {
-	return coreActionSchema(corePageFields(), map[string]ActionFieldSchema{"plans": {Type: "array", Items: &ActionFieldSchema{Type: "object"}}, "next_page_token": {Type: "string"}})
+	return coreActionSchema(corePageFields(), map[string]ActionFieldSchema{"plans": {Type: "array", Required: true, Items: &ActionFieldSchema{Type: "object", Properties: workloadPlanResponseFields()}}, "next_page_token": {Type: "string"}})
 }
 func coreWorkloadQuoteSchema() *ActionSchema {
 	return coreActionSchema(coreRequired("plan_id"), coreObjectResponse("quote"))
@@ -190,7 +220,7 @@ func coreWorkloadQuoteSchema() *ActionSchema {
 func coreWorkloadApplySchema() *ActionSchema {
 	req := coreRequired("idempotency_key", "plan_id")
 	req["workload_id"] = ActionFieldSchema{Type: "string"}
-	return coreActionSchema(req, map[string]ActionFieldSchema{"operation": {Type: "object"}, "confirmation": {Type: "object"}, "task_id": {Type: "string"}})
+	return coreActionSchema(req, map[string]ActionFieldSchema{"operation": {Type: "object", Required: true, Properties: workloadOperationFields()}, "confirmation": {Type: "object", Required: true}, "task_id": {Type: "string", Required: true}})
 }
 func coreWorkloadDestroySchema() *ActionSchema { return coreWorkloadApplySchema() }
 func coreAWSCredentialCreateSchema() *ActionSchema {

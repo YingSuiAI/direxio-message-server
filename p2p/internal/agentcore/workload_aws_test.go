@@ -1,6 +1,7 @@
 package agentcore
 
 import (
+	"encoding/json"
 	agentv1 "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcorev1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"math"
@@ -97,6 +98,45 @@ func TestMutationEmptyRequestWidAndQuoteFinite(t *testing.T) {
 	q.EstimatedMonthlyUsd = 0
 	if validateAWSQuote(q, u) != nil {
 		t.Fatal("zero quote rejected")
+	}
+}
+
+func TestOperationReadbackProjectionIsPublicAndLinked(t *testing.T) {
+	u := "00000000-0000-0000-0000-000000000001"
+	digest := strings.Repeat("a", 64)
+	now := timestamppb.New(time.Now().UTC())
+	identity := &agentv1.CoreWorkloadTargetIdentity{Kind: agentv1.CoreWorkloadTargetKind_CORE_WORKLOAD_TARGET_KIND_AWS_ECS, AwsRegion: "us-east-1", AwsEcsSubnetIds: []string{"subnet-1"}, AwsEcsAssignPublicIp: true}
+	target := &agentv1.CoreWorkloadTargetSettings{Identity: identity, Ports: []*agentv1.CoreWorkloadPort{{Port: 443}}, NetworkGrants: []*agentv1.CoreWorkloadNetworkGrant{{ReferenceId: "net-1", Kind: "egress"}}, Labels: map[string]string{"env": "test"}}
+	op := &agentv1.CoreWorkloadOperation{OperationId: u, WorkloadId: u, PlanId: u, Kind: agentv1.CoreWorkloadOperationKind_CORE_WORKLOAD_OPERATION_KIND_APPLY, PlanRevision: 2, PlanDigest: digest, TargetKind: agentv1.CoreWorkloadTargetKind_CORE_WORKLOAD_TARGET_KIND_AWS_ECS, TaskId: u, ConfirmationId: u, Revision: 3, CreatedAt: now, UpdatedAt: now, DesiredPlan: &agentv1.CoreWorkloadOperationPlan{PlanId: u, PlanRevision: 2, PlanDigest: digest, Target: target, ResourceLimits: &agentv1.CoreWorkloadResourceLimits{Cpu: 1, MemoryMb: 64}, SecretGrants: []*agentv1.CoreWorkloadSecretGrantRef{{ReferenceId: "secret-1", Purpose: agentv1.CoreWorkloadSecretPurpose_CORE_WORKLOAD_SECRET_PURPOSE_MCP_CREDENTIAL, BindingDigest: digest}}}, Actual: &agentv1.CoreWorkloadActualSnapshot{WorkloadId: u, Revision: 3, State: "running", Identity: identity, AppliedPlanId: u, AppliedPlanDigest: digest, ReadbackDigest: digest, ProviderVersion: "v1", ObservedAt: now, UpdatedAt: now}}
+	projected := operationMap(op)
+	if projected["target_kind"] != "aws-ecs" || projected["task_id"] != u || projected["confirmation_id"] != u {
+		t.Fatalf("operation linkage projection = %#v", projected)
+	}
+	desired := projected["desired_plan"].(map[string]any)
+	if desired["plan_id"] != u || desired["plan_revision"] != uint64(2) || desired["target"].(map[string]any)["identity"].(map[string]any)["kind"] != "aws-ecs" {
+		t.Fatalf("desired plan projection = %#v", desired)
+	}
+	actual := projected["actual"].(map[string]any)
+	if actual["identity"].(map[string]any)["kind"] != "aws-ecs" || actual["applied_plan_id"] != u {
+		t.Fatalf("actual projection = %#v", actual)
+	}
+	raw, err := json.Marshal(projected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	for _, forbidden := range []string{"CORE_WORKLOAD_TARGET_KIND", "protoimpl", "unknownFields", "DesiredPlan", "Actual"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("protobuf shape leaked: %s", text)
+		}
+	}
+	if !strings.Contains(text, `"target_kind":"aws-ecs"`) || strings.Contains(text, `"kind":3`) {
+		t.Fatalf("contract enum string missing: %s", text)
+	}
+	for _, kind := range []agentv1.CoreWorkloadTargetKind{agentv1.CoreWorkloadTargetKind_CORE_WORKLOAD_TARGET_KIND_CORE_RUNNER, agentv1.CoreWorkloadTargetKind_CORE_WORKLOAD_TARGET_KIND_AWS_EC2_SSM, agentv1.CoreWorkloadTargetKind_CORE_WORKLOAD_TARGET_KIND_AWS_ECS} {
+		if got := workloadTargetKind(kind); got == "" || strings.Contains(got, "_") {
+			t.Fatalf("target kind %v projected as %q", kind, got)
+		}
 	}
 }
 func TestAWSChangeValidatorCorruptions(t *testing.T) {
