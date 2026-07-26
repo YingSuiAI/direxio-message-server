@@ -9,8 +9,8 @@ func TestActionSpecsReturnsStableOrderedCopy(t *testing.T) {
 	first := ActionSpecs()
 	second := ActionSpecs()
 
-	if len(first) != 205 {
-		t.Fatalf("ActionSpecs() returned %d actions, want 205", len(first))
+	if len(first) != 207 {
+		t.Fatalf("ActionSpecs() returned %d actions, want 207", len(first))
 	}
 	if !reflect.DeepEqual(first, second) {
 		t.Fatal("ActionSpecs() did not preserve action order")
@@ -104,6 +104,19 @@ func TestAgentCoreFamilySchemaDrift(t *testing.T) {
 	s, _ := ActionSpecFor("agent.core.skills.execute")
 	if s.Schema.Request["tool_name"].Required {
 		t.Fatal("skill tool_name")
+	}
+	inspect, _ := ActionSpecFor("agent.core.mcp.inspect")
+	candidate := inspect.Schema.Request["candidate"]
+	if candidate.Type != "object" || !candidate.Required || !candidate.Properties["pin"].Required || candidate.Properties["pin"].Properties["git_sha256"].Type != "string" {
+		t.Fatal("inspect candidate schema must publish the immutable pin")
+	}
+	installation := i.Schema.Request["inspection"]
+	if installation.Type != "object" || !installation.Required || installation.Properties["execution"].Properties["remote"].Properties["url"].Type != "string" || installation.Properties["network_grants"].Items.Properties["port"].Type != "integer" || installation.Properties["secret_grants"].Items.Properties["configured"].Type != "boolean" {
+		t.Fatal("extension inspection schema is incomplete")
+	}
+	secret := i.Schema.Request["secret_inputs"].Items.Properties["secret_value"]
+	if !secret.Required || !secret.WriteOnly {
+		t.Fatal("extension secret value must be write-only")
 	}
 }
 

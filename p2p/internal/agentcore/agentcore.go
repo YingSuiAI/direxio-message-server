@@ -687,6 +687,18 @@ func optionalInt64(params map[string]any, key string) (int64, *actionbase.Error)
 		result = int64(n)
 	case int64:
 		result = n
+	case uint:
+		if uint64(n) > uint64(^uint64(0)>>1) {
+			return 0, actionbase.BadRequest(key + " is out of range")
+		}
+		result = int64(n)
+	case uint32:
+		result = int64(n)
+	case uint64:
+		if n > uint64(^uint64(0)>>1) {
+			return 0, actionbase.BadRequest(key + " is out of range")
+		}
+		result = int64(n)
 	case float64:
 		if n != float64(int64(n)) {
 			return 0, actionbase.BadRequest(key + " must be an integer")

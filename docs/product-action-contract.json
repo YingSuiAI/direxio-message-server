@@ -983,7 +983,56 @@
           "candidates": {
             "type": "array",
             "items": {
-              "type": "object"
+              "type": "object",
+              "required": true,
+              "properties": {
+                "description": {
+                  "type": "string",
+                  "required": true
+                },
+                "id": {
+                  "type": "string",
+                  "required": true
+                },
+                "kind": {
+                  "type": "string",
+                  "required": true
+                },
+                "name": {
+                  "type": "string",
+                  "required": true
+                },
+                "pin": {
+                  "type": "object",
+                  "required": true,
+                  "properties": {
+                    "git_commit": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "git_sha256": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "registry_sha256": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "registry_version": {
+                      "type": "string",
+                      "required": true
+                    }
+                  }
+                },
+                "source": {
+                  "type": "string",
+                  "required": true
+                },
+                "transport": {
+                  "type": "string",
+                  "required": true
+                }
+              }
             }
           },
           "next_page_token": {
@@ -1049,6 +1098,260 @@
       }
     },
     {
+      "name": "agent.core.mcp.inspect",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "candidate": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "description": {
+                "type": "string",
+                "required": true
+              },
+              "id": {
+                "type": "string",
+                "required": true
+              },
+              "kind": {
+                "type": "string",
+                "required": true
+              },
+              "name": {
+                "type": "string",
+                "required": true
+              },
+              "pin": {
+                "type": "object",
+                "required": true,
+                "properties": {
+                  "git_commit": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "git_sha256": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "registry_sha256": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "registry_version": {
+                    "type": "string",
+                    "required": true
+                  }
+                }
+              },
+              "source": {
+                "type": "string",
+                "required": true
+              },
+              "transport": {
+                "type": "string",
+                "required": true
+              }
+            }
+          }
+        },
+        "response": {
+          "inspection": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "candidate": {
+                "type": "object",
+                "required": true,
+                "properties": {
+                  "description": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "kind": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "name": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "pin": {
+                    "type": "object",
+                    "required": true,
+                    "properties": {
+                      "git_commit": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "git_sha256": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "registry_sha256": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "registry_version": {
+                        "type": "string",
+                        "required": true
+                      }
+                    }
+                  },
+                  "source": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "transport": {
+                    "type": "string",
+                    "required": true
+                  }
+                }
+              },
+              "content_digest": {
+                "type": "string",
+                "required": true
+              },
+              "execution": {
+                "type": "object",
+                "required": true,
+                "properties": {
+                  "remote": {
+                    "type": "object",
+                    "properties": {
+                      "credential_reference_id": {
+                        "type": "string"
+                      },
+                      "url": {
+                        "type": "string",
+                        "required": true
+                      }
+                    }
+                  },
+                  "skill": {
+                    "type": "object",
+                    "properties": {
+                      "argv": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "digest": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "executable": {
+                        "type": "boolean",
+                        "required": true
+                      },
+                      "relative_path": {
+                        "type": "string",
+                        "required": true
+                      }
+                    }
+                  },
+                  "stdio": {
+                    "type": "object",
+                    "properties": {
+                      "argv": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "digest": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "relative_path": {
+                        "type": "string",
+                        "required": true
+                      }
+                    }
+                  }
+                }
+              },
+              "execution_digest": {
+                "type": "string",
+                "required": true
+              },
+              "manifest_digest": {
+                "type": "string",
+                "required": true
+              },
+              "network_grants": {
+                "type": "array",
+                "required": true,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "host": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "path_prefix": {
+                      "type": "string"
+                    },
+                    "port": {
+                      "type": "integer",
+                      "required": true
+                    },
+                    "scheme": {
+                      "type": "string",
+                      "required": true
+                    }
+                  }
+                }
+              },
+              "network_schema_digest": {
+                "type": "string",
+                "required": true
+              },
+              "secret_grants": {
+                "type": "array",
+                "required": true,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "binding_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "configured": {
+                      "type": "boolean",
+                      "required": true
+                    },
+                    "purpose": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "reference_id": {
+                      "type": "string",
+                      "required": true
+                    }
+                  }
+                }
+              },
+              "secret_schema_digest": {
+                "type": "string",
+                "required": true
+              }
+            }
+          }
+        }
+      }
+    },
+    {
       "name": "agent.core.mcp.install",
       "auth": "owner",
       "transport": "http_and_ws_request",
@@ -1056,7 +1359,55 @@
         "request": {
           "candidate": {
             "type": "object",
-            "required": true
+            "required": true,
+            "properties": {
+              "description": {
+                "type": "string",
+                "required": true
+              },
+              "id": {
+                "type": "string",
+                "required": true
+              },
+              "kind": {
+                "type": "string",
+                "required": true
+              },
+              "name": {
+                "type": "string",
+                "required": true
+              },
+              "pin": {
+                "type": "object",
+                "required": true,
+                "properties": {
+                  "git_commit": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "git_sha256": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "registry_sha256": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "registry_version": {
+                    "type": "string",
+                    "required": true
+                  }
+                }
+              },
+              "source": {
+                "type": "string",
+                "required": true
+              },
+              "transport": {
+                "type": "string",
+                "required": true
+              }
+            }
           },
           "expected_revision": {
             "type": "integer",
@@ -1069,11 +1420,217 @@
             "type": "string",
             "required": true
           },
+          "inspection": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "candidate": {
+                "type": "object",
+                "required": true,
+                "properties": {
+                  "description": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "kind": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "name": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "pin": {
+                    "type": "object",
+                    "required": true,
+                    "properties": {
+                      "git_commit": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "git_sha256": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "registry_sha256": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "registry_version": {
+                        "type": "string",
+                        "required": true
+                      }
+                    }
+                  },
+                  "source": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "transport": {
+                    "type": "string",
+                    "required": true
+                  }
+                }
+              },
+              "content_digest": {
+                "type": "string",
+                "required": true
+              },
+              "execution": {
+                "type": "object",
+                "required": true,
+                "properties": {
+                  "remote": {
+                    "type": "object",
+                    "properties": {
+                      "credential_reference_id": {
+                        "type": "string"
+                      },
+                      "url": {
+                        "type": "string",
+                        "required": true
+                      }
+                    }
+                  },
+                  "skill": {
+                    "type": "object",
+                    "properties": {
+                      "argv": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "digest": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "executable": {
+                        "type": "boolean",
+                        "required": true
+                      },
+                      "relative_path": {
+                        "type": "string",
+                        "required": true
+                      }
+                    }
+                  },
+                  "stdio": {
+                    "type": "object",
+                    "properties": {
+                      "argv": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "digest": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "relative_path": {
+                        "type": "string",
+                        "required": true
+                      }
+                    }
+                  }
+                }
+              },
+              "execution_digest": {
+                "type": "string",
+                "required": true
+              },
+              "manifest_digest": {
+                "type": "string",
+                "required": true
+              },
+              "network_grants": {
+                "type": "array",
+                "required": true,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "host": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "path_prefix": {
+                      "type": "string"
+                    },
+                    "port": {
+                      "type": "integer",
+                      "required": true
+                    },
+                    "scheme": {
+                      "type": "string",
+                      "required": true
+                    }
+                  }
+                }
+              },
+              "network_schema_digest": {
+                "type": "string",
+                "required": true
+              },
+              "secret_grants": {
+                "type": "array",
+                "required": true,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "binding_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "configured": {
+                      "type": "boolean",
+                      "required": true
+                    },
+                    "purpose": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "reference_id": {
+                      "type": "string",
+                      "required": true
+                    }
+                  }
+                }
+              },
+              "secret_schema_digest": {
+                "type": "string",
+                "required": true
+              }
+            }
+          },
           "secret_inputs": {
             "type": "array",
             "write_only": true,
             "items": {
-              "type": "object"
+              "type": "object",
+              "properties": {
+                "purpose": {
+                  "type": "string",
+                  "required": true
+                },
+                "reference_id": {
+                  "type": "string",
+                  "required": true
+                },
+                "secret_value": {
+                  "type": "string",
+                  "required": true,
+                  "write_only": true
+                }
+              }
             }
           }
         },
@@ -1098,7 +1655,55 @@
         "request": {
           "candidate": {
             "type": "object",
-            "required": true
+            "required": true,
+            "properties": {
+              "description": {
+                "type": "string",
+                "required": true
+              },
+              "id": {
+                "type": "string",
+                "required": true
+              },
+              "kind": {
+                "type": "string",
+                "required": true
+              },
+              "name": {
+                "type": "string",
+                "required": true
+              },
+              "pin": {
+                "type": "object",
+                "required": true,
+                "properties": {
+                  "git_commit": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "git_sha256": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "registry_sha256": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "registry_version": {
+                    "type": "string",
+                    "required": true
+                  }
+                }
+              },
+              "source": {
+                "type": "string",
+                "required": true
+              },
+              "transport": {
+                "type": "string",
+                "required": true
+              }
+            }
           },
           "expected_revision": {
             "type": "integer",
@@ -1111,6 +1716,197 @@
             "type": "string",
             "required": true
           },
+          "inspection": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "candidate": {
+                "type": "object",
+                "required": true,
+                "properties": {
+                  "description": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "kind": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "name": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "pin": {
+                    "type": "object",
+                    "required": true,
+                    "properties": {
+                      "git_commit": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "git_sha256": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "registry_sha256": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "registry_version": {
+                        "type": "string",
+                        "required": true
+                      }
+                    }
+                  },
+                  "source": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "transport": {
+                    "type": "string",
+                    "required": true
+                  }
+                }
+              },
+              "content_digest": {
+                "type": "string",
+                "required": true
+              },
+              "execution": {
+                "type": "object",
+                "required": true,
+                "properties": {
+                  "remote": {
+                    "type": "object",
+                    "properties": {
+                      "credential_reference_id": {
+                        "type": "string"
+                      },
+                      "url": {
+                        "type": "string",
+                        "required": true
+                      }
+                    }
+                  },
+                  "skill": {
+                    "type": "object",
+                    "properties": {
+                      "argv": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "digest": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "executable": {
+                        "type": "boolean",
+                        "required": true
+                      },
+                      "relative_path": {
+                        "type": "string",
+                        "required": true
+                      }
+                    }
+                  },
+                  "stdio": {
+                    "type": "object",
+                    "properties": {
+                      "argv": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "digest": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "relative_path": {
+                        "type": "string",
+                        "required": true
+                      }
+                    }
+                  }
+                }
+              },
+              "execution_digest": {
+                "type": "string",
+                "required": true
+              },
+              "manifest_digest": {
+                "type": "string",
+                "required": true
+              },
+              "network_grants": {
+                "type": "array",
+                "required": true,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "host": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "path_prefix": {
+                      "type": "string"
+                    },
+                    "port": {
+                      "type": "integer",
+                      "required": true
+                    },
+                    "scheme": {
+                      "type": "string",
+                      "required": true
+                    }
+                  }
+                }
+              },
+              "network_schema_digest": {
+                "type": "string",
+                "required": true
+              },
+              "secret_grants": {
+                "type": "array",
+                "required": true,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "binding_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "configured": {
+                      "type": "boolean",
+                      "required": true
+                    },
+                    "purpose": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "reference_id": {
+                      "type": "string",
+                      "required": true
+                    }
+                  }
+                }
+              },
+              "secret_schema_digest": {
+                "type": "string",
+                "required": true
+              }
+            }
+          },
           "installation_id": {
             "type": "string",
             "required": true
@@ -1119,7 +1915,22 @@
             "type": "array",
             "write_only": true,
             "items": {
-              "type": "object"
+              "type": "object",
+              "properties": {
+                "purpose": {
+                  "type": "string",
+                  "required": true
+                },
+                "reference_id": {
+                  "type": "string",
+                  "required": true
+                },
+                "secret_value": {
+                  "type": "string",
+                  "required": true,
+                  "write_only": true
+                }
+              }
             }
           }
         },
@@ -1268,7 +2079,56 @@
           "candidates": {
             "type": "array",
             "items": {
-              "type": "object"
+              "type": "object",
+              "required": true,
+              "properties": {
+                "description": {
+                  "type": "string",
+                  "required": true
+                },
+                "id": {
+                  "type": "string",
+                  "required": true
+                },
+                "kind": {
+                  "type": "string",
+                  "required": true
+                },
+                "name": {
+                  "type": "string",
+                  "required": true
+                },
+                "pin": {
+                  "type": "object",
+                  "required": true,
+                  "properties": {
+                    "git_commit": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "git_sha256": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "registry_sha256": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "registry_version": {
+                      "type": "string",
+                      "required": true
+                    }
+                  }
+                },
+                "source": {
+                  "type": "string",
+                  "required": true
+                },
+                "transport": {
+                  "type": "string",
+                  "required": true
+                }
+              }
             }
           },
           "next_page_token": {
@@ -1334,6 +2194,260 @@
       }
     },
     {
+      "name": "agent.core.skills.inspect",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "candidate": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "description": {
+                "type": "string",
+                "required": true
+              },
+              "id": {
+                "type": "string",
+                "required": true
+              },
+              "kind": {
+                "type": "string",
+                "required": true
+              },
+              "name": {
+                "type": "string",
+                "required": true
+              },
+              "pin": {
+                "type": "object",
+                "required": true,
+                "properties": {
+                  "git_commit": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "git_sha256": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "registry_sha256": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "registry_version": {
+                    "type": "string",
+                    "required": true
+                  }
+                }
+              },
+              "source": {
+                "type": "string",
+                "required": true
+              },
+              "transport": {
+                "type": "string",
+                "required": true
+              }
+            }
+          }
+        },
+        "response": {
+          "inspection": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "candidate": {
+                "type": "object",
+                "required": true,
+                "properties": {
+                  "description": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "kind": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "name": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "pin": {
+                    "type": "object",
+                    "required": true,
+                    "properties": {
+                      "git_commit": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "git_sha256": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "registry_sha256": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "registry_version": {
+                        "type": "string",
+                        "required": true
+                      }
+                    }
+                  },
+                  "source": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "transport": {
+                    "type": "string",
+                    "required": true
+                  }
+                }
+              },
+              "content_digest": {
+                "type": "string",
+                "required": true
+              },
+              "execution": {
+                "type": "object",
+                "required": true,
+                "properties": {
+                  "remote": {
+                    "type": "object",
+                    "properties": {
+                      "credential_reference_id": {
+                        "type": "string"
+                      },
+                      "url": {
+                        "type": "string",
+                        "required": true
+                      }
+                    }
+                  },
+                  "skill": {
+                    "type": "object",
+                    "properties": {
+                      "argv": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "digest": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "executable": {
+                        "type": "boolean",
+                        "required": true
+                      },
+                      "relative_path": {
+                        "type": "string",
+                        "required": true
+                      }
+                    }
+                  },
+                  "stdio": {
+                    "type": "object",
+                    "properties": {
+                      "argv": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "digest": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "relative_path": {
+                        "type": "string",
+                        "required": true
+                      }
+                    }
+                  }
+                }
+              },
+              "execution_digest": {
+                "type": "string",
+                "required": true
+              },
+              "manifest_digest": {
+                "type": "string",
+                "required": true
+              },
+              "network_grants": {
+                "type": "array",
+                "required": true,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "host": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "path_prefix": {
+                      "type": "string"
+                    },
+                    "port": {
+                      "type": "integer",
+                      "required": true
+                    },
+                    "scheme": {
+                      "type": "string",
+                      "required": true
+                    }
+                  }
+                }
+              },
+              "network_schema_digest": {
+                "type": "string",
+                "required": true
+              },
+              "secret_grants": {
+                "type": "array",
+                "required": true,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "binding_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "configured": {
+                      "type": "boolean",
+                      "required": true
+                    },
+                    "purpose": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "reference_id": {
+                      "type": "string",
+                      "required": true
+                    }
+                  }
+                }
+              },
+              "secret_schema_digest": {
+                "type": "string",
+                "required": true
+              }
+            }
+          }
+        }
+      }
+    },
+    {
       "name": "agent.core.skills.install",
       "auth": "owner",
       "transport": "http_and_ws_request",
@@ -1341,7 +2455,55 @@
         "request": {
           "candidate": {
             "type": "object",
-            "required": true
+            "required": true,
+            "properties": {
+              "description": {
+                "type": "string",
+                "required": true
+              },
+              "id": {
+                "type": "string",
+                "required": true
+              },
+              "kind": {
+                "type": "string",
+                "required": true
+              },
+              "name": {
+                "type": "string",
+                "required": true
+              },
+              "pin": {
+                "type": "object",
+                "required": true,
+                "properties": {
+                  "git_commit": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "git_sha256": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "registry_sha256": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "registry_version": {
+                    "type": "string",
+                    "required": true
+                  }
+                }
+              },
+              "source": {
+                "type": "string",
+                "required": true
+              },
+              "transport": {
+                "type": "string",
+                "required": true
+              }
+            }
           },
           "expected_revision": {
             "type": "integer",
@@ -1354,11 +2516,217 @@
             "type": "string",
             "required": true
           },
+          "inspection": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "candidate": {
+                "type": "object",
+                "required": true,
+                "properties": {
+                  "description": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "kind": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "name": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "pin": {
+                    "type": "object",
+                    "required": true,
+                    "properties": {
+                      "git_commit": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "git_sha256": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "registry_sha256": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "registry_version": {
+                        "type": "string",
+                        "required": true
+                      }
+                    }
+                  },
+                  "source": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "transport": {
+                    "type": "string",
+                    "required": true
+                  }
+                }
+              },
+              "content_digest": {
+                "type": "string",
+                "required": true
+              },
+              "execution": {
+                "type": "object",
+                "required": true,
+                "properties": {
+                  "remote": {
+                    "type": "object",
+                    "properties": {
+                      "credential_reference_id": {
+                        "type": "string"
+                      },
+                      "url": {
+                        "type": "string",
+                        "required": true
+                      }
+                    }
+                  },
+                  "skill": {
+                    "type": "object",
+                    "properties": {
+                      "argv": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "digest": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "executable": {
+                        "type": "boolean",
+                        "required": true
+                      },
+                      "relative_path": {
+                        "type": "string",
+                        "required": true
+                      }
+                    }
+                  },
+                  "stdio": {
+                    "type": "object",
+                    "properties": {
+                      "argv": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "digest": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "relative_path": {
+                        "type": "string",
+                        "required": true
+                      }
+                    }
+                  }
+                }
+              },
+              "execution_digest": {
+                "type": "string",
+                "required": true
+              },
+              "manifest_digest": {
+                "type": "string",
+                "required": true
+              },
+              "network_grants": {
+                "type": "array",
+                "required": true,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "host": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "path_prefix": {
+                      "type": "string"
+                    },
+                    "port": {
+                      "type": "integer",
+                      "required": true
+                    },
+                    "scheme": {
+                      "type": "string",
+                      "required": true
+                    }
+                  }
+                }
+              },
+              "network_schema_digest": {
+                "type": "string",
+                "required": true
+              },
+              "secret_grants": {
+                "type": "array",
+                "required": true,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "binding_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "configured": {
+                      "type": "boolean",
+                      "required": true
+                    },
+                    "purpose": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "reference_id": {
+                      "type": "string",
+                      "required": true
+                    }
+                  }
+                }
+              },
+              "secret_schema_digest": {
+                "type": "string",
+                "required": true
+              }
+            }
+          },
           "secret_inputs": {
             "type": "array",
             "write_only": true,
             "items": {
-              "type": "object"
+              "type": "object",
+              "properties": {
+                "purpose": {
+                  "type": "string",
+                  "required": true
+                },
+                "reference_id": {
+                  "type": "string",
+                  "required": true
+                },
+                "secret_value": {
+                  "type": "string",
+                  "required": true,
+                  "write_only": true
+                }
+              }
             }
           }
         },
@@ -1383,7 +2751,55 @@
         "request": {
           "candidate": {
             "type": "object",
-            "required": true
+            "required": true,
+            "properties": {
+              "description": {
+                "type": "string",
+                "required": true
+              },
+              "id": {
+                "type": "string",
+                "required": true
+              },
+              "kind": {
+                "type": "string",
+                "required": true
+              },
+              "name": {
+                "type": "string",
+                "required": true
+              },
+              "pin": {
+                "type": "object",
+                "required": true,
+                "properties": {
+                  "git_commit": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "git_sha256": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "registry_sha256": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "registry_version": {
+                    "type": "string",
+                    "required": true
+                  }
+                }
+              },
+              "source": {
+                "type": "string",
+                "required": true
+              },
+              "transport": {
+                "type": "string",
+                "required": true
+              }
+            }
           },
           "expected_revision": {
             "type": "integer",
@@ -1396,6 +2812,197 @@
             "type": "string",
             "required": true
           },
+          "inspection": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "candidate": {
+                "type": "object",
+                "required": true,
+                "properties": {
+                  "description": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "kind": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "name": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "pin": {
+                    "type": "object",
+                    "required": true,
+                    "properties": {
+                      "git_commit": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "git_sha256": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "registry_sha256": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "registry_version": {
+                        "type": "string",
+                        "required": true
+                      }
+                    }
+                  },
+                  "source": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "transport": {
+                    "type": "string",
+                    "required": true
+                  }
+                }
+              },
+              "content_digest": {
+                "type": "string",
+                "required": true
+              },
+              "execution": {
+                "type": "object",
+                "required": true,
+                "properties": {
+                  "remote": {
+                    "type": "object",
+                    "properties": {
+                      "credential_reference_id": {
+                        "type": "string"
+                      },
+                      "url": {
+                        "type": "string",
+                        "required": true
+                      }
+                    }
+                  },
+                  "skill": {
+                    "type": "object",
+                    "properties": {
+                      "argv": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "digest": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "executable": {
+                        "type": "boolean",
+                        "required": true
+                      },
+                      "relative_path": {
+                        "type": "string",
+                        "required": true
+                      }
+                    }
+                  },
+                  "stdio": {
+                    "type": "object",
+                    "properties": {
+                      "argv": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "digest": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "relative_path": {
+                        "type": "string",
+                        "required": true
+                      }
+                    }
+                  }
+                }
+              },
+              "execution_digest": {
+                "type": "string",
+                "required": true
+              },
+              "manifest_digest": {
+                "type": "string",
+                "required": true
+              },
+              "network_grants": {
+                "type": "array",
+                "required": true,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "host": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "path_prefix": {
+                      "type": "string"
+                    },
+                    "port": {
+                      "type": "integer",
+                      "required": true
+                    },
+                    "scheme": {
+                      "type": "string",
+                      "required": true
+                    }
+                  }
+                }
+              },
+              "network_schema_digest": {
+                "type": "string",
+                "required": true
+              },
+              "secret_grants": {
+                "type": "array",
+                "required": true,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "binding_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "configured": {
+                      "type": "boolean",
+                      "required": true
+                    },
+                    "purpose": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "reference_id": {
+                      "type": "string",
+                      "required": true
+                    }
+                  }
+                }
+              },
+              "secret_schema_digest": {
+                "type": "string",
+                "required": true
+              }
+            }
+          },
           "installation_id": {
             "type": "string",
             "required": true
@@ -1404,7 +3011,22 @@
             "type": "array",
             "write_only": true,
             "items": {
-              "type": "object"
+              "type": "object",
+              "properties": {
+                "purpose": {
+                  "type": "string",
+                  "required": true
+                },
+                "reference_id": {
+                  "type": "string",
+                  "required": true
+                },
+                "secret_value": {
+                  "type": "string",
+                  "required": true,
+                  "write_only": true
+                }
+              }
             }
           }
         },

@@ -92,7 +92,33 @@ func coreExtensionDiscoverSchema() *ActionSchema {
 	request := corePageFields()
 	request["query"] = ActionFieldSchema{Type: "string"}
 	request["source"] = ActionFieldSchema{Type: "string"}
-	return coreActionSchema(request, map[string]ActionFieldSchema{"candidates": {Type: "array", Items: &ActionFieldSchema{Type: "object"}}, "next_page_token": {Type: "string"}})
+	candidate := coreExtensionCandidateSchema()
+	return coreActionSchema(request, map[string]ActionFieldSchema{"candidates": {Type: "array", Items: &candidate}, "next_page_token": {Type: "string"}})
+}
+func coreExtensionInspectSchema() *ActionSchema {
+	candidate := coreExtensionCandidateSchema()
+	inspection := coreExtensionInspectionFields()
+	return coreActionSchema(map[string]ActionFieldSchema{"candidate": candidate}, map[string]ActionFieldSchema{"inspection": {Type: "object", Required: true, Properties: inspection}})
+}
+
+func coreExtensionCandidateSchema() ActionFieldSchema {
+	pin := map[string]ActionFieldSchema{"registry_version": {Type: "string", Required: true}, "registry_sha256": {Type: "string", Required: true}, "git_commit": {Type: "string", Required: true}, "git_sha256": {Type: "string", Required: true}}
+	return ActionFieldSchema{Type: "object", Required: true, Properties: map[string]ActionFieldSchema{"id": {Type: "string", Required: true}, "kind": {Type: "string", Required: true}, "source": {Type: "string", Required: true}, "name": {Type: "string", Required: true}, "description": {Type: "string", Required: true}, "pin": {Type: "object", Required: true, Properties: pin}, "transport": {Type: "string", Required: true}}}
+}
+
+func coreExtensionInspectionFields() map[string]ActionFieldSchema {
+	argv := ActionFieldSchema{Type: "array", Items: &ActionFieldSchema{Type: "string"}}
+	execution := map[string]ActionFieldSchema{
+		"stdio":  {Type: "object", Properties: map[string]ActionFieldSchema{"relative_path": {Type: "string", Required: true}, "digest": {Type: "string", Required: true}, "argv": argv}},
+		"remote": {Type: "object", Properties: map[string]ActionFieldSchema{"url": {Type: "string", Required: true}, "credential_reference_id": {Type: "string"}}},
+		"skill":  {Type: "object", Properties: map[string]ActionFieldSchema{"relative_path": {Type: "string", Required: true}, "digest": {Type: "string", Required: true}, "executable": {Type: "boolean", Required: true}, "argv": argv}},
+	}
+	return map[string]ActionFieldSchema{
+		"candidate": coreExtensionCandidateSchema(), "content_digest": {Type: "string", Required: true}, "manifest_digest": {Type: "string", Required: true}, "execution_digest": {Type: "string", Required: true}, "network_schema_digest": {Type: "string", Required: true}, "secret_schema_digest": {Type: "string", Required: true},
+		"execution":      {Type: "object", Required: true, Properties: execution},
+		"network_grants": {Type: "array", Required: true, Items: &ActionFieldSchema{Type: "object", Properties: map[string]ActionFieldSchema{"scheme": {Type: "string", Required: true}, "host": {Type: "string", Required: true}, "port": {Type: "integer", Required: true}, "path_prefix": {Type: "string"}, "digest": {Type: "string", Required: true}}}},
+		"secret_grants":  {Type: "array", Required: true, Items: &ActionFieldSchema{Type: "object", Properties: map[string]ActionFieldSchema{"reference_id": {Type: "string", Required: true}, "purpose": {Type: "string", Required: true}, "binding_digest": {Type: "string", Required: true}, "configured": {Type: "boolean", Required: true}}}},
+	}
 }
 func coreExtensionGetSchema() *ActionSchema {
 	return coreActionSchema(coreRequired("installation_id"), coreObjectResponse("installation"))
@@ -111,8 +137,9 @@ func coreExtensionMutationSchema() *ActionSchema {
 }
 func coreExtensionInstallSchema() *ActionSchema {
 	req := coreMutationFields()
-	req["candidate"] = ActionFieldSchema{Type: "object", Required: true}
-	req["secret_inputs"] = ActionFieldSchema{Type: "array", WriteOnly: true, Items: &ActionFieldSchema{Type: "object"}}
+	req["candidate"] = coreExtensionCandidateSchema()
+	req["inspection"] = ActionFieldSchema{Type: "object", Required: true, Properties: coreExtensionInspectionFields()}
+	req["secret_inputs"] = ActionFieldSchema{Type: "array", WriteOnly: true, Items: &ActionFieldSchema{Type: "object", Properties: map[string]ActionFieldSchema{"reference_id": {Type: "string", Required: true}, "purpose": {Type: "string", Required: true}, "secret_value": {Type: "string", Required: true, WriteOnly: true}}}}
 	return coreActionSchema(req, map[string]ActionFieldSchema{"installation": {Type: "object"}, "confirmation_id": {Type: "string"}, "task_id": {Type: "string"}})
 }
 func coreExtensionUpdateSchema() *ActionSchema {

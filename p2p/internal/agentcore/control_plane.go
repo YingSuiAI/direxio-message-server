@@ -239,6 +239,42 @@ func candidateMap(candidate *agentv1.CoreExtensionCandidate) map[string]any {
 	}
 	return out
 }
+func executionMap(e *agentv1.CoreExecution) map[string]any {
+	if e == nil {
+		return nil
+	}
+	out := map[string]any{}
+	switch d := e.Descriptor_.(type) {
+	case *agentv1.CoreExecution_Stdio:
+		out["stdio"] = map[string]any{"relative_path": d.Stdio.GetRelativePath(), "digest": d.Stdio.GetDigest(), "argv": append([]string(nil), d.Stdio.GetArgv()...)}
+	case *agentv1.CoreExecution_Remote:
+		out["remote"] = map[string]any{"url": safeText(d.Remote.GetUrl()), "credential_reference_id": d.Remote.GetCredentialReferenceId()}
+	case *agentv1.CoreExecution_Skill:
+		out["skill"] = map[string]any{"relative_path": d.Skill.GetRelativePath(), "digest": d.Skill.GetDigest(), "executable": d.Skill.GetExecutable(), "argv": append([]string(nil), d.Skill.GetArgv()...)}
+	}
+	return out
+}
+func inspectionMap(i *agentv1.CoreExtensionInspection) map[string]any {
+	if i == nil {
+		return nil
+	}
+	out := map[string]any{"candidate": candidateMap(i.GetCandidate()), "content_digest": i.GetContentDigest(), "manifest_digest": i.GetManifestDigest(), "execution_digest": i.GetExecutionDigest(), "network_schema_digest": i.GetNetworkSchemaDigest(), "secret_schema_digest": i.GetSecretSchemaDigest(), "execution": executionMap(i.GetExecution())}
+	ng := []any{}
+	for _, g := range i.GetNetworkGrants() {
+		if g != nil {
+			ng = append(ng, map[string]any{"scheme": g.GetScheme(), "host": g.GetHost(), "port": g.GetPort(), "path_prefix": g.GetPathPrefix(), "digest": g.GetDigest()})
+		}
+	}
+	out["network_grants"] = ng
+	sg := []any{}
+	for _, g := range i.GetSecretGrants() {
+		if g != nil {
+			sg = append(sg, map[string]any{"reference_id": g.GetReferenceId(), "purpose": enumName(g.GetPurpose().String()), "binding_digest": g.GetBindingDigest(), "configured": g.GetConfigured()})
+		}
+	}
+	out["secret_grants"] = sg
+	return out
+}
 
 func installationMap(item *agentv1.CoreInstallation) map[string]any {
 	if item == nil {
@@ -586,6 +622,9 @@ func taskTemplateFromParams(params map[string]any, key string) (*agentv1.CoreTas
 	m, ok := raw.(map[string]any)
 	if !ok {
 		return nil, actionbase.BadRequest(key + " must be an object")
+	}
+	if e := strictKeys(m, "goal", "conversation_id", "model_profile_id", "timeout_seconds"); e != nil {
+		return nil, e
 	}
 	goal, e := requiredString(m, "goal")
 	if e != nil {
@@ -1053,27 +1092,397 @@ func candidateFromParams(params map[string]any, key string, kind agentv1.CoreExt
 	if !ok {
 		return nil, actionbase.BadRequest(key + " must be an object")
 	}
+	if e := strictKeys(m, "id", "kind", "source", "name", "description", "pin", "transport"); e != nil {
+		return nil, e
+	}
 	id, e := requiredString(m, "id")
 	if e != nil {
 		return nil, e
 	}
-	name, e := optionalString(m, "name")
+	kindName, e := requiredString(m, "kind")
 	if e != nil {
 		return nil, e
 	}
-	description, e := optionalString(m, "description")
+	if parsed, valid := parseExtensionKind(kindName, kind); !valid || parsed != kind {
+		return nil, actionbase.BadRequest("candidate.kind is invalid")
+	}
+	name, e := requiredString(m, "name")
 	if e != nil {
 		return nil, e
 	}
-	sourceName, e := optionalEnum(m, "source")
+	descriptionRaw, present := m["description"]
+	if !present || descriptionRaw == nil {
+		return nil, actionbase.BadRequest("description is required")
+	}
+	description, ok := descriptionRaw.(string)
+	if !ok {
+		return nil, actionbase.BadRequest("description must be a string")
+	}
+	sourceName, e := requiredString(m, "source")
 	if e != nil {
 		return nil, e
 	}
 	source, valid := parseExtensionSource(sourceName)
-	if !valid {
+	if !valid || source == agentv1.CoreExtensionSource_CORE_EXTENSION_SOURCE_UNSPECIFIED {
 		return nil, actionbase.BadRequest("candidate.source is invalid")
 	}
-	return &agentv1.CoreExtensionCandidate{Id: id, Kind: kind, Source: source, Name: safeText(name), Description: safeText(description)}, nil
+	if (kind == agentv1.CoreExtensionKind_CORE_EXTENSION_KIND_MCP && source != agentv1.CoreExtensionSource_CORE_EXTENSION_SOURCE_OFFICIAL_REGISTRY && source != agentv1.CoreExtensionSource_CORE_EXTENSION_SOURCE_SMITHERY && source != agentv1.CoreExtensionSource_CORE_EXTENSION_SOURCE_GLAMA && source != agentv1.CoreExtensionSource_CORE_EXTENSION_SOURCE_GITHUB) ||
+		(kind == agentv1.CoreExtensionKind_CORE_EXTENSION_KIND_SKILL && source != agentv1.CoreExtensionSource_CORE_EXTENSION_SOURCE_SKILLS_SH && source != agentv1.CoreExtensionSource_CORE_EXTENSION_SOURCE_GITHUB) {
+		return nil, actionbase.BadRequest("candidate.source is incompatible with candidate.kind")
+	}
+	transportName, e := requiredString(m, "transport")
+	if e != nil {
+		return nil, e
+	}
+	transport := agentv1.CoreExtensionTransport_CORE_EXTENSION_TRANSPORT_UNSPECIFIED
+	switch transportName {
+	case "stdio-static", "stdio_static":
+		transport = agentv1.CoreExtensionTransport_CORE_EXTENSION_TRANSPORT_STDIO_STATIC
+	case "streamable-http", "streamable_http":
+		transport = agentv1.CoreExtensionTransport_CORE_EXTENSION_TRANSPORT_STREAMABLE_HTTP
+	case "skill-static", "skill_static":
+		transport = agentv1.CoreExtensionTransport_CORE_EXTENSION_TRANSPORT_SKILL_STATIC
+	default:
+		return nil, actionbase.BadRequest("candidate.transport is invalid")
+	}
+	if kind == agentv1.CoreExtensionKind_CORE_EXTENSION_KIND_MCP && transport != agentv1.CoreExtensionTransport_CORE_EXTENSION_TRANSPORT_STDIO_STATIC && transport != agentv1.CoreExtensionTransport_CORE_EXTENSION_TRANSPORT_STREAMABLE_HTTP {
+		return nil, actionbase.BadRequest("candidate.transport is incompatible with MCP")
+	}
+	if kind == agentv1.CoreExtensionKind_CORE_EXTENSION_KIND_SKILL && transport != agentv1.CoreExtensionTransport_CORE_EXTENSION_TRANSPORT_SKILL_STATIC {
+		return nil, actionbase.BadRequest("candidate.transport is incompatible with Skill")
+	}
+	rawPin, ok := m["pin"]
+	if !ok || rawPin == nil {
+		return nil, actionbase.BadRequest("candidate.pin is required")
+	}
+	pm, ok := rawPin.(map[string]any)
+	if !ok {
+		return nil, actionbase.BadRequest("candidate.pin must be object")
+	}
+	if e := strictKeys(pm, "registry_version", "registry_sha256", "git_commit", "git_sha256"); e != nil {
+		return nil, e
+	}
+	rv, e := optionalString(pm, "registry_version")
+	if e != nil {
+		return nil, e
+	}
+	rs, e := optionalString(pm, "registry_sha256")
+	if e != nil {
+		return nil, e
+	}
+	gc, e := optionalString(pm, "git_commit")
+	if e != nil {
+		return nil, e
+	}
+	gs, e := optionalString(pm, "git_sha256")
+	if e != nil {
+		return nil, e
+	}
+	registryPin := rv != "" || rs != ""
+	gitPin := gc != "" || gs != ""
+	if registryPin == gitPin {
+		return nil, actionbase.BadRequest("candidate.pin must contain exactly one pin type")
+	}
+	if source == agentv1.CoreExtensionSource_CORE_EXTENSION_SOURCE_GITHUB {
+		if registryPin || !validGitCommit(gc) || !validLowerDigest(gs) {
+			return nil, actionbase.BadRequest("candidate.pin must be an exact git pin")
+		}
+	} else if gitPin || !registryPin || strings.TrimSpace(rv) == "" || strings.EqualFold(rv, "latest") || !validLowerDigest(rs) {
+		return nil, actionbase.BadRequest("candidate.pin must be an exact registry pin")
+	}
+	pin := &agentv1.CoreSourcePin{RegistryVersion: rv, RegistrySha256: rs, GitCommit: gc, GitSha256: gs}
+	return &agentv1.CoreExtensionCandidate{Id: id, Kind: kind, Source: source, Name: safeText(name), Description: safeText(description), Transport: transport, Pin: pin}, nil
+}
+
+// These match Agent Core's immutable SourcePin.Validate contract. The server
+// boundary deliberately does not normalize pins: a reviewed pin is exact data.
+func validLowerDigest(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	for _, r := range value {
+		if !(r >= '0' && r <= '9') && !(r >= 'a' && r <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func validGitCommit(value string) bool {
+	if len(value) != 40 {
+		return false
+	}
+	for _, r := range value {
+		if !(r >= '0' && r <= '9') && !(r >= 'a' && r <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func inspectionFromParams(params map[string]any, key string, kind agentv1.CoreExtensionKind, candidate *agentv1.CoreExtensionCandidate) (*agentv1.CoreExtensionInspection, *actionbase.Error) {
+	raw, ok := params[key]
+	if !ok {
+		return nil, actionbase.BadRequest(key + " is required")
+	}
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return nil, actionbase.BadRequest(key + " must be object")
+	}
+	if e := strictKeys(m, "candidate", "content_digest", "manifest_digest", "execution_digest", "network_schema_digest", "secret_schema_digest", "execution", "network_grants", "secret_grants"); e != nil {
+		return nil, e
+	}
+	cm, ok := m["candidate"].(map[string]any)
+	if !ok {
+		return nil, actionbase.BadRequest("inspection.candidate is required")
+	}
+	tmp := map[string]any{"candidate": cm}
+	cc, e := candidateFromParams(tmp, "candidate", kind)
+	if e != nil {
+		return nil, e
+	}
+	if cc.GetId() != candidate.GetId() || cc.GetKind() != candidate.GetKind() || cc.GetSource() != candidate.GetSource() || cc.GetName() != candidate.GetName() || cc.GetDescription() != candidate.GetDescription() || cc.GetTransport() != candidate.GetTransport() {
+		return nil, actionbase.BadRequest("inspection.candidate does not match candidate")
+	}
+	if (cc.GetPin() == nil) != (candidate.GetPin() == nil) || (cc.GetPin() != nil && (cc.GetPin().GetRegistryVersion() != candidate.GetPin().GetRegistryVersion() || cc.GetPin().GetRegistrySha256() != candidate.GetPin().GetRegistrySha256() || cc.GetPin().GetGitCommit() != candidate.GetPin().GetGitCommit() || cc.GetPin().GetGitSha256() != candidate.GetPin().GetGitSha256())) {
+		return nil, actionbase.BadRequest("inspection.candidate pin mismatch")
+	}
+	get := func(k string) (string, *actionbase.Error) { return requiredString(m, k) }
+	cd, e := get("content_digest")
+	if e != nil {
+		return nil, e
+	}
+	md, e := get("manifest_digest")
+	if e != nil {
+		return nil, e
+	}
+	ed, e := get("execution_digest")
+	if e != nil {
+		return nil, e
+	}
+	nd, e := get("network_schema_digest")
+	if e != nil {
+		return nil, e
+	}
+	sd, e := get("secret_schema_digest")
+	if e != nil {
+		return nil, e
+	}
+	if !validLowerDigest(cd) || !validLowerDigest(md) || !validLowerDigest(ed) || !validLowerDigest(nd) || !validLowerDigest(sd) {
+		return nil, actionbase.BadRequest("inspection digest is invalid")
+	}
+	ins := &agentv1.CoreExtensionInspection{Candidate: candidate, ContentDigest: cd, ManifestDigest: md, ExecutionDigest: ed, NetworkSchemaDigest: nd, SecretSchemaDigest: sd}
+	if raw, ok := m["network_grants"]; ok && raw != nil {
+		arr, ok := raw.([]any)
+		if !ok {
+			return nil, actionbase.BadRequest("network_grants must be array")
+		}
+		for _, x := range arr {
+			gm, ok := x.(map[string]any)
+			if !ok {
+				return nil, actionbase.BadRequest("network_grants item must object")
+			}
+			if e := strictKeys(gm, "scheme", "host", "port", "path_prefix", "digest"); e != nil {
+				return nil, e
+			}
+			sch, e := requiredString(gm, "scheme")
+			if e != nil {
+				return nil, e
+			}
+			host, e := requiredString(gm, "host")
+			if e != nil {
+				return nil, e
+			}
+			dig, e := requiredString(gm, "digest")
+			if e != nil || !validLowerDigest(dig) {
+				return nil, actionbase.BadRequest("network grant digest invalid")
+			}
+			port, e := optionalInt64(gm, "port")
+			if e != nil {
+				return nil, e
+			}
+			if port < 1 || port > 65535 {
+				return nil, actionbase.BadRequest("port is invalid")
+			}
+			path, e := optionalString(gm, "path_prefix")
+			if e != nil {
+				return nil, e
+			}
+			ins.NetworkGrants = append(ins.NetworkGrants, &agentv1.CoreNetworkGrant{Scheme: sch, Host: host, Port: uint32(port), PathPrefix: path, Digest: dig})
+		}
+	} else {
+		return nil, actionbase.BadRequest("network_grants is required")
+	}
+	if raw, ok := m["secret_grants"]; ok && raw != nil {
+		arr, ok := raw.([]any)
+		if !ok {
+			return nil, actionbase.BadRequest("secret_grants must be array")
+		}
+		for _, x := range arr {
+			gm, ok := x.(map[string]any)
+			if !ok {
+				return nil, actionbase.BadRequest("secret_grants item must object")
+			}
+			if e := strictKeys(gm, "reference_id", "purpose", "binding_digest", "configured"); e != nil {
+				return nil, e
+			}
+			ref, e := requiredString(gm, "reference_id")
+			if e != nil {
+				return nil, e
+			}
+			pur, e := optionalEnum(gm, "purpose")
+			if e != nil {
+				return nil, e
+			}
+			var p agentv1.CoreSecretPurpose
+			switch pur {
+			case "mcp-credential", "mcp_credential":
+				p = agentv1.CoreSecretPurpose_CORE_SECRET_PURPOSE_MCP_CREDENTIAL
+			case "skill-secret", "skill_secret":
+				p = agentv1.CoreSecretPurpose_CORE_SECRET_PURPOSE_SKILL_SECRET
+			default:
+				return nil, actionbase.BadRequest("secret grant purpose invalid")
+			}
+			bd, e := requiredString(gm, "binding_digest")
+			if e != nil || !validLowerDigest(bd) {
+				return nil, actionbase.BadRequest("secret grant digest invalid")
+			}
+			cfg, e := boolParam(gm, "configured")
+			if e != nil {
+				return nil, e
+			}
+			ins.SecretGrants = append(ins.SecretGrants, &agentv1.CoreExtensionSecretGrantDescriptor{ReferenceId: ref, Purpose: p, BindingDigest: bd, Configured: cfg})
+		}
+	} else {
+		return nil, actionbase.BadRequest("secret_grants is required")
+	}
+	rawExecution, ok := m["execution"]
+	if !ok || rawExecution == nil {
+		return nil, actionbase.BadRequest("execution is required")
+	}
+	em, ok := rawExecution.(map[string]any)
+	if !ok {
+		return nil, actionbase.BadRequest("execution must be object")
+	}
+	if e := strictKeys(em, "stdio", "remote", "skill"); e != nil {
+		return nil, e
+	}
+	present := 0
+	for _, name := range []string{"stdio", "remote", "skill"} {
+		if _, exists := em[name]; exists {
+			present++
+		}
+	}
+	if present != 1 {
+		return nil, actionbase.BadRequest("execution must contain exactly one descriptor")
+	}
+	if raw, exists := em["stdio"]; exists {
+		sm, ok := raw.(map[string]any)
+		if !ok {
+			return nil, actionbase.BadRequest("execution.stdio must be object")
+		}
+		if e := strictKeys(sm, "relative_path", "digest", "argv"); e != nil {
+			return nil, e
+		}
+		rp, e := requiredString(sm, "relative_path")
+		if e != nil {
+			return nil, e
+		}
+		dg, e := requiredString(sm, "digest")
+		if e != nil || !validLowerDigest(dg) {
+			return nil, actionbase.BadRequest("execution digest invalid")
+		}
+		argv := []string{}
+		if raw, ok := sm["argv"]; ok {
+			arr, ok := raw.([]any)
+			if !ok {
+				if ss, ok2 := raw.([]string); ok2 {
+					argv = append(argv, ss...)
+					arr = nil
+				} else {
+					return nil, actionbase.BadRequest("argv must be array")
+				}
+			}
+			for _, x := range arr {
+				s, ok := x.(string)
+				if !ok {
+					return nil, actionbase.BadRequest("argv item must string")
+				}
+				argv = append(argv, s)
+			}
+		}
+		ins.Execution = &agentv1.CoreExecution{Descriptor_: &agentv1.CoreExecution_Stdio{Stdio: &agentv1.CoreStaticEntry{RelativePath: rp, Digest: dg, Argv: argv}}}
+	}
+	if raw, exists := em["remote"]; exists {
+		rm, ok := raw.(map[string]any)
+		if !ok {
+			return nil, actionbase.BadRequest("execution.remote must be object")
+		}
+		if e := strictKeys(rm, "url", "credential_reference_id"); e != nil {
+			return nil, e
+		}
+		url, e := requiredString(rm, "url")
+		if e != nil {
+			return nil, e
+		}
+		cr, e := optionalString(rm, "credential_reference_id")
+		if e != nil {
+			return nil, e
+		}
+		ins.Execution = &agentv1.CoreExecution{Descriptor_: &agentv1.CoreExecution_Remote{Remote: &agentv1.CoreRemoteEndpoint{Url: url, CredentialReferenceId: cr}}}
+	}
+	if raw, exists := em["skill"]; exists {
+		km, ok := raw.(map[string]any)
+		if !ok {
+			return nil, actionbase.BadRequest("execution.skill must be object")
+		}
+		if e := strictKeys(km, "relative_path", "digest", "executable", "argv"); e != nil {
+			return nil, e
+		}
+		rp, e := requiredString(km, "relative_path")
+		if e != nil {
+			return nil, e
+		}
+		dg, e := requiredString(km, "digest")
+		if e != nil || !validLowerDigest(dg) {
+			return nil, actionbase.BadRequest("execution digest invalid")
+		}
+		ex, e := boolParam(km, "executable")
+		if e != nil {
+			return nil, e
+		}
+		argv := []string{}
+		if raw, ok := km["argv"]; ok {
+			arr, ok := raw.([]any)
+			if !ok {
+				if ss, ok2 := raw.([]string); ok2 {
+					argv = append(argv, ss...)
+					arr = nil
+				} else {
+					return nil, actionbase.BadRequest("argv must be array")
+				}
+			}
+			for _, x := range arr {
+				s, ok := x.(string)
+				if !ok {
+					return nil, actionbase.BadRequest("argv item must string")
+				}
+				argv = append(argv, s)
+			}
+		}
+		ins.Execution = &agentv1.CoreExecution{Descriptor_: &agentv1.CoreExecution_Skill{Skill: &agentv1.CoreSkillEntry{RelativePath: rp, Digest: dg, Executable: ex, Argv: argv}}}
+	}
+	if kind == agentv1.CoreExtensionKind_CORE_EXTENSION_KIND_MCP {
+		if candidate.GetTransport() == agentv1.CoreExtensionTransport_CORE_EXTENSION_TRANSPORT_STDIO_STATIC && ins.Execution.GetStdio() == nil {
+			return nil, actionbase.BadRequest("MCP stdio transport requires stdio execution")
+		}
+		if candidate.GetTransport() == agentv1.CoreExtensionTransport_CORE_EXTENSION_TRANSPORT_STREAMABLE_HTTP && ins.Execution.GetRemote() == nil {
+			return nil, actionbase.BadRequest("MCP HTTP transport requires remote execution")
+		}
+	} else if kind == agentv1.CoreExtensionKind_CORE_EXTENSION_KIND_SKILL && ins.Execution.GetSkill() == nil {
+		return nil, actionbase.BadRequest("Skill transport requires skill execution")
+	}
+	return ins, nil
 }
 
 func secretInputsFromParams(params map[string]any, key string) ([]*agentv1.CoreExtensionSecretInput, *actionbase.Error) {
@@ -1091,6 +1500,9 @@ func secretInputsFromParams(params map[string]any, key string) ([]*agentv1.CoreE
 		if !ok {
 			return nil, actionbase.BadRequest(key + " must contain objects")
 		}
+		if e := strictKeys(m, "reference_id", "purpose", "secret_value"); e != nil {
+			return nil, e
+		}
 		ref, e := requiredString(m, "reference_id")
 		if e != nil {
 			return nil, e
@@ -1099,9 +1511,16 @@ func secretInputsFromParams(params map[string]any, key string) ([]*agentv1.CoreE
 		if e != nil {
 			return nil, e
 		}
-		value, e := requiredString(m, "secret_value")
-		if e != nil {
-			return nil, e
+		secretRaw, present := m["secret_value"]
+		if !present || secretRaw == nil {
+			return nil, actionbase.BadRequest("secret_value is required")
+		}
+		value, ok := secretRaw.(string)
+		if !ok {
+			return nil, actionbase.BadRequest("secret_value must be a string")
+		}
+		if len(value) == 0 {
+			return nil, actionbase.BadRequest("secret_value is required")
 		}
 		var p agentv1.CoreSecretPurpose
 		switch purpose {
@@ -1118,7 +1537,54 @@ func secretInputsFromParams(params map[string]any, key string) ([]*agentv1.CoreE
 }
 
 func (c *Client) extensionHandlers(kind agentv1.CoreExtensionKind, prefix string) map[string]actionbase.Handler {
-	return map[string]actionbase.Handler{"agent.core." + prefix + ".discover": c.extensionDiscover(kind), "agent.core." + prefix + ".get": c.extensionGet(kind), "agent.core." + prefix + ".list": c.extensionList(kind), "agent.core." + prefix + ".install": c.extensionInstall(kind), "agent.core." + prefix + ".update": c.extensionUpdate(kind), "agent.core." + prefix + ".remove": c.extensionRemove(kind), "agent.core." + prefix + ".execute": c.extensionExecute(kind)}
+	return map[string]actionbase.Handler{"agent.core." + prefix + ".discover": c.extensionDiscover(kind), "agent.core." + prefix + ".get": c.extensionGet(kind), "agent.core." + prefix + ".list": c.extensionList(kind), "agent.core." + prefix + ".inspect": c.extensionInspect(kind), "agent.core." + prefix + ".install": c.extensionInstall(kind), "agent.core." + prefix + ".update": c.extensionUpdate(kind), "agent.core." + prefix + ".remove": c.extensionRemove(kind), "agent.core." + prefix + ".execute": c.extensionExecute(kind)}
+}
+
+func (c *Client) extensionInspect(kind agentv1.CoreExtensionKind) actionbase.Handler {
+	return func(ctx context.Context, p map[string]any) (any, *actionbase.Error) {
+		capability := "mcp"
+		if kind == agentv1.CoreExtensionKind_CORE_EXTENSION_KIND_SKILL {
+			capability = "skill"
+		}
+		if e := c.capability(ctx, capability); e != nil {
+			return nil, e
+		}
+		if e := strictKeys(p, "candidate"); e != nil {
+			return nil, e
+		}
+		candidate, e := candidateFromParams(p, "candidate", kind)
+		if e != nil {
+			return nil, e
+		}
+		id := candidate.GetId()
+		source := candidate.GetSource()
+		var out *agentv1.CoreExtensionInspection
+		err := c.controlPlaneUnary(ctx, func(cc context.Context, conn *grpc.ClientConn) error {
+			if kind == agentv1.CoreExtensionKind_CORE_EXTENSION_KIND_MCP {
+				r, er := agentv1.NewMCPServiceClient(conn).Inspect(cc, &agentv1.MCPServiceInspectRequest{Kind: kind, Source: source, Id: id, Pin: candidate.Pin})
+				if er == nil {
+					out = r.GetInspection()
+				}
+				return er
+			}
+			r, er := agentv1.NewSkillServiceClient(conn).Inspect(cc, &agentv1.SkillServiceInspectRequest{Kind: kind, Source: source, Id: id, Pin: candidate.Pin})
+			if er == nil {
+				out = r.GetInspection()
+			}
+			return er
+		})
+		if err != nil {
+			return nil, c.controlActionError(err, "extension inspection")
+		}
+		if out == nil || out.GetCandidate() == nil {
+			return nil, upstreamInvalid("extension inspection")
+		}
+		got := out.GetCandidate()
+		if got.GetId() != candidate.GetId() || got.GetKind() != candidate.GetKind() || got.GetSource() != candidate.GetSource() || got.GetTransport() != candidate.GetTransport() || got.GetName() != candidate.GetName() || got.GetDescription() != candidate.GetDescription() || (got.GetPin() == nil) != (candidate.GetPin() == nil) || (got.GetPin() != nil && (got.GetPin().GetRegistryVersion() != candidate.GetPin().GetRegistryVersion() || got.GetPin().GetRegistrySha256() != candidate.GetPin().GetRegistrySha256() || got.GetPin().GetGitCommit() != candidate.GetPin().GetGitCommit() || got.GetPin().GetGitSha256() != candidate.GetPin().GetGitSha256())) {
+			return nil, upstreamInvalid("extension inspection")
+		}
+		return map[string]any{"inspection": inspectionMap(out)}, nil
+	}
 }
 
 func (c *Client) extensionDiscover(kind agentv1.CoreExtensionKind) actionbase.Handler {
@@ -1282,6 +1748,13 @@ func (c *Client) extensionInstall(kind agentv1.CoreExtensionKind) actionbase.Han
 		if e != nil {
 			return nil, e
 		}
+		if _, ok := params["inspection"]; !ok {
+			return nil, actionbase.BadRequest("inspection is required")
+		}
+		inspection, e := inspectionFromParams(params, "inspection", kind, candidate)
+		if e != nil {
+			return nil, e
+		}
 		secrets, e := secretInputsFromParams(params, "secret_inputs")
 		if e != nil {
 			return nil, e
@@ -1290,14 +1763,14 @@ func (c *Client) extensionInstall(kind agentv1.CoreExtensionKind) actionbase.Han
 		var confirmationID, taskID string
 		err := c.controlPlaneUnary(ctx, func(callCtx context.Context, conn *grpc.ClientConn) error {
 			if kind == agentv1.CoreExtensionKind_CORE_EXTENSION_KIND_MCP {
-				response, err := agentv1.NewMCPServiceClient(conn).RequestInstall(callCtx, &agentv1.MCPServiceRequestInstallRequest{IdempotencyKey: idem, Candidate: candidate, SecretInputs: secrets})
+				response, err := agentv1.NewMCPServiceClient(conn).RequestInstall(callCtx, &agentv1.MCPServiceRequestInstallRequest{IdempotencyKey: idem, Candidate: candidate, Inspection: inspection, SecretInputs: secrets})
 				if err != nil {
 					return err
 				}
 				installation, confirmationID, taskID = response.GetInstallation(), response.GetConfirmationId(), response.GetTaskId()
 				return nil
 			}
-			response, err := agentv1.NewSkillServiceClient(conn).RequestInstall(callCtx, &agentv1.SkillServiceRequestInstallRequest{IdempotencyKey: idem, Candidate: candidate, SecretInputs: secrets})
+			response, err := agentv1.NewSkillServiceClient(conn).RequestInstall(callCtx, &agentv1.SkillServiceRequestInstallRequest{IdempotencyKey: idem, Candidate: candidate, Inspection: inspection, SecretInputs: secrets})
 			if err != nil {
 				return err
 			}
@@ -1336,6 +1809,10 @@ func (c *Client) extensionUpdate(kind agentv1.CoreExtensionKind) actionbase.Hand
 		if e != nil {
 			return nil, e
 		}
+		inspection, e := inspectionFromParams(params, "inspection", kind, candidate)
+		if e != nil {
+			return nil, e
+		}
 		secrets, e := secretInputsFromParams(params, "secret_inputs")
 		if e != nil {
 			return nil, e
@@ -1344,7 +1821,7 @@ func (c *Client) extensionUpdate(kind agentv1.CoreExtensionKind) actionbase.Hand
 		var confirmationID, taskID string
 		err := c.controlPlaneUnary(ctx, func(callCtx context.Context, conn *grpc.ClientConn) error {
 			if kind == agentv1.CoreExtensionKind_CORE_EXTENSION_KIND_MCP {
-				mutation := &agentv1.MCPServiceRequestInstallRequest{IdempotencyKey: idem, InstallationId: id, ExpectedRevision: revision, Candidate: candidate, SecretInputs: secrets}
+				mutation := &agentv1.MCPServiceRequestInstallRequest{IdempotencyKey: idem, InstallationId: id, ExpectedRevision: revision, Candidate: candidate, Inspection: inspection, SecretInputs: secrets}
 				response, err := agentv1.NewMCPServiceClient(conn).RequestUpdate(callCtx, &agentv1.MCPServiceRequestUpdateRequest{Mutation: mutation})
 				if err != nil {
 					return err
@@ -1352,7 +1829,7 @@ func (c *Client) extensionUpdate(kind agentv1.CoreExtensionKind) actionbase.Hand
 				installation, confirmationID, taskID = response.GetInstallation(), response.GetConfirmationId(), response.GetTaskId()
 				return nil
 			}
-			mutation := &agentv1.SkillServiceRequestInstallRequest{IdempotencyKey: idem, InstallationId: id, ExpectedRevision: revision, Candidate: candidate, SecretInputs: secrets}
+			mutation := &agentv1.SkillServiceRequestInstallRequest{IdempotencyKey: idem, InstallationId: id, ExpectedRevision: revision, Candidate: candidate, Inspection: inspection, SecretInputs: secrets}
 			response, err := agentv1.NewSkillServiceClient(conn).RequestUpdate(callCtx, &agentv1.SkillServiceRequestUpdateRequest{Mutation: mutation})
 			if err != nil {
 				return err
