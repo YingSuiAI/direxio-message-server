@@ -13,6 +13,7 @@ import (
 	actionbase "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/action"
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentturns"
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/nativeagent"
+	"github.com/YingSuiAI/dirextalk-message-server/p2p/storage"
 )
 
 // Runner is the stable Native Agent runtime boundary exposed by p2p.Config.
@@ -24,40 +25,44 @@ type Runner interface {
 
 // Config contains the runtime dependencies owned outside the Agent module.
 type Config struct {
-	Runner  Runner
-	DataDir string
-	Store   nativeagent.ConfigStore
-	MCP     *dirextalkmcp.Service
-	Account AccountPort
-	Turns   agentturns.Store
-	OwnerID func() string
+	Runner               Runner
+	DataDir              string
+	Store                nativeagent.ConfigStore
+	MCP                  *dirextalkmcp.Service
+	Account              AccountPort
+	Turns                agentturns.Store
+	OwnerID              func() string
+	ModelProfiles        storage.ModelProfileStore
+	ModelProfileResolver nativeagent.ModelProfileResolver
 }
 
 // Module owns runtime-backed ProductCore actions and streaming invocation.
 type Module struct {
-	runner  Runner
-	account AccountPort
-	turns   *agentturns.Coordinator
-	turnErr error
-	ownerID func() string
+	runner        Runner
+	account       AccountPort
+	turns         *agentturns.Coordinator
+	turnErr       error
+	ownerID       func() string
+	modelProfiles storage.ModelProfileStore
 }
 
 func New(cfg Config) *Module {
 	runner := cfg.Runner
 	if runner == nil {
 		runner = runtimeRunner{runtime: nativeagent.New(nativeagent.Config{
-			DataDir: cfg.DataDir,
-			Store:   cfg.Store,
-			Tools:   Tools(cfg.MCP),
+			DataDir:       cfg.DataDir,
+			Store:         cfg.Store,
+			Tools:         Tools(cfg.MCP),
+			ModelProfiles: cfg.ModelProfileResolver,
 		})}
 	}
 	turns, turnErr := agentturns.NewCoordinator(context.Background(), cfg.Turns)
-	return &Module{runner: runner, account: cfg.Account, turns: turns, turnErr: turnErr, ownerID: cfg.OwnerID}
+	return &Module{runner: runner, account: cfg.Account, turns: turns, turnErr: turnErr, ownerID: cfg.OwnerID, modelProfiles: cfg.ModelProfiles}
 }
 
 // Handlers returns the complete Agent ProductCore action surface.
 func (m *Module) Handlers() map[string]actionbase.Handler {
-	handlers := make(map[string]actionbase.Handler, len(runtimeActions)+7)
+	handlers := make(map[string]actionbase.Handler, len(runtimeActions)+11)
 	for _, action := range runtimeActions {
 		handlers[action] = m.invoke(action)
 	}
@@ -68,6 +73,10 @@ func (m *Module) Handlers() map[string]actionbase.Handler {
 	handlers["agent.chat.stream"] = streamOnly
 	handlers["agent.chat.turn.stop"] = m.stopTurn
 	handlers["agent.chat.turns.list"] = m.listTurns
+	handlers["agent.model_profiles.sync"] = m.modelProfileSync
+	handlers["agent.model_profiles.list"] = m.modelProfileList
+	handlers["agent.model_profiles.get"] = m.modelProfileGet
+	handlers["agent.model_profiles.delete"] = m.modelProfileDelete
 	return handlers
 }
 
@@ -93,21 +102,85 @@ func (m *Module) DurableStream(ctx context.Context, ownerID, action string, para
 	}
 	turnID := actionbase.String(params["turn_id"])
 	conversationID := nativeagent.ConversationID(params)
+	profileID := durableServerModelProfileID(params)
+	var pinnedRevision, pinnedCredential int64
+	if profileID != "" && turnID != "" {
+		if existing, ok, getErr := m.turns.Get(context.Background(), ownerID, turnID); getErr == nil && ok && existing.ModelProfileID == profileID {
+			pinnedRevision, pinnedCredential = existing.ModelProfileRevision, existing.CredentialVersion
+		}
+	}
+	if profileID != "" && (pinnedRevision <= 0 || pinnedCredential <= 0) {
+		if m.modelProfiles == nil {
+			return fmt.Errorf("server model profiles are unavailable")
+		}
+		profile, resolveErr := m.modelProfiles.ResolveModelProfile(ctx, strings.TrimSpace(ownerID), profileID)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		pinnedRevision, pinnedCredential = profile.Revision, profile.CredentialVersion
+	}
 	digest, err := agentturns.RequestDigest(action, params)
 	if err != nil {
 		return err
 	}
 	request := agentturns.Request{
 		OwnerID: strings.TrimSpace(ownerID), TurnID: turnID, ConversationID: conversationID,
-		Action: strings.TrimSpace(action), Digest: digest, AfterSeq: actionbase.Int64(params["after_seq"]),
+		Action: strings.TrimSpace(action), ModelProfileID: profileID, ModelProfileRevision: pinnedRevision,
+		CredentialVersion: pinnedCredential, Digest: digest, AfterSeq: actionbase.Int64(params["after_seq"]),
 	}
-	runParams := cloneMap(params)
-	delete(runParams, "after_seq")
 	return m.turns.Stream(ctx, request, func(runCtx context.Context, runtimeEmit func(agentturns.RuntimeEvent) error) error {
+		runParams := cloneMap(params)
+		delete(runParams, "after_seq")
+		if request.ModelProfileID != "" {
+			if m.modelProfiles == nil {
+				return fmt.Errorf("server model profiles are unavailable")
+			}
+			profile, resolveErr := m.modelProfiles.ResolveModelProfilePinned(runCtx, request.OwnerID, request.ModelProfileID, request.ModelProfileRevision, request.CredentialVersion)
+			if resolveErr != nil {
+				return resolveErr
+			}
+			runParams["model_profile"] = durableModelProfileParams(profile)
+			delete(runParams, "model_profile_id")
+			delete(runParams, "client_model_profile_id")
+		}
 		return m.runner.Stream(runCtx, request.Action, runParams, func(event nativeagent.Event) error {
 			return runtimeEmit(agentturns.RuntimeEvent{Event: event.Event, Data: event.Data})
 		})
 	}, emit)
+}
+
+func durableServerModelProfileID(params map[string]any) string {
+	if _, inline := params["model_profile"]; inline {
+		return ""
+	}
+	serverID := actionbase.String(params["model_profile_id"])
+	legacyID := actionbase.String(params["client_model_profile_id"])
+	if serverID != "" && legacyID == "" {
+		return serverID
+	}
+	if serverID == "" {
+		return legacyID
+	}
+	if serverID == legacyID {
+		return serverID
+	}
+	return ""
+}
+
+func durableModelProfileParams(profile storage.ModelProfile) map[string]any {
+	params := map[string]any{
+		"provider": profile.Provider, "base_url": profile.BaseURL, "model": profile.Model,
+		"system_prompt": profile.SystemPrompt, "api_key": profile.APIKey,
+		"max_output_tokens": profile.MaxOutputTokens, "context_window": profile.ContextWindow,
+		"reasoning_mode": profile.ReasoningEffort,
+	}
+	if profile.Temperature != nil {
+		params["temperature"] = *profile.Temperature
+	}
+	if profile.TopP != nil {
+		params["top_p"] = *profile.TopP
+	}
+	return params
 }
 
 func (m *Module) stopTurn(ctx context.Context, params map[string]any) (any, *actionbase.Error) {

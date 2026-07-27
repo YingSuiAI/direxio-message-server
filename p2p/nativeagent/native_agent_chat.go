@@ -19,7 +19,10 @@ func (r *Runtime) chat(ctx context.Context, params map[string]any) (map[string]a
 	if err != nil {
 		return nil, err
 	}
-	profile := r.resolveModelProfile(params)
+	profile, err := r.resolveModelProfileForRequest(ctx, params)
+	if err != nil {
+		return nil, err
+	}
 	if err := validateModelProfile(profile); err != nil {
 		return nil, err
 	}

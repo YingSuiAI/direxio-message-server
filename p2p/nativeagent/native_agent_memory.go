@@ -35,6 +35,7 @@ func (r *Runtime) prepareEinoRun(ctx context.Context, config map[string]any, par
 	}
 	requestMessages := requestEinoMessages(params)
 	systemPrompt := r.agentSystemPrompt(ctx, config, params, "")
+	systemPrompt = appendPromptBlock(systemPrompt, profile.SystemPrompt)
 	if run.memoryDisabled || run.conversationID == "" {
 		run.inputMessages = requestMessages
 		run.memoryMessages = memoryMessagesFromRequest(params, requestMessages)

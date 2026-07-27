@@ -61,16 +61,17 @@ var SupportedModelProviders = []string{"openai_compatible", "anthropic", "gemini
 // and retained only by the adapter; they are not serializable ProductCore
 // state.
 type Config struct {
-	Enabled            bool
-	Address            string
-	ServerName         string
-	CAFile             string
-	TokenFile          string
-	ExpectedInstanceID string
-	ConnectTimeout     time.Duration
-	UnaryTimeout       time.Duration
-	StreamIdleTimeout  time.Duration
-	ProbeTimeout       time.Duration
+	Enabled                    bool
+	Address                    string
+	ServerName                 string
+	CAFile                     string
+	TokenFile                  string
+	ExpectedInstanceID         string
+	ConnectTimeout             time.Duration
+	UnaryTimeout               time.Duration
+	StreamIdleTimeout          time.Duration
+	ProbeTimeout               time.Duration
+	EmbeddedModelProfilesReady func() bool
 }
 
 func (c Config) withDefaults() Config {
@@ -932,8 +933,12 @@ func (c *Client) Handlers() map[string]actionbase.Handler {
 func (c *Client) backendsGet(ctx context.Context, _ map[string]any) (any, *actionbase.Error) {
 	_ = c.Probe(ctx)
 	core := c.Snapshot()
+	embeddedCapabilities := []string{"chat", "models.query", "bundled_tools"}
+	if c.cfg.EmbeddedModelProfilesReady != nil && c.cfg.EmbeddedModelProfilesReady() {
+		embeddedCapabilities = append(embeddedCapabilities, "model_profiles.server")
+	}
 	return map[string]any{
-		"embedded": map[string]any{"available": true, "capabilities": []string{"chat", "models.query", "bundled_tools"}},
+		"embedded": map[string]any{"available": true, "capabilities": embeddedCapabilities},
 		"core":     snapshotMap(core),
 	}, nil
 }

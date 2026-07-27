@@ -1,6 +1,7 @@
 package nativeagent
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"strconv"
@@ -12,6 +13,7 @@ type nativeModelProfile struct {
 	Model           string
 	BaseURL         string
 	APIKey          string
+	SystemPrompt    string
 	Temperature     *float64
 	TopP            *float64
 	MaxOutputTokens int
@@ -26,12 +28,52 @@ func (r *Runtime) resolveModelProfile(params map[string]any) nativeModelProfile 
 		Model:           pluginConfigString(raw, "model"),
 		BaseURL:         strings.TrimRight(pluginConfigString(raw, "base_url"), "/"),
 		APIKey:          trimString(raw["api_key"]),
+		SystemPrompt:    pluginConfigString(raw, "system_prompt"),
 		Temperature:     optionalFloat(raw["temperature"]),
 		TopP:            optionalFloat(raw["top_p"]),
 		MaxOutputTokens: int(int64Param(raw["max_output_tokens"])),
 		ContextWindow:   int(int64Param(raw["context_window"])),
 		ReasoningMode:   normalizedReasoningMode(raw["reasoning_mode"]),
 	}
+}
+
+func (r *Runtime) resolveModelProfileForRequest(ctx context.Context, params map[string]any) (nativeModelProfile, error) {
+	// During the rolling upgrade window old Flutter sends the client-local
+	// model_profile_id together with the complete inline profile and key. The
+	// inline shape remains authoritative until that client path is retired.
+	if _, present := params["model_profile"]; present {
+		return r.resolveModelProfile(params), nil
+	}
+	serverID := trimString(params["model_profile_id"])
+	legacyID := trimString(params["client_model_profile_id"])
+	if serverID != "" && legacyID != "" && serverID != legacyID {
+		return nativeModelProfile{}, errors.New("model_profile_id and client_model_profile_id are ambiguous")
+	}
+	if serverID == "" {
+		serverID = legacyID
+	}
+	if serverID == "" {
+		return r.resolveModelProfile(params), nil
+	}
+	if r == nil || r.modelProfiles == nil {
+		return nativeModelProfile{}, errors.New("server model profiles are unavailable")
+	}
+	profile, err := r.modelProfiles.ResolveModelProfile(ctx, serverID)
+	if err != nil {
+		return nativeModelProfile{}, err
+	}
+	return nativeModelProfile{
+		Provider:        strings.ToLower(strings.TrimSpace(profile.Provider)),
+		Model:           strings.TrimSpace(profile.Model),
+		BaseURL:         strings.TrimRight(strings.TrimSpace(profile.BaseURL), "/"),
+		APIKey:          profile.APIKey,
+		SystemPrompt:    strings.TrimSpace(profile.SystemPrompt),
+		Temperature:     profile.Temperature,
+		TopP:            profile.TopP,
+		MaxOutputTokens: profile.MaxOutputTokens,
+		ContextWindow:   profile.ContextWindow,
+		ReasoningMode:   normalizedReasoningMode(profile.ReasoningEffort),
+	}, nil
 }
 
 func validateModelProfile(profile nativeModelProfile) error {

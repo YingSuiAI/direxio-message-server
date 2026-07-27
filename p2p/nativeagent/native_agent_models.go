@@ -9,6 +9,14 @@ import (
 )
 
 func (r *Runtime) modelsList(ctx context.Context, params map[string]any) (map[string]any, error) {
+	if trimString(params["model_profile_id"]) != "" || trimString(params["client_model_profile_id"]) != "" {
+		profile, err := r.resolveModelProfileForRequest(ctx, params)
+		if err != nil {
+			return nil, err
+		}
+		params = cloneAnyMap(params)
+		params["provider"], params["base_url"], params["api_key"] = profile.Provider, profile.BaseURL, profile.APIKey
+	}
 	provider := strings.ToLower(trimString(params["provider"]))
 	result := map[string]any{
 		"models":    []map[string]any{},

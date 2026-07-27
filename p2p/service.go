@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -38,6 +40,7 @@ import (
 	releasemodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/release"
 	reportsmodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/reports"
 	socialmodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/social"
+	"github.com/YingSuiAI/dirextalk-message-server/p2p/nativeagent"
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/serviceapi"
 	p2pstorage "github.com/YingSuiAI/dirextalk-message-server/p2p/storage"
 	"github.com/matrix-org/gomatrixserverlib/spec"
@@ -55,6 +58,7 @@ type Config struct {
 	PluginRunner                    PluginRunner
 	NativeAgentRunner               NativeAgentRunner
 	NativeAgentDataDir              string
+	ModelProfileKeyFile             string
 	AgentCore                       AgentCoreConfig
 	ReleaseController               releasecontrol.Controller
 	CentralVersionSource            releasecontrol.CentralVersionSource
@@ -110,6 +114,8 @@ type Service struct {
 	agentCore                 *agentcoremodule.Client
 	coreTurns                 *coreturns.Ledger
 	agentCoreInitErr          error
+	modelProfiles             p2pstorage.ModelProfileStore
+	modelProfileInitErr       error
 	mcpModule                 *mcpmodule.Module
 	mcpCapabilities           *dirextalkmcp.Service
 	releaseController         releasecontrol.Controller
@@ -225,6 +231,9 @@ func NewServiceWithStoreAndTransport(ctx context.Context, cfg Config, store Stor
 	}
 	shouldPersist := !ok || !state.Initialized || strings.TrimSpace(state.Password) == "" || migratedAgentConfig
 	service := newService(cfg, store, transport, state, ok)
+	if service.modelProfileInitErr != nil {
+		return nil, service.modelProfileInitErr
+	}
 	if err := service.agentModule.ReadyError(); err != nil {
 		return nil, err
 	}
@@ -829,17 +838,42 @@ func newService(cfg Config, store Store, transport Transport, state portalState,
 		Now:                   time.Now,
 	})
 	service.mcpCapabilities = service.mcpModule.Service()
+	if profileStore, ok := store.(p2pstorage.ModelProfileStore); ok {
+		service.modelProfiles = profileStore
+	} else if dbStore, ok := store.(*p2pstorage.DatabaseStore); ok {
+		keyFile := strings.TrimSpace(cfg.ModelProfileKeyFile)
+		if keyFile == "" {
+			dataDir := strings.TrimSpace(cfg.NativeAgentDataDir)
+			if dataDir == "" {
+				dataDir = strings.TrimSpace(os.Getenv("P2P_NATIVE_AGENT_DATA_DIR"))
+			}
+			if dataDir == "" {
+				dataDir = "/var/dirextalk-message-server/agent"
+			}
+			keyFile = filepath.Join(dataDir, "model-profile.master.key")
+		}
+		service.modelProfiles, service.modelProfileInitErr = p2pstorage.NewDatabaseModelProfileStore(context.Background(), dbStore, keyFile)
+	}
 	service.agentModule = agentmodule.New(agentmodule.Config{
-		Runner:  cfg.NativeAgentRunner,
-		DataDir: cfg.NativeAgentDataDir,
-		Store:   nativeAgentConfigStore{service: service},
-		MCP:     service.mcpCapabilities,
-		Account: serviceAgentAccountPort{service: service},
-		Turns:   service.store,
-		OwnerID: service.OwnerMXID,
+		Runner:        cfg.NativeAgentRunner,
+		DataDir:       cfg.NativeAgentDataDir,
+		Store:         nativeAgentConfigStore{service: service},
+		MCP:           service.mcpCapabilities,
+		Account:       serviceAgentAccountPort{service: service},
+		Turns:         service.store,
+		OwnerID:       service.OwnerMXID,
+		ModelProfiles: service.modelProfiles,
+		ModelProfileResolver: func() nativeagent.ModelProfileResolver {
+			if service.modelProfiles == nil {
+				return nil
+			}
+			return nativeModelProfileResolver{store: service.modelProfiles, owner: service.OwnerMXID}
+		}(),
 	})
 	// Agent Core config is deployment-owned and never persisted in portal state.
-	service.agentCore, service.agentCoreInitErr = agentcoremodule.New(cfg.AgentCore)
+	coreConfig := cfg.AgentCore
+	coreConfig.EmbeddedModelProfilesReady = func() bool { return service.modelProfiles != nil && service.modelProfiles.ModelProfileStoreReady() }
+	service.agentCore, service.agentCoreInitErr = agentcoremodule.New(coreConfig)
 	if service.agentCore == nil {
 		service.agentCore, _ = agentcoremodule.New(agentcoremodule.Config{})
 	}

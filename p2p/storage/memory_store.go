@@ -45,6 +45,12 @@ type MemoryStore struct {
 	legacyAgentInvocations           map[legacyAgentInvocationKey]legacygateway.InvocationRecord
 	legacyAgentInvocationEvents      map[string]legacyAgentInvocationKey
 	legacyAgentInvocationIdempotency map[legacyAgentIdempotencyKey]legacyAgentInvocationKey
+	modelProfiles                    map[string]ModelProfile
+	modelProfileRevisions            map[string]ModelProfile
+	modelProfileCredentials          map[string]map[int64]memoryModelProfileCredential
+	modelProfileDefaults             map[string]string
+	modelProfileDeletes              map[string]memoryModelProfileDelete
+	modelProfileSyncs                map[string]memoryModelProfileSync
 }
 
 // NewMemoryStore returns an empty, concurrency-safe store. It deliberately has
@@ -75,6 +81,12 @@ func NewMemoryStore() *MemoryStore {
 		legacyAgentInvocations:           make(map[legacyAgentInvocationKey]legacygateway.InvocationRecord),
 		legacyAgentInvocationEvents:      make(map[string]legacyAgentInvocationKey),
 		legacyAgentInvocationIdempotency: make(map[legacyAgentIdempotencyKey]legacyAgentInvocationKey),
+		modelProfiles:                    make(map[string]ModelProfile),
+		modelProfileRevisions:            make(map[string]ModelProfile),
+		modelProfileCredentials:          make(map[string]map[int64]memoryModelProfileCredential),
+		modelProfileDefaults:             make(map[string]string),
+		modelProfileDeletes:              make(map[string]memoryModelProfileDelete),
+		modelProfileSyncs:                make(map[string]memoryModelProfileSync),
 	}
 }
 

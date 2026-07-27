@@ -49,23 +49,29 @@ var (
 )
 
 type Turn struct {
-	OwnerID        string
-	TurnID         string
-	ConversationID string
-	Action         string
-	Digest         [32]byte
-	State          State
-	Error          string
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	OwnerID              string
+	TurnID               string
+	ConversationID       string
+	Action               string
+	ModelProfileID       string
+	ModelProfileRevision int64
+	CredentialVersion    int64
+	Digest               [32]byte
+	State                State
+	Error                string
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
 }
 
 type Candidate struct {
-	OwnerID        string
-	TurnID         string
-	ConversationID string
-	Action         string
-	Digest         [32]byte
+	OwnerID              string
+	TurnID               string
+	ConversationID       string
+	Action               string
+	ModelProfileID       string
+	ModelProfileRevision int64
+	CredentialVersion    int64
+	Digest               [32]byte
 }
 
 type Reservation struct {
@@ -97,12 +103,15 @@ type Store interface {
 }
 
 type Request struct {
-	OwnerID        string
-	TurnID         string
-	ConversationID string
-	Action         string
-	Digest         [32]byte
-	AfterSeq       int64
+	OwnerID              string
+	TurnID               string
+	ConversationID       string
+	Action               string
+	ModelProfileID       string
+	ModelProfileRevision int64
+	CredentialVersion    int64
+	Digest               [32]byte
+	AfterSeq             int64
 }
 
 func (r Request) WithAfterSeq(after int64) Request {

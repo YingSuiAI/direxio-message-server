@@ -2,6 +2,34 @@
 
 Last updated: 2026-07-23
 
+## 2026-07-27 Server-owned Native Agent model profiles
+
+Added owner-only `agent.model_profiles.sync`, `.list`, `.get`, and `.delete`
+actions. Profiles are persisted in PostgreSQL with an independently managed
+AES-GCM key under the updater-backed Message Server data root (or the protected
+`P2P_AGENT_MODEL_PROFILE_KEY_FILE` override). API keys are write-only and are
+never returned; reads expose only `api_key_configured` and credential version.
+Profile revisions are separate from retained encrypted credential versions so
+long-running work can resolve a pinned version after restart. Server model
+profile resolution is selected only by ID-only requests; the previous inline
+`model_profile` plus request key remains accepted during the rolling upgrade
+window. `agent.backends.get.embedded.capabilities` advertises
+`model_profiles.server` only when the encrypted store is ready.
+
+Profile edits are retained as immutable snapshots, logical deletion preserves
+historical profile and credential resolution, and concurrent identical sync
+idempotency keys return the committed response. Credential history is protected
+by a real profile foreign key and parent rows are committed before credentials
+or revision snapshots. Delete idempotency claims a request digest atomically;
+same-payload retries replay safely while a different payload conflicts. List
+cursors are opaque `(client_profile_id, profile_id)` cursors and only the
+requested page is decrypted. Numeric DTO fields reject loose strings,
+fractional integers, and non-finite values while preserving explicit zero.
+Durable Native Agent turns persist the selected profile revision and credential
+version without storing credentials; queued and replayed execution resolves
+the immutable pinned snapshot even after profile rotation, deletion, or
+reactivation. Legacy inline `model_profile` turns remain compatible.
+
 ## 2026-07-25 Agent Core control-plane bridge
 
 Added owner-only `agent.core.tasks.*`, `agent.core.schedules.*`,
@@ -65,6 +93,13 @@ Durable turn states are `accepted -> running -> succeeded|failed|stopped|interru
 Turns for the same owner and conversation execute serially in durable acceptance order, and an exact replay never executes twice. PostgreSQL is authoritative for state and replay events. A server restart changes any unsafe `accepted` or `running` row to terminal `interrupted` and never retries its possibly side-effecting runtime work. Terminal state plus its final `done`, `failed`, `stopped`, or `interrupted` record is committed before it is emitted.
 
 A durable attachment may include `params.after_seq`. The server first emits `server.native_agent_stream.accepted`, then replays stored records with `seq > after_seq`, and then follows live records. Durable `server.native_agent_stream.event` and `server.native_agent_stream.error` frames include `turn_id`, `conversation_id`, and monotonic per-turn `seq`. Event persistence recursively removes API keys, access/bearer tokens, authorization headers, passwords, secrets, and private keys. Full request params and request-scoped model profiles are never stored; PostgreSQL stores only their secret-free SHA-256 digest. Prompts remain governed by the existing authorized Native Agent conversation-memory contract rather than a second turn-input store.
+
+When a durable turn selects a server-owned model profile by ID, acceptance
+captures its immutable profile revision and retained credential version. Runtime
+execution resolves that exact pair, so edits, rotation, logical deletion, and
+reactivation cannot change an already accepted turn. Inline legacy profiles
+continue to use the existing secret-free digest and are not converted to the
+server-owned profile path.
 
 Native Agent conversation-memory persistence is now part of successful completion: if saving the authorized model context fails, `agent.chat` returns an error and a stream does not emit successful `done`. Runtime memory remains model context only and is not the durable turn source.
 

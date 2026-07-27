@@ -30,10 +30,32 @@ const (
 )
 
 type Config struct {
-	DataDir    string
-	Store      ConfigStore
-	Tools      []Tool
-	HTTPClient *http.Client
+	DataDir       string
+	Store         ConfigStore
+	Tools         []Tool
+	HTTPClient    *http.Client
+	ModelProfiles ModelProfileResolver
+}
+
+// ServerModelProfile is a redacted profile projection with the key retained
+// only in memory for the outbound provider request.
+type ServerModelProfile struct {
+	ProfileID, ClientProfileID string
+	DisplayName, Provider      string
+	BaseURL, Model             string
+	SystemPrompt               string
+	APIKey                     string
+	APIKeyConfigured           bool
+	Temperature, TopP          *float64
+	MaxOutputTokens            int
+	ContextWindow              int
+	ReasoningEffort            string
+	Revision                   int64
+	CredentialVersion          int64
+}
+
+type ModelProfileResolver interface {
+	ResolveModelProfile(context.Context, string) (ServerModelProfile, error)
 }
 
 type ConfigStore interface {
@@ -47,10 +69,11 @@ type Event struct {
 }
 
 type Runtime struct {
-	store   ConfigStore
-	dataDir string
-	client  *http.Client
-	tools   []Tool
+	store         ConfigStore
+	dataDir       string
+	client        *http.Client
+	tools         []Tool
+	modelProfiles ModelProfileResolver
 }
 
 func New(config Config) *Runtime {
@@ -66,10 +89,11 @@ func New(config Config) *Runtime {
 		client = &http.Client{Timeout: nativeAgentHTTPTimeout}
 	}
 	return &Runtime{
-		store:   config.Store,
-		dataDir: filepath.Clean(dataDir),
-		client:  client,
-		tools:   append([]Tool{}, config.Tools...),
+		store:         config.Store,
+		dataDir:       filepath.Clean(dataDir),
+		client:        client,
+		tools:         append([]Tool{}, config.Tools...),
+		modelProfiles: config.ModelProfiles,
 	}
 }
 
@@ -148,7 +172,13 @@ func (r *Runtime) Stream(ctx context.Context, action string, params map[string]a
 	if err != nil {
 		return emitNativeAgentStreamFailure(emit, err)
 	}
-	profile := r.resolveModelProfile(params)
+	profile, resolveErr := r.resolveModelProfileForRequest(ctx, params)
+	if resolveErr != nil {
+		if emitErr := emit(Event{Event: "error", Data: map[string]any{"error": resolveErr.Error()}}); emitErr != nil {
+			return emitErr
+		}
+		return emit(Event{Event: "done", Data: map[string]any{"ok": false, "native": true, "framework": "eino", "model_ready": false}})
+	}
 	if err := validateModelProfile(profile); err != nil {
 		if emitErr := emit(Event{Event: "error", Data: map[string]any{"error": err.Error()}}); emitErr != nil {
 			return emitErr

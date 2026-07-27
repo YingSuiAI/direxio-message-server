@@ -95,6 +95,7 @@ func (m *Monolith) AddAllPublicRoutes(
 		P2PEventRetentionPruneOnWrite:   p2pEventRetentionPruneOnWriteFromEnv(),
 		PushRules:                       m.UserAPI,
 		ReleaseController:               releasecontrol.NewUnixController(releasecontrol.UnixControllerConfig{}),
+		ModelProfileKeyFile:             strings.TrimSpace(os.Getenv("P2P_AGENT_MODEL_PROFILE_KEY_FILE")),
 	}
 	if agentCoreConfig, err := p2p.AgentCoreConfigFromEnv(); err != nil {
 		logrus.WithError(err).Fatal("invalid P2P Agent Core configuration")

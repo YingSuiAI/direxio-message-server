@@ -51,6 +51,7 @@ func modelProfileResponseFields() map[string]ActionFieldSchema {
 		"context_window":     {Type: "integer"},
 		"reasoning_effort":   {Type: "string"},
 		"revision":           {Type: "integer"},
+		"credential_version": {Type: "integer"},
 		"created_at":         {Type: "string"},
 		"updated_at":         {Type: "string"},
 	}
@@ -63,8 +64,9 @@ func modelProfileListSchema() *ActionSchema {
 			"page_token": {Type: "string", Presence: &ActionPresenceSchema{Omitted: "first_page"}},
 		},
 		Response: map[string]ActionFieldSchema{
-			"profiles":        {Type: "array", Items: &ActionFieldSchema{Type: "object", Properties: modelProfileResponseFields()}},
-			"next_page_token": {Type: "string"},
+			"profiles":                  {Type: "array", Items: &ActionFieldSchema{Type: "object", Properties: modelProfileResponseFields()}},
+			"next_page_token":           {Type: "string"},
+			"default_client_profile_id": {Type: "string"},
 		},
 	}
 }

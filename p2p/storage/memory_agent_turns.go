@@ -19,7 +19,8 @@ func (s *MemoryStore) ReserveAgentTurn(_ context.Context, candidate agentturns.C
 	now := time.Now().UTC()
 	turn := agentturns.Turn{
 		OwnerID: candidate.OwnerID, TurnID: candidate.TurnID, ConversationID: candidate.ConversationID,
-		Action: candidate.Action, Digest: candidate.Digest, State: agentturns.StateAccepted,
+		Action: candidate.Action, ModelProfileID: candidate.ModelProfileID, ModelProfileRevision: candidate.ModelProfileRevision,
+		CredentialVersion: candidate.CredentialVersion, Digest: candidate.Digest, State: agentturns.StateAccepted,
 		CreatedAt: now, UpdatedAt: now,
 	}
 	s.agentTurns[key] = turn

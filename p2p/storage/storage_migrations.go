@@ -863,6 +863,124 @@ func (s *DatabaseStore) migrate(ctx context.Context) error {
 			return err
 		},
 	})
+	m.AddMigrations(sqlutil.Migration{
+		Version: "p2p: encrypted server model profiles v79",
+		Up: func(ctx context.Context, txn *sql.Tx) error {
+			return execMigrationStatements(ctx, txn, []string{
+				`CREATE TABLE IF NOT EXISTS p2p_agent_model_profiles (
+					owner_id TEXT NOT NULL CHECK (owner_id <> ''),
+					profile_id TEXT NOT NULL CHECK (profile_id <> ''),
+					client_profile_id TEXT NOT NULL CHECK (client_profile_id <> ''),
+					display_name TEXT NOT NULL DEFAULT '',
+					provider TEXT NOT NULL,
+					base_url TEXT NOT NULL DEFAULT '',
+					model TEXT NOT NULL DEFAULT '',
+					system_prompt TEXT NOT NULL DEFAULT '',
+					temperature DOUBLE PRECISION,
+					top_p DOUBLE PRECISION,
+					max_output_tokens BIGINT NOT NULL DEFAULT 0,
+					context_window BIGINT NOT NULL DEFAULT 0,
+					reasoning_effort TEXT NOT NULL DEFAULT '',
+					revision BIGINT NOT NULL CHECK (revision > 0),
+					api_key_version BIGINT NOT NULL DEFAULT 1,
+					api_key_nonce BYTEA NOT NULL DEFAULT ''::bytea,
+					api_key_ciphertext BYTEA NOT NULL DEFAULT ''::bytea,
+					credential_version BIGINT NOT NULL DEFAULT 0,
+					created_at TIMESTAMPTZ NOT NULL,
+					updated_at TIMESTAMPTZ NOT NULL,
+					PRIMARY KEY (owner_id, profile_id),
+					UNIQUE (owner_id, client_profile_id)
+				)`,
+				`CREATE TABLE IF NOT EXISTS p2p_agent_model_profile_credentials (
+					owner_id TEXT NOT NULL,
+					profile_id TEXT NOT NULL,
+					credential_version BIGINT NOT NULL CHECK (credential_version > 0),
+					provider TEXT NOT NULL,
+					api_key_nonce BYTEA NOT NULL,
+					api_key_ciphertext BYTEA NOT NULL,
+					created_at TIMESTAMPTZ NOT NULL,
+					PRIMARY KEY (owner_id, profile_id, credential_version),
+					FOREIGN KEY (owner_id, profile_id) REFERENCES p2p_agent_model_profiles(owner_id, profile_id) ON DELETE CASCADE
+				)`,
+				`CREATE INDEX IF NOT EXISTS p2p_agent_model_profiles_owner_idx ON p2p_agent_model_profiles(owner_id, client_profile_id, profile_id)`,
+				`CREATE TABLE IF NOT EXISTS p2p_agent_model_profile_defaults (
+					owner_id TEXT PRIMARY KEY NOT NULL,
+					profile_id TEXT NOT NULL,
+					client_profile_id TEXT NOT NULL,
+					FOREIGN KEY (owner_id, profile_id) REFERENCES p2p_agent_model_profiles(owner_id, profile_id) ON DELETE CASCADE
+				)`,
+				`CREATE TABLE IF NOT EXISTS p2p_agent_model_profile_syncs (
+					owner_id TEXT NOT NULL,
+					idempotency_key TEXT NOT NULL,
+					request_digest BYTEA NOT NULL CHECK (octet_length(request_digest) = 32),
+					response_json JSONB NOT NULL,
+					created_at TIMESTAMPTZ NOT NULL,
+					PRIMARY KEY (owner_id, idempotency_key)
+				)`,
+				`CREATE TABLE IF NOT EXISTS p2p_agent_model_profile_deletes (
+					owner_id TEXT NOT NULL,
+					idempotency_key TEXT NOT NULL,
+					profile_id TEXT NOT NULL,
+					created_at TIMESTAMPTZ NOT NULL,
+					PRIMARY KEY (owner_id, idempotency_key)
+				)`,
+				`ALTER TABLE p2p_agent_model_profiles ADD COLUMN IF NOT EXISTS credential_version BIGINT NOT NULL DEFAULT 0`,
+			})
+		},
+	})
+	m.AddMigrations(sqlutil.Migration{
+		Version: "p2p: immutable model profile revisions v80",
+		Up: func(ctx context.Context, txn *sql.Tx) error {
+			return execMigrationStatements(ctx, txn, []string{
+				`ALTER TABLE p2p_agent_model_profiles ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ`,
+				`ALTER TABLE p2p_agent_model_profile_credentials DROP CONSTRAINT IF EXISTS p2p_agent_model_profile_credentials_owner_id_profile_id_fkey`,
+				`CREATE TABLE IF NOT EXISTS p2p_agent_model_profile_revisions (
+					owner_id TEXT NOT NULL,
+					profile_id TEXT NOT NULL,
+					profile_revision BIGINT NOT NULL CHECK (profile_revision > 0),
+					client_profile_id TEXT NOT NULL,
+					display_name TEXT NOT NULL DEFAULT '',
+					provider TEXT NOT NULL,
+					base_url TEXT NOT NULL DEFAULT '',
+					model TEXT NOT NULL DEFAULT '',
+					system_prompt TEXT NOT NULL DEFAULT '',
+					temperature DOUBLE PRECISION,
+					top_p DOUBLE PRECISION,
+					max_output_tokens BIGINT NOT NULL DEFAULT 0,
+					context_window BIGINT NOT NULL DEFAULT 0,
+					reasoning_effort TEXT NOT NULL DEFAULT '',
+					credential_version BIGINT NOT NULL DEFAULT 0,
+					deleted_at TIMESTAMPTZ,
+					created_at TIMESTAMPTZ NOT NULL,
+					PRIMARY KEY (owner_id, profile_id, profile_revision)
+				)`,
+				`CREATE INDEX IF NOT EXISTS p2p_agent_model_profile_revisions_lookup_idx ON p2p_agent_model_profile_revisions(owner_id, profile_id, profile_revision)`,
+				`INSERT INTO p2p_agent_model_profile_revisions(owner_id,profile_id,profile_revision,client_profile_id,display_name,provider,base_url,model,system_prompt,temperature,top_p,max_output_tokens,context_window,reasoning_effort,credential_version,deleted_at,created_at) SELECT owner_id,profile_id,revision,client_profile_id,display_name,provider,base_url,model,system_prompt,temperature,top_p,max_output_tokens,context_window,reasoning_effort,credential_version,deleted_at,updated_at FROM p2p_agent_model_profiles ON CONFLICT DO NOTHING`,
+			})
+		},
+	})
+	m.AddMigrations(sqlutil.Migration{
+		Version: "p2p: model profile credential integrity and delete idempotency v81",
+		Up: func(ctx context.Context, txn *sql.Tx) error {
+			return execMigrationStatements(ctx, txn, []string{
+				`DELETE FROM p2p_agent_model_profile_credentials c WHERE NOT EXISTS (SELECT 1 FROM p2p_agent_model_profiles p WHERE p.owner_id=c.owner_id AND p.profile_id=c.profile_id)`,
+				`ALTER TABLE p2p_agent_model_profile_credentials ADD CONSTRAINT p2p_agent_model_profile_credentials_owner_id_profile_id_fkey FOREIGN KEY (owner_id, profile_id) REFERENCES p2p_agent_model_profiles(owner_id, profile_id) ON DELETE RESTRICT`,
+				`ALTER TABLE p2p_agent_model_profile_deletes ADD COLUMN IF NOT EXISTS request_digest BYTEA`,
+				`ALTER TABLE p2p_agent_model_profile_deletes ADD COLUMN IF NOT EXISTS response_json JSONB NOT NULL DEFAULT '{}'::jsonb`,
+				`UPDATE p2p_agent_model_profile_deletes SET response_json=jsonb_build_object('deleted',true,'profile_id',profile_id) WHERE response_json='{}'::jsonb`,
+			})
+		},
+	})
+	m.AddMigrations(sqlutil.Migration{
+		Version: "p2p: pinned native agent turn profiles v82",
+		Up: func(ctx context.Context, txn *sql.Tx) error {
+			return execMigrationStatements(ctx, txn, []string{
+				`ALTER TABLE p2p_native_agent_turns ADD COLUMN IF NOT EXISTS model_profile_id TEXT NOT NULL DEFAULT ''`,
+				`ALTER TABLE p2p_native_agent_turns ADD COLUMN IF NOT EXISTS model_profile_revision BIGINT NOT NULL DEFAULT 0`,
+				`ALTER TABLE p2p_native_agent_turns ADD COLUMN IF NOT EXISTS credential_version BIGINT NOT NULL DEFAULT 0`,
+			})
+		},
+	})
 	return m.Up(ctx)
 }
 
