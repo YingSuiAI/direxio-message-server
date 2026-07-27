@@ -1090,6 +1090,19 @@ func (s *DatabaseStore) migrate(ctx context.Context) error {
 			`ALTER TABLE p2p_agent_model_profile_defaults ADD CONSTRAINT p2p_agent_model_profile_defaults_owner_speech_fkey FOREIGN KEY (owner_id, speech_profile_id) REFERENCES p2p_agent_model_profiles(owner_id, profile_id) ON DELETE RESTRICT`,
 		})
 	}})
+	m.AddMigrations(sqlutil.Migration{Version: "p2p: semantic native agent memory vectors v90", Up: func(ctx context.Context, txn *sql.Tx) error {
+		return execMigrationStatements(ctx, txn, []string{
+			`CREATE TABLE IF NOT EXISTS p2p_native_agent_memory_embeddings (
+				owner_id TEXT NOT NULL, memory_id TEXT NOT NULL, profile_id TEXT NOT NULL,
+				profile_revision BIGINT NOT NULL CHECK (profile_revision > 0), model TEXT NOT NULL,
+				dimension BIGINT NOT NULL CHECK (dimension BETWEEN 1 AND 32768), content_digest BYTEA NOT NULL CHECK (octet_length(content_digest)=32),
+				vector DOUBLE PRECISION[] NOT NULL CHECK (COALESCE(array_length(vector,1),0)=dimension), indexed_at TIMESTAMPTZ NOT NULL,
+				PRIMARY KEY(owner_id,memory_id),
+				FOREIGN KEY(owner_id,memory_id) REFERENCES p2p_native_agent_memory_records(owner_id,memory_id) ON DELETE CASCADE
+			)`,
+			`CREATE INDEX IF NOT EXISTS p2p_native_agent_memory_embeddings_profile_idx ON p2p_native_agent_memory_embeddings(owner_id,profile_id,profile_revision,model,dimension)`,
+		})
+	}})
 	return m.Up(ctx)
 }
 

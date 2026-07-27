@@ -33,6 +33,45 @@ func memoryModelProfileRevisionKey(ownerID, profileID string, revision int64) st
 
 func (s *MemoryStore) ModelProfileStoreReady() bool { return false }
 
+func (s *MemoryStore) ResolveDefaultModelProfile(_ context.Context, ownerID, kind string) (ModelProfile, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	defaults := s.modelProfileDefaults[strings.TrimSpace(ownerID)]
+	clientID := defaults.ConversationClientProfileID
+	switch kind {
+	case ModelKindEmbedding:
+		clientID = defaults.EmbeddingClientProfileID
+	case ModelKindSpeech:
+		clientID = defaults.SpeechClientProfileID
+	case ModelKindConversation:
+	default:
+		return ModelProfile{}, ErrModelProfileInvalid
+	}
+	if strings.TrimSpace(clientID) == "" {
+		return ModelProfile{}, ErrModelProfileNotFound
+	}
+	profile, ok := s.modelProfiles[strings.TrimSpace(ownerID)+"\x00"+clientID]
+	if !ok || profile.Deleted {
+		return ModelProfile{}, ErrModelProfileNotFound
+	}
+	if profile.ModelKind == "" {
+		profile.ModelKind = ModelKindConversation
+	}
+	if profile.ModelKind != kind {
+		return ModelProfile{}, ErrModelProfileInvalid
+	}
+	return profile, nil
+}
+
+func (s *MemoryStore) ResolveDefaultModelProfilePin(ctx context.Context, ownerID, kind string) (ModelProfile, error) {
+	profile, err := s.ResolveDefaultModelProfile(ctx, ownerID, kind)
+	if err != nil {
+		return ModelProfile{}, err
+	}
+	profile.APIKey = ""
+	return profile, nil
+}
+
 func (s *MemoryStore) SyncModelProfiles(_ context.Context, ownerID, idempotencyKey string, defaultClientID string, entries []ModelProfileSyncEntry) (ModelProfileSyncResult, error) {
 	return s.SyncModelProfilesWithDefaults(context.Background(), ownerID, idempotencyKey, ModelProfileDefaults{ConversationClientProfileID: defaultClientID}, entries)
 }

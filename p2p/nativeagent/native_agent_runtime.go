@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/YingSuiAI/dirextalk-message-server/p2p/agentmemory"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -40,6 +41,7 @@ type Config struct {
 	Knowledge             KnowledgeStore
 	Conversations         ConversationStore
 	PersistentMemoryReady bool
+	EmbeddingSession      agentmemory.KnowledgeEmbeddingSessionFunc
 }
 
 // ServerModelProfile is a redacted profile projection with the key retained
@@ -83,6 +85,7 @@ type Runtime struct {
 	memory                ConversationMemoryStore
 	knowledge             KnowledgeStore
 	persistentMemoryReady bool
+	embedding             agentmemory.KnowledgeEmbeddingSessionFunc
 	conversations         ConversationStore
 }
 
@@ -128,6 +131,7 @@ func New(config Config) *Runtime {
 		memory:                memory,
 		knowledge:             knowledge,
 		persistentMemoryReady: config.PersistentMemoryReady,
+		embedding:             config.EmbeddingSession,
 		conversations:         conversations,
 	}
 }

@@ -37,11 +37,11 @@ func knowledgeSchema(action string) *ActionSchema {
 	}
 	switch action {
 	case "create":
-		s.Response = map[string]ActionFieldSchema{"memory_id": {Type: "string"}, "title": {Type: "string"}, "content": {Type: "string"}, "tags": {Type: "array"}, "created_at": {Type: "string"}, "replayed": {Type: "boolean"}}
+		s.Response = map[string]ActionFieldSchema{"memory_id": {Type: "string"}, "title": {Type: "string"}, "content": {Type: "string"}, "tags": {Type: "array"}, "created_at": {Type: "string"}, "replayed": {Type: "boolean"}, "embedding_indexed": {Type: "boolean"}, "embedding_profile_id": {Type: "string"}, "embedding_profile_revision": {Type: "integer"}, "embedding_model": {Type: "string"}}
 	case "search":
-		s.Response = map[string]ActionFieldSchema{"items": {Type: "array"}, "next_cursor": {Type: "string"}}
+		s.Response = map[string]ActionFieldSchema{"items": {Type: "array"}, "next_cursor": {Type: "string"}, "search_mode": {Type: "string"}, "embedding_profile_id": {Type: "string"}, "embedding_profile_revision": {Type: "integer"}, "embedding_model": {Type: "string"}}
 	case "status":
-		s.Response = map[string]ActionFieldSchema{"supported": {Type: "boolean"}, "count": {Type: "integer"}}
+		s.Response = map[string]ActionFieldSchema{"supported": {Type: "boolean"}, "count": {Type: "integer"}, "embedding_indexed": {Type: "integer"}, "embedding_stale": {Type: "integer"}, "embedding_profile_id": {Type: "string"}, "embedding_profile_revision": {Type: "integer"}, "embedding_model": {Type: "string"}}
 	}
 	return s
 }

@@ -4,12 +4,90 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/agentmemory"
+	"github.com/lib/pq"
 )
+
+func TestDatabaseSemanticMemoryVectors(t *testing.T) {
+	ctx := context.Background()
+	store := newConversationTestStore(t, ctx)
+	profiles, err := NewDatabaseModelProfileStore(ctx, store, filepath.Join(t.TempDir(), "model.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	{
+		key := "k"
+		if _, err = profiles.SyncModelProfilesWithDefaults(ctx, "owner", "profile-sync", ModelProfileDefaults{EmbeddingClientProfileID: "embedding"}, []ModelProfileSyncEntry{{ClientProfileID: "embedding", Provider: "openai", BaseURL: "https://example.com", Model: "m", ModelKind: ModelKindEmbedding, APIKey: &key}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	profile, err := profiles.ResolveDefaultModelProfile(ctx, "owner", ModelKindEmbedding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := agentmemory.KnowledgeDigest("alpha", "alpha", nil)
+	open := func(context.Context) (agentmemory.KnowledgeEmbeddingSession, error) {
+		return agentmemory.KnowledgeEmbeddingSession{ProfileID: profile.ProfileID, Revision: profile.Revision, Model: "m", Embed: func(_ context.Context, input string) ([]float32, error) {
+			if strings.Contains(input, "alpha") || input == "query" {
+				return []float32{1, 0}, nil
+			}
+			return []float32{0, 1}, nil
+		}}, nil
+	}
+	if _, _, indexed, _, err := store.CreateKnowledgeMemorySemantic(ctx, "owner", "alpha", "alpha", nil, "a", digest, open); err != nil || !indexed {
+		t.Fatalf("create err=%v indexed=%v", err, indexed)
+	}
+	if _, _, _, _, err := store.CreateKnowledgeMemorySemantic(ctx, "owner", "beta", "beta", nil, "b", agentmemory.KnowledgeDigest("beta", "beta", nil), open); err != nil {
+		t.Fatal(err)
+	}
+	items, _, _, err := store.SearchKnowledgeMemorySemantic(ctx, "owner", "query", 10, "", open)
+	if err != nil || len(items) != 2 || items[0].ID != "a" {
+		t.Fatalf("ranking=%v err=%v", items, err)
+	}
+	other, _, _, err := store.SearchKnowledgeMemorySemantic(ctx, "other", "query", 10, "", open)
+	if err != nil || len(other) != 0 {
+		t.Fatalf("owner isolation=%v err=%v", other, err)
+	}
+	if _, _, _, _, err := store.CreateKnowledgeMemorySemantic(ctx, "owner", "alpha", "alpha", nil, "a", digest, open); err != nil {
+		t.Fatal(err)
+	}
+	key2 := "k2"
+	if _, err := profiles.SyncModelProfilesWithDefaults(ctx, "owner", "profile-sync-2", ModelProfileDefaults{EmbeddingClientProfileID: "embedding-v2"}, []ModelProfileSyncEntry{{ClientProfileID: "embedding-v2", Provider: "openai", BaseURL: "https://example.com", Model: "m", ModelKind: ModelKindEmbedding, APIKey: &key2}}); err != nil {
+		t.Fatal(err)
+	}
+	profile2, err := profiles.ResolveDefaultModelProfile(ctx, "owner", ModelKindEmbedding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	open2 := func(context.Context) (agentmemory.KnowledgeEmbeddingSession, error) {
+		return agentmemory.KnowledgeEmbeddingSession{ProfileID: profile2.ProfileID, Revision: profile2.Revision, Model: profile2.Model, Embed: func(context.Context, string) ([]float32, error) { return []float32{0, 1}, nil }}, nil
+	}
+	if _, _, indexed, _, err := store.CreateKnowledgeMemorySemantic(ctx, "owner", "alpha", "alpha", nil, "a", digest, open2); err != nil || !indexed {
+		t.Fatalf("rotation err=%v indexed=%v", err, indexed)
+	}
+	var storedProfile string
+	var storedVector []float64
+	if err := store.DB().QueryRowContext(ctx, `SELECT profile_id,vector FROM p2p_native_agent_memory_embeddings WHERE owner_id='owner' AND memory_id='a'`).Scan(&storedProfile, pq.Array(&storedVector)); err != nil || storedProfile != profile2.ProfileID || len(storedVector) != 2 || storedVector[0] != 0 || storedVector[1] != 1 {
+		t.Fatalf("stored profile=%q vector=%v err=%v", storedProfile, storedVector, err)
+	}
+	if _, _, indexed, _, err := store.CreateKnowledgeMemorySemantic(ctx, "owner", "alpha", "alpha", nil, "a", digest, open); err != agentmemory.ErrEmbeddingSessionStale || indexed {
+		t.Fatalf("late stale err=%v indexed=%v", err, indexed)
+	}
+	if err := store.DB().QueryRowContext(ctx, `SELECT profile_id,vector FROM p2p_native_agent_memory_embeddings WHERE owner_id='owner' AND memory_id='a'`).Scan(&storedProfile, pq.Array(&storedVector)); err != nil || storedProfile != profile2.ProfileID || len(storedVector) != 2 || storedVector[0] != 0 || storedVector[1] != 1 {
+		t.Fatalf("late write changed row profile=%q vector=%v err=%v", storedProfile, storedVector, err)
+	}
+	if _, _, err := store.CreateKnowledgeMemory(ctx, "owner", "missing", "missing", nil, "missing", agentmemory.KnowledgeDigest("missing", "missing", nil)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO p2p_native_agent_memory_embeddings(owner_id,memory_id,profile_id,profile_revision,model,dimension,content_digest,vector,indexed_at) VALUES('owner','missing','p',1,'m',2,decode('0000000000000000000000000000000000000000000000000000000000000000','hex'),ARRAY[1.0],NOW())`); err == nil {
+		t.Fatal("dimension constraint accepted malformed vector")
+	}
+}
 
 func TestDatabaseAgentConversationCASAndPagination(t *testing.T) {
 	ctx := context.Background()

@@ -6,8 +6,11 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +18,7 @@ import (
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/agentmemory"
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 )
 
 func (s *DatabaseStore) LoadConversationMemory(ctx context.Context, owner, conversation string) (agentmemory.ConversationMemory, error) {
@@ -447,4 +451,191 @@ func (s *DatabaseStore) KnowledgeStatus(ctx context.Context, owner string) (int,
 	var n int
 	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM p2p_native_agent_memory_records WHERE owner_id=$1`, owner).Scan(&n)
 	return n, err
+}
+
+func (s *DatabaseStore) CreateKnowledgeMemorySemantic(ctx context.Context, owner, title, content string, tags []string, idem string, digest [32]byte, openSession agentmemory.KnowledgeEmbeddingSessionFunc) (agentmemory.KnowledgeMemory, bool, bool, agentmemory.KnowledgeEmbedding, error) {
+	if openSession == nil {
+		return agentmemory.KnowledgeMemory{}, false, false, agentmemory.KnowledgeEmbedding{}, agentmemory.ErrNoEmbeddingProfile
+	}
+	item, replayed, err := s.CreateKnowledgeMemory(ctx, owner, title, content, tags, idem, digest)
+	if err != nil {
+		return item, replayed, false, agentmemory.KnowledgeEmbedding{}, err
+	}
+	session, err := openSession(ctx)
+	if err != nil {
+		return item, replayed, false, agentmemory.KnowledgeEmbedding{}, err
+	}
+	current := agentmemory.KnowledgeEmbedding{ProfileID: session.ProfileID, Revision: session.Revision, Model: session.Model}
+	var vector []float64
+	var oldProfile, oldModel string
+	var oldRevision int64
+	var oldDimension int
+	var oldDigest []byte
+	rowErr := s.db.QueryRowContext(ctx, `SELECT profile_id,profile_revision,model,dimension,content_digest,vector FROM p2p_native_agent_memory_embeddings WHERE owner_id=$1 AND memory_id=$2`, strings.TrimSpace(owner), item.ID).Scan(&oldProfile, &oldRevision, &oldModel, &oldDimension, &oldDigest, pq.Array(&vector))
+	if rowErr == nil && bytes.Equal(oldDigest, digest[:]) && oldProfile == current.ProfileID && oldRevision == current.Revision && oldModel == current.Model && oldDimension == len(vector) {
+		current.Vector = make([]float32, len(vector))
+		for i, v := range vector {
+			current.Vector[i] = float32(v)
+		}
+		return item, replayed, validVector(current.Vector), current, nil
+	}
+	if session.Embed == nil {
+		return item, replayed, false, current, errors.New("embedding session is not ready")
+	}
+	values, err := session.Embed(ctx, item.Title+"\n"+item.Content)
+	if err != nil {
+		return item, replayed, false, current, err
+	}
+	current.Vector = append([]float32(nil), values...)
+	if !validVector(current.Vector) {
+		return item, replayed, false, current, errors.New("invalid embedding vector")
+	}
+	if session.ValidateCurrent != nil {
+		if err := session.ValidateCurrent(ctx); err != nil {
+			return item, replayed, false, current, err
+		}
+	}
+	dimension := len(current.Vector)
+	encoded := make([]float64, dimension)
+	for i, v := range current.Vector {
+		encoded[i] = float64(v)
+	}
+	var result sql.Result
+	result, err = s.db.ExecContext(ctx, `INSERT INTO p2p_native_agent_memory_embeddings(owner_id,memory_id,profile_id,profile_revision,model,dimension,content_digest,vector,indexed_at) SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9 WHERE EXISTS (SELECT 1 FROM p2p_agent_model_profile_defaults d JOIN p2p_agent_model_profiles p ON p.owner_id=d.owner_id AND p.profile_id=d.embedding_profile_id WHERE d.owner_id=$1 AND d.embedding_profile_id=$3 AND p.profile_id=$3 AND p.revision=$4 AND p.model=$5 AND p.deleted_at IS NULL) ON CONFLICT(owner_id,memory_id) DO UPDATE SET profile_id=EXCLUDED.profile_id,profile_revision=EXCLUDED.profile_revision,model=EXCLUDED.model,dimension=EXCLUDED.dimension,content_digest=EXCLUDED.content_digest,vector=EXCLUDED.vector,indexed_at=EXCLUDED.indexed_at WHERE EXISTS (SELECT 1 FROM p2p_agent_model_profile_defaults d JOIN p2p_agent_model_profiles p ON p.owner_id=d.owner_id AND p.profile_id=d.embedding_profile_id WHERE d.owner_id=EXCLUDED.owner_id AND d.embedding_profile_id=EXCLUDED.profile_id AND p.revision=EXCLUDED.profile_revision AND p.model=EXCLUDED.model AND p.deleted_at IS NULL)`, owner, item.ID, current.ProfileID, current.Revision, current.Model, dimension, digest[:], pq.Array(encoded), time.Now().UTC())
+	if err != nil {
+		return item, replayed, false, current, err
+	}
+	if affected, rowsErr := result.RowsAffected(); rowsErr == nil && affected == 0 {
+		return item, replayed, false, current, agentmemory.ErrEmbeddingSessionStale
+	}
+	return item, replayed, true, current, nil
+}
+
+func (s *DatabaseStore) SearchKnowledgeMemorySemantic(ctx context.Context, owner, query string, limit int, token string, openSession agentmemory.KnowledgeEmbeddingSessionFunc) ([]agentmemory.KnowledgeMemory, string, agentmemory.KnowledgeEmbedding, error) {
+	if strings.TrimSpace(token) != "" {
+		return nil, "", agentmemory.KnowledgeEmbedding{}, agentmemory.ErrInvalidCursor
+	}
+	if openSession == nil {
+		return nil, "", agentmemory.KnowledgeEmbedding{}, agentmemory.ErrNoEmbeddingProfile
+	}
+	session, err := openSession(ctx)
+	if err != nil {
+		return nil, "", agentmemory.KnowledgeEmbedding{}, err
+	}
+	if session.Embed == nil {
+		return nil, "", agentmemory.KnowledgeEmbedding{}, errors.New("embedding session is not ready")
+	}
+	values, err := session.Embed(ctx, query)
+	if err != nil {
+		return nil, "", agentmemory.KnowledgeEmbedding{}, err
+	}
+	queryEmbedding := agentmemory.KnowledgeEmbedding{ProfileID: session.ProfileID, Revision: session.Revision, Model: session.Model, Vector: values}
+	if !validVector(queryEmbedding.Vector) {
+		return nil, "", agentmemory.KnowledgeEmbedding{}, errors.New("invalid embedding vector")
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT m.memory_id,m.title,m.content,m.tags_json,m.created_at,e.vector FROM p2p_native_agent_memory_embeddings e JOIN p2p_native_agent_memory_records m ON m.owner_id=e.owner_id AND m.memory_id=e.memory_id WHERE e.owner_id=$1 AND e.profile_id=$2 AND e.profile_revision=$3 AND e.model=$4 AND e.dimension=$5 ORDER BY m.created_at ASC,m.memory_id ASC LIMIT $6`, owner, queryEmbedding.ProfileID, queryEmbedding.Revision, queryEmbedding.Model, len(queryEmbedding.Vector), 10001)
+	if err != nil {
+		return nil, "", queryEmbedding, err
+	}
+	defer rows.Close()
+	type scored struct {
+		item  agentmemory.KnowledgeMemory
+		score float64
+	}
+	matches := make([]scored, 0)
+	scanned := 0
+	for rows.Next() {
+		scanned++
+		if scanned > 10000 {
+			return nil, "", queryEmbedding, errors.New("semantic search candidate capacity exceeded")
+		}
+		var item agentmemory.KnowledgeMemory
+		var tags []byte
+		var vector []float64
+		if err := rows.Scan(&item.ID, &item.Title, &item.Content, &tags, &item.CreatedAt, pq.Array(&vector)); err != nil {
+			return nil, "", queryEmbedding, err
+		}
+		_ = json.Unmarshal(tags, &item.Tags)
+		fv := make([]float32, len(vector))
+		if len(vector) != len(queryEmbedding.Vector) {
+			return nil, "", queryEmbedding, errors.New("stored embedding dimension mismatch")
+		}
+		for i, v := range vector {
+			fv[i] = float32(v)
+		}
+		if !validVector(fv) {
+			continue
+		}
+		matches = append(matches, scored{item: item, score: cosine(queryEmbedding.Vector, fv)})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", queryEmbedding, err
+	}
+	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].score != matches[j].score {
+			return matches[i].score > matches[j].score
+		}
+		return matches[i].item.ID < matches[j].item.ID
+	})
+	if len(matches) > limit {
+		matches = matches[:limit]
+	}
+	out := make([]agentmemory.KnowledgeMemory, len(matches))
+	for i := range matches {
+		out[i] = matches[i].item
+	}
+	return out, "", queryEmbedding, nil
+}
+
+func (s *DatabaseStore) KnowledgeStatusSemantic(ctx context.Context, owner string, openSession agentmemory.KnowledgeEmbeddingSessionFunc) (int, int, int, agentmemory.KnowledgeEmbedding, error) {
+	if openSession == nil {
+		return 0, 0, 0, agentmemory.KnowledgeEmbedding{}, agentmemory.ErrNoEmbeddingProfile
+	}
+	session, err := openSession(ctx)
+	if err != nil {
+		return 0, 0, 0, agentmemory.KnowledgeEmbedding{}, err
+	}
+	profile := agentmemory.KnowledgeEmbedding{ProfileID: session.ProfileID, Revision: session.Revision, Model: session.Model}
+	var total, indexed int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM p2p_native_agent_memory_records WHERE owner_id=$1`, owner).Scan(&total); err != nil {
+		return 0, 0, 0, agentmemory.KnowledgeEmbedding{}, err
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM p2p_native_agent_memory_embeddings WHERE owner_id=$1 AND profile_id=$2 AND profile_revision=$3 AND model=$4`, owner, profile.ProfileID, profile.Revision, profile.Model).Scan(&indexed); err != nil {
+		return total, 0, total, profile, err
+	}
+	return total, indexed, total - indexed, profile, nil
+}
+
+func validVector(v []float32) bool {
+	if len(v) == 0 {
+		return false
+	}
+	for _, x := range v {
+		if math.IsNaN(float64(x)) || math.IsInf(float64(x), 0) {
+			return false
+		}
+	}
+	return true
+}
+func cosine(a, b []float32) float64 {
+	if len(a) == 0 || len(a) != len(b) {
+		return 0
+	}
+	var dot, na, nb float64
+	for i := range a {
+		if i >= len(b) {
+			break
+		}
+		x, y := float64(a[i]), float64(b[i])
+		dot += x * y
+		na += x * x
+		nb += y * y
+	}
+	if na == 0 || nb == 0 {
+		return 0
+	}
+	return dot / math.Sqrt(na*nb)
 }

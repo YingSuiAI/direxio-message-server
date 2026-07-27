@@ -68,6 +68,7 @@ func New(cfg Config) *Module {
 			OwnerID:               cfg.OwnerID,
 			Memory:                cfg.Memory,
 			PersistentMemoryReady: cfg.PersistentMemoryReady,
+			EmbeddingSession:      embeddingForStore(cfg.ModelProfiles, cfg.OwnerID, nil),
 		})}
 	}
 	turns, turnErr := agentturns.NewCoordinator(context.Background(), cfg.Turns)

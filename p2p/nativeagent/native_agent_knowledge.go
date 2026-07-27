@@ -2,6 +2,7 @@ package nativeagent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/agentmemory"
 	"strings"
@@ -43,6 +44,24 @@ func (r *Runtime) createKnowledgeMemory(ctx context.Context, p map[string]any) (
 		return nil, validationErrorf("idempotency_key is required")
 	}
 	digest := agentmemory.KnowledgeDigest(title, content, tags)
+	if semantic, ok := s.(agentmemory.SemanticKnowledgeStore); ok && r.embedding != nil {
+		item, replayed, indexed, profile, err := semantic.CreateKnowledgeMemorySemantic(ctx, r.effectiveOwner(ctx), title, content, tags, idem, digest, r.embedding)
+		if err != nil {
+			if errors.Is(err, agentmemory.ErrNoEmbeddingProfile) {
+				item, replayed, legacyErr := s.CreateKnowledgeMemory(ctx, r.effectiveOwner(ctx), title, content, tags, idem, digest)
+				if legacyErr != nil {
+					return nil, legacyErr
+				}
+				return map[string]any{"memory_id": item.ID, "title": item.Title, "content": item.Content, "tags": item.Tags, "created_at": item.CreatedAt.UTC().Format("2006-01-02T15:04:05.999999999Z07:00"), "replayed": replayed, "embedding_indexed": false}, nil
+			}
+			return nil, err
+		}
+		result := map[string]any{"memory_id": item.ID, "title": item.Title, "content": item.Content, "tags": item.Tags, "created_at": item.CreatedAt.UTC().Format("2006-01-02T15:04:05.999999999Z07:00"), "replayed": replayed, "embedding_indexed": indexed}
+		if profile.ProfileID != "" {
+			result["embedding_profile_id"], result["embedding_profile_revision"], result["embedding_model"] = profile.ProfileID, profile.Revision, profile.Model
+		}
+		return result, nil
+	}
 	item, replayed, err := s.CreateKnowledgeMemory(ctx, r.effectiveOwner(ctx), title, content, tags, idem, digest)
 	if err != nil {
 		return nil, err
@@ -61,7 +80,34 @@ func (r *Runtime) searchKnowledgeMemory(ctx context.Context, p map[string]any) (
 	if limit <= 0 {
 		limit = 20
 	}
-	items, next, err := s.SearchKnowledgeMemory(ctx, r.effectiveOwner(ctx), trimString(p["query"]), limit, trimString(p["page_token"]))
+	query := trimString(p["query"])
+	if semantic, ok := s.(agentmemory.SemanticKnowledgeStore); ok && strings.TrimSpace(query) != "" && r.embedding != nil {
+		items, next, profile, err := semantic.SearchKnowledgeMemorySemantic(ctx, r.effectiveOwner(ctx), query, limit, trimString(p["page_token"]), r.embedding)
+		if err != nil {
+			if errors.Is(err, agentmemory.ErrNoEmbeddingProfile) {
+				items, next, legacyErr := s.SearchKnowledgeMemory(ctx, r.effectiveOwner(ctx), query, limit, trimString(p["page_token"]))
+				if legacyErr != nil {
+					return nil, legacyErr
+				}
+				out := make([]map[string]any, 0, len(items))
+				for _, i := range items {
+					out = append(out, map[string]any{"memory_id": i.ID, "title": i.Title, "content": i.Content, "tags": i.Tags, "created_at": i.CreatedAt.UTC().Format("2006-01-02T15:04:05.999999999Z07:00")})
+				}
+				return map[string]any{"items": out, "next_cursor": next, "search_mode": "text"}, nil
+			}
+			return nil, err
+		}
+		out := make([]map[string]any, 0, len(items))
+		for _, i := range items {
+			out = append(out, map[string]any{"memory_id": i.ID, "title": i.Title, "content": i.Content, "tags": i.Tags, "created_at": i.CreatedAt.UTC().Format("2006-01-02T15:04:05.999999999Z07:00")})
+		}
+		result := map[string]any{"items": out, "next_cursor": next, "search_mode": "semantic"}
+		if profile.ProfileID != "" {
+			result["embedding_profile_id"], result["embedding_profile_revision"], result["embedding_model"] = profile.ProfileID, profile.Revision, profile.Model
+		}
+		return result, nil
+	}
+	items, next, err := s.SearchKnowledgeMemory(ctx, r.effectiveOwner(ctx), query, limit, trimString(p["page_token"]))
 	if err != nil {
 		return nil, err
 	}
@@ -69,18 +115,36 @@ func (r *Runtime) searchKnowledgeMemory(ctx context.Context, p map[string]any) (
 	for _, i := range items {
 		out = append(out, map[string]any{"memory_id": i.ID, "title": i.Title, "content": i.Content, "tags": i.Tags, "created_at": i.CreatedAt.UTC().Format("2006-01-02T15:04:05.999999999Z07:00")})
 	}
-	return map[string]any{"items": out, "next_cursor": next}, nil
+	return map[string]any{"items": out, "next_cursor": next, "search_mode": "text"}, nil
 }
 func (r *Runtime) knowledgeStatus(ctx context.Context) (map[string]any, error) {
 	s, err := r.knowledgeStore(ctx)
 	if err != nil {
 		return nil, err
 	}
+	if semantic, ok := s.(agentmemory.SemanticKnowledgeStore); ok && r.embedding != nil {
+		total, indexed, stale, profile, err := semantic.KnowledgeStatusSemantic(ctx, r.effectiveOwner(ctx), r.embedding)
+		if err != nil {
+			if errors.Is(err, agentmemory.ErrNoEmbeddingProfile) {
+				n, legacyErr := s.KnowledgeStatus(ctx, r.effectiveOwner(ctx))
+				if legacyErr != nil {
+					return nil, legacyErr
+				}
+				return map[string]any{"supported": true, "count": n, "embedding_indexed": 0, "embedding_stale": n}, nil
+			}
+			return nil, err
+		}
+		result := map[string]any{"supported": true, "count": total, "embedding_indexed": indexed, "embedding_stale": stale}
+		if profile.ProfileID != "" {
+			result["embedding_profile_id"], result["embedding_profile_revision"], result["embedding_model"] = profile.ProfileID, profile.Revision, profile.Model
+		}
+		return result, nil
+	}
 	n, err := s.KnowledgeStatus(ctx, r.effectiveOwner(ctx))
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"supported": true, "count": n}, nil
+	return map[string]any{"supported": true, "count": n, "embedding_indexed": 0, "embedding_stale": n}, nil
 }
 func stringSlice(v any) []string {
 	a, ok := v.([]any)

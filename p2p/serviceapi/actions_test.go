@@ -19,9 +19,9 @@ func TestAgentConversationAndKnowledgeSchemasMatchHandlerResponses(t *testing.T)
 		{"agent.chat.conversations.get", map[string]string{"conversation": "object", "messages": "array", "next_cursor": "string"}},
 		{"agent.chat.conversations.rename", map[string]string{"conversation": "object", "replayed": "boolean"}},
 		{"agent.chat.conversations.delete", map[string]string{"conversation": "object", "replayed": "boolean"}},
-		{"agent.knowledge.memory.create", map[string]string{"memory_id": "string", "title": "string", "content": "string", "tags": "array", "created_at": "string", "replayed": "boolean"}},
-		{"agent.knowledge.search", map[string]string{"items": "array", "next_cursor": "string"}},
-		{"agent.knowledge.status", map[string]string{"supported": "boolean", "count": "integer"}},
+		{"agent.knowledge.memory.create", map[string]string{"memory_id": "string", "title": "string", "content": "string", "tags": "array", "created_at": "string", "replayed": "boolean", "embedding_indexed": "boolean", "embedding_profile_id": "string", "embedding_profile_revision": "integer", "embedding_model": "string"}},
+		{"agent.knowledge.search", map[string]string{"items": "array", "next_cursor": "string", "search_mode": "string", "embedding_profile_id": "string", "embedding_profile_revision": "integer", "embedding_model": "string"}},
+		{"agent.knowledge.status", map[string]string{"supported": "boolean", "count": "integer", "embedding_indexed": "integer", "embedding_stale": "integer", "embedding_profile_id": "string", "embedding_profile_revision": "integer", "embedding_model": "string"}},
 	} {
 		schema := byName[test.action].Schema
 		if schema == nil || len(schema.Response) != len(test.fields) {

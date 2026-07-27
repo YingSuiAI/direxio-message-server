@@ -108,7 +108,82 @@ type ModelProfileStore interface {
 	ResolveModelProfilePin(context.Context, string, string) (ModelProfile, error)
 	ResolveModelProfileVersion(context.Context, string, string, int64) (ModelProfile, error)
 	ResolveModelProfilePinned(context.Context, string, string, int64, int64) (ModelProfile, error)
+	ResolveDefaultModelProfile(context.Context, string, string) (ModelProfile, error)
+	ResolveDefaultModelProfilePin(context.Context, string, string) (ModelProfile, error)
 	ModelProfileStoreReady() bool
+}
+
+func (s *encryptedModelProfileStore) ResolveDefaultModelProfile(ctx context.Context, ownerID, kind string) (ModelProfile, error) {
+	column := "profile_id"
+	switch strings.TrimSpace(kind) {
+	case ModelKindEmbedding:
+		column = "embedding_profile_id"
+	case ModelKindSpeech:
+		column = "speech_profile_id"
+	case ModelKindConversation:
+		column = "profile_id"
+	default:
+		return ModelProfile{}, ErrModelProfileInvalid
+	}
+	var id sql.NullString
+	if err := s.db.QueryRowContext(ctx, `SELECT `+column+` FROM p2p_agent_model_profile_defaults WHERE owner_id=$1`, strings.TrimSpace(ownerID)).Scan(&id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ModelProfile{}, ErrModelProfileNotFound
+		}
+		return ModelProfile{}, err
+	}
+	if !id.Valid || strings.TrimSpace(id.String) == "" {
+		return ModelProfile{}, ErrModelProfileNotFound
+	}
+	profile, err := s.ResolveModelProfile(ctx, strings.TrimSpace(ownerID), id.String)
+	if err != nil {
+		return ModelProfile{}, err
+	}
+	if profile.ModelKind == "" {
+		profile.ModelKind = ModelKindConversation
+	}
+	if profile.ModelKind != kind {
+		return ModelProfile{}, ErrModelProfileInvalid
+	}
+	return profile, nil
+}
+
+func (s *encryptedModelProfileStore) ResolveDefaultModelProfilePin(ctx context.Context, ownerID, kind string) (ModelProfile, error) {
+	column := "profile_id"
+	switch strings.TrimSpace(kind) {
+	case ModelKindEmbedding:
+		column = "embedding_profile_id"
+	case ModelKindSpeech:
+		column = "speech_profile_id"
+	case ModelKindConversation:
+	default:
+		return ModelProfile{}, ErrModelProfileInvalid
+	}
+	var id sql.NullString
+	if err := s.db.QueryRowContext(ctx, `SELECT `+column+` FROM p2p_agent_model_profile_defaults WHERE owner_id=$1`, strings.TrimSpace(ownerID)).Scan(&id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ModelProfile{}, ErrModelProfileNotFound
+		}
+		return ModelProfile{}, err
+	}
+	if !id.Valid || strings.TrimSpace(id.String) == "" {
+		return ModelProfile{}, ErrModelProfileNotFound
+	}
+	row := s.db.QueryRowContext(ctx, `SELECT profile_id,client_profile_id,display_name,provider,base_url,model,system_prompt,temperature,top_p,max_output_tokens,context_window,reasoning_effort,model_kind,input_modalities,provider_config,revision,credential_version,created_at,updated_at FROM p2p_agent_model_profiles WHERE owner_id=$1 AND profile_id=$2 AND deleted_at IS NULL`, strings.TrimSpace(ownerID), id.String)
+	profile, err := scanProfilePin(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ModelProfile{}, ErrModelProfileNotFound
+	}
+	if err != nil {
+		return ModelProfile{}, err
+	}
+	if profile.ModelKind == "" {
+		profile.ModelKind = ModelKindConversation
+	}
+	if profile.ModelKind != kind {
+		return ModelProfile{}, ErrModelProfileInvalid
+	}
+	return profile, nil
 }
 
 type encryptedModelProfileStore struct {
