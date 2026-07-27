@@ -15,6 +15,7 @@ Embedded capability rules:
 - You can call configured model providers and compress local conversation context.`
 
 func (r *Runtime) chat(ctx context.Context, params map[string]any) (map[string]any, error) {
+	ctx = r.withRequestContext(ctx, params)
 	config, _, err := r.agentConfig(ctx)
 	if err != nil {
 		return nil, err

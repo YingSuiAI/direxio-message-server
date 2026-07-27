@@ -859,22 +859,6 @@ func newService(cfg Config, store Store, transport Transport, state portalState,
 		}
 		service.modelProfiles, service.modelProfileInitErr = p2pstorage.NewDatabaseModelProfileStore(context.Background(), dbStore, keyFile)
 	}
-	service.agentModule = agentmodule.New(agentmodule.Config{
-		Runner:        cfg.NativeAgentRunner,
-		DataDir:       cfg.NativeAgentDataDir,
-		Store:         nativeAgentConfigStore{service: service},
-		MCP:           service.mcpCapabilities,
-		Account:       serviceAgentAccountPort{service: service},
-		Turns:         service.store,
-		OwnerID:       service.OwnerMXID,
-		ModelProfiles: service.modelProfiles,
-		ModelProfileResolver: func() nativeagent.ModelProfileResolver {
-			if service.modelProfiles == nil {
-				return nil
-			}
-			return nativeModelProfileResolver{store: service.modelProfiles, owner: service.OwnerMXID}
-		}(),
-	})
 	var scheduleStore p2pstorage.ScheduleStore
 	if candidate, ok := store.(p2pstorage.ScheduleStore); ok {
 		scheduleStore = candidate
@@ -883,11 +867,27 @@ func newService(cfg Config, store Store, transport Transport, state portalState,
 	if scheduleRunner == nil && cfg.EmbeddedScheduleRunnerFactory != nil {
 		scheduleRunner, _ = cfg.EmbeddedScheduleRunnerFactory(agentmodule.Tools(service.mcpCapabilities))
 	}
-	service.scheduleModule = schedulesmodule.New(schedulesmodule.Config{Store: scheduleStore, Profiles: service.modelProfiles, Runner: scheduleRunner, OwnerID: service.OwnerMXID, SchedulerReady: func() bool {
+	var confirmations p2pstorage.ScheduleConfirmationStore
+	if candidate, ok := store.(p2pstorage.ScheduleConfirmationStore); ok {
+		confirmations = candidate
+	}
+	service.scheduleModule = schedulesmodule.New(schedulesmodule.Config{Store: scheduleStore, Profiles: service.modelProfiles, Runner: scheduleRunner, Confirmations: confirmations, OwnerID: service.OwnerMXID, SchedulerReady: func() bool {
 		service.mu.Lock()
 		defer service.mu.Unlock()
 		return service.scheduleRunning
 	}})
+	service.agentModule = agentmodule.New(agentmodule.Config{
+		Runner: cfg.NativeAgentRunner, DataDir: cfg.NativeAgentDataDir,
+		Store: nativeAgentConfigStore{service: service}, MCP: service.mcpCapabilities,
+		ScheduleTools: service.scheduleModule.Tools(), Account: serviceAgentAccountPort{service: service}, Turns: service.store,
+		OwnerID: service.OwnerMXID, ModelProfiles: service.modelProfiles,
+		ModelProfileResolver: func() nativeagent.ModelProfileResolver {
+			if service.modelProfiles == nil {
+				return nil
+			}
+			return nativeModelProfileResolver{store: service.modelProfiles, owner: service.OwnerMXID}
+		}(),
+	})
 	// Agent Core config is deployment-owned and never persisted in portal state.
 	coreConfig := cfg.AgentCore
 	coreConfig.EmbeddedModelProfilesReady = func() bool { return service.modelProfiles != nil && service.modelProfiles.ModelProfileStoreReady() }

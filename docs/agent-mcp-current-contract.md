@@ -33,6 +33,13 @@ This document is the backend-owned current contract for Dirextalk Agent state, N
 - Successful `agent.chat` responses and Native Agent stream `done` payloads may include additive `references[]` derived deterministically from the full successful built-in Dirextalk tool results from that run. Room references use `kind=room`, `room_id`, optional `room_type=direct|group|channel`, `title`, and optional `preview`; channel-post references use `kind=channel_post`, `room_id`, `channel_id`, `post_id`, `title`, and optional `preview`. References preserve tool/result order, deduplicate rooms and posts, never include message `event_id`, and are not inferred from model-authored text or third-party/runtime tool output.
 - `mcp.channel_posts.list` and the embedded `dirextalk_channel_posts_list` result envelope include both top-level `channel_id` and `room_id`, allowing a post reference to identify its product channel and Matrix room without parsing post content.
 
+### Embedded Native Agent schedule chat tools
+
+- Interactive Native Agent turns expose bounded `native_agent_schedules_*` and `native_agent_schedule_runs_*` tools. List/get and run-list/run-get are read-only; `native_agent_schedules_disable` executes directly through the existing Embedded schedule action.
+- Create, update, enable, delete, and run-now are proposal-only on the first model tool call. The server stores a durable, owner- and Native `conversation_id`-scoped confirmation containing canonical secret-free parameters, digest, deterministic Stage A idempotency key, bounded summary, expiry, revision, and short approval code. No API key or token is stored or returned.
+- `native_agent_schedules_confirm` can execute only on a later owner-authored turn in the same conversation whose current user text exactly normalizes to `确认执行 <code>`. Model arguments, previous-turn text, `dangerous_tools_confirm`, another owner, or another conversation cannot approve it. Completed/failed confirmations replay the authoritative terminal result; restart and concurrent retries are receipt-fenced and do not execute the Stage A mutation twice.
+- These interactive tools are separate from the restricted scheduled runner allowlist and from the Online Agent Matrix room/timeline. The scheduled runner cannot call mutation tools, and Flutter must present the proposal phrase then wait for a new Native turn.
+
 ## Consumer Boundaries
 
 - `dirextalk-connect` owns the local conversation bridge. It consumes the Matrix session and real `agent_room_id` for message sync/send and consumes the deployed `https://<server>/mcp` endpoint only through a runtime capability that supports connect-managed MCP. Host-managed runtimes keep MCP enrollment in their host runtime.

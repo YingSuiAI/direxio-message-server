@@ -15,6 +15,23 @@ the capability is unavailable until durable storage, profile-key readiness and
 an explicit read-only runner are wired. Stage B chat confirmation is not part
 of this surface.
 
+## 2026-07-27 Embedded Native Agent schedule chat confirmation (Stage B)
+
+Added an internal Native Agent chat-tool adapter over the Stage A schedule
+handlers. Schedule list/get and run list/get are read-only, and disable remains
+direct. Create/update/enable/delete/run_now first create a durable proposal;
+they do not mutate a schedule or run until a later owner-authored Native turn
+in the same `conversation_id` exactly normalizes to `确认执行 <code>`. Model
+arguments, previous-turn text, caller booleans, and `dangerous_tools_confirm`
+cannot substitute for that phrase. Confirmation rows contain only bounded,
+canonical, secret-free parameters, a digest, deterministic Stage A idempotency
+key, summary, expiry, revision, and approval code; no API key or token is
+stored or returned. Claim/complete fencing and Stage A receipts provide
+restart and concurrent replay of one authoritative terminal result. This is
+an internal Native tool surface: no public ProductCore confirmation action was
+added, the restricted scheduled runner allowlist is unchanged, and Online
+Agent Matrix conversations remain a separate transport.
+
 ## 2026-07-27 Server-owned Native Agent model profiles
 
 Added owner-only `agent.model_profiles.sync`, `.list`, `.get`, and `.delete`

@@ -78,6 +78,17 @@ func nativeToolAlias(value string) string {
 	value = strings.ReplaceAll(value, ".", "_")
 	value = strings.ReplaceAll(value, "-", "_")
 	aliases := map[string]string{
+		"agent_schedules_list":          "native_agent_schedules_list",
+		"agent_schedules_get":           "native_agent_schedules_get",
+		"agent_schedule_runs_list":      "native_agent_schedule_runs_list",
+		"agent_schedule_runs_get":       "native_agent_schedule_runs_get",
+		"agent_schedules_disable":       "native_agent_schedules_disable",
+		"agent_schedules_create":        "native_agent_schedules_create",
+		"agent_schedules_update":        "native_agent_schedules_update",
+		"agent_schedules_enable":        "native_agent_schedules_enable",
+		"agent_schedules_delete":        "native_agent_schedules_delete",
+		"agent_schedules_run_now":       "native_agent_schedules_run_now",
+		"agent_schedules_confirm":       "native_agent_schedules_confirm",
 		"contacts_list":                 "dirextalk_contacts_list",
 		"search_contacts":               "dirextalk_contacts_search",
 		"contacts_search":               "dirextalk_contacts_search",
@@ -155,6 +166,9 @@ func (r *Runtime) availableTools() []Tool {
 // capability registry. Configuration may select from it, but cannot add tools.
 func embeddedDirextalkTool(name string) bool {
 	if name == "dirextalk_summarize" {
+		return true
+	}
+	if strings.HasPrefix(name, "native_agent_schedules_") || strings.HasPrefix(name, "native_agent_schedule_runs_") {
 		return true
 	}
 	_, ok := dirextalkmcp.NativeToolAction(name)

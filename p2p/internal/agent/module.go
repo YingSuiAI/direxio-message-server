@@ -34,6 +34,7 @@ type Config struct {
 	OwnerID              func() string
 	ModelProfiles        storage.ModelProfileStore
 	ModelProfileResolver nativeagent.ModelProfileResolver
+	ScheduleTools        []nativeagent.Tool
 }
 
 // Module owns runtime-backed ProductCore actions and streaming invocation.
@@ -52,8 +53,9 @@ func New(cfg Config) *Module {
 		runner = runtimeRunner{runtime: nativeagent.New(nativeagent.Config{
 			DataDir:       cfg.DataDir,
 			Store:         cfg.Store,
-			Tools:         Tools(cfg.MCP),
+			Tools:         append(Tools(cfg.MCP), cfg.ScheduleTools...),
 			ModelProfiles: cfg.ModelProfileResolver,
+			OwnerID:       cfg.OwnerID,
 		})}
 	}
 	turns, turnErr := agentturns.NewCoordinator(context.Background(), cfg.Turns)

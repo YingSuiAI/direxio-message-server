@@ -35,6 +35,7 @@ type Config struct {
 	Tools         []Tool
 	HTTPClient    *http.Client
 	ModelProfiles ModelProfileResolver
+	OwnerID       func() string
 }
 
 // ServerModelProfile is a redacted profile projection with the key retained
@@ -74,6 +75,7 @@ type Runtime struct {
 	client        *http.Client
 	tools         []Tool
 	modelProfiles ModelProfileResolver
+	ownerID       func() string
 }
 
 func New(config Config) *Runtime {
@@ -94,7 +96,47 @@ func New(config Config) *Runtime {
 		client:        client,
 		tools:         append([]Tool{}, config.Tools...),
 		modelProfiles: config.ModelProfiles,
+		ownerID:       config.OwnerID,
 	}
+}
+
+type requestContextKey string
+
+const (
+	requestOwnerKey        requestContextKey = "nativeagent.owner"
+	requestConversationKey requestContextKey = "nativeagent.conversation"
+	requestUserTextKey     requestContextKey = "nativeagent.current_user_text"
+)
+
+// RequestContext exposes server-injected, non-model-authored scope to built-in
+// tools. Callers cannot supply these values as tool arguments.
+func RequestContext(ctx context.Context) (owner, conversation, userText string) {
+	owner, _ = ctx.Value(requestOwnerKey).(string)
+	conversation, _ = ctx.Value(requestConversationKey).(string)
+	userText, _ = ctx.Value(requestUserTextKey).(string)
+	return
+}
+
+// WithRequestContext is used by server-owned adapters and focused tests; model
+// tool arguments are never merged into this context.
+func WithRequestContext(ctx context.Context, owner, conversation, userText string) context.Context {
+	ctx = context.WithValue(ctx, requestOwnerKey, strings.TrimSpace(owner))
+	ctx = context.WithValue(ctx, requestConversationKey, strings.TrimSpace(conversation))
+	return context.WithValue(ctx, requestUserTextKey, userText)
+}
+func (r *Runtime) withRequestContext(ctx context.Context, params map[string]any) context.Context {
+	owner := ""
+	if r.ownerID != nil {
+		owner = strings.TrimSpace(r.ownerID())
+	}
+	conversation := ConversationID(params)
+	userText := trimString(params["prompt"])
+	if userText == "" {
+		userText = trimString(params["message"])
+	}
+	ctx = context.WithValue(ctx, requestOwnerKey, owner)
+	ctx = context.WithValue(ctx, requestConversationKey, conversation)
+	return context.WithValue(ctx, requestUserTextKey, userText)
 }
 
 func (r *Runtime) Apply(ctx context.Context, action string) error {
@@ -168,6 +210,7 @@ func (r *Runtime) Stream(ctx context.Context, action string, params map[string]a
 	if strings.TrimSpace(action) != "agent.chat.stream" {
 		return fmt.Errorf("native agent stream action %q is not implemented", action)
 	}
+	ctx = r.withRequestContext(ctx, params)
 	config, _, err := r.agentConfig(ctx)
 	if err != nil {
 		return emitNativeAgentStreamFailure(emit, err)

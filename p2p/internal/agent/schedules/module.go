@@ -25,6 +25,7 @@ type Config struct {
 	Runner         ScheduledRunner
 	OwnerID        func() string
 	SchedulerReady func() bool
+	Confirmations  storage.ScheduleConfirmationStore
 }
 type Module struct {
 	store          storage.ScheduleStore
@@ -32,11 +33,12 @@ type Module struct {
 	runner         ScheduledRunner
 	ownerID        func() string
 	schedulerReady func() bool
+	confirmations  storage.ScheduleConfirmationStore
 	mutationMu     sync.Mutex
 }
 
 func New(c Config) *Module {
-	return &Module{store: c.Store, profiles: c.Profiles, runner: c.Runner, ownerID: c.OwnerID, schedulerReady: c.SchedulerReady}
+	return &Module{store: c.Store, profiles: c.Profiles, runner: c.Runner, ownerID: c.OwnerID, schedulerReady: c.SchedulerReady, confirmations: c.Confirmations}
 }
 func (m *Module) schedulerRunning() bool {
 	return m != nil && m.runner != nil && (m.schedulerReady == nil || m.schedulerReady())
@@ -58,6 +60,17 @@ func (m *Module) Handlers() map[string]actionbase.Handler {
 	return map[string]actionbase.Handler{
 		"agent.schedules.create": m.create, "agent.schedules.update": m.update, "agent.schedules.get": m.get, "agent.schedules.list": m.list, "agent.schedules.delete": m.delete, "agent.schedules.enable": m.enable, "agent.schedules.disable": m.disable, "agent.schedules.run_now": m.runNow, "agent.schedule_runs.list": m.runsList, "agent.schedule_runs.get": m.runGet,
 	}
+}
+func (m *Module) InvokeTool(ctx context.Context, action string, params map[string]any) (any, error) {
+	h := m.Handlers()[action]
+	if h == nil {
+		return nil, fmt.Errorf("schedule action %q is unavailable", action)
+	}
+	v, e := h(ctx, params)
+	if e != nil {
+		return nil, fmt.Errorf("%s", e.Error)
+	}
+	return v, nil
 }
 
 func mutationDigest(action string, p map[string]any) [32]byte {

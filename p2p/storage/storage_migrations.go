@@ -1009,6 +1009,26 @@ func (s *DatabaseStore) migrate(ctx context.Context) error {
 			})
 		},
 	})
+	m.AddMigrations(sqlutil.Migration{
+		Version: "p2p: native schedule confirmations v85",
+		Up: func(ctx context.Context, txn *sql.Tx) error {
+			return execMigrationStatements(ctx, txn, []string{
+				`CREATE TABLE IF NOT EXISTS p2p_agent_schedule_confirmations (
+					confirmation_id TEXT NOT NULL, owner_id TEXT NOT NULL, conversation_id TEXT NOT NULL,
+					action TEXT NOT NULL, params_json JSONB NOT NULL, request_digest BYTEA NOT NULL CHECK (octet_length(request_digest)=32),
+					idempotency_key TEXT NOT NULL, summary TEXT NOT NULL, approval_code TEXT NOT NULL,
+					status TEXT NOT NULL CHECK (status IN ('pending','executing','completed','failed','expired','replaced')),
+					revision BIGINT NOT NULL DEFAULT 1, expires_at TIMESTAMPTZ NOT NULL, created_at TIMESTAMPTZ NOT NULL,
+					updated_at TIMESTAMPTZ NOT NULL, result_json JSONB NOT NULL DEFAULT '{}'::jsonb, error_text TEXT NOT NULL DEFAULT '',
+					PRIMARY KEY(owner_id,conversation_id,confirmation_id)
+				)`,
+				`CREATE INDEX IF NOT EXISTS p2p_agent_schedule_confirmations_pending_idx ON p2p_agent_schedule_confirmations(owner_id,conversation_id,status,updated_at)`,
+			})
+		},
+	})
+	m.AddMigrations(sqlutil.Migration{Version: "p2p: native schedule confirmation pending uniqueness v85b", Up: func(ctx context.Context, txn *sql.Tx) error {
+		return execMigrationStatements(ctx, txn, []string{`UPDATE p2p_agent_schedule_confirmations c SET status='replaced',revision=revision+1,updated_at=NOW() WHERE status IN ('pending','executing') AND EXISTS (SELECT 1 FROM p2p_agent_schedule_confirmations newer WHERE newer.owner_id=c.owner_id AND newer.conversation_id=c.conversation_id AND newer.status IN ('pending','executing') AND (newer.updated_at>c.updated_at OR (newer.updated_at=c.updated_at AND newer.confirmation_id>c.confirmation_id)))`, `CREATE UNIQUE INDEX IF NOT EXISTS p2p_agent_schedule_confirmations_active_idx ON p2p_agent_schedule_confirmations(owner_id,conversation_id) WHERE status IN ('pending','executing')`})
+	}})
 	return m.Up(ctx)
 }
 
