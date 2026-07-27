@@ -62,16 +62,16 @@ type voiceSession struct {
 }
 
 type voiceCoordinator struct {
-	mu       sync.Mutex
-	profiles storage.ModelProfileStore
-	owner    func() string
-	cfg      voiceRuntimeConfig
-	signer   voiceTokenSigner
-	sessions map[string]*voiceSession
-	streams  map[string]map[chan nativeagent.Event]struct{}
-	durable  func(context.Context, string, map[string]any, func(agentturns.StreamEvent) error) error
-	stop     func(context.Context, string, string) error
-	active   func(string) bool
+	mu         sync.Mutex
+	profiles   storage.ModelProfileStore
+	owner      func() string
+	cfg        voiceRuntimeConfig
+	signer     voiceTokenSigner
+	sessions   map[string]*voiceSession
+	streams    map[string]map[chan nativeagent.Event]struct{}
+	durable    func(context.Context, string, map[string]any, func(agentturns.StreamEvent) error) error
+	stop       func(context.Context, string, string) error
+	active     func(string) bool
 	generation func() uint64
 }
 
@@ -92,16 +92,32 @@ func (m *Module) AbortVoiceSessions(ctx context.Context) {
 		return
 	}
 	m.voice.mu.Lock()
-	ids := make([]string, 0, len(m.voice.sessions))
+	sessions := make([]*voiceSession, 0)
+	streams := make([]map[chan nativeagent.Event]struct{}, 0)
 	for id, s := range m.voice.sessions {
 		if s != nil && !s.Ended {
-			ids = append(ids, id)
+			cp := *s
+			sessions = append(sessions, &cp)
+			s.Ended = true
+			s.State = "ended"
+			streams = append(streams, m.voice.streams[id])
+			delete(m.voice.streams, id)
 		}
 	}
 	m.voice.mu.Unlock()
-	owner := m.currentOwnerID()
-	for _, id := range ids {
-		_, _ = m.voice.end(ctx, owner, map[string]any{"session_id": id})
+	for _, set := range streams {
+		for ch := range set {
+			select {
+			case ch <- nativeagent.Event{Event: "session.done", Data: map[string]any{"status": "done", "session_ended": true}}:
+			default:
+			}
+			close(ch)
+		}
+	}
+	for _, s := range sessions {
+		if client, err := m.voice.providerClient(ctx, s.OwnerID, s); err == nil && client != nil {
+			_ = client.StopVoiceChat(ctx, *s)
+		}
 	}
 }
 
@@ -272,7 +288,9 @@ func profileID(params map[string]any, key string) string {
 
 func (v *voiceCoordinator) create(ctx context.Context, owner string, params map[string]any) (any, *actionbase.Error) {
 	v.cleanupExpired(ctx)
-	if v.active != nil && !v.active(owner) { return nil, actionbase.StatusError(http.StatusUnauthorized, "M_UNKNOWN_TOKEN") }
+	if v.active != nil && !v.active(owner) {
+		return nil, actionbase.StatusError(http.StatusUnauthorized, "M_UNKNOWN_TOKEN")
+	}
 	conversationID := strings.TrimSpace(actionbase.String(params["conversation_id"]))
 	if conversationID == "" {
 		return nil, actionbase.BadRequest("conversation_id is required")
@@ -329,7 +347,13 @@ func (v *voiceCoordinator) create(ctx context.Context, owner string, params map[
 	if err != nil {
 		return nil, actionbase.CodedError(http.StatusServiceUnavailable, "voice_rtc_token_failed", err.Error())
 	}
-	generation := uint64(0); if v.generation != nil { generation = v.generation(); if generation == 0 { return nil, actionbase.StatusError(http.StatusUnauthorized, "M_UNKNOWN_TOKEN") } }
+	generation := uint64(0)
+	if v.generation != nil {
+		generation = v.generation()
+		if generation == 0 {
+			return nil, actionbase.StatusError(http.StatusUnauthorized, "M_UNKNOWN_TOKEN")
+		}
+	}
 	s := &voiceSession{SessionID: sid, OwnerID: owner, Generation: generation, ConversationID: conversationID, ConversationProfileID: conv.ProfileID, SpeechProfileID: speech.ProfileID, ConversationRevision: conv.Revision, ConversationCredential: conv.CredentialVersion, SpeechRevision: speech.Revision, SpeechCredential: speech.CredentialVersion, AppID: appID, VoiceChatAppID: fallback(stringConfig(speech.ProviderConfig, "voice_chat_app_id"), appID), AIUserID: ai, RoomID: room, UserID: uid, Token: token, CallbackToken: v.callbackToken(sid, expiry), ExpiresAt: expiry, State: "created", SpeechProviderConfig: cloneMap(speech.ProviderConfig), op: &sync.Mutex{}}
 	v.mu.Lock()
 	v.sessions[sid] = s
@@ -361,7 +385,9 @@ func (m *Module) AuthorizeVoiceCallback(sessionID, token string) error {
 	if m.voice.active != nil && !m.voice.active(s.OwnerID) {
 		return fmt.Errorf("voice session inactive")
 	}
-	if m.voice.generation != nil && s.Generation != m.voice.generation() { return fmt.Errorf("voice session generation expired") }
+	if m.voice.generation != nil && s.Generation != m.voice.generation() {
+		return fmt.Errorf("voice session generation expired")
+	}
 	want, got := []byte(m.voice.callbackToken(s.SessionID, s.ExpiresAt)), []byte(strings.TrimSpace(token))
 	if len(want) != len(got) || subtle.ConstantTimeCompare(want, got) != 1 {
 		return fmt.Errorf("invalid voice callback token")
@@ -506,7 +532,9 @@ func (v *voiceCoordinator) get(owner, id string) (*voiceSession, *actionbase.Err
 	if v.active != nil && !v.active(s.OwnerID) {
 		return nil, actionbase.StatusError(http.StatusUnauthorized, "M_UNKNOWN_TOKEN")
 	}
-	if v.generation != nil && s.Generation != v.generation() { return nil, actionbase.StatusError(http.StatusUnauthorized, "M_UNKNOWN_TOKEN") }
+	if v.generation != nil && s.Generation != v.generation() {
+		return nil, actionbase.StatusError(http.StatusUnauthorized, "M_UNKNOWN_TOKEN")
+	}
 	if time.Now().After(s.ExpiresAt) {
 		return nil, actionbase.StatusError(http.StatusGone, "voice session expired")
 	}
@@ -693,6 +721,10 @@ func (v *voiceCoordinator) end(ctx context.Context, owner string, params map[str
 	if current.OwnerID != owner {
 		v.mu.Unlock()
 		return nil, actionbase.StatusError(http.StatusForbidden, "M_FORBIDDEN")
+	}
+	if v.generation != nil && current.Generation != v.generation() {
+		v.mu.Unlock()
+		return nil, actionbase.StatusError(http.StatusUnauthorized, "M_UNKNOWN_TOKEN")
 	}
 	if current.Ended || current.State == "ended" {
 		v.mu.Unlock()
