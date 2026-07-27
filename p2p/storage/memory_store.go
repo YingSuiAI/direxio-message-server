@@ -51,6 +51,9 @@ type MemoryStore struct {
 	modelProfileDefaults             map[string]string
 	modelProfileDeletes              map[string]memoryModelProfileDelete
 	modelProfileSyncs                map[string]memoryModelProfileSync
+	schedules                        map[memoryScheduleKey]Schedule
+	scheduleRuns                     map[string]ScheduleRun
+	scheduleMutations                map[string]memoryScheduleMutation
 }
 
 // NewMemoryStore returns an empty, concurrency-safe store. It deliberately has
@@ -87,6 +90,9 @@ func NewMemoryStore() *MemoryStore {
 		modelProfileDefaults:             make(map[string]string),
 		modelProfileDeletes:              make(map[string]memoryModelProfileDelete),
 		modelProfileSyncs:                make(map[string]memoryModelProfileSync),
+		schedules:                        make(map[memoryScheduleKey]Schedule),
+		scheduleRuns:                     make(map[string]ScheduleRun),
+		scheduleMutations:                make(map[string]memoryScheduleMutation),
 	}
 }
 

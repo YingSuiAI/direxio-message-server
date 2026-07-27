@@ -205,6 +205,17 @@ func (s *MemoryStore) ResolveModelProfile(ctx context.Context, ownerID, profileI
 	}
 	return p, nil
 }
+func (s *MemoryStore) ResolveModelProfilePin(ctx context.Context, ownerID, profileID string) (ModelProfile, error) {
+	p, err := s.ResolveModelProfile(ctx, ownerID, profileID)
+	if err != nil {
+		return ModelProfile{}, err
+	}
+	// Mirror the database pin projection: no credential is observable on this
+	// path, including in test-only memory storage.
+	p.APIKey = ""
+	p.APIKeyConfigured = false
+	return p, nil
+}
 func (s *MemoryStore) ResolveModelProfileVersion(ctx context.Context, ownerID, profileID string, credentialVersion int64) (ModelProfile, error) {
 	profile, err := s.ResolveModelProfile(ctx, ownerID, profileID)
 	if err != nil {

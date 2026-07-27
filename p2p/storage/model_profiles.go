@@ -80,6 +80,9 @@ type ModelProfileStore interface {
 	GetModelProfile(context.Context, string, string) (ModelProfile, bool, error)
 	DeleteModelProfile(context.Context, string, string, string, *int64) error
 	ResolveModelProfile(context.Context, string, string) (ModelProfile, error)
+	// ResolveModelProfilePin returns active owner-scoped profile metadata for
+	// durable callers. It never reads or decrypts credential material.
+	ResolveModelProfilePin(context.Context, string, string) (ModelProfile, error)
 	ResolveModelProfileVersion(context.Context, string, string, int64) (ModelProfile, error)
 	ResolveModelProfilePinned(context.Context, string, string, int64, int64) (ModelProfile, error)
 	ModelProfileStoreReady() bool
@@ -567,6 +570,34 @@ func (s *encryptedModelProfileStore) ResolveModelProfile(ctx context.Context, ow
 		return ModelProfile{}, ErrModelProfileNotFound
 	}
 	return p, nil
+}
+
+// scanProfilePin deliberately has no credential columns. Keep it separate
+// from scanProfile so adding a caller to the durable pin path cannot begin
+// decrypting a key by accident.
+func scanProfilePin(row modelProfileScanner) (ModelProfile, error) {
+	var p ModelProfile
+	var temperature, topP sql.NullFloat64
+	err := row.Scan(&p.ProfileID, &p.ClientProfileID, &p.DisplayName, &p.Provider, &p.BaseURL, &p.Model, &p.SystemPrompt, &temperature, &topP, &p.MaxOutputTokens, &p.ContextWindow, &p.ReasoningEffort, &p.Revision, &p.CredentialVersion, &p.CreatedAt, &p.UpdatedAt)
+	if err != nil {
+		return p, err
+	}
+	if temperature.Valid {
+		p.Temperature = &temperature.Float64
+	}
+	if topP.Valid {
+		p.TopP = &topP.Float64
+	}
+	return p, nil
+}
+
+func (s *encryptedModelProfileStore) ResolveModelProfilePin(ctx context.Context, ownerID, profileID string) (ModelProfile, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT profile_id,client_profile_id,display_name,provider,base_url,model,system_prompt,temperature,top_p,max_output_tokens,context_window,reasoning_effort,revision,credential_version,created_at,updated_at FROM p2p_agent_model_profiles WHERE owner_id=$1 AND profile_id=$2 AND deleted_at IS NULL`, ownerID, profileID)
+	p, err := scanProfilePin(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ModelProfile{}, ErrModelProfileNotFound
+	}
+	return p, err
 }
 
 func (s *encryptedModelProfileStore) ResolveModelProfileVersion(ctx context.Context, ownerID, profileID string, credentialVersion int64) (ModelProfile, error) {

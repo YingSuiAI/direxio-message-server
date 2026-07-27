@@ -981,6 +981,34 @@ func (s *DatabaseStore) migrate(ctx context.Context) error {
 			})
 		},
 	})
+	m.AddMigrations(sqlutil.Migration{
+		Version: "p2p: embedded schedules v83",
+		Up: func(ctx context.Context, txn *sql.Tx) error {
+			return execMigrationStatements(ctx, txn, []string{
+				`CREATE TABLE IF NOT EXISTS p2p_agent_schedules (schedule_id TEXT NOT NULL, owner_id TEXT NOT NULL, name TEXT NOT NULL, prompt TEXT NOT NULL, trigger_kind TEXT NOT NULL, trigger_value TEXT NOT NULL, timezone TEXT NOT NULL, skip_if_running BOOLEAN NOT NULL DEFAULT FALSE, status TEXT NOT NULL, revision BIGINT NOT NULL DEFAULT 1, model_profile_id TEXT NOT NULL, model_profile_revision BIGINT NOT NULL, credential_version BIGINT NOT NULL, next_run_at TIMESTAMPTZ, latest_run_at TIMESTAMPTZ, lease_owner TEXT NOT NULL DEFAULT '', lease_until TIMESTAMPTZ, lease_epoch BIGINT NOT NULL DEFAULT 0, idempotency_key TEXT NOT NULL DEFAULT '', deleted_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL, PRIMARY KEY(owner_id,schedule_id))`,
+				`CREATE UNIQUE INDEX IF NOT EXISTS p2p_agent_schedules_idem_idx ON p2p_agent_schedules(owner_id,idempotency_key) WHERE idempotency_key <> ''`,
+				`CREATE INDEX IF NOT EXISTS p2p_agent_schedules_due_idx ON p2p_agent_schedules(status,next_run_at) WHERE deleted_at IS NULL`,
+				`CREATE TABLE IF NOT EXISTS p2p_agent_schedule_runs (run_id TEXT PRIMARY KEY NOT NULL, schedule_id TEXT NOT NULL, owner_id TEXT NOT NULL, status TEXT NOT NULL, scheduled_for TIMESTAMPTZ NOT NULL, started_at TIMESTAMPTZ, finished_at TIMESTAMPTZ, result TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', lease_epoch BIGINT NOT NULL DEFAULT 0, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`,
+				`CREATE INDEX IF NOT EXISTS p2p_agent_schedule_runs_owner_idx ON p2p_agent_schedule_runs(owner_id,schedule_id,run_id)`,
+			})
+		},
+	})
+	m.AddMigrations(sqlutil.Migration{
+		Version: "p2p: schedule mutation receipts and CAS v84",
+		Up: func(ctx context.Context, txn *sql.Tx) error {
+			return execMigrationStatements(ctx, txn, []string{
+				`CREATE TABLE IF NOT EXISTS p2p_agent_schedule_mutations (owner_id TEXT NOT NULL, action TEXT NOT NULL, idempotency_key TEXT NOT NULL, request_digest BYTEA NOT NULL CHECK (octet_length(request_digest)=32), response_json JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL, PRIMARY KEY(owner_id,action,idempotency_key))`,
+			})
+		},
+	})
+	m.AddMigrations(sqlutil.Migration{
+		Version: "p2p: embedded schedule occurrence fencing v84",
+		Up: func(ctx context.Context, txn *sql.Tx) error {
+			return execMigrationStatements(ctx, txn, []string{
+				`CREATE UNIQUE INDEX IF NOT EXISTS p2p_agent_schedule_runs_occurrence_idx ON p2p_agent_schedule_runs(owner_id,schedule_id,scheduled_for)`,
+			})
+		},
+	})
 	return m.Up(ctx)
 }
 

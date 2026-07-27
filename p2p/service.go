@@ -18,6 +18,7 @@ import (
 	"github.com/YingSuiAI/dirextalk-message-server/internal/realtime"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/releasecontrol"
 	agentmodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agent"
+	schedulesmodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agent/schedules"
 	agentcoremodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcore"
 	coreturns "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcoreturns"
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentturns"
@@ -58,6 +59,8 @@ type Config struct {
 	PluginRunner                    PluginRunner
 	NativeAgentRunner               NativeAgentRunner
 	NativeAgentDataDir              string
+	EmbeddedScheduleRunner          schedulesmodule.ScheduledRunner
+	EmbeddedScheduleRunnerFactory   func([]nativeagent.Tool) (schedulesmodule.ScheduledRunner, error)
 	ModelProfileKeyFile             string
 	AgentCore                       AgentCoreConfig
 	ReleaseController               releasecontrol.Controller
@@ -111,6 +114,8 @@ type Service struct {
 	storeMode                 string
 	projectorStarted          bool
 	agentModule               *agentmodule.Module
+	scheduleModule            *schedulesmodule.Module
+	scheduleRunning           bool
 	agentCore                 *agentcoremodule.Client
 	coreTurns                 *coreturns.Ledger
 	agentCoreInitErr          error
@@ -870,9 +875,23 @@ func newService(cfg Config, store Store, transport Transport, state portalState,
 			return nativeModelProfileResolver{store: service.modelProfiles, owner: service.OwnerMXID}
 		}(),
 	})
+	var scheduleStore p2pstorage.ScheduleStore
+	if candidate, ok := store.(p2pstorage.ScheduleStore); ok {
+		scheduleStore = candidate
+	}
+	scheduleRunner := cfg.EmbeddedScheduleRunner
+	if scheduleRunner == nil && cfg.EmbeddedScheduleRunnerFactory != nil {
+		scheduleRunner, _ = cfg.EmbeddedScheduleRunnerFactory(agentmodule.Tools(service.mcpCapabilities))
+	}
+	service.scheduleModule = schedulesmodule.New(schedulesmodule.Config{Store: scheduleStore, Profiles: service.modelProfiles, Runner: scheduleRunner, OwnerID: service.OwnerMXID, SchedulerReady: func() bool {
+		service.mu.Lock()
+		defer service.mu.Unlock()
+		return service.scheduleRunning
+	}})
 	// Agent Core config is deployment-owned and never persisted in portal state.
 	coreConfig := cfg.AgentCore
 	coreConfig.EmbeddedModelProfilesReady = func() bool { return service.modelProfiles != nil && service.modelProfiles.ModelProfileStoreReady() }
+	coreConfig.EmbeddedSchedulesReady = service.EmbeddedSchedulesReady
 	service.agentCore, service.agentCoreInitErr = agentcoremodule.New(coreConfig)
 	if service.agentCore == nil {
 		service.agentCore, _ = agentcoremodule.New(agentcoremodule.Config{})

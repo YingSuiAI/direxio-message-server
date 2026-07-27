@@ -7,12 +7,10 @@ require (
 	github.com/Masterminds/semver/v3 v3.3.1
 	github.com/blevesearch/bleve/v2 v2.5.2
 	github.com/cloudwego/eino v0.9.12
-	github.com/cloudwego/eino-ext/components/tool/mcp/officialmcp v0.1.0
 	github.com/codeclysm/extract v2.2.0+incompatible
 	github.com/coder/websocket v1.8.13
 	github.com/cretz/bine v0.2.0
 	github.com/dgraph-io/ristretto v0.2.0
-	github.com/distribution/reference v0.6.0
 	github.com/docker/docker v26.1.5+incompatible
 	github.com/docker/go-connections v0.5.0
 	github.com/eino-contrib/jsonschema v1.0.3
@@ -39,6 +37,7 @@ require (
 	github.com/patrickmn/go-cache v2.1.0+incompatible
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.22.0
+	github.com/robfig/cron/v3 v3.0.1
 	github.com/sirupsen/logrus v1.9.3
 	github.com/stretchr/testify v1.11.1
 	github.com/tidwall/gjson v1.18.0
@@ -94,6 +93,7 @@ require (
 	github.com/cloudwego/base64x v0.1.6 // indirect
 	github.com/containerd/log v0.1.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/distribution/reference v0.6.0 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/eyedeekay/i2pkeys v0.33.8 // indirect

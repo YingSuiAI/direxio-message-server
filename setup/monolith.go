@@ -96,6 +96,7 @@ func (m *Monolith) AddAllPublicRoutes(
 		PushRules:                       m.UserAPI,
 		ReleaseController:               releasecontrol.NewUnixController(releasecontrol.UnixControllerConfig{}),
 		ModelProfileKeyFile:             strings.TrimSpace(os.Getenv("P2P_AGENT_MODEL_PROFILE_KEY_FILE")),
+		EmbeddedScheduleRunnerFactory:   p2p.RestrictedScheduledRunnerFactory,
 	}
 	if agentCoreConfig, err := p2p.AgentCoreConfigFromEnv(); err != nil {
 		logrus.WithError(err).Fatal("invalid P2P Agent Core configuration")
@@ -154,6 +155,9 @@ func (m *Monolith) AddAllPublicRoutes(
 		} else {
 			p2pService.SetProjectorStarted(true)
 		}
+	}
+	if !p2pService.StartEmbeddedScheduler(processCtx.Context(), "embedded-scheduler") {
+		logrus.Debug("embedded schedule capability unavailable; scheduler not started")
 	}
 	p2p.Register(routers.P2P, p2pService)
 	p2p.RegisterMCP(routers.MCP, p2pService)

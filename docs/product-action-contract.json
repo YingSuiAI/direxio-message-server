@@ -803,6 +803,295 @@
       }
     },
     {
+      "name": "agent.schedules.create",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          },
+          "model_profile_id": {
+            "type": "string",
+            "required": true
+          },
+          "name": {
+            "type": "string",
+            "required": true
+          },
+          "prompt": {
+            "type": "string",
+            "required": true
+          },
+          "skip_if_running": {
+            "type": "boolean"
+          },
+          "trigger": {
+            "type": "object",
+            "required": true
+          }
+        },
+        "response": {
+          "schedule": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.schedules.update",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "expected_revision": {
+            "type": "integer",
+            "required": true
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          },
+          "model_profile_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "schedule_id": {
+            "type": "string",
+            "required": true
+          },
+          "skip_if_running": {
+            "type": "boolean"
+          },
+          "trigger": {
+            "type": "object"
+          }
+        },
+        "response": {
+          "schedule": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.schedules.get",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "schedule_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "schedule": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.schedules.list",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "page_size": {
+            "type": "integer",
+            "presence": {
+              "omitted": "server_default"
+            }
+          },
+          "page_token": {
+            "type": "string",
+            "presence": {
+              "omitted": "first_page"
+            }
+          }
+        },
+        "response": {
+          "next_cursor": {
+            "type": "string"
+          },
+          "schedules": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.schedules.delete",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "expected_revision": {
+            "type": "integer",
+            "required": true
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          },
+          "schedule_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "deleted": {
+            "type": "boolean"
+          },
+          "schedule": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.schedules.enable",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "expected_revision": {
+            "type": "integer",
+            "required": true
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          },
+          "schedule_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "deleted": {
+            "type": "boolean"
+          },
+          "schedule": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.schedules.disable",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "expected_revision": {
+            "type": "integer",
+            "required": true
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          },
+          "schedule_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "deleted": {
+            "type": "boolean"
+          },
+          "schedule": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.schedules.run_now",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          },
+          "schedule_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "run": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.schedule_runs.list",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "cursor": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "schedule_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "next_cursor": {
+            "type": "string"
+          },
+          "runs": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.schedule_runs.get",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "run_id": {
+            "type": "string",
+            "required": true
+          },
+          "schedule_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "run": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    {
       "name": "agent.core.tasks.get",
       "auth": "owner",
       "transport": "http_and_ws_request",

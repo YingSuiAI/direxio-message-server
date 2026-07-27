@@ -2,6 +2,19 @@
 
 Last updated: 2026-07-23
 
+## 2026-07-27 Embedded schedules (Stage A)
+
+Added owner-only `agent.schedules.create`, `.update`, `.get`, `.list`,
+`.delete`, `.enable`, `.disable`, `.run_now` and `agent.schedule_runs.list`
+and `.get`. Schedules accept one RFC3339 occurrence or a five-field cron with
+an explicit IANA timezone, persist only server-owned model profile revision and
+credential version, and expose bounded opaque-cursor readbacks. PostgreSQL
+claims due work with row locks and fencing epochs; run output and errors are
+bounded and secret-free. The restricted runner and scheduler are fail-closed:
+the capability is unavailable until durable storage, profile-key readiness and
+an explicit read-only runner are wired. Stage B chat confirmation is not part
+of this surface.
+
 ## 2026-07-27 Server-owned Native Agent model profiles
 
 Added owner-only `agent.model_profiles.sync`, `.list`, `.get`, and `.delete`

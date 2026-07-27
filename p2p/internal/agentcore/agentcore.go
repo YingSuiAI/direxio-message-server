@@ -72,6 +72,7 @@ type Config struct {
 	StreamIdleTimeout          time.Duration
 	ProbeTimeout               time.Duration
 	EmbeddedModelProfilesReady func() bool
+	EmbeddedSchedulesReady     func() bool
 }
 
 func (c Config) withDefaults() Config {
@@ -936,6 +937,9 @@ func (c *Client) backendsGet(ctx context.Context, _ map[string]any) (any, *actio
 	embeddedCapabilities := []string{"chat", "models.query", "bundled_tools"}
 	if c.cfg.EmbeddedModelProfilesReady != nil && c.cfg.EmbeddedModelProfilesReady() {
 		embeddedCapabilities = append(embeddedCapabilities, "model_profiles.server")
+	}
+	if c.cfg.EmbeddedSchedulesReady != nil && c.cfg.EmbeddedSchedulesReady() {
+		embeddedCapabilities = append(embeddedCapabilities, "schedules.server")
 	}
 	return map[string]any{
 		"embedded": map[string]any{"available": true, "capabilities": embeddedCapabilities},
