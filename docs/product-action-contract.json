@@ -7610,12 +7610,130 @@
     {
       "name": "agent.chat",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "after_seq": {
+            "type": "integer"
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "data_base64": {
+                  "type": "string",
+                  "required": true,
+                  "write_only": true
+                },
+                "mime_type": {
+                  "type": "string",
+                  "required": true
+                },
+                "name": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "client_model_profile_id": {
+            "type": "string"
+          },
+          "conversation_id": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "messages": {
+            "type": "array"
+          },
+          "model_profile_id": {
+            "type": "string"
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "turn_id": {
+            "type": "string"
+          }
+        },
+        "response": {
+          "text": {
+            "type": "string"
+          },
+          "tool_calls": {
+            "type": "array"
+          }
+        }
+      }
     },
     {
       "name": "agent.chat.stream",
       "auth": "owner",
-      "transport": "ws_stream_only"
+      "transport": "ws_stream_only",
+      "schema": {
+        "request": {
+          "after_seq": {
+            "type": "integer"
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "data_base64": {
+                  "type": "string",
+                  "required": true,
+                  "write_only": true
+                },
+                "mime_type": {
+                  "type": "string",
+                  "required": true
+                },
+                "name": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "client_model_profile_id": {
+            "type": "string"
+          },
+          "conversation_id": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "messages": {
+            "type": "array"
+          },
+          "model_profile_id": {
+            "type": "string"
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "turn_id": {
+            "type": "string"
+          }
+        },
+        "response": {
+          "text": {
+            "type": "string"
+          },
+          "tool_calls": {
+            "type": "array"
+          }
+        }
+      }
     },
     {
       "name": "agent.chat.turn.stop",

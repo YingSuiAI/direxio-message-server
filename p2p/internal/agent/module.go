@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"reflect"
 	"strings"
 	"time"
 
@@ -140,6 +141,8 @@ func (m *Module) Stream(ctx context.Context, action string, params map[string]an
 	if strings.TrimSpace(action) == "agent.voice.session.stream" && m.voice != nil {
 		return m.voice.stream(ctx, m.currentOwnerID(), params, emit)
 	}
+	params = cloneMap(params)
+	delete(params, "_server_pinned_profile")
 	return m.runner.Stream(ctx, strings.TrimSpace(action), cloneMap(params), emit)
 }
 
@@ -147,9 +150,42 @@ func (m *Module) DurableStream(ctx context.Context, ownerID, action string, para
 	if m == nil || m.runner == nil || m.turns == nil {
 		return fmt.Errorf("native agent turn coordinator is not configured")
 	}
+	params = cloneMap(params)
+	delete(params, "_server_pinned_profile")
 	turnID := actionbase.String(params["turn_id"])
 	conversationID := nativeagent.ConversationID(params)
 	profileID := durableServerModelProfileID(params)
+	var existing agentturns.Turn
+	var existingOK bool
+	if turnID != "" {
+		var getErr error
+		existing, existingOK, getErr = m.turns.Get(context.Background(), ownerID, turnID)
+		if getErr != nil {
+			return getErr
+		}
+	}
+	contentPresent := durableChatContentPresent(params)
+	if existingOK && !contentPresent {
+		if suppliedConversation := actionbase.String(params["conversation_id"]); suppliedConversation != "" && suppliedConversation != existing.ConversationID {
+			return agentturns.ErrTurnIDReused
+		}
+		if suppliedAction := strings.TrimSpace(action); suppliedAction != "" && suppliedAction != existing.Action {
+			return agentturns.ErrTurnIDReused
+		}
+		if suppliedProfile := durableServerModelProfileID(params); suppliedProfile != "" && suppliedProfile != existing.ModelProfileID {
+			return agentturns.ErrTurnIDReused
+		}
+		conversationID = existing.ConversationID
+		profileID = existing.ModelProfileID
+		digest := existing.Digest
+		request := agentturns.Request{OwnerID: strings.TrimSpace(ownerID), TurnID: turnID, ConversationID: conversationID, Action: existing.Action, ModelProfileID: profileID, ModelProfileRevision: existing.ModelProfileRevision, CredentialVersion: existing.CredentialVersion, Digest: digest, AfterSeq: actionbase.Int64(params["after_seq"])}
+		return m.turns.Stream(ctx, request, func(context.Context, func(agentturns.RuntimeEvent) error) error { return nil }, emit)
+	}
+	if action == "agent.chat" || action == "agent.chat.stream" {
+		if _, err := nativeagent.ValidateNativeAgentChatParams(params); err != nil {
+			return err
+		}
+	}
 	var pinnedRevision, pinnedCredential int64
 	requestedRevision, requestedCredential := int64(0), int64(0)
 	if pin, ok := ctx.Value(pinnedProfileContextKey{}).(pinnedProfileContext); ok {
@@ -176,6 +212,20 @@ func (m *Module) DurableStream(ctx context.Context, ownerID, action string, para
 		}
 		pinnedRevision, pinnedCredential = profile.Revision, profile.CredentialVersion
 	}
+	if action == "agent.chat" || action == "agent.chat.stream" {
+		attachments, _ := nativeagent.ValidateNativeAgentChatParams(params)
+		if len(attachments) > 0 {
+			// The runtime repeats this fence; doing it here prevents a bad
+			// request from reserving a durable turn or calculating its digest.
+			profile, resolveErr := m.modelProfiles.ResolveModelProfilePinned(ctx, strings.TrimSpace(ownerID), profileID, pinnedRevision, pinnedCredential)
+			if resolveErr != nil {
+				return resolveErr
+			}
+			if profile.ModelKind != storage.ModelKindConversation || !containsImageModality(profile.InputModalities) {
+				return fmt.Errorf("image attachments require a conversation model profile with image input")
+			}
+		}
+	}
 	digest, err := agentturns.RequestDigest(action, params)
 	if err != nil {
 		return err
@@ -199,6 +249,7 @@ func (m *Module) DurableStream(ctx context.Context, ownerID, action string, para
 				return resolveErr
 			}
 			runParams["model_profile"] = durableModelProfileParams(profile)
+			runParams["_server_pinned_profile"] = true
 			delete(runParams, "model_profile_id")
 			delete(runParams, "client_model_profile_id")
 		}
@@ -236,7 +287,8 @@ func durableModelProfileParams(profile storage.ModelProfile) map[string]any {
 		"provider": profile.Provider, "base_url": profile.BaseURL, "model": profile.Model,
 		"system_prompt": profile.SystemPrompt, "api_key": profile.APIKey,
 		"max_output_tokens": profile.MaxOutputTokens, "context_window": profile.ContextWindow,
-		"reasoning_mode": profile.ReasoningEffort,
+		"reasoning_mode": profile.ReasoningEffort, "model_kind": profile.ModelKind,
+		"input_modalities": append([]string(nil), profile.InputModalities...),
 	}
 	if profile.Temperature != nil {
 		params["temperature"] = *profile.Temperature
@@ -245,6 +297,36 @@ func durableModelProfileParams(profile storage.ModelProfile) map[string]any {
 		params["top_p"] = *profile.TopP
 	}
 	return params
+}
+
+func durableChatContentPresent(params map[string]any) bool {
+	for _, key := range []string{"prompt", "message", "messages", "attachments"} {
+		value, ok := params[key]
+		if !ok || value == nil {
+			continue
+		}
+		if text, ok := value.(string); ok {
+			if strings.TrimSpace(text) != "" {
+				return true
+			}
+			continue
+		}
+		if key == "messages" || key == "attachments" {
+			if reflect.ValueOf(value).Kind() == reflect.Slice && reflect.ValueOf(value).Len() > 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func containsImageModality(modalities []string) bool {
+	for _, modality := range modalities {
+		if strings.EqualFold(strings.TrimSpace(modality), "image") {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Module) stopTurn(ctx context.Context, params map[string]any) (any, *actionbase.Error) {
@@ -313,7 +395,9 @@ func (m *Module) invoke(action string) actionbase.Handler {
 		if m == nil || m.runner == nil {
 			return nil, actionbase.StatusError(http.StatusBadGateway, "native agent runtime is not configured")
 		}
-		result, err := m.runner.Invoke(ctx, strings.TrimSpace(action), cloneMap(params))
+		params = cloneMap(params)
+		delete(params, "_server_pinned_profile")
+		result, err := m.runner.Invoke(ctx, strings.TrimSpace(action), params)
 		if err != nil {
 			if errors.Is(err, agentmemory.ErrInvalidCursor) {
 				return nil, actionbase.BadRequest(err.Error())

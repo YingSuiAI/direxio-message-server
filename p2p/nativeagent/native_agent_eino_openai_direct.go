@@ -122,11 +122,31 @@ func openAICompatibleMessages(input []*schema.Message) []map[string]any {
 				record["tool_calls"] = openAICompatibleToolCalls(message.ToolCalls)
 			}
 		default:
-			record["content"] = message.Content
+			if len(message.UserInputMultiContent) > 0 {
+				record["content"] = openAICompatibleInputContent(message)
+			} else {
+				record["content"] = message.Content
+			}
 		}
 		messages = append(messages, record)
 	}
 	return messages
+}
+
+func openAICompatibleInputContent(message *schema.Message) []map[string]any {
+	parts := make([]map[string]any, 0, len(message.UserInputMultiContent))
+	for _, part := range message.UserInputMultiContent {
+		switch part.Type {
+		case schema.ChatMessagePartTypeText:
+			parts = append(parts, map[string]any{"type": "text", "text": part.Text})
+		case schema.ChatMessagePartTypeImageURL:
+			if part.Image == nil || part.Image.Base64Data == nil {
+				continue
+			}
+			parts = append(parts, map[string]any{"type": "image_url", "image_url": map[string]any{"url": "data:" + part.Image.MIMEType + ";base64," + *part.Image.Base64Data}})
+		}
+	}
+	return parts
 }
 
 func openAICompatibleToolCalls(calls []schema.ToolCall) []map[string]any {

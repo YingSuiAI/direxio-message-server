@@ -167,6 +167,9 @@ func (m *Module) Handler() http.HandlerFunc {
 		if err != nil {
 			return
 		}
+		// Native Agent image turns can be up to 8 MiB decoded (~11 MiB base64)
+		// plus JSON framing. Keep a bounded frame ceiling for all realtime traffic.
+		conn.SetReadLimit(16 << 20)
 		record, err := m.ConsumeTicket(ticket)
 		if err != nil {
 			_ = conn.Close(websocket.StatusPolicyViolation, "M_UNKNOWN_TOKEN")

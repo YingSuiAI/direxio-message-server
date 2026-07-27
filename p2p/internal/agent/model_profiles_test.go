@@ -2,7 +2,9 @@ package agent
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"math"
 	"strings"
 	"sync"
@@ -206,6 +208,50 @@ func TestDurableTurnPinsServerModelProfileAcrossRotationDeleteAndReactivation(t 
 	turn, ok, err := store.GetAgentTurn(context.Background(), "owner", "turn-pinned")
 	if err != nil || !ok || turn.ModelProfileRevision != created.Profiles[0].Revision || turn.CredentialVersion != created.Profiles[0].CredentialVersion {
 		t.Fatalf("persisted pinned turn = %#v, ok=%v err=%v", turn, ok, err)
+	}
+}
+
+func TestDurableImageTurnValidatesBeforeReserveAndSupportsDigestOnlyReattach(t *testing.T) {
+	store := storage.NewMemoryStore()
+	created, err := store.SyncModelProfiles(context.Background(), "owner", "image-profile-create", "", []storage.ModelProfileSyncEntry{{ClientProfileID: "image-client", Provider: "openai", Model: "gpt-4o", BaseURL: "https://api.openai.com/v1", APIKey: agentStringPtr("secret"), ModelKind: storage.ModelKindConversation, InputModalities: []string{"text", "image"}}})
+	if err != nil || len(created.Profiles) != 1 {
+		t.Fatalf("profile create: %#v %v", created, err)
+	}
+	runner := &pinnedTurnRunner{}
+	module := New(Config{Runner: runner, Turns: store, ModelProfiles: store, OwnerID: func() string { return "owner" }})
+	invalid := map[string]any{"turn_id": "image-invalid", "conversation_id": "image-conversation", "prompt": "look", "model_profile_id": created.Profiles[0].ProfileID, "attachments": []any{map[string]any{"mime_type": "image/gif", "data_base64": base64.StdEncoding.EncodeToString([]byte("x"))}}}
+	if err := module.DurableStream(context.Background(), "owner", "agent.chat.stream", invalid, func(agentturns.StreamEvent) error { return nil }); err == nil {
+		t.Fatal("invalid image was accepted")
+	}
+	if _, ok, _ := store.GetAgentTurn(context.Background(), "owner", "image-invalid"); ok {
+		t.Fatal("invalid image reserved a durable turn")
+	}
+	encoded := base64.StdEncoding.EncodeToString([]byte("image"))
+	params := map[string]any{"turn_id": "image-valid", "conversation_id": "image-conversation", "prompt": "look", "model_profile_id": created.Profiles[0].ProfileID, "attachments": []any{map[string]any{"type": "image", "mime_type": "image/png", "data_base64": encoded}}}
+	if err := module.DurableStream(context.Background(), "owner", "agent.chat.stream", params, func(agentturns.StreamEvent) error { return nil }); err != nil {
+		t.Fatalf("valid image turn: %v", err)
+	}
+	if err := module.DurableStream(context.Background(), "owner", "agent.chat.stream", map[string]any{"turn_id": "image-valid", "after_seq": int64(1)}, func(agentturns.StreamEvent) error { return nil }); err != nil {
+		t.Fatalf("digest-only reattach: %v", err)
+	}
+	changed := cloneMap(params)
+	changed["attachments"] = []any{map[string]any{"type": "image", "mime_type": "image/png", "data_base64": base64.StdEncoding.EncodeToString([]byte("changed"))}}
+	if err := module.DurableStream(context.Background(), "owner", "agent.chat.stream", changed, func(agentturns.StreamEvent) error { return nil }); !errors.Is(err, agentturns.ErrTurnIDReused) {
+		t.Fatalf("changed image error = %v, want turn reuse", err)
+	}
+	other, err := store.SyncModelProfiles(context.Background(), "owner", "image-profile-other", "", []storage.ModelProfileSyncEntry{{ClientProfileID: "image-client-other", Provider: "openai", Model: "gpt-4o-mini", BaseURL: "https://api.openai.com/v1", APIKey: agentStringPtr("secret"), ModelKind: storage.ModelKindConversation, InputModalities: []string{"text", "image"}}})
+	if err != nil || len(other.Profiles) == 0 {
+		t.Fatalf("other profile create: %#v %v", other, err)
+	}
+	profileChanged := cloneMap(params)
+	profileChanged["model_profile_id"] = other.Profiles[len(other.Profiles)-1].ProfileID
+	if err := module.DurableStream(context.Background(), "owner", "agent.chat.stream", profileChanged, func(agentturns.StreamEvent) error { return nil }); !errors.Is(err, agentturns.ErrTurnIDReused) {
+		t.Fatalf("changed profile error = %v, want turn reuse", err)
+	}
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	if runner.executions != 1 {
+		t.Fatalf("reattach reran runtime: %d", runner.executions)
 	}
 }
 

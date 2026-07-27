@@ -57,6 +57,8 @@ type ServerModelProfile struct {
 	MaxOutputTokens            int
 	ContextWindow              int
 	ReasoningEffort            string
+	ModelKind                  string
+	InputModalities            []string
 	Revision                   int64
 	CredentialVersion          int64
 }
@@ -263,6 +265,10 @@ func (r *Runtime) Stream(ctx context.Context, action string, params map[string]a
 		return fmt.Errorf("native agent stream action %q is not implemented", action)
 	}
 	ctx = r.withRequestContext(ctx, params)
+	attachments, validationErr := ValidateNativeAgentChatParams(params)
+	if validationErr != nil {
+		return emitNativeAgentStreamFailure(emit, validationErr)
+	}
 	config, _, err := r.agentConfig(ctx)
 	if err != nil {
 		return emitNativeAgentStreamFailure(emit, err)
@@ -273,6 +279,9 @@ func (r *Runtime) Stream(ctx context.Context, action string, params map[string]a
 			return emitErr
 		}
 		return emit(Event{Event: "done", Data: map[string]any{"ok": false, "native": true, "framework": "eino", "model_ready": false}})
+	}
+	if validationErr := nativeAgentImageProfileAllowed(params, profile, len(attachments) > 0); validationErr != nil {
+		return emitNativeAgentStreamFailure(emit, validationErr)
 	}
 	if err := validateModelProfile(profile); err != nil {
 		if emitErr := emit(Event{Event: "error", Data: map[string]any{"error": err.Error()}}); emitErr != nil {

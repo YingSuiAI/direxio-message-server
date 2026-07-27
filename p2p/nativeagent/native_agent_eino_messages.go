@@ -2,6 +2,7 @@ package nativeagent
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/cloudwego/eino/schema"
@@ -41,8 +42,13 @@ func requestEinoMessages(params map[string]any) []*schema.Message {
 		}
 	}
 	prompt := fallbackString(trimString(params["prompt"]), trimString(params["message"]))
-	if prompt != "" {
-		result = append(result, schema.UserMessage(prompt))
+	attachments, _ := parseNativeAgentAttachments(params)
+	if prompt != "" || len(attachments) > 0 {
+		if len(attachments) > 0 {
+			result = append(result, &schema.Message{Role: schema.User, Content: prompt, UserInputMultiContent: nativeAgentAttachmentParts(prompt, attachments)})
+		} else {
+			result = append(result, schema.UserMessage(prompt))
+		}
 	}
 	if len(result) == 0 {
 		result = append(result, schema.UserMessage("你好"))
@@ -125,12 +131,79 @@ func cloneEinoMessages(messages []*schema.Message) []*schema.Message {
 		}
 		clone := *message
 		if len(message.ToolCalls) > 0 {
-			clone.ToolCalls = append([]schema.ToolCall{}, message.ToolCalls...)
+			clone.ToolCalls = make([]schema.ToolCall, len(message.ToolCalls))
+			for i, call := range message.ToolCalls {
+				clone.ToolCalls[i] = call
+				if call.Extra != nil {
+					clone.ToolCalls[i].Extra = cloneAnyMap(call.Extra)
+				}
+			}
 		}
+		clone.UserInputMultiContent = cloneEinoInputParts(message.UserInputMultiContent)
+		clone.MultiContent = cloneEinoChatParts(message.MultiContent)
 		if len(message.Extra) > 0 {
 			clone.Extra = cloneAnyMap(message.Extra)
 		}
 		result = append(result, &clone)
+	}
+	return result
+}
+
+func cloneEinoChatParts(parts []schema.ChatMessagePart) []schema.ChatMessagePart {
+	if len(parts) == 0 {
+		return nil
+	}
+	result := make([]schema.ChatMessagePart, len(parts))
+	for i, part := range parts {
+		result[i] = part
+		if part.ImageURL != nil {
+			copyPart := *part.ImageURL
+			copyPart.Extra = cloneAnyMap(part.ImageURL.Extra)
+			result[i].ImageURL = &copyPart
+		}
+		if part.AudioURL != nil {
+			copyPart := *part.AudioURL
+			copyPart.Extra = cloneAnyMap(part.AudioURL.Extra)
+			result[i].AudioURL = &copyPart
+		}
+		if part.VideoURL != nil {
+			copyPart := *part.VideoURL
+			copyPart.Extra = cloneAnyMap(part.VideoURL.Extra)
+			result[i].VideoURL = &copyPart
+		}
+		if part.FileURL != nil {
+			copyPart := *part.FileURL
+			copyPart.Extra = cloneAnyMap(part.FileURL.Extra)
+			result[i].FileURL = &copyPart
+		}
+	}
+	return result
+}
+
+func cloneEinoInputParts(parts []schema.MessageInputPart) []schema.MessageInputPart {
+	if len(parts) == 0 {
+		return nil
+	}
+	result := make([]schema.MessageInputPart, len(parts))
+	for i, part := range parts {
+		result[i] = part
+		if part.Image != nil {
+			image := *part.Image
+			image.MessagePartCommon = part.Image.MessagePartCommon
+			if part.Image.URL != nil {
+				value := *part.Image.URL
+				image.URL = &value
+			}
+			if part.Image.Base64Data != nil {
+				value := *part.Image.Base64Data
+				image.Base64Data = &value
+			}
+			image.Extra = cloneAnyMap(part.Image.Extra)
+			result[i].Image = &image
+		}
+		if part.Extra != nil {
+			result[i].Extra = cloneAnyMap(part.Extra)
+		}
 	}
 	return result
 }
@@ -149,6 +222,15 @@ func trimEinoMessageForMemory(message *schema.Message) *schema.Message {
 	clone := *message
 	clone.ResponseMeta = nil
 	clone.Extra = nil
+	if len(clone.UserInputMultiContent) > 0 {
+		marker := attachmentMemoryMarker(clone.UserInputMultiContent)
+		if strings.TrimSpace(clone.Content) == "" {
+			clone.Content = marker
+		} else if marker != "" {
+			clone.Content = strings.TrimSpace(clone.Content) + "\n" + marker
+		}
+		clone.UserInputMultiContent = nil
+	}
 	if clone.Role == schema.Assistant && len(clone.ToolCalls) == 0 && strings.TrimSpace(clone.Content) == "" {
 		return nil
 	}
@@ -159,6 +241,19 @@ func trimEinoMessageForMemory(message *schema.Message) *schema.Message {
 		clone.ToolCalls = append([]schema.ToolCall{}, clone.ToolCalls...)
 	}
 	return &clone
+}
+
+func attachmentMemoryMarker(parts []schema.MessageInputPart) string {
+	count := 0
+	for _, part := range parts {
+		if part.Type == schema.ChatMessagePartTypeImageURL && part.Image != nil {
+			count++
+		}
+	}
+	if count == 0 {
+		return ""
+	}
+	return fmt.Sprintf("[attached %d image(s)]", count)
 }
 
 func compactEinoMessagesForMemory(messages []*schema.Message) []*schema.Message {

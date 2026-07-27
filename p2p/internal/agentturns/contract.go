@@ -190,7 +190,7 @@ func secretFreeValue(value any) any {
 		sort.Strings(keys)
 		result := make(map[string]any, len(keys))
 		for _, key := range keys {
-			if secretKey(key) || key == "after_seq" {
+			if secretKey(key) || key == "after_seq" || key == "model_profile_revision" || key == "credential_version" {
 				continue
 			}
 			normalizedKey := strings.ToLower(strings.TrimSpace(key))
@@ -232,7 +232,7 @@ func secretFreeConcreteValue(value any) any {
 		result := make(map[string]any, len(keys))
 		for _, reflectedKey := range keys {
 			key := reflectedKey.String()
-			if secretKey(key) || key == "after_seq" {
+			if secretKey(key) || key == "after_seq" || key == "model_profile_revision" || key == "credential_version" {
 				continue
 			}
 			item := reflected.MapIndex(reflectedKey).Interface()

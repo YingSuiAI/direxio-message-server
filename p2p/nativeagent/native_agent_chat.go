@@ -16,12 +16,19 @@ Embedded capability rules:
 
 func (r *Runtime) chat(ctx context.Context, params map[string]any) (map[string]any, error) {
 	ctx = r.withRequestContext(ctx, params)
+	attachments, err := ValidateNativeAgentChatParams(params)
+	if err != nil {
+		return nil, err
+	}
 	config, _, err := r.agentConfig(ctx)
 	if err != nil {
 		return nil, err
 	}
 	profile, err := r.resolveModelProfileForRequest(ctx, params)
 	if err != nil {
+		return nil, err
+	}
+	if err := nativeAgentImageProfileAllowed(params, profile, len(attachments) > 0); err != nil {
 		return nil, err
 	}
 	if err := validateModelProfile(profile); err != nil {

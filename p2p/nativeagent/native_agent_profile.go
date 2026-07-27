@@ -19,6 +19,8 @@ type nativeModelProfile struct {
 	MaxOutputTokens int
 	ContextWindow   int
 	ReasoningMode   string
+	ModelKind       string
+	InputModalities []string
 }
 
 func (r *Runtime) resolveModelProfile(params map[string]any) nativeModelProfile {
@@ -34,6 +36,8 @@ func (r *Runtime) resolveModelProfile(params map[string]any) nativeModelProfile 
 		MaxOutputTokens: int(int64Param(raw["max_output_tokens"])),
 		ContextWindow:   int(int64Param(raw["context_window"])),
 		ReasoningMode:   normalizedReasoningMode(raw["reasoning_mode"]),
+		ModelKind:       fallbackString(pluginConfigString(raw, "model_kind"), "conversation"),
+		InputModalities: stringSliceParam(raw["input_modalities"]),
 	}
 }
 
@@ -73,6 +77,8 @@ func (r *Runtime) resolveModelProfileForRequest(ctx context.Context, params map[
 		MaxOutputTokens: profile.MaxOutputTokens,
 		ContextWindow:   profile.ContextWindow,
 		ReasoningMode:   normalizedReasoningMode(profile.ReasoningEffort),
+		ModelKind:       profile.ModelKind,
+		InputModalities: append([]string(nil), profile.InputModalities...),
 	}, nil
 }
 

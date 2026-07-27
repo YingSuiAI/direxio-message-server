@@ -25,6 +25,7 @@ func (r nativeModelProfileResolver) ResolveModelProfile(ctx context.Context, pro
 		Temperature: profile.Temperature, TopP: profile.TopP,
 		MaxOutputTokens: profile.MaxOutputTokens, ContextWindow: profile.ContextWindow,
 		ReasoningEffort: profile.ReasoningEffort,
-		Revision:        profile.Revision, CredentialVersion: profile.CredentialVersion,
+		ModelKind:       profile.ModelKind, InputModalities: append([]string(nil), profile.InputModalities...),
+		Revision: profile.Revision, CredentialVersion: profile.CredentialVersion,
 	}, nil
 }

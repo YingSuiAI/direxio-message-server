@@ -182,7 +182,20 @@ func geminiDirectContents(input []*schema.Message) (string, []map[string]any) {
 				},
 			})
 		default:
-			if message.Content != "" {
+			if len(message.UserInputMultiContent) > 0 {
+				for _, part := range message.UserInputMultiContent {
+					switch part.Type {
+					case schema.ChatMessagePartTypeText:
+						if part.Text != "" {
+							parts = append(parts, map[string]any{"text": part.Text})
+						}
+					case schema.ChatMessagePartTypeImageURL:
+						if part.Image != nil && part.Image.Base64Data != nil {
+							parts = append(parts, map[string]any{"inlineData": map[string]any{"mimeType": part.Image.MIMEType, "data": *part.Image.Base64Data}})
+						}
+					}
+				}
+			} else if message.Content != "" {
 				parts = append(parts, map[string]any{"text": message.Content})
 			}
 		}

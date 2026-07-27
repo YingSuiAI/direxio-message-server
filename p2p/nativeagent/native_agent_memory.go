@@ -131,8 +131,18 @@ func (r *Runtime) rememberEinoMessages(ctx context.Context, config map[string]an
 
 func memoryMessagesFromRequest(params map[string]any, requestMessages []*schema.Message) []*schema.Message {
 	prompt := fallbackString(trimString(params["prompt"]), trimString(params["message"]))
-	if prompt != "" {
-		return []*schema.Message{schema.UserMessage(prompt)}
+	attachments, _ := parseNativeAgentAttachments(params)
+	if prompt != "" || len(attachments) > 0 {
+		content := prompt
+		if len(attachments) > 0 {
+			marker := fmt.Sprintf("[attached %d image(s)]", len(attachments))
+			if content == "" {
+				content = marker
+			} else {
+				content += "\n" + marker
+			}
+		}
+		return []*schema.Message{schema.UserMessage(content)}
 	}
 	if !hasExplicitRequestMessages(params) {
 		return cloneEinoMessages(requestMessages)

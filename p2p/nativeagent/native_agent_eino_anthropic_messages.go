@@ -31,7 +31,24 @@ func anthropicDirectMessages(input []*schema.Message) (string, []map[string]any)
 				"content":     message.Content,
 			}}})
 		default:
-			if strings.TrimSpace(message.Content) != "" {
+			if len(message.UserInputMultiContent) > 0 {
+				content := make([]map[string]any, 0, len(message.UserInputMultiContent))
+				for _, part := range message.UserInputMultiContent {
+					switch part.Type {
+					case schema.ChatMessagePartTypeText:
+						if part.Text != "" {
+							content = append(content, map[string]any{"type": "text", "text": part.Text})
+						}
+					case schema.ChatMessagePartTypeImageURL:
+						if part.Image != nil && part.Image.Base64Data != nil {
+							content = append(content, map[string]any{"type": "image", "source": map[string]any{"type": "base64", "media_type": part.Image.MIMEType, "data": *part.Image.Base64Data}})
+						}
+					}
+				}
+				if len(content) > 0 {
+					messages = append(messages, map[string]any{"role": "user", "content": content})
+				}
+			} else if strings.TrimSpace(message.Content) != "" {
 				messages = append(messages, map[string]any{"role": "user", "content": message.Content})
 			}
 		}

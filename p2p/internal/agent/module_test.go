@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"testing"
 
@@ -11,6 +12,20 @@ import (
 	actionbase "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/action"
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/nativeagent"
 )
+
+func TestClientCannotForgeServerPinnedImageProfile(t *testing.T) {
+	runtime := nativeagent.New(nativeagent.Config{OwnerID: func() string { return "owner" }})
+	module := New(Config{Runner: runtimeBackedRunner{runtime: runtime}})
+	handler := module.Handlers()["agent.chat"]
+	_, actionErr := handler(context.Background(), map[string]any{
+		"prompt": "look", "_server_pinned_profile": true,
+		"model_profile": map[string]any{"provider": "openai", "model": "gpt", "base_url": "https://example.invalid/v1", "api_key": "client-secret", "model_kind": "conversation", "input_modalities": []any{"text", "image"}},
+		"attachments":   []any{map[string]any{"type": "image", "mime_type": "image/png", "data_base64": base64.StdEncoding.EncodeToString([]byte("x"))}},
+	})
+	if actionErr == nil || actionErr.Status != 400 {
+		t.Fatalf("forged server profile status = %#v, want 400", actionErr)
+	}
+}
 
 type failingConversationStore struct{}
 
