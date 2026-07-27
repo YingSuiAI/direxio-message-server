@@ -69,6 +69,65 @@ func TestReadOnlyAllowlistRejectsMutation(t *testing.T) {
 	}
 }
 
+func TestScheduleListUsesPagePaginationContract(t *testing.T) {
+	ctx := context.Background()
+	store := storage.NewMemoryStore()
+	for _, id := range []string{"schedule-1", "schedule-2", "schedule-3"} {
+		if _, err := store.CreateSchedule(ctx, storage.Schedule{OwnerID: "owner", ScheduleID: id}, ""); err != nil {
+			t.Fatalf("create %s: %v", id, err)
+		}
+	}
+	list := New(Config{Store: store, OwnerID: func() string { return "owner" }}).Handlers()["agent.schedules.list"]
+
+	for _, params := range []map[string]any{{"limit": 1}, {"cursor": "schedule-1"}} {
+		if _, actionErr := list(ctx, params); actionErr == nil {
+			t.Fatalf("legacy pagination params unexpectedly accepted: %#v", params)
+		}
+	}
+
+	first, actionErr := list(ctx, map[string]any{"page_size": 2})
+	if actionErr != nil {
+		t.Fatalf("first page: %#v", actionErr)
+	}
+	firstPage := first.(map[string]any)
+	if got := len(firstPage["schedules"].([]storage.Schedule)); got != 2 {
+		t.Fatalf("first page length = %d, want 2", got)
+	}
+	next, ok := firstPage["next_cursor"].(string)
+	if !ok || next == "" {
+		t.Fatalf("first page cursor = %#v", firstPage["next_cursor"])
+	}
+
+	second, actionErr := list(ctx, map[string]any{"page_size": 2, "page_token": next})
+	if actionErr != nil {
+		t.Fatalf("second page: %#v", actionErr)
+	}
+	secondPage := second.(map[string]any)
+	if got := len(secondPage["schedules"].([]storage.Schedule)); got != 1 {
+		t.Fatalf("second page length = %d, want 1", got)
+	}
+	if got := secondPage["next_cursor"].(string); got != "" {
+		t.Fatalf("second page cursor = %q, want empty", got)
+	}
+}
+
+func TestScheduleListRejectsInvalidPageParameters(t *testing.T) {
+	list := New(Config{Store: storage.NewMemoryStore(), OwnerID: func() string { return "owner" }}).Handlers()["agent.schedules.list"]
+	for name, params := range map[string]map[string]any{
+		"unknown":       {"page_size": 1, "limit": 1},
+		"string size":   {"page_size": "1"},
+		"fraction size": {"page_size": 1.5},
+		"zero size":     {"page_size": 0},
+		"negative size": {"page_size": -1},
+		"large size":    {"page_size": 101},
+		"token type":    {"page_token": 1},
+	} {
+		if _, actionErr := list(context.Background(), params); actionErr == nil {
+			t.Fatalf("%s unexpectedly accepted: %#v", name, params)
+		}
+	}
+}
+
 func TestActiveSameKeyReplayReturnsInProgressWithoutRunnerCall(t *testing.T) {
 	store, module, sch, run, runner := runNowReplayFixture(t, time.Minute)
 	out, terminal, handled := module.reconcileRunNowReplay(context.Background(), sch.ScheduleID, run.RunID)

@@ -393,14 +393,14 @@ func (m *Module) get(ctx context.Context, p map[string]any) (any, *actionbase.Er
 	return map[string]any{"schedule": v}, nil
 }
 func (m *Module) list(ctx context.Context, p map[string]any) (any, *actionbase.Error) {
-	if e := rejectUnknown(p, "limit", "cursor"); e != nil {
+	if e := rejectUnknown(p, "page_size", "page_token"); e != nil {
 		return nil, invalid(e)
 	}
-	n, e := intVal(p, "limit")
+	n, e := pageSizeVal(p)
 	if e != nil {
 		return nil, invalid(e)
 	}
-	c, e := optionalString(p, "cursor")
+	c, e := optionalString(p, "page_token")
 	if e != nil {
 		return nil, invalid(e)
 	}
@@ -409,6 +409,17 @@ func (m *Module) list(ctx context.Context, p map[string]any) (any, *actionbase.E
 		return nil, invalid(e)
 	}
 	return map[string]any{"schedules": v.Schedules, "next_cursor": v.NextCursor}, nil
+}
+
+func pageSizeVal(p map[string]any) (int, error) {
+	n, err := intVal(p, "page_size")
+	if err != nil {
+		return 0, err
+	}
+	if n <= 0 || n > 100 {
+		return 0, fmt.Errorf("page_size must be between 1 and 100")
+	}
+	return n, nil
 }
 func (m *Module) updateOnce(ctx context.Context, p map[string]any) (any, *actionbase.Error) {
 	if _, e := str(p, "idempotency_key"); e != nil {
