@@ -274,4 +274,60 @@ func TestVoiceAbortRetriesProviderStopPending(t *testing.T) {
 	}
 }
 
+func TestVoiceCustomLLMTerminalPathsDoNotDoubleUnlock(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		durable func(func(agentturns.StreamEvent) error) error
+		wantErr bool
+	}{{"done", func(emit func(agentturns.StreamEvent) error) error {
+		return emit(agentturns.StreamEvent{Event: "done"})
+	}, false}, {"error", func(func(agentturns.StreamEvent) error) error { return fmt.Errorf("boom") }, true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := &voiceCoordinator{cfg: voiceRuntimeConfig{WebhookSecret: "secret"}, sessions: map[string]*voiceSession{}, streams: map[string]map[chan nativeagent.Event]struct{}{}, active: func(string) bool { return true }}
+			s := &voiceSession{SessionID: "voice", OwnerID: "owner", ExpiresAt: time.Now().Add(time.Minute), op: &sync.Mutex{}}
+			v.sessions[s.SessionID] = s
+			v.durable = func(_ context.Context, _ string, _ map[string]any, emit func(agentturns.StreamEvent) error) error {
+				return tc.durable(emit)
+			}
+			_, err := (&Module{voice: v}).RunVoiceCustomLLM(context.Background(), s.SessionID, v.callbackToken(s.SessionID, s.ExpiresAt), "hi", "req")
+			if (err != nil) != tc.wantErr || s.Busy || s.ActiveTurnID != "" {
+				t.Fatalf("err=%v busy=%v active=%q", err, s.Busy, s.ActiveTurnID)
+			}
+		})
+	}
+}
+
+type failingStopClient struct{ fail *int }
+
+func (c failingStopClient) StartVoiceChat(context.Context, voiceSession) error     { return nil }
+func (c failingStopClient) InterruptVoiceChat(context.Context, voiceSession) error { return nil }
+func (c failingStopClient) StopVoiceChat(context.Context, voiceSession) error {
+	if *c.fail > 0 {
+		*c.fail--
+		return fmt.Errorf("down")
+	}
+	return nil
+}
+func TestVoiceAbortRetriesAllProviderStops(t *testing.T) {
+	fails, calls := 2, 0
+	v := &voiceCoordinator{sessions: map[string]*voiceSession{}, streams: map[string]map[chan nativeagent.Event]struct{}{}}
+	for _, id := range []string{"a", "b"} {
+		v.sessions[id] = &voiceSession{SessionID: id, OwnerID: "o", op: &sync.Mutex{}}
+	}
+	v.client = func(context.Context, string, *voiceSession) (voiceChatClient, *actionbase.Error) {
+		calls++
+		return failingStopClient{&fails}, nil
+	}
+	m := &Module{voice: v}
+	if m.AbortVoiceSessions(context.Background()) == nil || !v.sessions["a"].ProviderStopPending || !v.sessions["b"].ProviderStopPending {
+		t.Fatal("both pending required")
+	}
+	if err := m.AbortVoiceSessions(context.Background()); err != nil || v.sessions["a"].ProviderStopPending || v.sessions["b"].ProviderStopPending {
+		t.Fatal("retry failed")
+	}
+	if err := m.AbortVoiceSessions(context.Background()); err != nil || calls != 4 {
+		t.Fatalf("third calls=%d", calls)
+	}
+}
+
 func stringPtr(value string) *string { return &value }
