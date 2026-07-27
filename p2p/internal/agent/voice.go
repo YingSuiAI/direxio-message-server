@@ -131,13 +131,15 @@ func (m *Module) AbortVoiceSessions(ctx context.Context) error {
 				stopErr = errorsFromAction(err)
 			}
 		} else if client != nil {
-			if err := client.StopVoiceChat(ctx, session); err != nil && stopErr == nil {
+			if err := client.StopVoiceChat(ctx, session); err != nil {
 				m.voice.mu.Lock()
 				if live := m.voice.sessions[session.SessionID]; live != nil {
 					live.ProviderStopPending = true
 				}
 				m.voice.mu.Unlock()
-				stopErr = err
+				if stopErr == nil {
+					stopErr = err
+				}
 			} else if err == nil {
 				m.voice.mu.Lock()
 				if live := m.voice.sessions[session.SessionID]; live != nil {
@@ -610,7 +612,7 @@ func (m *Module) runVoiceCustomLLM(ctx context.Context, sessionID, token, transc
 			current.Busy = false
 		}
 		m.voice.mu.Unlock()
-			m.voice.emit(sessionID, nativeagent.Event{Event: "error", Data: map[string]any{"status": "error", "error": "voice turn failed"}})
+		m.voice.emit(sessionID, nativeagent.Event{Event: "error", Data: map[string]any{"status": "error", "error": "voice turn failed"}})
 	}
 	return answer.String(), err
 }
