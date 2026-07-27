@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"sort"
 	"strings"
@@ -143,6 +144,38 @@ func decodeScheduleCursor(v string) (string, error) {
 	}
 	b, e := base64.RawURLEncoding.DecodeString(v)
 	return string(b), e
+}
+
+type scheduleRunCursor struct {
+	ScheduledFor time.Time `json:"scheduled_for"`
+	RunID        string    `json:"run_id"`
+}
+
+func encodeScheduleRunCursor(scheduledFor time.Time, runID string) string {
+	if runID == "" {
+		return ""
+	}
+	b, _ := json.Marshal(scheduleRunCursor{ScheduledFor: scheduledFor.UTC(), RunID: runID})
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+func decodeScheduleRunCursor(v string) (scheduleRunCursor, error) {
+	if strings.TrimSpace(v) == "" {
+		return scheduleRunCursor{}, nil
+	}
+	b, err := base64.RawURLEncoding.DecodeString(v)
+	if err != nil {
+		return scheduleRunCursor{}, err
+	}
+	var cursor scheduleRunCursor
+	if err := json.Unmarshal(b, &cursor); err != nil {
+		return scheduleRunCursor{}, err
+	}
+	if cursor.RunID == "" || cursor.ScheduledFor.IsZero() {
+		return scheduleRunCursor{}, errors.New("invalid schedule run cursor")
+	}
+	cursor.ScheduledFor = cursor.ScheduledFor.UTC()
+	return cursor, nil
 }
 
 type memoryScheduleKey struct{ owner, id string }
@@ -465,7 +498,7 @@ func (s *MemoryStore) ListScheduleRuns(_ context.Context, o, id string, limit in
 		limit = 50
 	}
 	a := []ScheduleRun{}
-	start, err := decodeScheduleCursor(cursor)
+	start, err := decodeScheduleRunCursor(cursor)
 	if err != nil {
 		return ScheduleRunPage{}, err
 	}
@@ -474,10 +507,15 @@ func (s *MemoryStore) ListScheduleRuns(_ context.Context, o, id string, limit in
 			a = append(a, cloneRun(v))
 		}
 	}
-	sort.Slice(a, func(i, j int) bool { return a[i].RunID < a[j].RunID })
-	if start != "" {
+	sort.Slice(a, func(i, j int) bool {
+		if !a[i].ScheduledFor.Equal(a[j].ScheduledFor) {
+			return a[i].ScheduledFor.After(a[j].ScheduledFor)
+		}
+		return a[i].RunID > a[j].RunID
+	})
+	if start.RunID != "" {
 		i := 0
-		for i < len(a) && a[i].RunID <= start {
+		for i < len(a) && (a[i].ScheduledFor.After(start.ScheduledFor) || (a[i].ScheduledFor.Equal(start.ScheduledFor) && a[i].RunID >= start.RunID)) {
 			i++
 		}
 		a = a[i:]
@@ -485,7 +523,8 @@ func (s *MemoryStore) ListScheduleRuns(_ context.Context, o, id string, limit in
 	p := ScheduleRunPage{Runs: a}
 	if len(a) > limit {
 		p.Runs = a[:limit]
-		p.NextCursor = encodeScheduleCursor(a[limit-1].RunID)
+		last := p.Runs[len(p.Runs)-1]
+		p.NextCursor = encodeScheduleRunCursor(last.ScheduledFor, last.RunID)
 	}
 	return p, nil
 }
@@ -980,11 +1019,15 @@ func (s *DatabaseStore) ListScheduleRuns(ctx context.Context, o, id string, limi
 	if limit <= 0 || limit > 100 {
 		limit = 50
 	}
-	start, err := decodeScheduleCursor(cursor)
+	start, err := decodeScheduleRunCursor(cursor)
 	if err != nil {
 		return ScheduleRunPage{}, err
 	}
-	rows, e := s.db.QueryContext(ctx, `SELECT run_id,schedule_id,owner_id,status,scheduled_for,started_at,finished_at,result,error,lease_epoch FROM p2p_agent_schedule_runs WHERE owner_id=$1 AND schedule_id=$2 AND run_id>$3 ORDER BY run_id LIMIT $4`, o, id, start, limit+1)
+	var startTime any
+	if start.RunID != "" {
+		startTime = start.ScheduledFor
+	}
+	rows, e := s.db.QueryContext(ctx, `SELECT run_id,schedule_id,owner_id,status,scheduled_for,started_at,finished_at,result,error,lease_epoch FROM p2p_agent_schedule_runs WHERE owner_id=$1 AND schedule_id=$2 AND ($3::timestamptz IS NULL OR scheduled_for<$3 OR (scheduled_for=$3 AND run_id<$4)) ORDER BY scheduled_for DESC,run_id DESC LIMIT $5`, o, id, startTime, start.RunID, limit+1)
 	if e != nil {
 		return ScheduleRunPage{}, e
 	}
@@ -998,7 +1041,8 @@ func (s *DatabaseStore) ListScheduleRuns(ctx context.Context, o, id string, limi
 		p.Runs = append(p.Runs, r)
 	}
 	if len(p.Runs) > limit {
-		p.NextCursor = encodeScheduleCursor(p.Runs[limit-1].RunID)
+		last := p.Runs[limit-1]
+		p.NextCursor = encodeScheduleRunCursor(last.ScheduledFor, last.RunID)
 		p.Runs = p.Runs[:limit]
 	}
 	return p, rows.Err()

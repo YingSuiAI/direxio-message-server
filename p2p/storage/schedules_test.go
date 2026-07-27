@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -154,5 +155,43 @@ func TestMemoryScheduleRunRecoveryLeaseFencesExpiredDeterministicRun(t *testing.
 	}
 	if err := s.AdvanceSchedule(ctx, "o", "recover", first.LeaseOwner, first.Revision, first.LeaseEpoch, nil, "disabled"); err != ErrScheduleClaimed {
 		t.Fatalf("stale advance=%v", err)
+	}
+}
+
+func TestMemoryScheduleRunsListOrdersByOccurrenceAndPaginatesStableTies(t *testing.T) {
+	store := NewMemoryStore()
+	store.ensureSchedules()
+	older := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	tie := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
+	newest := time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC)
+	for _, run := range []ScheduleRun{
+		{RunID: "run-older", OwnerID: "owner", ScheduleID: "schedule", ScheduledFor: older},
+		{RunID: "run-tie-a", OwnerID: "owner", ScheduleID: "schedule", ScheduledFor: tie},
+		{RunID: "run-tie-z", OwnerID: "owner", ScheduleID: "schedule", ScheduledFor: tie},
+		{RunID: "run-newest", OwnerID: "owner", ScheduleID: "schedule", ScheduledFor: newest},
+	} {
+		store.scheduleRuns[run.RunID] = run
+	}
+
+	first, err := store.ListScheduleRuns(context.Background(), "owner", "schedule", 2, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := []string{first.Runs[0].RunID, first.Runs[1].RunID}; !reflect.DeepEqual(got, []string{"run-newest", "run-tie-z"}) {
+		t.Fatalf("first page = %#v, want newest-first with run_id DESC tie-break", got)
+	}
+	if first.NextCursor == "" {
+		t.Fatal("first page missing cursor")
+	}
+
+	second, err := store.ListScheduleRuns(context.Background(), "owner", "schedule", 2, first.NextCursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := []string{second.Runs[0].RunID, second.Runs[1].RunID}; !reflect.DeepEqual(got, []string{"run-tie-a", "run-older"}) {
+		t.Fatalf("second page = %#v, want remaining runs without gaps or duplicates", got)
+	}
+	if second.NextCursor != "" {
+		t.Fatalf("second page cursor = %q, want empty", second.NextCursor)
 	}
 }
