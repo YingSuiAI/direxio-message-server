@@ -30,12 +30,16 @@ const (
 )
 
 type Config struct {
-	DataDir       string
-	Store         ConfigStore
-	Tools         []Tool
-	HTTPClient    *http.Client
-	ModelProfiles ModelProfileResolver
-	OwnerID       func() string
+	DataDir               string
+	Store                 ConfigStore
+	Tools                 []Tool
+	HTTPClient            *http.Client
+	ModelProfiles         ModelProfileResolver
+	OwnerID               func() string
+	Memory                ConversationMemoryStore
+	Knowledge             KnowledgeStore
+	Conversations         ConversationStore
+	PersistentMemoryReady bool
 }
 
 // ServerModelProfile is a redacted profile projection with the key retained
@@ -70,12 +74,16 @@ type Event struct {
 }
 
 type Runtime struct {
-	store         ConfigStore
-	dataDir       string
-	client        *http.Client
-	tools         []Tool
-	modelProfiles ModelProfileResolver
-	ownerID       func() string
+	store                 ConfigStore
+	dataDir               string
+	client                *http.Client
+	tools                 []Tool
+	modelProfiles         ModelProfileResolver
+	ownerID               func() string
+	memory                ConversationMemoryStore
+	knowledge             KnowledgeStore
+	persistentMemoryReady bool
+	conversations         ConversationStore
 }
 
 func New(config Config) *Runtime {
@@ -90,13 +98,37 @@ func New(config Config) *Runtime {
 	if client == nil {
 		client = &http.Client{Timeout: nativeAgentHTTPTimeout}
 	}
+	memory := config.Memory
+	if memory == nil {
+		// Volatile storage is reserved for direct unit tests. Production wiring
+		// always supplies OwnerID and must provide a durable store explicitly.
+		if config.OwnerID == nil {
+			memory = NewInMemoryConversationMemoryStore()
+		}
+	}
+	knowledge := config.Knowledge
+	if knowledge == nil {
+		if candidate, ok := memory.(KnowledgeStore); ok {
+			knowledge = candidate
+		}
+	}
+	conversations := config.Conversations
+	if conversations == nil {
+		if candidate, ok := memory.(ConversationStore); ok {
+			conversations = candidate
+		}
+	}
 	return &Runtime{
-		store:         config.Store,
-		dataDir:       filepath.Clean(dataDir),
-		client:        client,
-		tools:         append([]Tool{}, config.Tools...),
-		modelProfiles: config.ModelProfiles,
-		ownerID:       config.OwnerID,
+		store:                 config.Store,
+		dataDir:               filepath.Clean(dataDir),
+		client:                client,
+		tools:                 append([]Tool{}, config.Tools...),
+		modelProfiles:         config.ModelProfiles,
+		ownerID:               config.OwnerID,
+		memory:                memory,
+		knowledge:             knowledge,
+		persistentMemoryReady: config.PersistentMemoryReady,
+		conversations:         conversations,
 	}
 }
 
@@ -151,6 +183,7 @@ func (r *Runtime) Apply(ctx context.Context, action string) error {
 }
 
 func (r *Runtime) Invoke(ctx context.Context, action string, params map[string]any) (map[string]any, error) {
+	ctx = r.withRequestContext(ctx, params)
 	action = strings.TrimSpace(action)
 	switch action {
 	case "agent.chat":
@@ -191,9 +224,24 @@ func (r *Runtime) Invoke(ctx context.Context, action string, params map[string]a
 		return nil, embeddedExtensionsForbidden()
 	case "agent.knowledge.config.get", "agent.knowledge.config.update", "agent.knowledge.sources.list",
 		"agent.knowledge.sources.delete", "agent.knowledge.upload.start", "agent.knowledge.upload.chunk",
-		"agent.knowledge.upload.finish", "agent.knowledge.memory.create", "agent.knowledge.search",
-		"agent.knowledge.status":
+		"agent.knowledge.upload.finish":
 		return map[string]any{"supported": false, "status": "unsupported"}, nil
+	case "agent.knowledge.memory.create":
+		return r.createKnowledgeMemory(ctx, params)
+	case "agent.knowledge.search":
+		return r.searchKnowledgeMemory(ctx, params)
+	case "agent.knowledge.status":
+		return r.knowledgeStatus(ctx)
+	case "agent.chat.conversations.create":
+		return r.createConversation(ctx, params)
+	case "agent.chat.conversations.list":
+		return r.listConversations(ctx, params)
+	case "agent.chat.conversations.get":
+		return r.getConversation(ctx, params)
+	case "agent.chat.conversations.rename":
+		return r.renameConversation(ctx, params)
+	case "agent.chat.conversations.delete":
+		return r.deleteConversation(ctx, params)
 	case "agent.context.compress":
 		return r.compressMemory(ctx, params)
 	case "agent.config.propose_patch":
@@ -316,7 +364,13 @@ func (r *Runtime) runtimeInspect(ctx context.Context) (map[string]any, error) {
 		"skills":        []map[string]any{},
 		"mcp_servers":   []map[string]any{},
 		"runtime_tools": []map[string]any{},
-		"time":          time.Now().UTC().Format(time.RFC3339),
+		"capabilities": func() []string {
+			if r.persistentMemoryReady {
+				return []string{"memory.server"}
+			}
+			return []string{}
+		}(),
+		"time": time.Now().UTC().Format(time.RFC3339),
 	}, nil
 }
 

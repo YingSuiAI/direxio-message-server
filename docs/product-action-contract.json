@@ -7150,6 +7150,148 @@
       "transport": "http_and_ws_request"
     },
     {
+      "name": "agent.chat.conversations.create",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "conversation_id": {
+            "type": "string",
+            "required": true
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "response": {
+          "conversation": {
+            "type": "object"
+          },
+          "replayed": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.chat.conversations.list",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "page_size": {
+            "type": "integer"
+          },
+          "page_token": {
+            "type": "string"
+          }
+        },
+        "response": {
+          "conversations": {
+            "type": "array"
+          },
+          "next_cursor": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.chat.conversations.get",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "conversation_id": {
+            "type": "string",
+            "required": true
+          },
+          "message_cursor": {
+            "type": "string"
+          },
+          "message_limit": {
+            "type": "integer"
+          }
+        },
+        "response": {
+          "conversation": {
+            "type": "object"
+          },
+          "messages": {
+            "type": "array"
+          },
+          "next_cursor": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.chat.conversations.rename",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "conversation_id": {
+            "type": "string",
+            "required": true
+          },
+          "expected_revision": {
+            "type": "integer",
+            "required": true
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "response": {
+          "conversation": {
+            "type": "object"
+          },
+          "replayed": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.chat.conversations.delete",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "conversation_id": {
+            "type": "string",
+            "required": true
+          },
+          "expected_revision": {
+            "type": "integer",
+            "required": true
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "conversation": {
+            "type": "object"
+          },
+          "replayed": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    {
       "name": "agent.context.compress",
       "auth": "owner",
       "transport": "http_and_ws_request"
@@ -7277,17 +7419,86 @@
     {
       "name": "agent.knowledge.memory.create",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "content": {
+            "type": "string",
+            "required": true
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          },
+          "tags": {
+            "type": "array"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "response": {
+          "content": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "memory_id": {
+            "type": "string"
+          },
+          "replayed": {
+            "type": "boolean"
+          },
+          "tags": {
+            "type": "array"
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      }
     },
     {
       "name": "agent.knowledge.search",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "page_size": {
+            "type": "integer"
+          },
+          "page_token": {
+            "type": "string"
+          },
+          "query": {
+            "type": "string"
+          }
+        },
+        "response": {
+          "items": {
+            "type": "array"
+          },
+          "next_cursor": {
+            "type": "string"
+          }
+        }
+      }
     },
     {
       "name": "agent.knowledge.status",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_and_ws_request",
+      "schema": {
+        "response": {
+          "count": {
+            "type": "integer"
+          },
+          "supported": {
+            "type": "boolean"
+          }
+        }
+      }
     },
     {
       "name": "agent.contacts.list",

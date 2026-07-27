@@ -5,11 +5,41 @@ import (
 	"testing"
 )
 
+func TestAgentConversationAndKnowledgeSchemasMatchHandlerResponses(t *testing.T) {
+	byName := make(map[string]ActionSpec)
+	for _, spec := range ActionSpecs() {
+		byName[spec.Name] = spec
+	}
+	for _, test := range []struct {
+		action string
+		fields map[string]string
+	}{
+		{"agent.chat.conversations.create", map[string]string{"conversation": "object", "replayed": "boolean"}},
+		{"agent.chat.conversations.list", map[string]string{"conversations": "array", "next_cursor": "string"}},
+		{"agent.chat.conversations.get", map[string]string{"conversation": "object", "messages": "array", "next_cursor": "string"}},
+		{"agent.chat.conversations.rename", map[string]string{"conversation": "object", "replayed": "boolean"}},
+		{"agent.chat.conversations.delete", map[string]string{"conversation": "object", "replayed": "boolean"}},
+		{"agent.knowledge.memory.create", map[string]string{"memory_id": "string", "title": "string", "content": "string", "tags": "array", "created_at": "string", "replayed": "boolean"}},
+		{"agent.knowledge.search", map[string]string{"items": "array", "next_cursor": "string"}},
+		{"agent.knowledge.status", map[string]string{"supported": "boolean", "count": "integer"}},
+	} {
+		schema := byName[test.action].Schema
+		if schema == nil || len(schema.Response) != len(test.fields) {
+			t.Fatalf("%s response schema = %#v", test.action, schema)
+		}
+		for name, want := range test.fields {
+			if got := schema.Response[name].Type; got != want {
+				t.Fatalf("%s response.%s = %q, want %q", test.action, name, got, want)
+			}
+		}
+	}
+}
+
 func TestActionSpecsReturnsStableOrderedCopy(t *testing.T) {
 	first := ActionSpecs()
 	second := ActionSpecs()
 
-	if len(first) != 225 {
+	if len(first) != 230 {
 		t.Fatalf("ActionSpecs() returned %d actions, want 225", len(first))
 	}
 	if !reflect.DeepEqual(first, second) {

@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -45,6 +46,27 @@ func int64Param(value any) int64 {
 	case int64:
 		return v
 	case int:
+		return int64(v)
+	case int8:
+		return int64(v)
+	case int16:
+		return int64(v)
+	case int32:
+		return int64(v)
+	case uint:
+		return int64(v)
+	case uint8:
+		return int64(v)
+	case uint16:
+		return int64(v)
+	case uint32:
+		return int64(v)
+	case uint64:
+		if v <= math.MaxInt64 {
+			return int64(v)
+		}
+		return 0
+	case float32:
 		return int64(v)
 	case float64:
 		return int64(v)

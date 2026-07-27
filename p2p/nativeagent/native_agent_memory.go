@@ -2,6 +2,7 @@ package nativeagent
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/cloudwego/eino/schema"
@@ -63,12 +64,46 @@ func (r *Runtime) rememberEinoMessages(ctx context.Context, config map[string]an
 	if run.memoryDisabled || run.conversationID == "" {
 		return nil
 	}
+	if r.memory == nil {
+		return fmt.Errorf("conversation memory store is not configured")
+	}
 	memory := run.memory
 	if memory.ConversationID == "" {
 		memory.ConversationID = run.conversationID
 	}
-	memory.Messages = append(memory.Messages, compactEinoMessagesForMemory(run.memoryMessages)...)
-	memory.Messages = append(memory.Messages, compactEinoMessagesForMemory(produced)...)
+	owner := r.effectiveOwner(ctx)
+	if owner == "" {
+		return fmt.Errorf("owner context is required")
+	}
+	turnID := trimString(params["turn_id"])
+	newMessages := append(compactEinoMessagesForMemory(run.memoryMessages), compactEinoMessagesForMemory(produced)...)
+	stored := make([]StoredMessage, 0, len(newMessages))
+	roleIndex := map[string]int{}
+	references := nativeAgentReferences(produced)
+	for _, msg := range newMessages {
+		if msg == nil {
+			continue
+		}
+		item := StoredMessage{TurnID: turnID, Role: string(msg.Role), Content: msg.Content, Message: msg}
+		if msg.Role == schema.Assistant && len(references) > 0 {
+			item.References = references
+		}
+		if turnID != "" && (msg.Role == schema.User || msg.Role == schema.Assistant) {
+			role := string(msg.Role)
+			if idx, ok := roleIndex[role]; ok {
+				stored[idx] = item
+				continue
+			}
+			roleIndex[role] = len(stored)
+		}
+		stored = append(stored, item)
+	}
+	if len(stored) > 0 {
+		if err := r.memory.AppendConversationMessages(ctx, owner, run.conversationID, turnID, stored); err != nil {
+			return err
+		}
+	}
+	memory.Messages = append(memory.Messages, newMessages...)
 	window := int(int64Param(params["memory_window"]))
 	if window <= 0 {
 		window = int(int64Param(config["memory_window"]))
@@ -85,7 +120,13 @@ func (r *Runtime) rememberEinoMessages(ctx context.Context, config map[string]an
 	} else {
 		memory = compactNativeAgentMemory(memory, window)
 	}
-	return r.saveMemory(ctx, memory)
+	// Message append is the durable turn boundary. Summary compaction is
+	// best-effort: a failed summary update must not turn a successful model turn
+	// into a terminal error or discard its messages.
+	if err := r.saveMemory(ctx, memory); err != nil {
+		return nil
+	}
+	return nil
 }
 
 func memoryMessagesFromRequest(params map[string]any, requestMessages []*schema.Message) []*schema.Message {

@@ -1029,6 +1029,36 @@ func (s *DatabaseStore) migrate(ctx context.Context) error {
 	m.AddMigrations(sqlutil.Migration{Version: "p2p: native schedule confirmation pending uniqueness v85b", Up: func(ctx context.Context, txn *sql.Tx) error {
 		return execMigrationStatements(ctx, txn, []string{`UPDATE p2p_agent_schedule_confirmations c SET status='replaced',revision=revision+1,updated_at=NOW() WHERE status IN ('pending','executing') AND EXISTS (SELECT 1 FROM p2p_agent_schedule_confirmations newer WHERE newer.owner_id=c.owner_id AND newer.conversation_id=c.conversation_id AND newer.status IN ('pending','executing') AND (newer.updated_at>c.updated_at OR (newer.updated_at=c.updated_at AND newer.confirmation_id>c.confirmation_id)))`, `CREATE UNIQUE INDEX IF NOT EXISTS p2p_agent_schedule_confirmations_active_idx ON p2p_agent_schedule_confirmations(owner_id,conversation_id) WHERE status IN ('pending','executing')`})
 	}})
+	m.AddMigrations(sqlutil.Migration{Version: "p2p: embedded native agent conversation memory v86", Up: func(ctx context.Context, txn *sql.Tx) error {
+		return execMigrationStatements(ctx, txn, []string{
+			`CREATE TABLE IF NOT EXISTS p2p_native_agent_conversations (
+				owner_id TEXT NOT NULL CHECK (owner_id <> ''), conversation_id TEXT NOT NULL CHECK (char_length(conversation_id) BETWEEN 1 AND 256),
+				title TEXT NOT NULL DEFAULT '', active BOOLEAN NOT NULL DEFAULT TRUE, deleted BOOLEAN NOT NULL DEFAULT FALSE,
+				revision BIGINT NOT NULL DEFAULT 1 CHECK (revision > 0), last_message_seq BIGINT NOT NULL DEFAULT 0 CHECK (last_message_seq >= 0),
+				summary TEXT NOT NULL DEFAULT '', summary_through_seq BIGINT NOT NULL DEFAULT 0 CHECK (summary_through_seq >= 0),
+				created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL, deleted_at TIMESTAMPTZ,
+				PRIMARY KEY(owner_id, conversation_id)
+			)`,
+			`CREATE INDEX IF NOT EXISTS p2p_native_agent_conversations_owner_cursor_idx ON p2p_native_agent_conversations(owner_id,updated_at,conversation_id)`,
+			`CREATE TABLE IF NOT EXISTS p2p_native_agent_messages (
+				owner_id TEXT NOT NULL, conversation_id TEXT NOT NULL, seq BIGINT NOT NULL CHECK (seq > 0), turn_id TEXT NOT NULL DEFAULT '', message_id TEXT NOT NULL,
+				role TEXT NOT NULL CHECK (role IN ('user','assistant')), content TEXT NOT NULL, references_json JSONB NOT NULL DEFAULT '[]'::jsonb, created_at TIMESTAMPTZ NOT NULL,
+				PRIMARY KEY(owner_id,conversation_id,seq), UNIQUE(owner_id,conversation_id,message_id),
+				FOREIGN KEY(owner_id,conversation_id) REFERENCES p2p_native_agent_conversations(owner_id,conversation_id) ON DELETE CASCADE
+			)`,
+			`CREATE UNIQUE INDEX IF NOT EXISTS p2p_native_agent_messages_turn_role_idx ON p2p_native_agent_messages(owner_id,conversation_id,turn_id,role) WHERE turn_id <> ''`,
+			`CREATE INDEX IF NOT EXISTS p2p_native_agent_messages_cursor_idx ON p2p_native_agent_messages(owner_id,conversation_id,seq DESC,message_id)`,
+			`CREATE TABLE IF NOT EXISTS p2p_native_agent_memory_turns (owner_id TEXT NOT NULL, conversation_id TEXT NOT NULL, turn_id TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL, PRIMARY KEY(owner_id,conversation_id,turn_id), FOREIGN KEY(owner_id,conversation_id) REFERENCES p2p_native_agent_conversations(owner_id,conversation_id) ON DELETE CASCADE)`,
+			`CREATE TABLE IF NOT EXISTS p2p_native_agent_memory_records (owner_id TEXT NOT NULL, memory_id TEXT NOT NULL, title TEXT NOT NULL, content TEXT NOT NULL, tags_json JSONB NOT NULL DEFAULT '[]'::jsonb, request_digest BYTEA NOT NULL CHECK (octet_length(request_digest)=32), created_at TIMESTAMPTZ NOT NULL, PRIMARY KEY(owner_id,memory_id), UNIQUE(owner_id,request_digest))`,
+			`CREATE INDEX IF NOT EXISTS p2p_native_agent_memory_records_cursor_idx ON p2p_native_agent_memory_records(owner_id,created_at,memory_id)`,
+			`CREATE TABLE IF NOT EXISTS p2p_native_agent_conversation_mutations (owner_id TEXT NOT NULL, action TEXT NOT NULL, idempotency_key TEXT NOT NULL, request_digest BYTEA NOT NULL CHECK (octet_length(request_digest)=32), response_json JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMPTZ NOT NULL, PRIMARY KEY(owner_id,action,idempotency_key))`,
+		})
+	}})
+	m.AddMigrations(sqlutil.Migration{Version: "p2p: native agent memory idempotency keys v87", Up: func(ctx context.Context, txn *sql.Tx) error {
+		return execMigrationStatements(ctx, txn, []string{
+			`ALTER TABLE p2p_native_agent_memory_records DROP CONSTRAINT IF EXISTS p2p_native_agent_memory_records_owner_id_request_digest_key`,
+		})
+	}})
 	return m.Up(ctx)
 }
 

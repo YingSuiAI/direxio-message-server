@@ -288,6 +288,41 @@ func TestDisabledConfigIsNotConfigured(t *testing.T) {
 	}
 }
 
+func TestBackendsMemoryCapabilityRequiresPersistentReadiness(t *testing.T) {
+	client, err := New(Config{EmbeddedMemoryReady: func() bool { return false }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, actionErr := client.Handlers()["agent.backends.get"](context.Background(), nil)
+	if actionErr != nil {
+		t.Fatal(actionErr)
+	}
+	embedded := result.(map[string]any)["embedded"].(map[string]any)
+	for _, cap := range embedded["capabilities"].([]string) {
+		if cap == "memory.server" {
+			t.Fatal("memory.server advertised when not ready")
+		}
+	}
+	client, err = New(Config{EmbeddedMemoryReady: func() bool { return true }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, actionErr = client.Handlers()["agent.backends.get"](context.Background(), nil)
+	if actionErr != nil {
+		t.Fatal(actionErr)
+	}
+	embedded = result.(map[string]any)["embedded"].(map[string]any)
+	found := false
+	for _, cap := range embedded["capabilities"].([]string) {
+		if cap == "memory.server" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("memory.server missing when ready")
+	}
+}
+
 func TestSafeInstanceIDRedactsUnexpectedCharacters(t *testing.T) {
 	if got := safeInstanceID("core/secret"); got != "redacted-safe-id" {
 		t.Fatalf("safeInstanceID() = %q", got)

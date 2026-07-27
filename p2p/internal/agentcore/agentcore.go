@@ -73,6 +73,7 @@ type Config struct {
 	ProbeTimeout               time.Duration
 	EmbeddedModelProfilesReady func() bool
 	EmbeddedSchedulesReady     func() bool
+	EmbeddedMemoryReady        func() bool
 }
 
 func (c Config) withDefaults() Config {
@@ -940,6 +941,9 @@ func (c *Client) backendsGet(ctx context.Context, _ map[string]any) (any, *actio
 	}
 	if c.cfg.EmbeddedSchedulesReady != nil && c.cfg.EmbeddedSchedulesReady() {
 		embeddedCapabilities = append(embeddedCapabilities, "schedules.server")
+	}
+	if c.cfg.EmbeddedMemoryReady != nil && c.cfg.EmbeddedMemoryReady() {
+		embeddedCapabilities = append(embeddedCapabilities, "memory.server")
 	}
 	return map[string]any{
 		"embedded": map[string]any{"available": true, "capabilities": embeddedCapabilities},

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/YingSuiAI/dirextalk-message-server/internal/dirextalkmcp"
+	"github.com/YingSuiAI/dirextalk-message-server/p2p/agentmemory"
 	actionbase "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/action"
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentturns"
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/nativeagent"
@@ -25,16 +26,18 @@ type Runner interface {
 
 // Config contains the runtime dependencies owned outside the Agent module.
 type Config struct {
-	Runner               Runner
-	DataDir              string
-	Store                nativeagent.ConfigStore
-	MCP                  *dirextalkmcp.Service
-	Account              AccountPort
-	Turns                agentturns.Store
-	OwnerID              func() string
-	ModelProfiles        storage.ModelProfileStore
-	ModelProfileResolver nativeagent.ModelProfileResolver
-	ScheduleTools        []nativeagent.Tool
+	Runner                Runner
+	DataDir               string
+	Store                 nativeagent.ConfigStore
+	MCP                   *dirextalkmcp.Service
+	Account               AccountPort
+	Turns                 agentturns.Store
+	OwnerID               func() string
+	Memory                nativeagent.ConversationMemoryStore
+	PersistentMemoryReady bool
+	ModelProfiles         storage.ModelProfileStore
+	ModelProfileResolver  nativeagent.ModelProfileResolver
+	ScheduleTools         []nativeagent.Tool
 }
 
 // Module owns runtime-backed ProductCore actions and streaming invocation.
@@ -51,11 +54,13 @@ func New(cfg Config) *Module {
 	runner := cfg.Runner
 	if runner == nil {
 		runner = runtimeRunner{runtime: nativeagent.New(nativeagent.Config{
-			DataDir:       cfg.DataDir,
-			Store:         cfg.Store,
-			Tools:         append(Tools(cfg.MCP), cfg.ScheduleTools...),
-			ModelProfiles: cfg.ModelProfileResolver,
-			OwnerID:       cfg.OwnerID,
+			DataDir:               cfg.DataDir,
+			Store:                 cfg.Store,
+			Tools:                 append(Tools(cfg.MCP), cfg.ScheduleTools...),
+			ModelProfiles:         cfg.ModelProfileResolver,
+			OwnerID:               cfg.OwnerID,
+			Memory:                cfg.Memory,
+			PersistentMemoryReady: cfg.PersistentMemoryReady,
 		})}
 	}
 	turns, turnErr := agentturns.NewCoordinator(context.Background(), cfg.Turns)
@@ -253,6 +258,18 @@ func (m *Module) invoke(action string) actionbase.Handler {
 		}
 		result, err := m.runner.Invoke(ctx, strings.TrimSpace(action), cloneMap(params))
 		if err != nil {
+			if errors.Is(err, agentmemory.ErrInvalidCursor) {
+				return nil, actionbase.BadRequest(err.Error())
+			}
+			if errors.Is(err, agentmemory.ErrIdempotencyConflict) || errors.Is(err, agentmemory.ErrRevisionConflict) {
+				return nil, actionbase.StatusError(http.StatusConflict, err.Error())
+			}
+			if errors.Is(err, agentmemory.ErrNotFound) || errors.Is(err, agentmemory.ErrDeleted) {
+				return nil, actionbase.StatusError(http.StatusNotFound, err.Error())
+			}
+			if nativeagent.IsValidationError(err) {
+				return nil, actionbase.BadRequest(err.Error())
+			}
 			if nativeagent.IsEmbeddedExtensionsForbidden(err) {
 				return nil, actionbase.StatusError(http.StatusForbidden, err.Error())
 			}
@@ -294,6 +311,11 @@ func (r runtimeRunner) Stream(ctx context.Context, action string, params map[str
 var runtimeActions = []string{
 	"agent.config.propose_patch",
 	"agent.chat",
+	"agent.chat.conversations.create",
+	"agent.chat.conversations.list",
+	"agent.chat.conversations.get",
+	"agent.chat.conversations.rename",
+	"agent.chat.conversations.delete",
 	"agent.context.compress",
 	"agent.models.list",
 	"agent.runtime.inspect",

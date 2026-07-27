@@ -881,6 +881,13 @@ func newService(cfg Config, store Store, transport Transport, state portalState,
 		Store: nativeAgentConfigStore{service: service}, MCP: service.mcpCapabilities,
 		ScheduleTools: service.scheduleModule.Tools(), Account: serviceAgentAccountPort{service: service}, Turns: service.store,
 		OwnerID: service.OwnerMXID, ModelProfiles: service.modelProfiles,
+		Memory: func() nativeagent.ConversationMemoryStore {
+			if candidate, ok := store.(nativeagent.ConversationMemoryStore); ok {
+				return candidate
+			}
+			return nil
+		}(),
+		PersistentMemoryReady: func() bool { _, ok := store.(*p2pstorage.DatabaseStore); return ok }(),
 		ModelProfileResolver: func() nativeagent.ModelProfileResolver {
 			if service.modelProfiles == nil {
 				return nil
@@ -892,6 +899,7 @@ func newService(cfg Config, store Store, transport Transport, state portalState,
 	coreConfig := cfg.AgentCore
 	coreConfig.EmbeddedModelProfilesReady = func() bool { return service.modelProfiles != nil && service.modelProfiles.ModelProfileStoreReady() }
 	coreConfig.EmbeddedSchedulesReady = service.EmbeddedSchedulesReady
+	coreConfig.EmbeddedMemoryReady = func() bool { _, ok := store.(*p2pstorage.DatabaseStore); return ok }
 	service.agentCore, service.agentCoreInitErr = agentcoremodule.New(coreConfig)
 	if service.agentCore == nil {
 		service.agentCore, _ = agentcoremodule.New(agentcoremodule.Config{})
