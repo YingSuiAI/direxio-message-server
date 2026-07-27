@@ -2,6 +2,7 @@ package schedules
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -124,6 +125,29 @@ func TestScheduleListRejectsInvalidPageParameters(t *testing.T) {
 	} {
 		if _, actionErr := list(context.Background(), params); actionErr == nil {
 			t.Fatalf("%s unexpectedly accepted: %#v", name, params)
+		}
+	}
+}
+
+func TestScheduleListAcceptsUseNumberIntegralPageSize(t *testing.T) {
+	list := New(Config{Store: storage.NewMemoryStore(), OwnerID: func() string { return "owner" }}).Handlers()["agent.schedules.list"]
+	if _, e := list(context.Background(), map[string]any{"page_size": json.Number("2")}); e != nil {
+		t.Fatal(e)
+	}
+	for _, v := range []any{json.Number("1.5"), json.Number("NaN"), json.Number("-1"), "2"} {
+		if _, e := list(context.Background(), map[string]any{"page_size": v}); e == nil {
+			t.Fatalf("accepted %#v", v)
+		}
+	}
+}
+
+func TestExpectedRevisionUseNumberStrict(t *testing.T) {
+	if n, e := expectedRevision(map[string]any{"expected_revision": json.Number("2")}); e != nil || n != 2 {
+		t.Fatalf("n=%d e=%v", n, e)
+	}
+	for _, v := range []any{json.Number("1.5"), json.Number("0"), json.Number("-1"), "2"} {
+		if _, e := expectedRevision(map[string]any{"expected_revision": v}); e == nil {
+			t.Fatalf("accepted %#v", v)
 		}
 	}
 }

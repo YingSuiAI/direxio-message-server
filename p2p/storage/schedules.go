@@ -309,6 +309,9 @@ func (s *MemoryStore) UpdateScheduleCAS(_ context.Context, v Schedule, expected 
 	if expected != 0 && expected != old.Revision {
 		return Schedule{}, ErrScheduleConflict
 	}
+	if old.Status == "running" {
+		return Schedule{}, ErrScheduleConflict
+	}
 	v.Revision = old.Revision + 1
 	v.CreatedAt = old.CreatedAt
 	v.UpdatedAt = time.Now().UTC()
@@ -326,6 +329,9 @@ func (s *MemoryStore) DeleteScheduleCAS(_ context.Context, o, id string, expecte
 		return ErrScheduleNotFound
 	}
 	if expected != 0 && v.Revision != expected {
+		return ErrScheduleConflict
+	}
+	if v.Status == "running" {
 		return ErrScheduleConflict
 	}
 	v.Status = "deleted"
@@ -347,7 +353,7 @@ func (s *MemoryStore) SetScheduleStatusCAS(_ context.Context, o, id string, expe
 	if expected != 0 && v.Revision != expected {
 		return Schedule{}, ErrScheduleConflict
 	}
-	if v.Status == "running" && v.LeaseUntil != nil && v.LeaseUntil.After(time.Now().UTC()) {
+	if v.Status == "running" {
 		return Schedule{}, ErrScheduleConflict
 	}
 	if en {
@@ -799,7 +805,7 @@ func (s *DatabaseStore) UpdateScheduleCAS(ctx context.Context, v Schedule, expec
 	if expected == 0 {
 		expected = v.Revision - 1
 	}
-	r, e := s.db.ExecContext(ctx, `UPDATE p2p_agent_schedules SET name=$1,prompt=$2,trigger_kind=$3,trigger_value=$4,timezone=$5,skip_if_running=$6,status=$7,revision=$8,model_profile_id=$9,model_profile_revision=$10,credential_version=$11,next_run_at=$12,updated_at=$13 WHERE owner_id=$14 AND schedule_id=$15 AND revision=$16 AND deleted_at IS NULL`, v.Name, v.Prompt, v.TriggerKind, v.TriggerValue, v.Timezone, v.SkipIfRunning, v.Status, v.Revision, v.ModelProfileID, v.ModelProfileRevision, v.CredentialVersion, v.NextRunAt, v.UpdatedAt, v.OwnerID, v.ScheduleID, expected)
+	r, e := s.db.ExecContext(ctx, `UPDATE p2p_agent_schedules SET name=$1,prompt=$2,trigger_kind=$3,trigger_value=$4,timezone=$5,skip_if_running=$6,status=$7,revision=$8,model_profile_id=$9,model_profile_revision=$10,credential_version=$11,next_run_at=$12,updated_at=$13 WHERE owner_id=$14 AND schedule_id=$15 AND revision=$16 AND deleted_at IS NULL AND status<>'running'`, v.Name, v.Prompt, v.TriggerKind, v.TriggerValue, v.Timezone, v.SkipIfRunning, v.Status, v.Revision, v.ModelProfileID, v.ModelProfileRevision, v.CredentialVersion, v.NextRunAt, v.UpdatedAt, v.OwnerID, v.ScheduleID, expected)
 	if e != nil {
 		return Schedule{}, e
 	}
@@ -816,7 +822,7 @@ func (s *DatabaseStore) DeleteSchedule(ctx context.Context, o, id, _ string) err
 	return s.DeleteScheduleCAS(ctx, o, id, 0)
 }
 func (s *DatabaseStore) DeleteScheduleCAS(ctx context.Context, o, id string, expected int64) error {
-	query := `UPDATE p2p_agent_schedules SET deleted_at=NOW(),status='deleted',revision=revision+1,updated_at=NOW() WHERE owner_id=$1 AND schedule_id=$2 AND deleted_at IS NULL`
+	query := `UPDATE p2p_agent_schedules SET deleted_at=NOW(),status='deleted',revision=revision+1,updated_at=NOW() WHERE owner_id=$1 AND schedule_id=$2 AND deleted_at IS NULL AND status<>'running'`
 	args := []any{o, id}
 	if expected != 0 {
 		query += ` AND revision=$3`
@@ -845,7 +851,7 @@ func (s *DatabaseStore) SetScheduleStatusCAS(ctx context.Context, o, id string, 
 	if en {
 		status = "enabled"
 	}
-	query := `UPDATE p2p_agent_schedules SET status=$1,revision=revision+1,updated_at=NOW() WHERE owner_id=$2 AND schedule_id=$3 AND deleted_at IS NULL AND NOT (status='running' AND lease_until>NOW())`
+	query := `UPDATE p2p_agent_schedules SET status=$1,revision=revision+1,updated_at=NOW() WHERE owner_id=$2 AND schedule_id=$3 AND deleted_at IS NULL AND status<>'running'`
 	args := []any{status, o, id}
 	if expected != 0 {
 		query += ` AND revision=$4`

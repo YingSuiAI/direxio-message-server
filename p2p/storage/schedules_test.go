@@ -158,6 +158,36 @@ func TestMemoryScheduleRunRecoveryLeaseFencesExpiredDeterministicRun(t *testing.
 	}
 }
 
+func TestMemoryActiveLeaseRejectsUpdateAndDelete(t *testing.T) {
+	s := NewMemoryStore()
+	n := time.Now().UTC().Add(time.Hour)
+	v, _ := s.CreateSchedule(context.Background(), Schedule{OwnerID: "o", ScheduleID: "active", Status: "enabled", NextRunAt: &n}, "")
+	c, _ := s.ClaimScheduleNow(context.Background(), "o", v.ScheduleID, "worker", time.Minute)
+	if _, err := s.UpdateScheduleCAS(context.Background(), v, c.Revision); err != ErrScheduleConflict {
+		t.Fatalf("update=%v", err)
+	}
+	if err := s.DeleteScheduleCAS(context.Background(), "o", v.ScheduleID, c.Revision); err != ErrScheduleConflict {
+		t.Fatalf("delete=%v", err)
+	}
+}
+
+func TestMemoryExpiredLeaseStillRejectsMutationUntilRecovery(t *testing.T) {
+	s := NewMemoryStore()
+	n := time.Now().UTC().Add(time.Hour)
+	v, _ := s.CreateSchedule(context.Background(), Schedule{OwnerID: "o", ScheduleID: "expired", Status: "enabled", NextRunAt: &n}, "")
+	c, _ := s.ClaimScheduleNow(context.Background(), "o", v.ScheduleID, "w", time.Millisecond)
+	time.Sleep(3 * time.Millisecond)
+	if _, e := s.UpdateScheduleCAS(context.Background(), v, c.Revision); e != ErrScheduleConflict {
+		t.Fatalf("update=%v", e)
+	}
+	if e := s.DeleteScheduleCAS(context.Background(), "o", v.ScheduleID, c.Revision); e != ErrScheduleConflict {
+		t.Fatalf("delete=%v", e)
+	}
+	if _, e := s.SetScheduleStatusCAS(context.Background(), "o", v.ScheduleID, c.Revision, false); e != ErrScheduleConflict {
+		t.Fatalf("status=%v", e)
+	}
+}
+
 func TestMemoryScheduleRunsListOrdersByOccurrenceAndPaginatesStableTies(t *testing.T) {
 	store := NewMemoryStore()
 	store.ensureSchedules()

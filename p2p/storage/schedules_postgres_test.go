@@ -98,6 +98,46 @@ func TestPostgresSchedulesRestartAndTwoClaimers(t *testing.T) {
 	}
 }
 
+func TestPostgresActiveLeaseRejectsUpdateAndDelete(t *testing.T) {
+	ctx := context.Background()
+	conn, closeDB := test.PrepareDBConnectionString(t, test.DBTypePostgres)
+	defer closeDB()
+	opts := config.DatabaseOptions{ConnectionString: config.DataSource(conn)}
+	s, e := NewDatabaseStore(ctx, sqlutil.NewConnectionManager(nil, opts), &opts)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer s.Close()
+	n := time.Now().UTC().Add(time.Hour)
+	v, e := s.CreateSchedule(ctx, Schedule{OwnerID: "o", ScheduleID: "active-pg", Status: "enabled", NextRunAt: &n}, "")
+	if e != nil {
+		t.Fatal(e)
+	}
+	c, e := s.ClaimScheduleNow(ctx, "o", v.ScheduleID, "worker", 5*time.Millisecond)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = s.UpdateScheduleCAS(ctx, v, c.Revision); e != ErrScheduleConflict {
+		t.Fatalf("update=%v", e)
+	}
+	if e = s.DeleteScheduleCAS(ctx, "o", v.ScheduleID, c.Revision); e != ErrScheduleConflict {
+		t.Fatalf("delete=%v", e)
+	}
+	if _, e = s.SetScheduleStatusCAS(ctx, "o", v.ScheduleID, c.Revision, false); e != ErrScheduleConflict {
+		t.Fatalf("status=%v", e)
+	}
+	time.Sleep(10 * time.Millisecond)
+	if _, e = s.UpdateScheduleCAS(ctx, v, c.Revision); e != ErrScheduleConflict {
+		t.Fatalf("expired update=%v", e)
+	}
+	if e = s.DeleteScheduleCAS(ctx, "o", v.ScheduleID, c.Revision); e != ErrScheduleConflict {
+		t.Fatalf("expired delete=%v", e)
+	}
+	if _, e = s.SetScheduleStatusCAS(ctx, "o", v.ScheduleID, c.Revision, false); e != ErrScheduleConflict {
+		t.Fatalf("expired status=%v", e)
+	}
+}
+
 func TestPostgresScheduleRunRecoveryLeaseFencesExpiredRun(t *testing.T) {
 	ctx := context.Background()
 	conn, closeDB := test.PrepareDBConnectionString(t, test.DBTypePostgres)

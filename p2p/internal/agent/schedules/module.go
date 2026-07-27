@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -252,6 +253,12 @@ func intVal(p map[string]any, k string) (int, error) {
 	if ok && f == float64(int(f)) {
 		return int(f), nil
 	}
+	if n, ok := p[k].(json.Number); ok {
+		i, e := strconv.ParseInt(string(n), 10, 64)
+		if e == nil && i >= 0 {
+			return int(i), nil
+		}
+	}
 	return 0, fmt.Errorf("%s must be integer", k)
 }
 func expectedRevision(p map[string]any) (int64, error) {
@@ -271,6 +278,11 @@ func expectedRevision(p map[string]any) (int64, error) {
 	case float64:
 		if n > 0 && n == float64(int64(n)) {
 			return int64(n), nil
+		}
+	case json.Number:
+		parsed, err := strconv.ParseInt(string(n), 10, 64)
+		if err == nil && parsed > 0 {
+			return parsed, nil
 		}
 	}
 	return 0, fmt.Errorf("expected_revision must be positive integer")
