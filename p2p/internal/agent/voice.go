@@ -55,6 +55,8 @@ type voiceSession struct {
 	Started, Ended                                         bool
 	State                                                  string
 	ActiveTurnID                                           string
+	PendingStopID                                          string
+	ProviderStopPending                                    bool
 	TurnSequence                                           int64
 	Generation                                             uint64
 	Busy                                                   bool
@@ -71,6 +73,7 @@ type voiceCoordinator struct {
 	streams    map[string]map[chan nativeagent.Event]struct{}
 	durable    func(context.Context, string, map[string]any, func(agentturns.StreamEvent) error) error
 	stop       func(context.Context, string, string) error
+	client     func(context.Context, string, *voiceSession) (voiceChatClient, *actionbase.Error) // test seam
 	active     func(string) bool
 	generation func() uint64
 }
@@ -79,46 +82,94 @@ func (m *Module) VoiceReady() bool {
 	if m == nil || m.voice == nil || m.voice.profiles == nil || m.voice.cfg.WebhookSecret == "" {
 		return false
 	}
-	raw := m.voice.cfg.CustomLLMURL
-	if raw == "" {
-		raw = m.voice.cfg.WebhookURL
-	}
-	u, err := url.Parse(raw)
+	return voiceHTTPSURL(m.voice.cfg.WebhookURL) && voiceHTTPSURL(m.voice.cfg.CustomLLMURL)
+}
+
+func voiceHTTPSURL(raw string) bool {
+	u, err := url.Parse(strings.TrimSpace(raw))
 	return err == nil && u.Scheme == "https" && u.Host != ""
 }
 
-func (m *Module) AbortVoiceSessions(ctx context.Context) {
+func (m *Module) AbortVoiceSessions(ctx context.Context) error {
 	if m == nil || m.voice == nil {
-		return
+		return nil
 	}
+	var stopErr error
 	m.voice.mu.Lock()
-	sessions := make([]*voiceSession, 0)
-	streams := make([]map[chan nativeagent.Event]struct{}, 0)
-	for id, s := range m.voice.sessions {
-		if s != nil && !s.Ended {
-			cp := *s
-			sessions = append(sessions, &cp)
-			s.Ended = true
-			s.State = "ended"
-			streams = append(streams, m.voice.streams[id])
-			delete(m.voice.streams, id)
+	candidates := make([]*voiceSession, 0, len(m.voice.sessions))
+	for _, s := range m.voice.sessions {
+		if s != nil && (!s.Ended || s.PendingStopID != "" || s.ProviderStopPending) {
+			candidates = append(candidates, s)
 		}
 	}
 	m.voice.mu.Unlock()
-	for _, set := range streams {
-		for ch := range set {
+	for _, candidate := range candidates {
+		var session voiceSession
+		var streams map[chan nativeagent.Event]struct{}
+		m.voice.mu.Lock()
+		live := m.voice.sessions[candidate.SessionID]
+		if live == nil || (live.Ended && live.PendingStopID == "" && !live.ProviderStopPending) {
+			m.voice.mu.Unlock()
+			continue
+		}
+		if live.ActiveTurnID != "" {
+			live.PendingStopID = live.ActiveTurnID
+		}
+		session = *live
+		live.Ended, live.Started, live.Busy = true, false, false
+		live.State, live.ActiveTurnID = "ended", ""
+		streams = m.voice.streams[live.SessionID]
+		delete(m.voice.streams, live.SessionID)
+		m.voice.mu.Unlock()
+		if client, err := m.voice.providerClient(ctx, session.OwnerID, &session); err != nil {
+			m.voice.mu.Lock()
+			if live := m.voice.sessions[session.SessionID]; live != nil {
+				live.ProviderStopPending = true
+			}
+			m.voice.mu.Unlock()
+			if stopErr == nil {
+				stopErr = errorsFromAction(err)
+			}
+		} else if client != nil {
+			if err := client.StopVoiceChat(ctx, session); err != nil && stopErr == nil {
+				m.voice.mu.Lock()
+				if live := m.voice.sessions[session.SessionID]; live != nil {
+					live.ProviderStopPending = true
+				}
+				m.voice.mu.Unlock()
+				stopErr = err
+			} else if err == nil {
+				m.voice.mu.Lock()
+				if live := m.voice.sessions[session.SessionID]; live != nil {
+					live.ProviderStopPending = false
+				}
+				m.voice.mu.Unlock()
+			}
+		}
+		if m.voice.stop != nil && session.PendingStopID != "" {
+			if err := m.voice.stop(ctx, session.OwnerID, session.PendingStopID); err != nil && stopErr == nil {
+				stopErr = err
+			} else if err == nil {
+				m.voice.mu.Lock()
+				if live := m.voice.sessions[session.SessionID]; live != nil {
+					live.PendingStopID = ""
+				}
+				m.voice.mu.Unlock()
+			}
+		}
+		// Channels are detached under the coordinator mutex and only closed
+		// afterwards, so emitters never hold the same lock while sending.
+		for ch := range streams {
 			select {
 			case ch <- nativeagent.Event{Event: "session.done", Data: map[string]any{"status": "done", "session_ended": true}}:
 			default:
 			}
-			close(ch)
+			// The stream loop exits on this terminal event.  Do not close a
+			// channel here: an emitter may already have selected it after
+			// releasing v.mu, and closing would race into a send panic.
 		}
 	}
-	for _, s := range sessions {
-		if client, err := m.voice.providerClient(ctx, s.OwnerID, s); err == nil && client != nil {
-			_ = client.StopVoiceChat(ctx, *s)
-		}
-	}
+	return stopErr
 }
 
 func newVoiceCoordinator(profiles storage.ModelProfileStore, owner func() string) *voiceCoordinator {
@@ -173,7 +224,7 @@ func (volcRTCTokenSigner) SignRTC(appID, appKey, roomID, userID string, expiry t
 	var count [2]byte
 	binary.LittleEndian.PutUint16(count[:], 2)
 	b = append(b, count[:]...)
-	for _, privilege := range []uint16{1, 2} {
+	for _, privilege := range []uint16{1, 4} {
 		var x [6]byte
 		binary.LittleEndian.PutUint16(x[:2], privilege)
 		binary.LittleEndian.PutUint32(x[2:], expires)
@@ -271,6 +322,9 @@ func (v *voiceCoordinator) resolve(ctx context.Context, owner, id, kind string) 
 }
 
 func (v *voiceCoordinator) providerClient(ctx context.Context, owner string, s *voiceSession) (voiceChatClient, *actionbase.Error) {
+	if v.client != nil {
+		return v.client(ctx, owner, s)
+	}
 	profile, err := v.profiles.ResolveModelProfilePinned(ctx, owner, s.SpeechProfileID, s.SpeechRevision, s.SpeechCredential)
 	if err != nil {
 		return nil, actionbase.StatusError(http.StatusServiceUnavailable, "speech profile credentials are unavailable")
@@ -295,12 +349,7 @@ func (v *voiceCoordinator) create(ctx context.Context, owner string, params map[
 	if conversationID == "" {
 		return nil, actionbase.BadRequest("conversation_id is required")
 	}
-	callbackURL := v.cfg.CustomLLMURL
-	if callbackURL == "" {
-		callbackURL = v.cfg.WebhookURL
-	}
-	parsedCallback, callbackErr := url.Parse(callbackURL)
-	if v.cfg.WebhookSecret == "" || callbackErr != nil || parsedCallback.Scheme != "https" || parsedCallback.Host == "" {
+	if v.cfg.WebhookSecret == "" || !voiceHTTPSURL(v.cfg.WebhookURL) || !voiceHTTPSURL(v.cfg.CustomLLMURL) {
 		return nil, actionbase.CodedError(http.StatusServiceUnavailable, "voice_callback_not_configured", "voice callback configuration is required")
 	}
 	conv, err := v.resolve(ctx, owner, profileID(params, "conversation_profile_id"), storage.ModelKindConversation)
@@ -409,18 +458,39 @@ func (m *Module) ValidateVoiceProviderPayload(sessionID string, payload map[stri
 		keys []string
 		want string
 	}{{[]string{"TaskId", "task_id"}, s.SessionID}, {[]string{"RoomId", "room_id"}, s.RoomID}, {[]string{"UserId", "user_id"}, s.UserID}} {
-		found := false
 		for _, key := range field.keys {
 			if got, ok := payload[key].(string); ok && strings.TrimSpace(got) != "" {
-				found = true
 				if strings.TrimSpace(got) != field.want {
 					return fmt.Errorf("voice provider identity mismatch")
 				}
 			}
 		}
-		if !found {
-			return fmt.Errorf("voice provider identity missing")
+	}
+	marked := false
+	if marker := actionbase.String(payload["session_id"]); marker != "" {
+		if marker != sessionID {
+			return fmt.Errorf("voice session marker mismatch")
 		}
+		marked = true
+	}
+	if custom, ok := payload["Custom"].(map[string]any); ok {
+		if marker := actionbase.String(custom["session_id"]); marker != "" && marker != sessionID {
+			return fmt.Errorf("voice session marker mismatch")
+		} else if marker != "" {
+			marked = true
+		}
+	}
+	for _, key := range []string{"custom", "Custom"} {
+		if raw, ok := payload[key].(string); ok && strings.TrimSpace(raw) != "" {
+			var custom map[string]any
+			if json.Unmarshal([]byte(raw), &custom) != nil || actionbase.String(custom["session_id"]) != sessionID {
+				return fmt.Errorf("voice session marker mismatch")
+			}
+			marked = true
+		}
+	}
+	if !marked {
+		return fmt.Errorf("voice session marker is required")
 	}
 	return nil
 }
@@ -455,6 +525,9 @@ func (m *Module) runVoiceCustomLLM(ctx context.Context, sessionID, token, transc
 	if s == nil {
 		return "", fmt.Errorf("voice session not found")
 	}
+	if s.op != nil {
+		s.op.Lock()
+	}
 	turnKey := m.voice.nextTurnKey(sessionID)
 	if len(requestID) > 0 && strings.TrimSpace(requestID[0]) != "" {
 		turnKey = transcriptDigest(strings.TrimSpace(requestID[0]))
@@ -462,18 +535,44 @@ func (m *Module) runVoiceCustomLLM(ctx context.Context, sessionID, token, transc
 	turnID := sessionID + "_turn_" + turnKey
 	m.voice.mu.Lock()
 	if current := m.voice.sessions[sessionID]; current != nil {
+		if current.Ended || current.OwnerID != s.OwnerID || time.Now().After(current.ExpiresAt) || (m.voice.active != nil && !m.voice.active(current.OwnerID)) || (m.voice.generation != nil && current.Generation != m.voice.generation()) {
+			m.voice.mu.Unlock()
+			if s.op != nil {
+				s.op.Unlock()
+			}
+			return "", fmt.Errorf("voice session is no longer active")
+		}
 		if current.Busy && current.ActiveTurnID != turnID {
 			m.voice.mu.Unlock()
+			if s.op != nil {
+				s.op.Unlock()
+			}
 			return "", fmt.Errorf("voice session already has an active turn")
 		}
 		current.ActiveTurnID = turnID
 		current.Busy = true
+	} else {
+		m.voice.mu.Unlock()
+		if s.op != nil {
+			s.op.Unlock()
+		}
+		return "", fmt.Errorf("voice session not found")
 	}
 	m.voice.mu.Unlock()
+	if s.op != nil {
+		s.op.Unlock()
+	}
 	if strings.TrimSpace(transcript) == "" {
+		m.voice.mu.Lock()
+		if current := m.voice.sessions[sessionID]; current != nil && current.ActiveTurnID == turnID {
+			current.ActiveTurnID = ""
+			current.Busy = false
+		}
+		m.voice.mu.Unlock()
 		return "", fmt.Errorf("voice transcript is empty")
 	}
 	var answer strings.Builder
+	var terminalErr error
 	err := m.voice.durable(ctx, s.OwnerID, map[string]any{"turn_id": turnID, "conversation_id": s.ConversationID, "model_profile_id": s.ConversationProfileID, "_voice_revision": s.ConversationRevision, "_voice_credential": s.ConversationCredential, "prompt": strings.TrimSpace(transcript)}, func(event agentturns.StreamEvent) error {
 		if event.Event == "delta" {
 			if text := actionbase.String(event.Data["text"]); text != "" {
@@ -495,8 +594,15 @@ func (m *Module) runVoiceCustomLLM(ctx context.Context, sessionID, token, transc
 			m.voice.mu.Unlock()
 			m.voice.emit(sessionID, nativeagent.Event{Event: "turn.done", Data: map[string]any{"status": "done"}})
 		}
+		if event.Event == "failed" || event.Event == "error" || event.Event == "stopped" || event.Event == "interrupted" {
+			terminalErr = fmt.Errorf("voice turn %s", event.Event)
+			m.voice.emit(sessionID, nativeagent.Event{Event: event.Event, Data: map[string]any{"status": event.Event}})
+		}
 		return nil
 	})
+	if err == nil && terminalErr != nil {
+		err = terminalErr
+	}
 	if err != nil {
 		m.voice.mu.Lock()
 		if current := m.voice.sessions[sessionID]; current != nil {
@@ -504,7 +610,7 @@ func (m *Module) runVoiceCustomLLM(ctx context.Context, sessionID, token, transc
 			current.Busy = false
 		}
 		m.voice.mu.Unlock()
-		m.voice.emit(sessionID, nativeagent.Event{Event: "error", Data: map[string]any{"status": "error", "error": "voice turn failed"}})
+			m.voice.emit(sessionID, nativeagent.Event{Event: "error", Data: map[string]any{"status": "error", "error": "voice turn failed"}})
 	}
 	return answer.String(), err
 }
@@ -544,32 +650,55 @@ func (v *voiceCoordinator) get(owner, id string) (*voiceSession, *actionbase.Err
 
 func (v *voiceCoordinator) cleanupExpired(ctx context.Context) {
 	now := time.Now()
-	var expired []*voiceSession
-	var expiredStreams []map[chan nativeagent.Event]struct{}
+	var candidates []*voiceSession
 	v.mu.Lock()
-	for id, s := range v.sessions {
-		if s != nil && !s.Ended && now.After(s.ExpiresAt) {
-			cp := *s
-			s.Ended = true
-			s.State = "ended"
-			expiredStreams = append(expiredStreams, v.streams[id])
-			delete(v.streams, id)
-			expired = append(expired, &cp)
+	for _, s := range v.sessions {
+		if s != nil && ((!s.Ended && now.After(s.ExpiresAt)) || s.PendingStopID != "") {
+			candidates = append(candidates, s)
 		}
 	}
 	v.mu.Unlock()
-	for _, s := range expired {
-		if client, err := v.providerClient(ctx, s.OwnerID, s); err == nil && client != nil {
-			_ = client.StopVoiceChat(ctx, *s)
+	for _, candidate := range candidates {
+		var s voiceSession
+		var streams map[chan nativeagent.Event]struct{}
+		v.mu.Lock()
+		live := v.sessions[candidate.SessionID]
+		if live == nil || (live.Ended && live.PendingStopID == "") || (!live.Ended && !now.After(live.ExpiresAt)) {
+			v.mu.Unlock()
+			continue
 		}
-	}
-	for _, streams := range expiredStreams {
+		if live.ActiveTurnID != "" {
+			live.PendingStopID = live.ActiveTurnID
+		}
+		s = *live
+		live.Ended = true
+		live.State = "ended"
+		live.Busy = false
+		live.ActiveTurnID = ""
+		streams = v.streams[live.SessionID]
+		delete(v.streams, live.SessionID)
+		v.mu.Unlock()
+		if client, err := v.providerClient(ctx, s.OwnerID, &s); err == nil && client != nil {
+			_ = client.StopVoiceChat(ctx, s)
+		}
+		if v.stop != nil && s.PendingStopID != "" {
+			// Expiry is a janitor path: local terminal revoke is retained even
+			// when the durable stop is transiently unavailable; a later account
+			// abort can retry while no stream remains authorized.
+			if v.stop(ctx, s.OwnerID, s.PendingStopID) == nil {
+				v.mu.Lock()
+				if live := v.sessions[s.SessionID]; live != nil {
+					live.PendingStopID = ""
+				}
+				v.mu.Unlock()
+			}
+		}
 		for ch := range streams {
 			select {
 			case ch <- nativeagent.Event{Event: "session.done", Data: map[string]any{"status": "done", "session_ended": true}}:
 			default:
 			}
-			close(ch)
+			// See AbortVoiceSessions: session.done is the safe terminal signal.
 		}
 	}
 }
@@ -587,6 +716,19 @@ func (v *voiceCoordinator) start(ctx context.Context, owner string, params map[s
 		s.op.Lock()
 		defer s.op.Unlock()
 	}
+	v.mu.Lock()
+	live := v.sessions[id]
+	if live == nil || live.Ended || live.State == "stopping" || live.State == "ended" {
+		v.mu.Unlock()
+		return nil, actionbase.StatusError(http.StatusConflict, "voice session is not startable")
+	}
+	if v.generation != nil && live.Generation != v.generation() {
+		v.mu.Unlock()
+		return nil, actionbase.StatusError(http.StatusUnauthorized, "M_UNKNOWN_TOKEN")
+	}
+	cp := *live
+	s = &cp
+	v.mu.Unlock()
 	v.mu.Lock()
 	if current := v.sessions[id]; current != nil && current.Started {
 		v.mu.Unlock()
@@ -619,7 +761,18 @@ func (v *voiceCoordinator) start(ctx context.Context, owner string, params map[s
 		}
 	}
 	v.mu.Lock()
-	if cur := v.sessions[id]; cur != nil {
+	cur := v.sessions[id]
+	if cur == nil || cur.Ended || cur.OwnerID != owner || time.Now().After(cur.ExpiresAt) || (v.active != nil && !v.active(owner)) || (v.generation != nil && cur.Generation != v.generation()) {
+		v.mu.Unlock()
+		// Abort/expiry can win while the provider Start call is in flight.  The
+		// session was locally revoked first, so compensate before returning and
+		// never expose a remotely-live zombie as a successful start.
+		if client != nil {
+			_ = client.StopVoiceChat(ctx, *s)
+		}
+		return nil, actionbase.StatusError(http.StatusUnauthorized, "M_UNKNOWN_TOKEN")
+	}
+	if cur != nil {
 		cur.State = "started"
 	}
 	v.mu.Unlock()
@@ -645,18 +798,37 @@ func (v *voiceCoordinator) transcript(_ context.Context, owner string, params ma
 	v.emit(id, nativeagent.Event{Event: "transcribing", Data: map[string]any{"status": "transcribing"}})
 	if v.durable != nil {
 		s, _ := v.get(owner, id)
+		if s == nil {
+			return nil, actionbase.StatusError(http.StatusNotFound, "voice session not found")
+		}
+		if s.op != nil {
+			s.op.Lock()
+		}
+		defer func() {
+			if s.op != nil {
+				s.op.Unlock()
+			}
+		}()
 		turnID := id + "_turn_" + v.nextTurnKey(id)
 		v.mu.Lock()
 		if current := v.sessions[id]; current != nil {
+			if current.Ended || current.OwnerID != owner || time.Now().After(current.ExpiresAt) || (v.active != nil && !v.active(owner)) || (v.generation != nil && current.Generation != v.generation()) {
+				v.mu.Unlock()
+				return nil, actionbase.StatusError(http.StatusUnauthorized, "M_UNKNOWN_TOKEN")
+			}
 			if current.Busy {
 				v.mu.Unlock()
 				return nil, actionbase.StatusError(http.StatusConflict, "voice session already has an active turn")
 			}
 			current.ActiveTurnID = turnID
 			current.Busy = true
+		} else {
+			v.mu.Unlock()
+			return nil, actionbase.StatusError(http.StatusNotFound, "voice session not found")
 		}
 		v.mu.Unlock()
 		go func() {
+			var terminalErr error
 			err := v.durable(context.Background(), owner, map[string]any{"turn_id": turnID, "conversation_id": s.ConversationID, "model_profile_id": s.ConversationProfileID, "_voice_revision": s.ConversationRevision, "_voice_credential": s.ConversationCredential, "prompt": text}, func(event agentturns.StreamEvent) error {
 				if event.Event == "delta" {
 					if value := actionbase.String(event.Data["text"]); value != "" {
@@ -670,9 +842,15 @@ func (v *voiceCoordinator) transcript(_ context.Context, owner string, params ma
 					}
 					v.mu.Unlock()
 					v.emit(id, nativeagent.Event{Event: "turn.done", Data: map[string]any{"status": "done"}})
+				} else if event.Event == "failed" || event.Event == "error" || event.Event == "stopped" || event.Event == "interrupted" {
+					terminalErr = fmt.Errorf("voice turn %s", event.Event)
+					v.emit(id, nativeagent.Event{Event: event.Event, Data: map[string]any{"status": event.Event}})
 				}
 				return nil
 			})
+			if err == nil && terminalErr != nil {
+				err = terminalErr
+			}
 			if err != nil {
 				v.mu.Lock()
 				if current := v.sessions[id]; current != nil {
@@ -688,22 +866,48 @@ func (v *voiceCoordinator) transcript(_ context.Context, owner string, params ma
 	}
 	return map[string]any{"ok": true, "session_id": id, "accepted": true}, nil
 }
-func (v *voiceCoordinator) interrupt(_ context.Context, owner string, params map[string]any) (any, *actionbase.Error) {
-	v.cleanupExpired(context.Background())
+func (v *voiceCoordinator) interrupt(ctx context.Context, owner string, params map[string]any) (any, *actionbase.Error) {
+	v.cleanupExpired(ctx)
 	id := profileID(params, "session_id")
+	if id == "" {
+		return nil, actionbase.BadRequest("session_id is required")
+	}
 	s, e := v.get(owner, id)
 	if e != nil {
 		return nil, e
 	}
+	if s.op != nil {
+		s.op.Lock()
+		defer s.op.Unlock()
+	}
+	v.mu.Lock()
+	live := v.sessions[id]
+	if live == nil || live.Ended || live.OwnerID != owner || (v.generation != nil && live.Generation != v.generation()) {
+		v.mu.Unlock()
+		return nil, actionbase.StatusError(http.StatusUnauthorized, "M_UNKNOWN_TOKEN")
+	}
+	cp := *live
+	s = &cp
+	v.mu.Unlock()
 	v.emit(id, nativeagent.Event{Event: "listening", Data: map[string]any{"status": "listening"}})
-	if client, err := v.providerClient(context.Background(), owner, s); err == nil && client != nil {
-		if err := client.InterruptVoiceChat(context.Background(), *s); err != nil {
+	if client, err := v.providerClient(ctx, owner, s); err != nil {
+		return nil, err
+	} else if client != nil {
+		if err := client.InterruptVoiceChat(ctx, *s); err != nil {
 			return nil, actionbase.StatusError(http.StatusBadGateway, "voice provider interrupt failed")
 		}
 	}
 	if v.stop != nil && s.ActiveTurnID != "" {
-		_ = v.stop(context.Background(), owner, s.ActiveTurnID)
+		if err := v.stop(ctx, owner, s.ActiveTurnID); err != nil {
+			return nil, actionbase.StatusError(http.StatusBadGateway, "voice turn stop failed")
+		}
 	}
+	v.mu.Lock()
+	if current := v.sessions[id]; current != nil {
+		current.ActiveTurnID = ""
+		current.Busy = false
+	}
+	v.mu.Unlock()
 	return map[string]any{"ok": true, "session_id": id, "interrupted": true}, nil
 }
 func (v *voiceCoordinator) end(ctx context.Context, owner string, params map[string]any) (any, *actionbase.Error) {
@@ -740,35 +944,49 @@ func (v *voiceCoordinator) end(ctx context.Context, owner string, params map[str
 		return nil, actionbase.StatusError(http.StatusGone, "voice session expired")
 	}
 	v.mu.Lock()
-	if latest := v.sessions[id]; latest != nil {
-		latest.State = "stopping"
-	}
-	v.mu.Unlock()
-	if client, err := v.providerClient(ctx, owner, &s); err != nil {
-		v.mu.Lock()
-		if latest := v.sessions[id]; latest != nil {
-			latest.State = "started"
-		}
+	latest := v.sessions[id]
+	if latest == nil || latest.Ended || latest.OwnerID != owner || (v.generation != nil && latest.Generation != v.generation()) {
 		v.mu.Unlock()
-		return nil, err
-	} else if client != nil {
-		if err := client.StopVoiceChat(ctx, s); err != nil {
+		return nil, actionbase.StatusError(http.StatusUnauthorized, "M_UNKNOWN_TOKEN")
+	}
+	s = *latest
+	latest.State = "stopping"
+	v.mu.Unlock()
+	if s.PendingStopID == "" {
+		if client, err := v.providerClient(ctx, owner, &s); err != nil {
 			v.mu.Lock()
 			if latest := v.sessions[id]; latest != nil {
 				latest.State = "started"
 			}
 			v.mu.Unlock()
-			return nil, actionbase.StatusError(http.StatusBadGateway, "voice provider stop failed")
+			return nil, err
+		} else if client != nil {
+			if err := client.StopVoiceChat(ctx, s); err != nil {
+				v.mu.Lock()
+				if latest := v.sessions[id]; latest != nil {
+					latest.State = "started"
+				}
+				v.mu.Unlock()
+				return nil, actionbase.StatusError(http.StatusBadGateway, "voice provider stop failed")
+			}
 		}
 	}
 	if v.stop != nil && s.ActiveTurnID != "" {
-		_ = v.stop(ctx, owner, s.ActiveTurnID)
+		if err := v.stop(ctx, owner, s.ActiveTurnID); err != nil {
+			v.mu.Lock()
+			if latest := v.sessions[id]; latest != nil && !latest.Ended {
+				latest.State, latest.PendingStopID = "stopping", s.ActiveTurnID
+			}
+			v.mu.Unlock()
+			return nil, actionbase.StatusError(http.StatusBadGateway, "voice turn stop failed")
+		}
 	}
 	v.mu.Lock()
 	if latest := v.sessions[id]; latest != nil {
 		latest.Ended = true
 		latest.State = "ended"
 		latest.ActiveTurnID = ""
+		latest.PendingStopID = ""
 	}
 	streams := v.streams[id]
 	delete(v.streams, id)
@@ -778,7 +996,7 @@ func (v *voiceCoordinator) end(ctx context.Context, owner string, params map[str
 		case ch <- nativeagent.Event{Event: "session.done", Data: map[string]any{"status": "done", "session_ended": true}}:
 		default:
 		}
-		close(ch)
+		// See AbortVoiceSessions: session.done is the safe terminal signal.
 	}
 	return map[string]any{"ok": true, "session_id": id, "ended": true}, nil
 }
@@ -799,6 +1017,14 @@ func (v *voiceCoordinator) stream(ctx context.Context, owner string, params map[
 		v.mu.Unlock()
 		return fmt.Errorf("M_FORBIDDEN")
 	}
+	if v.active != nil && !v.active(owner) {
+		v.mu.Unlock()
+		return fmt.Errorf("M_UNKNOWN_TOKEN")
+	}
+	if v.generation != nil && s.Generation != v.generation() {
+		v.mu.Unlock()
+		return fmt.Errorf("M_UNKNOWN_TOKEN")
+	}
 	if v.streams[id] == nil {
 		v.streams[id] = map[chan nativeagent.Event]struct{}{}
 	}
@@ -808,16 +1034,32 @@ func (v *voiceCoordinator) stream(ctx context.Context, owner string, params map[
 	if err := emit(nativeagent.Event{Event: "listening", Data: map[string]any{"status": "listening"}}); err != nil {
 		return err
 	}
+	// A terminal event must not depend on the bounded fan-out buffer: it may be
+	// full while the caller is temporarily stalled.  Polling the authoritative
+	// local revoke state gives each registered stream an independent terminal
+	// path without closing a channel concurrently with emitters.
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-tick.C:
+			v.mu.Lock()
+			ended := v.sessions[id] == nil || v.sessions[id].Ended
+			v.mu.Unlock()
+			if ended {
+				return emit(nativeagent.Event{Event: "session.done", Data: map[string]any{"status": "done", "session_ended": true}})
+			}
 		case e, ok := <-ch:
 			if !ok {
 				return nil
 			}
 			if err := emit(e); err != nil {
 				return err
+			}
+			if e.Event == "session.done" || actionbase.Bool(e.Data["session_ended"]) {
+				return nil
 			}
 		}
 	}

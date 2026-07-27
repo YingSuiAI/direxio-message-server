@@ -2,6 +2,8 @@ package p2p
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -28,8 +30,38 @@ func Register(router *mux.Router, service *Service) {
 	router.HandleFunc("/command", product).Methods(http.MethodPost, http.MethodOptions)
 	router.HandleFunc("/ws", realtimeWSHandler(service)).Methods(http.MethodGet, http.MethodOptions)
 	router.HandleFunc("/agent/voice/volc/custom-llm", voiceCustomLLMHandler(service)).Methods(http.MethodPost, http.MethodOptions)
-	router.HandleFunc("/agent/voice/webhook", voiceCustomLLMHandler(service)).Methods(http.MethodPost, http.MethodOptions)
+	router.HandleFunc("/agent/voice/webhook", voiceEventWebhookHandler(service)).Methods(http.MethodPost, http.MethodOptions)
 	router.HandleFunc("/health", httpapi.HealthHandler(nil)).Methods(http.MethodGet, http.MethodOptions)
+}
+
+func voiceEventWebhookHandler(service *Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		sessionID := strings.TrimSpace(r.URL.Query().Get("session_id"))
+		body, err := io.ReadAll(io.LimitReader(r.Body, 64<<10))
+		if err != nil {
+			http.Error(w, "invalid voice callback", http.StatusBadRequest)
+			return
+		}
+		var callback struct {
+			Message   json.RawMessage `json:"message"`
+			Binary    json.RawMessage `json:"binary"`
+			Signature string          `json:"signature"`
+		}
+		if json.Unmarshal(body, &callback) != nil || strings.TrimSpace(callback.Signature) == "" {
+			http.Error(w, "voice callback rejected", http.StatusUnauthorized)
+			return
+		}
+		if service == nil || service.agentModule == nil || service.agentModule.AuthorizeVoiceCallback(sessionID, callback.Signature) != nil {
+			http.Error(w, "voice callback rejected", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "session_id": sessionID})
+	}
 }
 
 func voiceCustomLLMHandler(service *Service) http.HandlerFunc {
@@ -103,12 +135,15 @@ func voiceCustomLLMHandler(service *Service) http.HandlerFunc {
 }
 
 func voiceCallbackRequestID(payload map[string]any) string {
-	for _, key := range []string{"request_id", "event_id", "RequestId", "EventId", "task_id"} {
+	for _, key := range []string{"request_id", "event_id", "RequestId", "EventId"} {
 		if value, ok := payload[key].(string); ok && strings.TrimSpace(value) != "" {
 			return strings.TrimSpace(value)
 		}
 	}
-	return ""
+	canonical, _ := json.Marshal(payload["messages"])
+	marker := strings.TrimSpace(actionbase.String(payload["session_id"]))
+	sum := sha256.Sum256(append(canonical, []byte("|"+marker)...))
+	return "history-" + hex.EncodeToString(sum[:8])
 }
 
 func voiceCallbackTranscript(payload map[string]any) string {

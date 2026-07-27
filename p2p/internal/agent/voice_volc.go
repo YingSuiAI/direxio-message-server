@@ -24,8 +24,8 @@ type voiceChatClient interface {
 }
 
 type volcVoiceChatClient struct {
-	httpClient                                                 *http.Client
-	host, region, accessKey, secret, webhookURL, webhookSecret string
+	httpClient                                                               *http.Client
+	host, region, accessKey, secret, webhookURL, customLLMURL, webhookSecret string
 }
 
 func newVolcVoiceChatClient(accessKey, secret string, cfg voiceRuntimeConfig) voiceChatClient {
@@ -39,26 +39,24 @@ func newVolcVoiceChatClient(accessKey, secret string, cfg voiceRuntimeConfig) vo
 	if !strings.HasPrefix(host, "https://") {
 		host = "https://" + host
 	}
-	callback := cfg.CustomLLMURL
-	if callback == "" {
-		callback = cfg.WebhookURL
-	}
-	return &volcVoiceChatClient{httpClient: &http.Client{Timeout: 15 * time.Second}, host: host, region: "cn-north-1", accessKey: accessKey, secret: secret, webhookURL: callback, webhookSecret: cfg.WebhookSecret}
+	return &volcVoiceChatClient{httpClient: &http.Client{Timeout: 15 * time.Second}, host: host, region: "cn-north-1", accessKey: accessKey, secret: secret, webhookURL: cfg.WebhookURL, customLLMURL: cfg.CustomLLMURL, webhookSecret: cfg.WebhookSecret}
 }
 
 func (c *volcVoiceChatClient) StartVoiceChat(ctx context.Context, s voiceSession) error {
-	callback := c.webhookURL
-	if callback != "" {
-		u, err := url.Parse(callback)
-		if err != nil || u.Scheme != "https" {
-			return fmt.Errorf("voice callback URL must use HTTPS")
-		}
-		q := u.Query()
-		q.Set("session_id", s.SessionID)
-		u.RawQuery = q.Encode()
-		callback = u.String()
+	callback, err := voiceCallbackURL(c.webhookURL, s.SessionID)
+	if err != nil {
+		return err
 	}
-	config := map[string]any{"CallbackUrl": callback, "ASRConfig": map[string]any{"Provider": "volcano", "ProviderParams": map[string]any{"Mode": "bigmodel", "ApiResourceId": "volc.seedasr.sauc.duration", "StreamMode": 2, "VolcanoASRParameters": "{\"request\":{\"enable_nonstream\":true}}"}, "VADConfig": map[string]any{"SilenceTime": 900}, "InterruptConfig": map[string]any{"InterruptSpeechDuration": 700}}, "LLMConfig": map[string]any{"Mode": "CustomLLM", "Url": callback, "APIKey": s.CallbackToken}, "TTSConfig": map[string]any{"Provider": "volcano_bidirection", "ProviderParams": map[string]any{}}}
+	llmURL := c.customLLMURL
+	if llmURL == "" {
+		return fmt.Errorf("voice custom LLM URL must be configured separately")
+	}
+	llmURL, err = voiceCallbackURL(llmURL, s.SessionID)
+	if err != nil {
+		return err
+	}
+	custom, _ := json.Marshal(map[string]string{"session_id": s.SessionID})
+	config := map[string]any{"ASRConfig": map[string]any{"Provider": "volcano", "ProviderParams": map[string]any{"Mode": "bigmodel", "ApiResourceId": "volc.seedasr.sauc.duration", "StreamMode": 2, "VolcanoASRParameters": "{\"request\":{\"enable_nonstream\":true}}"}, "VADConfig": map[string]any{"SilenceTime": 900}, "InterruptConfig": map[string]any{"InterruptSpeechDuration": 700}}, "LLMConfig": map[string]any{"Mode": "CustomLLM", "Url": llmURL, "APIKey": s.CallbackToken, "Custom": string(custom)}, "TTSConfig": map[string]any{"Provider": "volcano_bidirection", "ProviderParams": map[string]any{}}}
 	if s.SpeechProviderConfig != nil {
 		params := config["TTSConfig"].(map[string]any)["ProviderParams"].(map[string]any)
 		resource, speaker := logString(s.SpeechProviderConfig["tts_resource_id"]), logString(s.SpeechProviderConfig["tts_speaker"])
@@ -73,8 +71,22 @@ func (c *volcVoiceChatClient) StartVoiceChat(ctx context.Context, s voiceSession
 		encoded, _ := json.Marshal(tts)
 		params["VolcanoTTSParameters"] = string(encoded)
 	}
-	payload := map[string]any{"AppId": s.VoiceChatAppID, "RoomId": s.RoomID, "TaskId": s.SessionID, "Config": config, "AgentConfig": map[string]any{"TargetUserId": []string{s.UserID}, "UserId": s.AIUserID, "EnableConversationStateCallback": true}}
+	payload := map[string]any{"AppId": s.VoiceChatAppID, "RoomId": s.RoomID, "TaskId": s.SessionID, "Config": config, "AgentConfig": map[string]any{"TargetUserId": []string{s.UserID}, "UserId": s.AIUserID, "EnableConversationStateCallback": true, "ServerMessageURLForRTS": callback, "ServerMessageSignatureForRTS": s.CallbackToken}}
 	return c.call(ctx, "StartVoiceChat", payload)
+}
+
+// voiceCallbackURL binds a provider callback to exactly one short-lived
+// server session.  The callback HMAC itself remains in LLMConfig.APIKey (and
+// is never placed in a URL); the session id is non-secret routing metadata.
+func voiceCallbackURL(raw, sessionID string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Scheme != "https" || u.Host == "" {
+		return "", fmt.Errorf("voice callback URL must use HTTPS")
+	}
+	q := u.Query()
+	q.Set("session_id", sessionID)
+	u.RawQuery = q.Encode()
+	return u.String(), nil
 }
 func (c *volcVoiceChatClient) StopVoiceChat(ctx context.Context, s voiceSession) error {
 	return c.call(ctx, "StopVoiceChat", map[string]any{"AppId": s.VoiceChatAppID, "RoomId": s.RoomID, "TaskId": s.SessionID})

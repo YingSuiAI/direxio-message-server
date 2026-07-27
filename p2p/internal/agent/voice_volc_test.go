@@ -20,7 +20,7 @@ func TestVolcVoicePayloadUsesSessionTokenAndTypedAudioConfig(t *testing.T) {
 		raw, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(raw, &body)
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader([]byte(`{}`))), Header: make(http.Header)}, nil
-	})}, host: "https://rtc.volcengineapi.com", accessKey: "ak", secret: "sk", webhookURL: "https://voice.example.test/_p2p/agent/voice/volc/custom-llm", webhookSecret: "master-secret"}
+	})}, host: "https://rtc.volcengineapi.com", accessKey: "ak", secret: "sk", webhookURL: "https://voice.example.test/_p2p/agent/voice/webhook", customLLMURL: "https://voice.example.test/_p2p/agent/voice/volc/custom-llm", webhookSecret: "master-secret"}
 	s := voiceSession{SessionID: "voice_1", CallbackToken: "session-token", VoiceChatAppID: "app", RoomID: "room", UserID: "user", AIUserID: "ai", SpeechProviderConfig: map[string]any{"tts_speaker": "speaker", "tts_speech_rate": "12", "tts_loudness_rate": "3", "tts_pitch": "-1", "tts_resource_id": "res"}}
 	if err := client.StartVoiceChat(context.Background(), s); err != nil {
 		t.Fatal(err)
@@ -31,9 +31,23 @@ func TestVolcVoicePayloadUsesSessionTokenAndTypedAudioConfig(t *testing.T) {
 		t.Fatal("master callback secret leaked into provider payload")
 	}
 	config := body["Config"].(map[string]any)
+	if _, ok := config["CallbackUrl"]; ok {
+		t.Fatal("deprecated Config.CallbackUrl must not be sent")
+	}
+	agentConfig := body["AgentConfig"].(map[string]any)
+	if agentConfig["ServerMessageURLForRTS"] != "https://voice.example.test/_p2p/agent/voice/webhook?session_id=voice_1" || agentConfig["ServerMessageSignatureForRTS"] != "session-token" {
+		t.Fatalf("state callback shape=%#v", agentConfig)
+	}
 	llm := config["LLMConfig"].(map[string]any)
 	if llm["APIKey"] != "session-token" {
 		t.Fatalf("api key=%v", llm["APIKey"])
+	}
+	if llm["Url"] != "https://voice.example.test/_p2p/agent/voice/volc/custom-llm?session_id=voice_1" {
+		t.Fatalf("custom llm url=%v", llm["Url"])
+	}
+	var custom map[string]string
+	if err := json.Unmarshal([]byte(llm["Custom"].(string)), &custom); err != nil || custom["session_id"] != "voice_1" {
+		t.Fatalf("session marker=%v err=%v", llm["Custom"], err)
 	}
 	asr := config["ASRConfig"].(map[string]any)
 	if asr["VADConfig"].(map[string]any)["SilenceTime"] != float64(900) {
