@@ -655,7 +655,7 @@ func (v *voiceCoordinator) cleanupExpired(ctx context.Context) {
 	var candidates []*voiceSession
 	v.mu.Lock()
 	for _, s := range v.sessions {
-		if s != nil && ((!s.Ended && now.After(s.ExpiresAt)) || s.PendingStopID != "") {
+		if s != nil && ((!s.Ended && now.After(s.ExpiresAt)) || s.PendingStopID != "" || s.ProviderStopPending) {
 			candidates = append(candidates, s)
 		}
 	}
@@ -665,7 +665,7 @@ func (v *voiceCoordinator) cleanupExpired(ctx context.Context) {
 		var streams map[chan nativeagent.Event]struct{}
 		v.mu.Lock()
 		live := v.sessions[candidate.SessionID]
-		if live == nil || (live.Ended && live.PendingStopID == "") || (!live.Ended && !now.After(live.ExpiresAt)) {
+		if live == nil || (live.Ended && live.PendingStopID == "" && !live.ProviderStopPending) || (!live.Ended && !now.After(live.ExpiresAt)) {
 			v.mu.Unlock()
 			continue
 		}
@@ -680,8 +680,26 @@ func (v *voiceCoordinator) cleanupExpired(ctx context.Context) {
 		streams = v.streams[live.SessionID]
 		delete(v.streams, live.SessionID)
 		v.mu.Unlock()
-		if client, err := v.providerClient(ctx, s.OwnerID, &s); err == nil && client != nil {
-			_ = client.StopVoiceChat(ctx, s)
+		if client, err := v.providerClient(ctx, s.OwnerID, &s); err != nil {
+			v.mu.Lock()
+			if live := v.sessions[s.SessionID]; live != nil {
+				live.ProviderStopPending = true
+			}
+			v.mu.Unlock()
+		} else if client != nil {
+			if err := client.StopVoiceChat(ctx, s); err != nil {
+				v.mu.Lock()
+				if live := v.sessions[s.SessionID]; live != nil {
+					live.ProviderStopPending = true
+				}
+				v.mu.Unlock()
+			} else {
+				v.mu.Lock()
+				if live := v.sessions[s.SessionID]; live != nil {
+					live.ProviderStopPending = false
+				}
+				v.mu.Unlock()
+			}
 		}
 		if v.stop != nil && s.PendingStopID != "" {
 			// Expiry is a janitor path: local terminal revoke is retained even

@@ -160,6 +160,32 @@ func TestVoiceExpiryRetriesPendingDurableStop(t *testing.T) {
 	}
 }
 
+func TestVoiceExpiryRetriesProviderStopPending(t *testing.T) {
+	calls := 0
+	client := &testVoiceClient{}
+	v := &voiceCoordinator{profiles: storage.NewMemoryStore(), sessions: map[string]*voiceSession{}, streams: map[string]map[chan nativeagent.Event]struct{}{}}
+	s := &voiceSession{SessionID: "voice-1", OwnerID: "owner", ExpiresAt: time.Now().Add(-time.Minute), op: &sync.Mutex{}}
+	v.sessions[s.SessionID] = s
+	v.client = func(context.Context, string, *voiceSession) (voiceChatClient, *actionbase.Error) {
+		calls++
+		if calls == 1 {
+			return nil, actionbase.StatusError(503, "provider unavailable")
+		}
+		return client, nil
+	}
+	v.cleanupExpired(context.Background())
+	if !v.sessions[s.SessionID].ProviderStopPending {
+		t.Fatal("provider stop must stay pending after resolution failure")
+	}
+	v.cleanupExpired(context.Background())
+	if v.sessions[s.SessionID].ProviderStopPending {
+		t.Fatal("provider stop pending should clear after retry")
+	}
+	if calls != 2 || client.stops != 1 {
+		t.Fatalf("calls=%d stops=%d", calls, client.stops)
+	}
+}
+
 type testVoiceClient struct{ stops int }
 
 func (c *testVoiceClient) StartVoiceChat(context.Context, voiceSession) error     { return nil }
