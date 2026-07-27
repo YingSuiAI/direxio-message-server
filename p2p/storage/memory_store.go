@@ -48,7 +48,7 @@ type MemoryStore struct {
 	modelProfiles                    map[string]ModelProfile
 	modelProfileRevisions            map[string]ModelProfile
 	modelProfileCredentials          map[string]map[int64]memoryModelProfileCredential
-	modelProfileDefaults             map[string]string
+	modelProfileDefaults             map[string]ModelProfileDefaults
 	modelProfileDeletes              map[string]memoryModelProfileDelete
 	modelProfileSyncs                map[string]memoryModelProfileSync
 	schedules                        map[memoryScheduleKey]Schedule
@@ -88,7 +88,7 @@ func NewMemoryStore() *MemoryStore {
 		modelProfiles:                    make(map[string]ModelProfile),
 		modelProfileRevisions:            make(map[string]ModelProfile),
 		modelProfileCredentials:          make(map[string]map[int64]memoryModelProfileCredential),
-		modelProfileDefaults:             make(map[string]string),
+		modelProfileDefaults:             make(map[string]ModelProfileDefaults),
 		modelProfileDeletes:              make(map[string]memoryModelProfileDelete),
 		modelProfileSyncs:                make(map[string]memoryModelProfileSync),
 		schedules:                        make(map[memoryScheduleKey]Schedule),

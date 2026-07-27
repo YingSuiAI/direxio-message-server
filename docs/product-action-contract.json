@@ -136,6 +136,15 @@
               "empty": "rejected"
             }
           },
+          "default_conversation_client_profile_id": {
+            "type": "string"
+          },
+          "default_embedding_client_profile_id": {
+            "type": "string"
+          },
+          "default_speech_client_profile_id": {
+            "type": "string"
+          },
           "entries": {
             "type": "array",
             "required": true,
@@ -175,15 +184,71 @@
                     "present": "must_match_current_revision"
                   }
                 },
+                "input_modalities": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
                 "max_output_tokens": {
                   "type": "integer"
                 },
                 "model": {
                   "type": "string"
                 },
+                "model_kind": {
+                  "type": "string"
+                },
                 "provider": {
                   "type": "string",
                   "required": true
+                },
+                "provider_config": {
+                  "type": "object",
+                  "properties": {
+                    "ai_user_id": {
+                      "type": "string"
+                    },
+                    "app_id": {
+                      "type": "string"
+                    },
+                    "tts_loudness_rate": {
+                      "type": "string"
+                    },
+                    "tts_pitch": {
+                      "type": "string"
+                    },
+                    "tts_resource_id": {
+                      "type": "string"
+                    },
+                    "tts_speaker": {
+                      "type": "string"
+                    },
+                    "tts_speech_rate": {
+                      "type": "string"
+                    },
+                    "voice_chat_app_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "provider_secrets": {
+                  "type": "object",
+                  "write_only": true,
+                  "properties": {
+                    "access_key_id": {
+                      "type": "string",
+                      "write_only": true
+                    },
+                    "rtc_app_key": {
+                      "type": "string",
+                      "write_only": true
+                    },
+                    "secret_access_key": {
+                      "type": "string",
+                      "write_only": true
+                    }
+                  }
                 },
                 "reasoning_effort": {
                   "type": "string"
@@ -207,6 +272,15 @@
         },
         "response": {
           "default_client_profile_id": {
+            "type": "string"
+          },
+          "default_conversation_client_profile_id": {
+            "type": "string"
+          },
+          "default_embedding_client_profile_id": {
+            "type": "string"
+          },
+          "default_speech_client_profile_id": {
             "type": "string"
           },
           "profiles": {
@@ -235,10 +309,19 @@
                 "display_name": {
                   "type": "string"
                 },
+                "input_modalities": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
                 "max_output_tokens": {
                   "type": "integer"
                 },
                 "model": {
+                  "type": "string"
+                },
+                "model_kind": {
                   "type": "string"
                 },
                 "profile_id": {
@@ -246,6 +329,49 @@
                 },
                 "provider": {
                   "type": "string"
+                },
+                "provider_config": {
+                  "type": "object",
+                  "properties": {
+                    "ai_user_id": {
+                      "type": "string"
+                    },
+                    "app_id": {
+                      "type": "string"
+                    },
+                    "tts_loudness_rate": {
+                      "type": "string"
+                    },
+                    "tts_pitch": {
+                      "type": "string"
+                    },
+                    "tts_resource_id": {
+                      "type": "string"
+                    },
+                    "tts_speaker": {
+                      "type": "string"
+                    },
+                    "tts_speech_rate": {
+                      "type": "string"
+                    },
+                    "voice_chat_app_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "provider_secret_status": {
+                  "type": "object",
+                  "properties": {
+                    "access_key_id": {
+                      "type": "boolean"
+                    },
+                    "rtc_app_key": {
+                      "type": "boolean"
+                    },
+                    "secret_access_key": {
+                      "type": "boolean"
+                    }
+                  }
                 },
                 "reasoning_effort": {
                   "type": "string"
@@ -294,6 +420,15 @@
           "default_client_profile_id": {
             "type": "string"
           },
+          "default_conversation_client_profile_id": {
+            "type": "string"
+          },
+          "default_embedding_client_profile_id": {
+            "type": "string"
+          },
+          "default_speech_client_profile_id": {
+            "type": "string"
+          },
           "next_page_token": {
             "type": "string"
           },
@@ -323,10 +458,19 @@
                 "display_name": {
                   "type": "string"
                 },
+                "input_modalities": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
                 "max_output_tokens": {
                   "type": "integer"
                 },
                 "model": {
+                  "type": "string"
+                },
+                "model_kind": {
                   "type": "string"
                 },
                 "profile_id": {
@@ -334,6 +478,49 @@
                 },
                 "provider": {
                   "type": "string"
+                },
+                "provider_config": {
+                  "type": "object",
+                  "properties": {
+                    "ai_user_id": {
+                      "type": "string"
+                    },
+                    "app_id": {
+                      "type": "string"
+                    },
+                    "tts_loudness_rate": {
+                      "type": "string"
+                    },
+                    "tts_pitch": {
+                      "type": "string"
+                    },
+                    "tts_resource_id": {
+                      "type": "string"
+                    },
+                    "tts_speaker": {
+                      "type": "string"
+                    },
+                    "tts_speech_rate": {
+                      "type": "string"
+                    },
+                    "voice_chat_app_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "provider_secret_status": {
+                  "type": "object",
+                  "properties": {
+                    "access_key_id": {
+                      "type": "boolean"
+                    },
+                    "rtc_app_key": {
+                      "type": "boolean"
+                    },
+                    "secret_access_key": {
+                      "type": "boolean"
+                    }
+                  }
                 },
                 "reasoning_effort": {
                   "type": "string"
@@ -395,10 +582,19 @@
               "display_name": {
                 "type": "string"
               },
+              "input_modalities": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
               "max_output_tokens": {
                 "type": "integer"
               },
               "model": {
+                "type": "string"
+              },
+              "model_kind": {
                 "type": "string"
               },
               "profile_id": {
@@ -406,6 +602,49 @@
               },
               "provider": {
                 "type": "string"
+              },
+              "provider_config": {
+                "type": "object",
+                "properties": {
+                  "ai_user_id": {
+                    "type": "string"
+                  },
+                  "app_id": {
+                    "type": "string"
+                  },
+                  "tts_loudness_rate": {
+                    "type": "string"
+                  },
+                  "tts_pitch": {
+                    "type": "string"
+                  },
+                  "tts_resource_id": {
+                    "type": "string"
+                  },
+                  "tts_speaker": {
+                    "type": "string"
+                  },
+                  "tts_speech_rate": {
+                    "type": "string"
+                  },
+                  "voice_chat_app_id": {
+                    "type": "string"
+                  }
+                }
+              },
+              "provider_secret_status": {
+                "type": "object",
+                "properties": {
+                  "access_key_id": {
+                    "type": "boolean"
+                  },
+                  "rtc_app_key": {
+                    "type": "boolean"
+                  },
+                  "secret_access_key": {
+                    "type": "boolean"
+                  }
+                }
               },
               "reasoning_effort": {
                 "type": "string"
@@ -476,6 +715,15 @@
               "empty": "rejected"
             }
           },
+          "default_conversation_client_profile_id": {
+            "type": "string"
+          },
+          "default_embedding_client_profile_id": {
+            "type": "string"
+          },
+          "default_speech_client_profile_id": {
+            "type": "string"
+          },
           "entries": {
             "type": "array",
             "required": true,
@@ -515,15 +763,71 @@
                     "present": "must_match_current_revision"
                   }
                 },
+                "input_modalities": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
                 "max_output_tokens": {
                   "type": "integer"
                 },
                 "model": {
                   "type": "string"
                 },
+                "model_kind": {
+                  "type": "string"
+                },
                 "provider": {
                   "type": "string",
                   "required": true
+                },
+                "provider_config": {
+                  "type": "object",
+                  "properties": {
+                    "ai_user_id": {
+                      "type": "string"
+                    },
+                    "app_id": {
+                      "type": "string"
+                    },
+                    "tts_loudness_rate": {
+                      "type": "string"
+                    },
+                    "tts_pitch": {
+                      "type": "string"
+                    },
+                    "tts_resource_id": {
+                      "type": "string"
+                    },
+                    "tts_speaker": {
+                      "type": "string"
+                    },
+                    "tts_speech_rate": {
+                      "type": "string"
+                    },
+                    "voice_chat_app_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "provider_secrets": {
+                  "type": "object",
+                  "write_only": true,
+                  "properties": {
+                    "access_key_id": {
+                      "type": "string",
+                      "write_only": true
+                    },
+                    "rtc_app_key": {
+                      "type": "string",
+                      "write_only": true
+                    },
+                    "secret_access_key": {
+                      "type": "string",
+                      "write_only": true
+                    }
+                  }
                 },
                 "reasoning_effort": {
                   "type": "string"
@@ -547,6 +851,15 @@
         },
         "response": {
           "default_client_profile_id": {
+            "type": "string"
+          },
+          "default_conversation_client_profile_id": {
+            "type": "string"
+          },
+          "default_embedding_client_profile_id": {
+            "type": "string"
+          },
+          "default_speech_client_profile_id": {
             "type": "string"
           },
           "profiles": {
@@ -575,10 +888,19 @@
                 "display_name": {
                   "type": "string"
                 },
+                "input_modalities": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
                 "max_output_tokens": {
                   "type": "integer"
                 },
                 "model": {
+                  "type": "string"
+                },
+                "model_kind": {
                   "type": "string"
                 },
                 "profile_id": {
@@ -586,6 +908,49 @@
                 },
                 "provider": {
                   "type": "string"
+                },
+                "provider_config": {
+                  "type": "object",
+                  "properties": {
+                    "ai_user_id": {
+                      "type": "string"
+                    },
+                    "app_id": {
+                      "type": "string"
+                    },
+                    "tts_loudness_rate": {
+                      "type": "string"
+                    },
+                    "tts_pitch": {
+                      "type": "string"
+                    },
+                    "tts_resource_id": {
+                      "type": "string"
+                    },
+                    "tts_speaker": {
+                      "type": "string"
+                    },
+                    "tts_speech_rate": {
+                      "type": "string"
+                    },
+                    "voice_chat_app_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "provider_secret_status": {
+                  "type": "object",
+                  "properties": {
+                    "access_key_id": {
+                      "type": "boolean"
+                    },
+                    "rtc_app_key": {
+                      "type": "boolean"
+                    },
+                    "secret_access_key": {
+                      "type": "boolean"
+                    }
+                  }
                 },
                 "reasoning_effort": {
                   "type": "string"
@@ -634,6 +999,15 @@
           "default_client_profile_id": {
             "type": "string"
           },
+          "default_conversation_client_profile_id": {
+            "type": "string"
+          },
+          "default_embedding_client_profile_id": {
+            "type": "string"
+          },
+          "default_speech_client_profile_id": {
+            "type": "string"
+          },
           "next_page_token": {
             "type": "string"
           },
@@ -663,10 +1037,19 @@
                 "display_name": {
                   "type": "string"
                 },
+                "input_modalities": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
                 "max_output_tokens": {
                   "type": "integer"
                 },
                 "model": {
+                  "type": "string"
+                },
+                "model_kind": {
                   "type": "string"
                 },
                 "profile_id": {
@@ -674,6 +1057,49 @@
                 },
                 "provider": {
                   "type": "string"
+                },
+                "provider_config": {
+                  "type": "object",
+                  "properties": {
+                    "ai_user_id": {
+                      "type": "string"
+                    },
+                    "app_id": {
+                      "type": "string"
+                    },
+                    "tts_loudness_rate": {
+                      "type": "string"
+                    },
+                    "tts_pitch": {
+                      "type": "string"
+                    },
+                    "tts_resource_id": {
+                      "type": "string"
+                    },
+                    "tts_speaker": {
+                      "type": "string"
+                    },
+                    "tts_speech_rate": {
+                      "type": "string"
+                    },
+                    "voice_chat_app_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "provider_secret_status": {
+                  "type": "object",
+                  "properties": {
+                    "access_key_id": {
+                      "type": "boolean"
+                    },
+                    "rtc_app_key": {
+                      "type": "boolean"
+                    },
+                    "secret_access_key": {
+                      "type": "boolean"
+                    }
+                  }
                 },
                 "reasoning_effort": {
                   "type": "string"
@@ -735,10 +1161,19 @@
               "display_name": {
                 "type": "string"
               },
+              "input_modalities": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
               "max_output_tokens": {
                 "type": "integer"
               },
               "model": {
+                "type": "string"
+              },
+              "model_kind": {
                 "type": "string"
               },
               "profile_id": {
@@ -746,6 +1181,49 @@
               },
               "provider": {
                 "type": "string"
+              },
+              "provider_config": {
+                "type": "object",
+                "properties": {
+                  "ai_user_id": {
+                    "type": "string"
+                  },
+                  "app_id": {
+                    "type": "string"
+                  },
+                  "tts_loudness_rate": {
+                    "type": "string"
+                  },
+                  "tts_pitch": {
+                    "type": "string"
+                  },
+                  "tts_resource_id": {
+                    "type": "string"
+                  },
+                  "tts_speaker": {
+                    "type": "string"
+                  },
+                  "tts_speech_rate": {
+                    "type": "string"
+                  },
+                  "voice_chat_app_id": {
+                    "type": "string"
+                  }
+                }
+              },
+              "provider_secret_status": {
+                "type": "object",
+                "properties": {
+                  "access_key_id": {
+                    "type": "boolean"
+                  },
+                  "rtc_app_key": {
+                    "type": "boolean"
+                  },
+                  "secret_access_key": {
+                    "type": "boolean"
+                  }
+                }
               },
               "reasoning_effort": {
                 "type": "string"

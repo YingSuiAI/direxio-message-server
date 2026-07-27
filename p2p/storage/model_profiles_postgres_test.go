@@ -146,5 +146,48 @@ func TestPostgresModelProfileSyncReadbackAndRestart(t *testing.T) {
 	}
 }
 
+func TestPostgresModelProfileSpeechCredentialTransitionPins(t *testing.T) {
+	ctx := context.Background()
+	connStr, closeDB := test.PrepareDBConnectionString(t, test.DBTypePostgres)
+	defer closeDB()
+	dbOpts := config.DatabaseOptions{ConnectionString: config.DataSource(connStr)}
+	store, err := NewDatabaseStore(ctx, sqlutil.NewConnectionManager(nil, dbOpts), &dbOpts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, constraint := range []string{"p2p_agent_model_profile_defaults_owner_profile_fkey", "p2p_agent_model_profile_defaults_owner_embedding_fkey", "p2p_agent_model_profile_defaults_owner_speech_fkey"} {
+		var exists bool
+		if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_constraint WHERE conname=$1)`, constraint).Scan(&exists); err != nil || !exists {
+			t.Fatalf("default constraint %s exists=%v err=%v", constraint, exists, err)
+		}
+	}
+	profiles, err := NewDatabaseModelProfileStore(ctx, store, filepath.Join(t.TempDir(), "model-profile.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := "generic-secret"
+	first, err := profiles.SyncModelProfiles(ctx, "owner", "transition-create", "", []ModelProfileSyncEntry{{ClientProfileID: "client", Provider: "openai", Model: "gpt", APIKey: &key}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := first.Profiles[0]
+	rotated, err := profiles.SyncModelProfilesWithDefaults(ctx, "owner", "transition-speech", ModelProfileDefaults{}, []ModelProfileSyncEntry{{ClientProfileID: "client", Provider: "volc_voice", ModelKind: ModelKindSpeech, ProviderConfig: map[string]any{"app_id": "app"}, ProviderSecrets: map[string]string{"rtc_app_key": "rtc", "access_key_id": "access", "secret_access_key": "secret"}, ExpectedRevision: &old.Revision}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := rotated.Profiles[0]
+	if current.CredentialVersion != old.CredentialVersion+1 || current.ModelKind != ModelKindSpeech {
+		t.Fatalf("transition versions = %#v", current)
+	}
+	oldPin, err := profiles.ResolveModelProfilePinned(ctx, "owner", current.ProfileID, old.Revision, old.CredentialVersion)
+	if err != nil || oldPin.APIKey != key {
+		t.Fatalf("old pin = %#v err=%v", oldPin, err)
+	}
+	newPin, err := profiles.ResolveModelProfilePinned(ctx, "owner", current.ProfileID, current.Revision, current.CredentialVersion)
+	if err != nil || !strings.Contains(newPin.APIKey, "rtc_app_key") || strings.Contains(newPin.APIKey, key) {
+		t.Fatalf("new speech pin = %#v err=%v", newPin, err)
+	}
+}
+
 func stringPtr(value string) *string { return &value }
 func int64Ptr(value int64) *int64    { return &value }

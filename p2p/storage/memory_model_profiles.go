@@ -3,6 +3,7 @@ package storage
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"sort"
 	"strconv"
 	"strings"
@@ -33,12 +34,24 @@ func memoryModelProfileRevisionKey(ownerID, profileID string, revision int64) st
 func (s *MemoryStore) ModelProfileStoreReady() bool { return false }
 
 func (s *MemoryStore) SyncModelProfiles(_ context.Context, ownerID, idempotencyKey string, defaultClientID string, entries []ModelProfileSyncEntry) (ModelProfileSyncResult, error) {
+	return s.SyncModelProfilesWithDefaults(context.Background(), ownerID, idempotencyKey, ModelProfileDefaults{ConversationClientProfileID: defaultClientID}, entries)
+}
+
+func (s *MemoryStore) SyncModelProfilesWithDefaults(_ context.Context, ownerID, idempotencyKey string, requestedDefaults ModelProfileDefaults, entries []ModelProfileSyncEntry) (ModelProfileSyncResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if strings.TrimSpace(ownerID) == "" || strings.TrimSpace(idempotencyKey) == "" {
 		return ModelProfileSyncResult{}, ErrModelProfileInvalid
 	}
-	digest := profileSyncDigest(defaultClientID, entries)
+	requestedDefaults = normalizeModelProfileDefaults(requestedDefaults)
+	normalizedEntries := make([]ModelProfileSyncEntry, len(entries))
+	for i, entry := range entries {
+		normalizedEntries[i] = entry
+		if err := normalizeModelProfileEntry(&normalizedEntries[i]); err != nil {
+			return ModelProfileSyncResult{}, err
+		}
+	}
+	digest := profileSyncDigest(requestedDefaults, normalizedEntries)
 	syncKey := ownerID + "\x00" + idempotencyKey
 	if prior, ok := s.modelProfileSyncs[syncKey]; ok {
 		if prior.Digest != digest {
@@ -46,7 +59,7 @@ func (s *MemoryStore) SyncModelProfiles(_ context.Context, ownerID, idempotencyK
 		}
 		return prior.Result, nil
 	}
-	for _, entry := range entries {
+	for _, entry := range normalizedEntries {
 		if strings.TrimSpace(entry.ClientProfileID) == "" || strings.TrimSpace(entry.Provider) == "" || (entry.APIKey != nil && strings.TrimSpace(*entry.APIKey) == "") {
 			return ModelProfileSyncResult{}, ErrModelProfileInvalid
 		}
@@ -55,17 +68,32 @@ func (s *MemoryStore) SyncModelProfiles(_ context.Context, ownerID, idempotencyK
 	revisions := cloneModelProfiles(s.modelProfileRevisions)
 	credentials := cloneModelProfileCredentials(s.modelProfileCredentials)
 	defaults := cloneModelProfileDefaults(s.modelProfileDefaults)
-	for _, entry := range entries {
+	for _, entry := range normalizedEntries {
 		key := ownerID + "\x00" + entry.ClientProfileID
 		profile, ok := profiles[key]
 		if !ok {
 			profile = ModelProfile{ProfileID: uuid.NewString(), ClientProfileID: entry.ClientProfileID, Revision: 0, CreatedAt: time.Now().UTC()}
 		}
+		if err := normalizeModelProfileEntry(&entry); err != nil {
+			return ModelProfileSyncResult{}, err
+		}
+		if profile.Revision > 0 {
+			if err := validateModelProfileCredentialTransition(profile.ModelKind, entry.ModelKind, entry.APIKey, entry.ProviderSecrets); err != nil {
+				return ModelProfileSyncResult{}, err
+			}
+		}
 		if entry.ExpectedRevision != nil && *entry.ExpectedRevision != profile.Revision {
 			return ModelProfileSyncResult{}, ErrModelProfileRevision
 		}
 		provider := strings.ToLower(strings.TrimSpace(entry.Provider))
-		credentialRotated := entry.APIKey != nil || (profile.Provider != "" && profile.Provider != provider && profile.APIKeyConfigured)
+		if entry.ModelKind == ModelKindSpeech && (profile.Revision == 0 || len(entry.ProviderSecrets) > 0) {
+			for _, key := range []string{"rtc_app_key", "access_key_id", "secret_access_key"} {
+				if strings.TrimSpace(entry.ProviderSecrets[key]) == "" {
+					return ModelProfileSyncResult{}, ErrModelProfileInvalid
+				}
+			}
+		}
+		credentialRotated := entry.APIKey != nil || len(entry.ProviderSecrets) > 0 || (profile.Provider != "" && profile.Provider != provider && profile.APIKeyConfigured)
 		if entry.APIKey != nil {
 			profile.APIKey = *entry.APIKey
 			profile.APIKeyConfigured = profile.APIKey != ""
@@ -81,6 +109,31 @@ func (s *MemoryStore) SyncModelProfiles(_ context.Context, ownerID, idempotencyK
 			credentials[profile.ProfileID][profile.CredentialVersion] = memoryModelProfileCredential{Provider: provider, APIKey: profile.APIKey}
 		}
 		profile.DisplayName, profile.Provider = strings.TrimSpace(entry.DisplayName), provider
+		profile.ModelKind = entry.ModelKind
+		profile.InputModalities = append([]string(nil), entry.InputModalities...)
+		profile.ProviderConfig = cloneAnyMap(entry.ProviderConfig)
+		if entry.ModelKind == ModelKindSpeech && len(entry.ProviderSecrets) > 0 {
+			encoded, encodeErr := json.Marshal(entry.ProviderSecrets)
+			if encodeErr != nil {
+				return ModelProfileSyncResult{}, ErrModelProfileInvalid
+			}
+			profile.APIKey = string(encoded)
+			profile.APIKeyConfigured = true
+			if credentialRotated {
+				credentials[profile.ProfileID][profile.CredentialVersion] = memoryModelProfileCredential{Provider: provider, APIKey: profile.APIKey}
+			}
+		}
+		if entry.ModelKind == ModelKindSpeech {
+			var secrets map[string]string
+			if json.Unmarshal([]byte(profile.APIKey), &secrets) == nil {
+				profile.ProviderSecretStatus = map[string]bool{}
+				for _, key := range []string{"rtc_app_key", "access_key_id", "secret_access_key"} {
+					profile.ProviderSecretStatus[key] = strings.TrimSpace(secrets[key]) != ""
+				}
+			}
+		} else {
+			profile.ProviderSecretStatus = nil
+		}
 		profile.BaseURL, profile.Model, profile.SystemPrompt = strings.TrimRight(strings.TrimSpace(entry.BaseURL), "/"), strings.TrimSpace(entry.Model), strings.TrimSpace(entry.SystemPrompt)
 		profile.Temperature, profile.TopP = entry.Temperature, entry.TopP
 		profile.MaxOutputTokens, profile.ContextWindow, profile.ReasoningEffort = entry.MaxOutputTokens, entry.ContextWindow, strings.TrimSpace(entry.ReasoningEffort)
@@ -90,13 +143,29 @@ func (s *MemoryStore) SyncModelProfiles(_ context.Context, ownerID, idempotencyK
 		profiles[key] = profile
 		revisions[memoryModelProfileRevisionKey(ownerID, profile.ProfileID, profile.Revision)] = profile
 	}
-	if defaultClientID != "" {
-		if profile, ok := profiles[ownerID+"\x00"+defaultClientID]; !ok || profile.Deleted {
-			return ModelProfileSyncResult{}, ErrModelProfileNotFound
-		}
-		defaults[ownerID] = defaultClientID
+	currentDefaults := defaults[ownerID]
+	if requestedDefaults.ConversationClientProfileID == "" {
+		requestedDefaults.ConversationClientProfileID = currentDefaults.ConversationClientProfileID
 	}
+	if requestedDefaults.EmbeddingClientProfileID == "" {
+		requestedDefaults.EmbeddingClientProfileID = currentDefaults.EmbeddingClientProfileID
+	}
+	if requestedDefaults.SpeechClientProfileID == "" {
+		requestedDefaults.SpeechClientProfileID = currentDefaults.SpeechClientProfileID
+	}
+	profileByClient := map[string]ModelProfile{}
+	for key, profile := range profiles {
+		if strings.HasPrefix(key, ownerID+"\x00") {
+			profileByClient[profile.ClientProfileID] = profile
+		}
+	}
+	if err := validateDefaultKinds(requestedDefaults, profileByClient); err != nil {
+		return ModelProfileSyncResult{}, err
+	}
+	defaults[ownerID] = requestedDefaults
 	result := listMemoryProfiles(profiles, defaults, ownerID)
+	result.Defaults = requestedDefaults
+	result.DefaultClientProfileID = requestedDefaults.ConversationClientProfileID
 	s.modelProfiles = profiles
 	s.modelProfileRevisions = revisions
 	s.modelProfileCredentials = credentials
@@ -109,7 +178,7 @@ func (s *MemoryStore) listMemoryProfilesLocked(ownerID string) ModelProfileSyncR
 	return listMemoryProfiles(s.modelProfiles, s.modelProfileDefaults, ownerID)
 }
 
-func listMemoryProfiles(profilesByKey map[string]ModelProfile, defaults map[string]string, ownerID string) ModelProfileSyncResult {
+func listMemoryProfiles(profilesByKey map[string]ModelProfile, defaults map[string]ModelProfileDefaults, ownerID string) ModelProfileSyncResult {
 	profiles := make([]ModelProfile, 0)
 	for key, profile := range profilesByKey {
 		if strings.HasPrefix(key, ownerID+"\x00") && !profile.Deleted {
@@ -122,7 +191,8 @@ func listMemoryProfiles(profilesByKey map[string]ModelProfile, defaults map[stri
 		}
 		return profiles[i].ClientProfileID < profiles[j].ClientProfileID
 	})
-	return ModelProfileSyncResult{Profiles: profiles, DefaultClientProfileID: defaults[ownerID]}
+	ownerDefaults := defaults[ownerID]
+	return ModelProfileSyncResult{Profiles: profiles, DefaultClientProfileID: ownerDefaults.ConversationClientProfileID, Defaults: ownerDefaults}
 }
 
 func cloneModelProfiles(source map[string]ModelProfile) map[string]ModelProfile {
@@ -144,10 +214,10 @@ func cloneModelProfileCredentials(source map[string]map[int64]memoryModelProfile
 	return copy
 }
 
-func cloneModelProfileDefaults(source map[string]string) map[string]string {
-	copy := make(map[string]string, len(source))
-	for ownerID, clientProfileID := range source {
-		copy[ownerID] = clientProfileID
+func cloneModelProfileDefaults(source map[string]ModelProfileDefaults) map[string]ModelProfileDefaults {
+	copy := make(map[string]ModelProfileDefaults, len(source))
+	for ownerID, defaults := range source {
+		copy[ownerID] = defaults
 	}
 	return copy
 }
@@ -181,9 +251,9 @@ func (s *MemoryStore) ListModelProfiles(_ context.Context, ownerID string, pageS
 	result.Profiles = result.Profiles[start:]
 	if pageSize > 0 && len(result.Profiles) > pageSize {
 		last := result.Profiles[pageSize-1]
-		return ModelProfileListResult{Profiles: result.Profiles[:pageSize], NextPageToken: encodeModelProfilePageToken(last.ClientProfileID, last.ProfileID), DefaultClientProfileID: result.DefaultClientProfileID}, nil
+		return ModelProfileListResult{Profiles: result.Profiles[:pageSize], NextPageToken: encodeModelProfilePageToken(last.ClientProfileID, last.ProfileID), DefaultClientProfileID: result.DefaultClientProfileID, Defaults: result.Defaults}, nil
 	}
-	return ModelProfileListResult{Profiles: result.Profiles, DefaultClientProfileID: result.DefaultClientProfileID}, nil
+	return ModelProfileListResult{Profiles: result.Profiles, DefaultClientProfileID: result.DefaultClientProfileID, Defaults: result.Defaults}, nil
 }
 func (s *MemoryStore) GetModelProfile(_ context.Context, ownerID, profileID string) (ModelProfile, bool, error) {
 	s.mu.RLock()
@@ -273,9 +343,17 @@ func (s *MemoryStore) DeleteModelProfile(_ context.Context, ownerID, idempotency
 			p.UpdatedAt = time.Now().UTC()
 			s.modelProfiles[key] = p
 			s.modelProfileRevisions[memoryModelProfileRevisionKey(ownerID, p.ProfileID, p.Revision)] = p
-			if s.modelProfileDefaults[ownerID] == p.ClientProfileID {
-				delete(s.modelProfileDefaults, ownerID)
+			defaults := s.modelProfileDefaults[ownerID]
+			if defaults.ConversationClientProfileID == p.ClientProfileID {
+				defaults.ConversationClientProfileID = ""
 			}
+			if defaults.EmbeddingClientProfileID == p.ClientProfileID {
+				defaults.EmbeddingClientProfileID = ""
+			}
+			if defaults.SpeechClientProfileID == p.ClientProfileID {
+				defaults.SpeechClientProfileID = ""
+			}
+			s.modelProfileDefaults[ownerID] = defaults
 			s.modelProfileDeletes[deleteKey] = memoryModelProfileDelete{ProfileID: profileID, Digest: profileDeleteDigest(profileID, expected)}
 			return nil
 		}

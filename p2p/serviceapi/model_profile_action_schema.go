@@ -8,11 +8,17 @@ func modelProfileSyncSchema() *ActionSchema {
 				Type:     "string",
 				Presence: &ActionPresenceSchema{Omitted: "no_default_reference", Present: "exact_nonempty_client_profile_id", Empty: "rejected"},
 			},
-			"entries": {Type: "array", Required: true, Items: &ActionFieldSchema{Type: "object", Properties: modelProfileSyncEntryFields()}},
+			"default_conversation_client_profile_id": {Type: "string"},
+			"default_embedding_client_profile_id":    {Type: "string"},
+			"default_speech_client_profile_id":       {Type: "string"},
+			"entries":                                {Type: "array", Required: true, Items: &ActionFieldSchema{Type: "object", Properties: modelProfileSyncEntryFields()}},
 		},
 		Response: map[string]ActionFieldSchema{
-			"profiles":                  {Type: "array", Items: &ActionFieldSchema{Type: "object", Properties: modelProfileResponseFields()}},
-			"default_client_profile_id": {Type: "string"},
+			"profiles":                               {Type: "array", Items: &ActionFieldSchema{Type: "object", Properties: modelProfileResponseFields()}},
+			"default_client_profile_id":              {Type: "string"},
+			"default_conversation_client_profile_id": {Type: "string"},
+			"default_embedding_client_profile_id":    {Type: "string"},
+			"default_speech_client_profile_id":       {Type: "string"},
 		},
 	}
 }
@@ -32,6 +38,16 @@ func modelProfileSyncEntryFields() map[string]ActionFieldSchema {
 		"max_output_tokens": {Type: "integer"},
 		"context_window":    {Type: "integer"},
 		"reasoning_effort":  {Type: "string"},
+		"model_kind":        {Type: "string"},
+		"input_modalities":  {Type: "array", Items: &ActionFieldSchema{Type: "string"}},
+		"provider_config": {Type: "object", Properties: map[string]ActionFieldSchema{
+			"app_id": {Type: "string"}, "voice_chat_app_id": {Type: "string"}, "ai_user_id": {Type: "string"},
+			"tts_speaker": {Type: "string"}, "tts_resource_id": {Type: "string"}, "tts_speech_rate": {Type: "string"},
+			"tts_loudness_rate": {Type: "string"}, "tts_pitch": {Type: "string"},
+		}},
+		"provider_secrets": {Type: "object", WriteOnly: true, Properties: map[string]ActionFieldSchema{
+			"rtc_app_key": {Type: "string", WriteOnly: true}, "access_key_id": {Type: "string", WriteOnly: true}, "secret_access_key": {Type: "string", WriteOnly: true},
+		}},
 	}
 }
 
@@ -52,8 +68,18 @@ func modelProfileResponseFields() map[string]ActionFieldSchema {
 		"reasoning_effort":   {Type: "string"},
 		"revision":           {Type: "integer"},
 		"credential_version": {Type: "integer"},
-		"created_at":         {Type: "string"},
-		"updated_at":         {Type: "string"},
+		"model_kind":         {Type: "string"},
+		"input_modalities":   {Type: "array", Items: &ActionFieldSchema{Type: "string"}},
+		"provider_config": {Type: "object", Properties: map[string]ActionFieldSchema{
+			"app_id": {Type: "string"}, "voice_chat_app_id": {Type: "string"}, "ai_user_id": {Type: "string"},
+			"tts_speaker": {Type: "string"}, "tts_resource_id": {Type: "string"}, "tts_speech_rate": {Type: "string"},
+			"tts_loudness_rate": {Type: "string"}, "tts_pitch": {Type: "string"},
+		}},
+		"provider_secret_status": {Type: "object", Properties: map[string]ActionFieldSchema{
+			"rtc_app_key": {Type: "boolean"}, "access_key_id": {Type: "boolean"}, "secret_access_key": {Type: "boolean"},
+		}},
+		"created_at": {Type: "string"},
+		"updated_at": {Type: "string"},
 	}
 }
 
@@ -64,9 +90,12 @@ func modelProfileListSchema() *ActionSchema {
 			"page_token": {Type: "string", Presence: &ActionPresenceSchema{Omitted: "first_page"}},
 		},
 		Response: map[string]ActionFieldSchema{
-			"profiles":                  {Type: "array", Items: &ActionFieldSchema{Type: "object", Properties: modelProfileResponseFields()}},
-			"next_page_token":           {Type: "string"},
-			"default_client_profile_id": {Type: "string"},
+			"profiles":                               {Type: "array", Items: &ActionFieldSchema{Type: "object", Properties: modelProfileResponseFields()}},
+			"next_page_token":                        {Type: "string"},
+			"default_client_profile_id":              {Type: "string"},
+			"default_conversation_client_profile_id": {Type: "string"},
+			"default_embedding_client_profile_id":    {Type: "string"},
+			"default_speech_client_profile_id":       {Type: "string"},
 		},
 	}
 }

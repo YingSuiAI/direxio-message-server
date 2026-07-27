@@ -16,7 +16,7 @@ func (m *Module) modelProfileSync(ctx context.Context, params map[string]any) (a
 		return nil, actionbase.StatusError(http.StatusServiceUnavailable, "server model profiles are unavailable")
 	}
 	for key := range params {
-		if key != "idempotency_key" && key != "default_client_profile_id" && key != "entries" {
+		if key != "idempotency_key" && key != "default_client_profile_id" && key != "default_conversation_client_profile_id" && key != "default_embedding_client_profile_id" && key != "default_speech_client_profile_id" && key != "entries" {
 			return nil, actionbase.BadRequest("unknown model profile sync field: " + key)
 		}
 	}
@@ -24,7 +24,25 @@ func (m *Module) modelProfileSync(ctx context.Context, params map[string]any) (a
 	if err != nil {
 		return nil, err
 	}
-	defaultID, err := optionalProfileString(params, "default_client_profile_id")
+	legacyDefault, err := optionalProfileString(params, "default_client_profile_id")
+	if err != nil {
+		return nil, err
+	}
+	conversationDefault, err := optionalProfileString(params, "default_conversation_client_profile_id")
+	if err != nil {
+		return nil, err
+	}
+	if legacyDefault != "" && conversationDefault != "" && legacyDefault != conversationDefault {
+		return nil, actionbase.BadRequest("default_client_profile_id conflicts with default_conversation_client_profile_id")
+	}
+	if conversationDefault == "" {
+		conversationDefault = legacyDefault
+	}
+	embeddingDefault, err := optionalProfileString(params, "default_embedding_client_profile_id")
+	if err != nil {
+		return nil, err
+	}
+	speechDefault, err := optionalProfileString(params, "default_speech_client_profile_id")
 	if err != nil {
 		return nil, err
 	}
@@ -53,11 +71,11 @@ func (m *Module) modelProfileSync(ctx context.Context, params map[string]any) (a
 		}
 		entries = append(entries, entry)
 	}
-	result, storeErr := m.modelProfiles.SyncModelProfiles(ctx, m.currentOwnerID(), idempotency, defaultID, entries)
+	result, storeErr := m.modelProfiles.SyncModelProfilesWithDefaults(ctx, m.currentOwnerID(), idempotency, storage.ModelProfileDefaults{ConversationClientProfileID: conversationDefault, EmbeddingClientProfileID: embeddingDefault, SpeechClientProfileID: speechDefault}, entries)
 	if storeErr != nil {
 		return nil, modelProfileStoreError(storeErr)
 	}
-	return map[string]any{"profiles": profileMaps(result.Profiles), "default_client_profile_id": result.DefaultClientProfileID}, nil
+	return map[string]any{"profiles": profileMaps(result.Profiles), "default_client_profile_id": result.DefaultClientProfileID, "default_conversation_client_profile_id": result.Defaults.ConversationClientProfileID, "default_embedding_client_profile_id": result.Defaults.EmbeddingClientProfileID, "default_speech_client_profile_id": result.Defaults.SpeechClientProfileID}, nil
 }
 
 func (m *Module) modelProfileList(ctx context.Context, params map[string]any) (any, *actionbase.Error) {
@@ -85,7 +103,7 @@ func (m *Module) modelProfileList(ctx context.Context, params map[string]any) (a
 	if storeErr != nil {
 		return nil, modelProfileStoreError(storeErr)
 	}
-	return map[string]any{"profiles": profileMaps(result.Profiles), "next_page_token": result.NextPageToken, "default_client_profile_id": result.DefaultClientProfileID}, nil
+	return map[string]any{"profiles": profileMaps(result.Profiles), "next_page_token": result.NextPageToken, "default_client_profile_id": result.DefaultClientProfileID, "default_conversation_client_profile_id": result.Defaults.ConversationClientProfileID, "default_embedding_client_profile_id": result.Defaults.EmbeddingClientProfileID, "default_speech_client_profile_id": result.Defaults.SpeechClientProfileID}, nil
 }
 func (m *Module) modelProfileGet(ctx context.Context, params map[string]any) (any, *actionbase.Error) {
 	if m == nil || m.modelProfiles == nil {
@@ -193,7 +211,7 @@ func requiredProfileValue(params map[string]any, key string) (string, *actionbas
 	return s, nil
 }
 func parseProfileEntry(raw map[string]any) (storage.ModelProfileSyncEntry, *actionbase.Error) {
-	known := map[string]bool{"client_profile_id": true, "expected_revision": true, "display_name": true, "provider": true, "base_url": true, "model": true, "system_prompt": true, "api_key": true, "temperature": true, "top_p": true, "max_output_tokens": true, "context_window": true, "reasoning_effort": true}
+	known := map[string]bool{"client_profile_id": true, "expected_revision": true, "display_name": true, "provider": true, "base_url": true, "model": true, "system_prompt": true, "api_key": true, "temperature": true, "top_p": true, "max_output_tokens": true, "context_window": true, "reasoning_effort": true, "model_kind": true, "input_modalities": true, "provider_config": true, "provider_secrets": true}
 	for key := range raw {
 		if !known[key] {
 			return storage.ModelProfileSyncEntry{}, actionbase.BadRequest("unknown model profile field: " + key)
@@ -209,7 +227,7 @@ func parseProfileEntry(raw map[string]any) (storage.ModelProfileSyncEntry, *acti
 	}
 	provider = strings.ToLower(provider)
 	switch provider {
-	case "openai", "anthropic", "deepseek", "gemini", "xai", "openai_compatible", "openrouter":
+	case "openai", "anthropic", "deepseek", "gemini", "xai", "openai_compatible", "openrouter", "volc_voice":
 	default:
 		return storage.ModelProfileSyncEntry{}, actionbase.BadRequest("model profile provider is not supported")
 	}
@@ -234,6 +252,64 @@ func parseProfileEntry(raw map[string]any) (storage.ModelProfileSyncEntry, *acti
 		return storage.ModelProfileSyncEntry{}, e
 	}
 	entry := storage.ModelProfileSyncEntry{ClientProfileID: client, Provider: provider, DisplayName: displayName, BaseURL: baseURL, Model: model, SystemPrompt: systemPrompt, ReasoningEffort: reasoningEffort}
+	if rawKind, ok := raw["model_kind"]; ok {
+		kind, ok := rawKind.(string)
+		if !ok {
+			return storage.ModelProfileSyncEntry{}, actionbase.BadRequest("model_kind must be a string")
+		}
+		entry.ModelKind = strings.TrimSpace(kind)
+	}
+	if rawModalities, ok := raw["input_modalities"]; ok {
+		values, ok := rawModalities.([]any)
+		if typed, typedOK := rawModalities.([]string); typedOK {
+			values = make([]any, len(typed))
+			for i := range typed {
+				values[i] = typed[i]
+			}
+			ok = true
+		}
+		if !ok {
+			return storage.ModelProfileSyncEntry{}, actionbase.BadRequest("input_modalities must be an array")
+		}
+		for _, value := range values {
+			text, ok := value.(string)
+			if !ok {
+				return storage.ModelProfileSyncEntry{}, actionbase.BadRequest("input_modalities must contain strings")
+			}
+			entry.InputModalities = append(entry.InputModalities, text)
+		}
+	}
+	if rawConfig, ok := raw["provider_config"]; ok {
+		config, ok := rawConfig.(map[string]any)
+		if !ok {
+			return storage.ModelProfileSyncEntry{}, actionbase.BadRequest("provider_config must be an object")
+		}
+		entry.ProviderConfig = config
+	}
+	if rawSecrets, ok := raw["provider_secrets"]; ok {
+		secrets, ok := rawSecrets.(map[string]any)
+		if !ok {
+			return storage.ModelProfileSyncEntry{}, actionbase.BadRequest("provider_secrets must be an object")
+		}
+		entry.ProviderSecrets = map[string]string{}
+		for key, value := range secrets {
+			text, ok := value.(string)
+			if !ok || strings.TrimSpace(text) == "" {
+				return storage.ModelProfileSyncEntry{}, actionbase.BadRequest("provider_secrets values must be non-empty strings")
+			}
+			entry.ProviderSecrets[key] = text
+		}
+	}
+	if provider == "volc_voice" && entry.ModelKind == "" {
+		entry.ModelKind = storage.ModelKindSpeech
+	}
+	if provider == "volc_voice" {
+		for _, key := range []string{"api_key", "base_url", "model", "system_prompt", "temperature", "top_p", "max_output_tokens", "context_window", "reasoning_effort"} {
+			if _, present := raw[key]; present {
+				return storage.ModelProfileSyncEntry{}, actionbase.BadRequest("speech profiles do not accept " + key)
+			}
+		}
+	}
 	if v, ok := raw["max_output_tokens"]; ok {
 		n, parseErr := strictProfileInt64(v)
 		if parseErr != nil {
@@ -353,7 +429,7 @@ func strictProfileFloat64(value any) (float64, error) {
 	}
 }
 func profileMap(p storage.ModelProfile) map[string]any {
-	return map[string]any{"profile_id": p.ProfileID, "client_profile_id": p.ClientProfileID, "display_name": p.DisplayName, "provider": p.Provider, "base_url": p.BaseURL, "model": p.Model, "system_prompt": p.SystemPrompt, "api_key_configured": p.APIKeyConfigured, "temperature": p.Temperature, "top_p": p.TopP, "max_output_tokens": p.MaxOutputTokens, "context_window": p.ContextWindow, "reasoning_effort": p.ReasoningEffort, "revision": p.Revision, "credential_version": p.CredentialVersion, "created_at": p.CreatedAt.UTC().Format("2006-01-02T15:04:05.999999999Z07:00"), "updated_at": p.UpdatedAt.UTC().Format("2006-01-02T15:04:05.999999999Z07:00")}
+	return map[string]any{"profile_id": p.ProfileID, "client_profile_id": p.ClientProfileID, "display_name": p.DisplayName, "provider": p.Provider, "model_kind": p.ModelKind, "input_modalities": p.InputModalities, "provider_config": p.ProviderConfig, "provider_secret_status": p.ProviderSecretStatus, "base_url": p.BaseURL, "model": p.Model, "system_prompt": p.SystemPrompt, "api_key_configured": p.APIKeyConfigured, "temperature": p.Temperature, "top_p": p.TopP, "max_output_tokens": p.MaxOutputTokens, "context_window": p.ContextWindow, "reasoning_effort": p.ReasoningEffort, "revision": p.Revision, "credential_version": p.CredentialVersion, "created_at": p.CreatedAt.UTC().Format("2006-01-02T15:04:05.999999999Z07:00"), "updated_at": p.UpdatedAt.UTC().Format("2006-01-02T15:04:05.999999999Z07:00")}
 }
 func profileMaps(profiles []storage.ModelProfile) []map[string]any {
 	out := make([]map[string]any, 0, len(profiles))

@@ -33,12 +33,22 @@ var (
 
 const defaultModelProfilePageSize = 25
 
+const (
+	ModelKindConversation = "conversation"
+	ModelKindEmbedding    = "embedding"
+	ModelKindSpeech       = "speech"
+)
+
 // ModelProfile is the server-owned, redacted profile projection. APIKey is
 // populated only for internal model construction and is never serialized by
 // ProductCore action handlers.
 type ModelProfile struct {
 	ProfileID, ClientProfileID string
 	DisplayName, Provider      string
+	ModelKind                  string
+	InputModalities            []string
+	ProviderConfig             map[string]any
+	ProviderSecretStatus       map[string]bool
 	BaseURL, Model             string
 	SystemPrompt               string
 	APIKey                     string `json:"-"`
@@ -61,21 +71,34 @@ type ModelProfileSyncEntry struct {
 	Temperature, TopP                                   *float64
 	MaxOutputTokens, ContextWindow                      int
 	ReasoningEffort                                     string
+	ModelKind                                           string
+	InputModalities                                     []string
+	ProviderConfig                                      map[string]any
+	ProviderSecrets                                     map[string]string
+}
+
+type ModelProfileDefaults struct {
+	ConversationClientProfileID string
+	EmbeddingClientProfileID    string
+	SpeechClientProfileID       string
 }
 
 type ModelProfileSyncResult struct {
 	Profiles               []ModelProfile
 	DefaultClientProfileID string
+	Defaults               ModelProfileDefaults
 }
 
 type ModelProfileListResult struct {
 	Profiles               []ModelProfile
 	NextPageToken          string
 	DefaultClientProfileID string
+	Defaults               ModelProfileDefaults
 }
 
 type ModelProfileStore interface {
 	SyncModelProfiles(context.Context, string, string, string, []ModelProfileSyncEntry) (ModelProfileSyncResult, error)
+	SyncModelProfilesWithDefaults(context.Context, string, string, ModelProfileDefaults, []ModelProfileSyncEntry) (ModelProfileSyncResult, error)
 	ListModelProfiles(context.Context, string, int, string) (ModelProfileListResult, error)
 	GetModelProfile(context.Context, string, string) (ModelProfile, bool, error)
 	DeleteModelProfile(context.Context, string, string, string, *int64) error
@@ -227,11 +250,23 @@ func loadOrCreateModelProfileKey(path string, encryptedRows bool) ([]byte, error
 }
 
 func (s *encryptedModelProfileStore) SyncModelProfiles(ctx context.Context, ownerID, idempotencyKey, defaultClientID string, entries []ModelProfileSyncEntry) (ModelProfileSyncResult, error) {
+	return s.SyncModelProfilesWithDefaults(ctx, ownerID, idempotencyKey, ModelProfileDefaults{ConversationClientProfileID: defaultClientID}, entries)
+}
+
+func (s *encryptedModelProfileStore) SyncModelProfilesWithDefaults(ctx context.Context, ownerID, idempotencyKey string, defaults ModelProfileDefaults, entries []ModelProfileSyncEntry) (ModelProfileSyncResult, error) {
 	ownerID, idempotencyKey = strings.TrimSpace(ownerID), strings.TrimSpace(idempotencyKey)
 	if ownerID == "" || idempotencyKey == "" {
 		return ModelProfileSyncResult{}, ErrModelProfileInvalid
 	}
-	digest := profileSyncDigest(defaultClientID, entries)
+	normalizedEntries := make([]ModelProfileSyncEntry, len(entries))
+	for i, entry := range entries {
+		normalizedEntries[i] = entry
+		if err := normalizeModelProfileEntry(&normalizedEntries[i]); err != nil {
+			return ModelProfileSyncResult{}, err
+		}
+	}
+	defaults = normalizeModelProfileDefaults(defaults)
+	digest := profileSyncDigest(defaults, normalizedEntries)
 	var result ModelProfileSyncResult
 	err := s.writer.Do(s.db, nil, func(tx *sql.Tx) error {
 		var storedDigest []byte
@@ -254,35 +289,26 @@ func (s *encryptedModelProfileStore) SyncModelProfiles(ctx context.Context, owne
 				return json.Unmarshal([]byte(storedJSON), &result)
 			}
 		}
-		for _, entry := range entries {
+		for _, entry := range normalizedEntries {
 			if strings.TrimSpace(entry.ClientProfileID) == "" || strings.TrimSpace(entry.Provider) == "" || (entry.APIKey != nil && strings.TrimSpace(*entry.APIKey) == "") {
 				return ErrModelProfileInvalid
 			}
 		}
-		for _, entry := range entries {
+		for _, entry := range normalizedEntries {
 			if err := s.upsertProfileTx(ctx, tx, ownerID, entry); err != nil {
 				return err
 			}
 		}
-		if defaultClientID != "" {
-			var profileID string
-			if err := tx.QueryRowContext(ctx, `SELECT profile_id FROM p2p_agent_model_profiles WHERE owner_id=$1 AND client_profile_id=$2`, ownerID, defaultClientID).Scan(&profileID); err != nil {
-				if errors.Is(err, sql.ErrNoRows) {
-					return ErrModelProfileNotFound
-				}
-				return err
-			}
-			if _, err := tx.ExecContext(ctx, `INSERT INTO p2p_agent_model_profile_defaults(owner_id, profile_id, client_profile_id) VALUES($1,$2,$3) ON CONFLICT(owner_id) DO UPDATE SET profile_id=EXCLUDED.profile_id, client_profile_id=EXCLUDED.client_profile_id`, ownerID, profileID, defaultClientID); err != nil {
-				return err
-			}
-		} else {
-			_ = tx.QueryRowContext(ctx, `SELECT client_profile_id FROM p2p_agent_model_profile_defaults WHERE owner_id=$1`, ownerID).Scan(&defaultClientID)
+		if err := s.syncProfileDefaultsTx(ctx, tx, ownerID, defaults); err != nil {
+			return err
 		}
 		profiles, err := s.listProfilesTx(ctx, tx, ownerID, 0, "")
 		if err != nil {
 			return err
 		}
-		result = ModelProfileSyncResult{Profiles: profiles, DefaultClientProfileID: defaultClientID}
+		storedDefaults := ModelProfileDefaults{}
+		_ = tx.QueryRowContext(ctx, `SELECT client_profile_id, embedding_client_profile_id, speech_client_profile_id FROM p2p_agent_model_profile_defaults WHERE owner_id=$1`, ownerID).Scan(&storedDefaults.ConversationClientProfileID, &storedDefaults.EmbeddingClientProfileID, &storedDefaults.SpeechClientProfileID)
+		result = ModelProfileSyncResult{Profiles: profiles, DefaultClientProfileID: storedDefaults.ConversationClientProfileID, Defaults: storedDefaults}
 		payload, err := json.Marshal(result)
 		if err != nil {
 			return err
@@ -296,11 +322,16 @@ func (s *encryptedModelProfileStore) SyncModelProfiles(ctx context.Context, owne
 func (s *encryptedModelProfileStore) upsertProfileTx(ctx context.Context, tx *sql.Tx, ownerID string, entry ModelProfileSyncEntry) error {
 	var profile ModelProfile
 	var deletedAt sql.NullTime
-	err := tx.QueryRowContext(ctx, `SELECT profile_id,revision,provider,credential_version,deleted_at FROM p2p_agent_model_profiles WHERE owner_id=$1 AND client_profile_id=$2 FOR UPDATE`, ownerID, entry.ClientProfileID).Scan(&profile.ProfileID, &profile.Revision, &profile.Provider, &profile.CredentialVersion, &deletedAt)
+	err := tx.QueryRowContext(ctx, `SELECT profile_id,revision,provider,credential_version,model_kind,deleted_at FROM p2p_agent_model_profiles WHERE owner_id=$1 AND client_profile_id=$2 FOR UPDATE`, ownerID, entry.ClientProfileID).Scan(&profile.ProfileID, &profile.Revision, &profile.Provider, &profile.CredentialVersion, &profile.ModelKind, &deletedAt)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
 	isNew := errors.Is(err, sql.ErrNoRows)
+	if !isNew {
+		if err := validateModelProfileCredentialTransition(profile.ModelKind, entry.ModelKind, entry.APIKey, entry.ProviderSecrets); err != nil {
+			return err
+		}
+	}
 	if !isNew && entry.ExpectedRevision != nil && *entry.ExpectedRevision != profile.Revision {
 		return ErrModelProfileRevision
 	}
@@ -315,10 +346,29 @@ func (s *encryptedModelProfileStore) upsertProfileTx(ctx context.Context, tx *sq
 	if provider == "" {
 		return ErrModelProfileInvalid
 	}
+	if entry.ModelKind == ModelKindSpeech && (profile.Revision == 0 || len(entry.ProviderSecrets) > 0) {
+		for _, key := range []string{"rtc_app_key", "access_key_id", "secret_access_key"} {
+			if strings.TrimSpace(entry.ProviderSecrets[key]) == "" {
+				return ErrModelProfileInvalid
+			}
+		}
+	}
 	var nonce, ciphertext []byte
 	credentialRotated := entry.APIKey != nil
-	if isNew || entry.APIKey != nil {
-		if entry.APIKey != nil {
+	if entry.ModelKind == ModelKindSpeech {
+		credentialRotated = len(entry.ProviderSecrets) > 0
+	}
+	if isNew || entry.APIKey != nil || len(entry.ProviderSecrets) > 0 {
+		if entry.ModelKind == ModelKindSpeech && len(entry.ProviderSecrets) > 0 {
+			encoded, encodeErr := json.Marshal(entry.ProviderSecrets)
+			if encodeErr != nil {
+				return ErrModelProfileInvalid
+			}
+			nonce, ciphertext, err = s.encrypt(profile.ProfileID, provider, encoded)
+			if err != nil {
+				return err
+			}
+		} else if entry.APIKey != nil {
 			var err error
 			nonce, ciphertext, err = s.encrypt(profile.ProfileID, provider, []byte(*entry.APIKey))
 			if err != nil {
@@ -334,7 +384,7 @@ func (s *encryptedModelProfileStore) upsertProfileTx(ctx context.Context, tx *sq
 			return err
 		}
 	}
-	if !isNew && entry.APIKey == nil && len(ciphertext) > 0 && profile.Provider != provider {
+	if !isNew && entry.APIKey == nil && len(entry.ProviderSecrets) == 0 && len(ciphertext) > 0 && profile.Provider != provider {
 		apiKey, err := s.decrypt(profile.ProfileID, profile.Provider, nonce, ciphertext)
 		if err != nil {
 			return err
@@ -351,11 +401,13 @@ func (s *encryptedModelProfileStore) upsertProfileTx(ctx context.Context, tx *sq
 			profile.CredentialVersion = 1
 		}
 	}
-	args := []any{ownerID, profile.ProfileID, entry.ClientProfileID, strings.TrimSpace(entry.DisplayName), provider, strings.TrimRight(strings.TrimSpace(entry.BaseURL), "/"), strings.TrimSpace(entry.Model), strings.TrimSpace(entry.SystemPrompt), nullableFloat(entry.Temperature), nullableFloat(entry.TopP), entry.MaxOutputTokens, entry.ContextWindow, strings.TrimSpace(entry.ReasoningEffort), revision}
+	modalitiesJSON, _ := json.Marshal(entry.InputModalities)
+	providerConfigJSON, _ := json.Marshal(entry.ProviderConfig)
+	args := []any{ownerID, profile.ProfileID, entry.ClientProfileID, strings.TrimSpace(entry.DisplayName), provider, strings.TrimRight(strings.TrimSpace(entry.BaseURL), "/"), strings.TrimSpace(entry.Model), strings.TrimSpace(entry.SystemPrompt), nullableFloat(entry.Temperature), nullableFloat(entry.TopP), entry.MaxOutputTokens, entry.ContextWindow, strings.TrimSpace(entry.ReasoningEffort), entry.ModelKind, string(modalitiesJSON), string(providerConfigJSON), revision}
 	if isNew {
-		_, err = tx.ExecContext(ctx, `INSERT INTO p2p_agent_model_profiles(owner_id,profile_id,client_profile_id,display_name,provider,base_url,model,system_prompt,temperature,top_p,max_output_tokens,context_window,reasoning_effort,revision,api_key_version,api_key_nonce,api_key_ciphertext,credential_version,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,1,$15,$16,$17,$18,$18)`, append(args, nonce, ciphertext, profile.CredentialVersion, s.now())...)
+		_, err = tx.ExecContext(ctx, `INSERT INTO p2p_agent_model_profiles(owner_id,profile_id,client_profile_id,display_name,provider,base_url,model,system_prompt,temperature,top_p,max_output_tokens,context_window,reasoning_effort,model_kind,input_modalities,provider_config,revision,api_key_version,api_key_nonce,api_key_ciphertext,credential_version,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16::jsonb,$17,1,$18,$19,$20,$21,$21)`, append(args, nonce, ciphertext, profile.CredentialVersion, s.now())...)
 	} else {
-		_, err = tx.ExecContext(ctx, `UPDATE p2p_agent_model_profiles SET display_name=$4,provider=$5,base_url=$6,model=$7,system_prompt=$8,temperature=$9,top_p=$10,max_output_tokens=$11,context_window=$12,reasoning_effort=$13,revision=$14,api_key_version=1,api_key_nonce=$15,api_key_ciphertext=$16,credential_version=$17,deleted_at=NULL,updated_at=$18 WHERE owner_id=$1 AND profile_id=$2 AND client_profile_id=$3`, append(args, nonce, ciphertext, profile.CredentialVersion, s.now())...)
+		_, err = tx.ExecContext(ctx, `UPDATE p2p_agent_model_profiles SET display_name=$4,provider=$5,base_url=$6,model=$7,system_prompt=$8,temperature=$9,top_p=$10,max_output_tokens=$11,context_window=$12,reasoning_effort=$13,model_kind=$14,input_modalities=$15::jsonb,provider_config=$16::jsonb,revision=$17,api_key_version=1,api_key_nonce=$18,api_key_ciphertext=$19,credential_version=$20,deleted_at=NULL,updated_at=$21 WHERE owner_id=$1 AND profile_id=$2 AND client_profile_id=$3`, append(args, nonce, ciphertext, profile.CredentialVersion, s.now())...)
 	}
 	if err == nil && credentialRotated {
 		_, err = tx.ExecContext(ctx, `INSERT INTO p2p_agent_model_profile_credentials(owner_id,profile_id,credential_version,provider,api_key_nonce,api_key_ciphertext,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)`, ownerID, profile.ProfileID, profile.CredentialVersion, provider, nonce, ciphertext, s.now())
@@ -367,7 +419,7 @@ func (s *encryptedModelProfileStore) upsertProfileTx(ctx context.Context, tx *sq
 }
 
 func (s *encryptedModelProfileStore) snapshotProfileTx(ctx context.Context, tx *sql.Tx, ownerID, profileID string, revision int64) error {
-	_, err := tx.ExecContext(ctx, `INSERT INTO p2p_agent_model_profile_revisions(owner_id,profile_id,profile_revision,client_profile_id,display_name,provider,base_url,model,system_prompt,temperature,top_p,max_output_tokens,context_window,reasoning_effort,credential_version,deleted_at,created_at) SELECT owner_id,profile_id,revision,client_profile_id,display_name,provider,base_url,model,system_prompt,temperature,top_p,max_output_tokens,context_window,reasoning_effort,credential_version,deleted_at,updated_at FROM p2p_agent_model_profiles WHERE owner_id=$1 AND profile_id=$2 AND revision=$3 ON CONFLICT DO NOTHING`, ownerID, profileID, revision)
+	_, err := tx.ExecContext(ctx, `INSERT INTO p2p_agent_model_profile_revisions(owner_id,profile_id,profile_revision,client_profile_id,display_name,provider,base_url,model,system_prompt,temperature,top_p,max_output_tokens,context_window,reasoning_effort,model_kind,input_modalities,provider_config,credential_version,deleted_at,created_at) SELECT owner_id,profile_id,revision,client_profile_id,display_name,provider,base_url,model,system_prompt,temperature,top_p,max_output_tokens,context_window,reasoning_effort,model_kind,input_modalities,provider_config,credential_version,deleted_at,updated_at FROM p2p_agent_model_profiles WHERE owner_id=$1 AND profile_id=$2 AND revision=$3 ON CONFLICT DO NOTHING`, ownerID, profileID, revision)
 	return err
 }
 
@@ -410,11 +462,18 @@ func (s *encryptedModelProfileStore) decrypt(profileID, provider string, nonce, 
 	return string(plaintext), nil
 }
 
-func profileSyncDigest(defaultClientID string, entries []ModelProfileSyncEntry) [32]byte {
+func profileSyncDigest(defaultsInput any, entries []ModelProfileSyncEntry) [32]byte {
+	defaults := ModelProfileDefaults{}
+	switch value := defaultsInput.(type) {
+	case string:
+		defaults.ConversationClientProfileID = value
+	case ModelProfileDefaults:
+		defaults = value
+	}
 	data, _ := json.Marshal(struct {
-		Default string
-		Entries []ModelProfileSyncEntry
-	}{defaultClientID, entries})
+		Defaults ModelProfileDefaults
+		Entries  []ModelProfileSyncEntry
+	}{normalizeModelProfileDefaults(defaults), entries})
 	return sha256.Sum256(data)
 }
 
@@ -458,7 +517,7 @@ func (s *encryptedModelProfileStore) listProfiles(ctx context.Context, ownerID s
 			return ModelProfileListResult{}, ErrModelProfileInvalid
 		}
 	}
-	query := `SELECT profile_id,client_profile_id,display_name,provider,base_url,model,system_prompt,temperature,top_p,max_output_tokens,context_window,reasoning_effort,revision,credential_version,api_key_nonce,api_key_ciphertext,created_at,updated_at,deleted_at FROM p2p_agent_model_profiles WHERE owner_id=$1 AND deleted_at IS NULL`
+	query := `SELECT profile_id,client_profile_id,display_name,provider,base_url,model,system_prompt,temperature,top_p,max_output_tokens,context_window,reasoning_effort,model_kind,input_modalities,provider_config,revision,credential_version,api_key_nonce,api_key_ciphertext,created_at,updated_at,deleted_at FROM p2p_agent_model_profiles WHERE owner_id=$1 AND deleted_at IS NULL`
 	args := []any{ownerID}
 	if pageToken != "" {
 		query += ` AND (client_profile_id,profile_id) > ($2,$3)`
@@ -487,9 +546,9 @@ func (s *encryptedModelProfileStore) listProfiles(ctx context.Context, ownerID s
 		next = encodeModelProfilePageToken(profiles[pageSize-1].ClientProfileID, profiles[pageSize-1].ProfileID)
 		profiles = profiles[:pageSize]
 	}
-	var defaultID string
-	_ = s.db.QueryRowContext(ctx, `SELECT client_profile_id FROM p2p_agent_model_profile_defaults WHERE owner_id=$1`, ownerID).Scan(&defaultID)
-	return ModelProfileListResult{Profiles: profiles, NextPageToken: next, DefaultClientProfileID: defaultID}, nil
+	var defaults ModelProfileDefaults
+	_ = s.db.QueryRowContext(ctx, `SELECT client_profile_id,embedding_client_profile_id,speech_client_profile_id FROM p2p_agent_model_profile_defaults WHERE owner_id=$1`, ownerID).Scan(&defaults.ConversationClientProfileID, &defaults.EmbeddingClientProfileID, &defaults.SpeechClientProfileID)
+	return ModelProfileListResult{Profiles: profiles, NextPageToken: next, DefaultClientProfileID: defaults.ConversationClientProfileID, Defaults: defaults}, nil
 }
 
 func encodeModelProfilePageToken(clientProfileID, profileID string) string {
@@ -509,7 +568,7 @@ func decodeModelProfilePageToken(token string) (string, string, error) {
 }
 
 func (s *encryptedModelProfileStore) listProfilesTx(ctx context.Context, tx *sql.Tx, ownerID string, pageSize int, pageToken string) ([]ModelProfile, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT profile_id,client_profile_id,display_name,provider,base_url,model,system_prompt,temperature,top_p,max_output_tokens,context_window,reasoning_effort,revision,credential_version,api_key_nonce,api_key_ciphertext,created_at,updated_at,deleted_at FROM p2p_agent_model_profiles WHERE owner_id=$1 AND deleted_at IS NULL ORDER BY client_profile_id,profile_id`, ownerID)
+	rows, err := tx.QueryContext(ctx, `SELECT profile_id,client_profile_id,display_name,provider,base_url,model,system_prompt,temperature,top_p,max_output_tokens,context_window,reasoning_effort,model_kind,input_modalities,provider_config,revision,credential_version,api_key_nonce,api_key_ciphertext,created_at,updated_at,deleted_at FROM p2p_agent_model_profiles WHERE owner_id=$1 AND deleted_at IS NULL ORDER BY client_profile_id,profile_id`, ownerID)
 	if err != nil {
 		return nil, err
 	}
@@ -532,7 +591,8 @@ func (s *encryptedModelProfileStore) scanProfile(row modelProfileScanner) (Model
 	var nonce, ciphertext []byte
 	var temperature, topP sql.NullFloat64
 	var deletedAt sql.NullTime
-	err := row.Scan(&p.ProfileID, &p.ClientProfileID, &p.DisplayName, &p.Provider, &p.BaseURL, &p.Model, &p.SystemPrompt, &temperature, &topP, &p.MaxOutputTokens, &p.ContextWindow, &p.ReasoningEffort, &p.Revision, &p.CredentialVersion, &nonce, &ciphertext, &p.CreatedAt, &p.UpdatedAt, &deletedAt)
+	var modalitiesJSON, providerConfigJSON []byte
+	err := row.Scan(&p.ProfileID, &p.ClientProfileID, &p.DisplayName, &p.Provider, &p.BaseURL, &p.Model, &p.SystemPrompt, &temperature, &topP, &p.MaxOutputTokens, &p.ContextWindow, &p.ReasoningEffort, &p.ModelKind, &modalitiesJSON, &providerConfigJSON, &p.Revision, &p.CredentialVersion, &nonce, &ciphertext, &p.CreatedAt, &p.UpdatedAt, &deletedAt)
 	if err != nil {
 		return p, err
 	}
@@ -542,6 +602,14 @@ func (s *encryptedModelProfileStore) scanProfile(row modelProfileScanner) (Model
 	if topP.Valid {
 		p.TopP = &topP.Float64
 	}
+	_ = json.Unmarshal(modalitiesJSON, &p.InputModalities)
+	_ = json.Unmarshal(providerConfigJSON, &p.ProviderConfig)
+	if p.ModelKind == "" {
+		p.ModelKind = ModelKindConversation
+	}
+	if p.ModelKind == ModelKindSpeech && p.CredentialVersion > 0 {
+		p.ProviderSecretStatus = map[string]bool{"rtc_app_key": true, "access_key_id": true, "secret_access_key": true}
+	}
 	p.Deleted = deletedAt.Valid
 	if len(ciphertext) > 0 {
 		p.APIKey, err = s.decrypt(p.ProfileID, p.Provider, nonce, ciphertext)
@@ -549,12 +617,21 @@ func (s *encryptedModelProfileStore) scanProfile(row modelProfileScanner) (Model
 			return ModelProfile{}, err
 		}
 		p.APIKeyConfigured = true
+		if p.ModelKind == ModelKindSpeech {
+			var secrets map[string]string
+			if json.Unmarshal([]byte(p.APIKey), &secrets) == nil {
+				p.ProviderSecretStatus = map[string]bool{}
+				for _, key := range []string{"rtc_app_key", "access_key_id", "secret_access_key"} {
+					p.ProviderSecretStatus[key] = strings.TrimSpace(secrets[key]) != ""
+				}
+			}
+		}
 	}
 	return p, nil
 }
 
 func (s *encryptedModelProfileStore) GetModelProfile(ctx context.Context, ownerID, profileID string) (ModelProfile, bool, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT profile_id,client_profile_id,display_name,provider,base_url,model,system_prompt,temperature,top_p,max_output_tokens,context_window,reasoning_effort,revision,credential_version,api_key_nonce,api_key_ciphertext,created_at,updated_at,deleted_at FROM p2p_agent_model_profiles WHERE owner_id=$1 AND profile_id=$2 AND deleted_at IS NULL`, ownerID, profileID)
+	row := s.db.QueryRowContext(ctx, `SELECT profile_id,client_profile_id,display_name,provider,base_url,model,system_prompt,temperature,top_p,max_output_tokens,context_window,reasoning_effort,model_kind,input_modalities,provider_config,revision,credential_version,api_key_nonce,api_key_ciphertext,created_at,updated_at,deleted_at FROM p2p_agent_model_profiles WHERE owner_id=$1 AND profile_id=$2 AND deleted_at IS NULL`, ownerID, profileID)
 	p, err := s.scanProfile(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ModelProfile{}, false, nil
@@ -578,7 +655,8 @@ func (s *encryptedModelProfileStore) ResolveModelProfile(ctx context.Context, ow
 func scanProfilePin(row modelProfileScanner) (ModelProfile, error) {
 	var p ModelProfile
 	var temperature, topP sql.NullFloat64
-	err := row.Scan(&p.ProfileID, &p.ClientProfileID, &p.DisplayName, &p.Provider, &p.BaseURL, &p.Model, &p.SystemPrompt, &temperature, &topP, &p.MaxOutputTokens, &p.ContextWindow, &p.ReasoningEffort, &p.Revision, &p.CredentialVersion, &p.CreatedAt, &p.UpdatedAt)
+	var modalitiesJSON, providerConfigJSON []byte
+	err := row.Scan(&p.ProfileID, &p.ClientProfileID, &p.DisplayName, &p.Provider, &p.BaseURL, &p.Model, &p.SystemPrompt, &temperature, &topP, &p.MaxOutputTokens, &p.ContextWindow, &p.ReasoningEffort, &p.ModelKind, &modalitiesJSON, &providerConfigJSON, &p.Revision, &p.CredentialVersion, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return p, err
 	}
@@ -588,11 +666,19 @@ func scanProfilePin(row modelProfileScanner) (ModelProfile, error) {
 	if topP.Valid {
 		p.TopP = &topP.Float64
 	}
+	_ = json.Unmarshal(modalitiesJSON, &p.InputModalities)
+	_ = json.Unmarshal(providerConfigJSON, &p.ProviderConfig)
+	if p.ModelKind == "" {
+		p.ModelKind = ModelKindConversation
+	}
+	if p.ModelKind == ModelKindSpeech && p.CredentialVersion > 0 {
+		p.ProviderSecretStatus = map[string]bool{"rtc_app_key": true, "access_key_id": true, "secret_access_key": true}
+	}
 	return p, nil
 }
 
 func (s *encryptedModelProfileStore) ResolveModelProfilePin(ctx context.Context, ownerID, profileID string) (ModelProfile, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT profile_id,client_profile_id,display_name,provider,base_url,model,system_prompt,temperature,top_p,max_output_tokens,context_window,reasoning_effort,revision,credential_version,created_at,updated_at FROM p2p_agent_model_profiles WHERE owner_id=$1 AND profile_id=$2 AND deleted_at IS NULL`, ownerID, profileID)
+	row := s.db.QueryRowContext(ctx, `SELECT profile_id,client_profile_id,display_name,provider,base_url,model,system_prompt,temperature,top_p,max_output_tokens,context_window,reasoning_effort,model_kind,input_modalities,provider_config,revision,credential_version,created_at,updated_at FROM p2p_agent_model_profiles WHERE owner_id=$1 AND profile_id=$2 AND deleted_at IS NULL`, ownerID, profileID)
 	p, err := scanProfilePin(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ModelProfile{}, ErrModelProfileNotFound
@@ -629,7 +715,8 @@ func (s *encryptedModelProfileStore) ResolveModelProfilePinned(ctx context.Conte
 	var profile ModelProfile
 	var temperature, topP sql.NullFloat64
 	var deletedAt sql.NullTime
-	err := s.db.QueryRowContext(ctx, `SELECT profile_id,client_profile_id,display_name,provider,base_url,model,system_prompt,temperature,top_p,max_output_tokens,context_window,reasoning_effort,profile_revision,credential_version,deleted_at FROM p2p_agent_model_profile_revisions WHERE owner_id=$1 AND profile_id=$2 AND profile_revision=$3`, ownerID, profileID, profileRevision).Scan(&profile.ProfileID, &profile.ClientProfileID, &profile.DisplayName, &profile.Provider, &profile.BaseURL, &profile.Model, &profile.SystemPrompt, &temperature, &topP, &profile.MaxOutputTokens, &profile.ContextWindow, &profile.ReasoningEffort, &profile.Revision, &profile.CredentialVersion, &deletedAt)
+	var modalitiesJSON, providerConfigJSON []byte
+	err := s.db.QueryRowContext(ctx, `SELECT profile_id,client_profile_id,display_name,provider,base_url,model,system_prompt,temperature,top_p,max_output_tokens,context_window,reasoning_effort,model_kind,input_modalities,provider_config,profile_revision,credential_version,deleted_at FROM p2p_agent_model_profile_revisions WHERE owner_id=$1 AND profile_id=$2 AND profile_revision=$3`, ownerID, profileID, profileRevision).Scan(&profile.ProfileID, &profile.ClientProfileID, &profile.DisplayName, &profile.Provider, &profile.BaseURL, &profile.Model, &profile.SystemPrompt, &temperature, &topP, &profile.MaxOutputTokens, &profile.ContextWindow, &profile.ReasoningEffort, &profile.ModelKind, &modalitiesJSON, &providerConfigJSON, &profile.Revision, &profile.CredentialVersion, &deletedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ModelProfile{}, ErrModelProfileNotFound
 	}
@@ -641,6 +728,11 @@ func (s *encryptedModelProfileStore) ResolveModelProfilePinned(ctx context.Conte
 	}
 	if topP.Valid {
 		profile.TopP = &topP.Float64
+	}
+	_ = json.Unmarshal(modalitiesJSON, &profile.InputModalities)
+	_ = json.Unmarshal(providerConfigJSON, &profile.ProviderConfig)
+	if profile.ModelKind == "" {
+		profile.ModelKind = ModelKindConversation
 	}
 	profile.Deleted = deletedAt.Valid
 	if credentialVersion <= 0 {
@@ -688,7 +780,8 @@ func (s *encryptedModelProfileStore) DeleteModelProfile(ctx context.Context, own
 			}
 		}
 		var rev int64
-		if err := tx.QueryRowContext(ctx, `SELECT revision FROM p2p_agent_model_profiles WHERE owner_id=$1 AND profile_id=$2 AND deleted_at IS NULL FOR UPDATE`, ownerID, profileID).Scan(&rev); errors.Is(err, sql.ErrNoRows) {
+		var clientProfileID string
+		if err := tx.QueryRowContext(ctx, `SELECT revision,client_profile_id FROM p2p_agent_model_profiles WHERE owner_id=$1 AND profile_id=$2 AND deleted_at IS NULL FOR UPDATE`, ownerID, profileID).Scan(&rev, &clientProfileID); errors.Is(err, sql.ErrNoRows) {
 			return ErrModelProfileNotFound
 		} else if err != nil {
 			return err
@@ -702,7 +795,10 @@ func (s *encryptedModelProfileStore) DeleteModelProfile(ctx context.Context, own
 		if err := s.snapshotProfileTx(ctx, tx, ownerID, profileID, rev+1); err != nil {
 			return err
 		}
-		_, _ = tx.ExecContext(ctx, `DELETE FROM p2p_agent_model_profile_defaults WHERE owner_id=$1 AND profile_id=$2`, ownerID, profileID)
+		_, err = tx.ExecContext(ctx, `UPDATE p2p_agent_model_profile_defaults SET profile_id=CASE WHEN profile_id=$2 OR client_profile_id=$3 THEN NULL ELSE profile_id END,client_profile_id=CASE WHEN client_profile_id=$3 THEN '' ELSE client_profile_id END,embedding_profile_id=CASE WHEN embedding_profile_id=$2 OR embedding_client_profile_id=$3 THEN NULL ELSE embedding_profile_id END,embedding_client_profile_id=CASE WHEN embedding_client_profile_id=$3 THEN '' ELSE embedding_client_profile_id END,speech_profile_id=CASE WHEN speech_profile_id=$2 OR speech_client_profile_id=$3 THEN NULL ELSE speech_profile_id END,speech_client_profile_id=CASE WHEN speech_client_profile_id=$3 THEN '' ELSE speech_client_profile_id END WHERE owner_id=$1`, ownerID, profileID, clientProfileID)
+		if err != nil {
+			return err
+		}
 		response, marshalErr := json.Marshal(map[string]any{"deleted": true, "profile_id": profileID})
 		if marshalErr != nil {
 			return marshalErr
@@ -710,6 +806,189 @@ func (s *encryptedModelProfileStore) DeleteModelProfile(ctx context.Context, own
 		_, err = tx.ExecContext(ctx, `UPDATE p2p_agent_model_profile_deletes SET request_digest=$3,response_json=$4::jsonb WHERE owner_id=$1 AND idempotency_key=$2`, ownerID, idempotencyKey, digest, string(response))
 		return err
 	})
+}
+
+func normalizeModelProfileDefaults(defaults ModelProfileDefaults) ModelProfileDefaults {
+	defaults.ConversationClientProfileID = strings.TrimSpace(defaults.ConversationClientProfileID)
+	defaults.EmbeddingClientProfileID = strings.TrimSpace(defaults.EmbeddingClientProfileID)
+	defaults.SpeechClientProfileID = strings.TrimSpace(defaults.SpeechClientProfileID)
+	return defaults
+}
+
+func normalizeModelProfileEntry(entry *ModelProfileSyncEntry) error {
+	if entry == nil {
+		return ErrModelProfileInvalid
+	}
+	entry.ModelKind = strings.ToLower(strings.TrimSpace(entry.ModelKind))
+	if entry.ModelKind == "" {
+		entry.ModelKind = ModelKindConversation
+	}
+	modalities := make([]string, 0, len(entry.InputModalities))
+	seen := map[string]bool{}
+	for _, raw := range entry.InputModalities {
+		value := strings.ToLower(strings.TrimSpace(raw))
+		if value == "" || seen[value] {
+			return ErrModelProfileInvalid
+		}
+		seen[value] = true
+		modalities = append(modalities, value)
+	}
+	switch entry.ModelKind {
+	case ModelKindConversation:
+		if len(modalities) == 0 {
+			modalities = []string{"text"}
+			seen["text"] = true
+		}
+		for _, modality := range modalities {
+			if modality != "text" && modality != "image" {
+				return ErrModelProfileInvalid
+			}
+		}
+		if !seen["text"] {
+			return ErrModelProfileInvalid
+		}
+	case ModelKindEmbedding:
+		if len(modalities) == 0 {
+			modalities = []string{"text"}
+			seen["text"] = true
+		}
+		if len(modalities) != 1 || modalities[0] != "text" {
+			return ErrModelProfileInvalid
+		}
+	case ModelKindSpeech:
+		if entry.APIKey != nil {
+			return ErrModelProfileInvalid
+		}
+		if len(modalities) == 0 {
+			modalities = []string{"audio"}
+			seen["audio"] = true
+		}
+		if len(modalities) != 1 || modalities[0] != "audio" {
+			return ErrModelProfileInvalid
+		}
+	default:
+		return ErrModelProfileInvalid
+	}
+	entry.InputModalities = modalities
+	if entry.ModelKind == ModelKindSpeech {
+		if strings.ToLower(strings.TrimSpace(entry.Provider)) != "volc_voice" {
+			return ErrModelProfileInvalid
+		}
+		if entry.ProviderConfig == nil {
+			entry.ProviderConfig = map[string]any{}
+		}
+		allowed := map[string]bool{"app_id": true, "voice_chat_app_id": true, "ai_user_id": true, "tts_speaker": true, "tts_resource_id": true, "tts_speech_rate": true, "tts_loudness_rate": true, "tts_pitch": true}
+		for key, value := range entry.ProviderConfig {
+			if !allowed[key] {
+				return ErrModelProfileInvalid
+			}
+			switch typed := value.(type) {
+			case string:
+				if strings.TrimSpace(typed) == "" {
+					return ErrModelProfileInvalid
+				}
+			default:
+				return ErrModelProfileInvalid
+			}
+		}
+		allowedSecrets := map[string]bool{"rtc_app_key": true, "access_key_id": true, "secret_access_key": true}
+		for key, value := range entry.ProviderSecrets {
+			if !allowedSecrets[key] || strings.TrimSpace(value) == "" {
+				return ErrModelProfileInvalid
+			}
+		}
+	} else if len(entry.ProviderConfig) > 0 || len(entry.ProviderSecrets) > 0 {
+		return ErrModelProfileInvalid
+	}
+	return nil
+}
+
+func validateModelProfileCredentialTransition(existingKind, requestedKind string, apiKey *string, providerSecrets map[string]string) error {
+	if existingKind == "" {
+		existingKind = ModelKindConversation
+	}
+	if existingKind == requestedKind {
+		return nil
+	}
+	if existingKind == ModelKindSpeech {
+		// A voice secret bundle must never be reused as a generic API key.
+		if apiKey == nil || len(providerSecrets) != 0 {
+			return ErrModelProfileInvalid
+		}
+		return nil
+	}
+	if requestedKind == ModelKindSpeech {
+		// A generic API key must never be reinterpreted as voice credentials.
+		if apiKey != nil || len(providerSecrets) == 0 {
+			return ErrModelProfileInvalid
+		}
+	}
+	return nil
+}
+
+func validateDefaultKinds(defaults ModelProfileDefaults, profiles map[string]ModelProfile) error {
+	defaults = normalizeModelProfileDefaults(defaults)
+	for _, item := range []struct {
+		clientID string
+		kind     string
+		required bool
+	}{
+		{defaults.ConversationClientProfileID, ModelKindConversation, true},
+		{defaults.EmbeddingClientProfileID, ModelKindEmbedding, false},
+		{defaults.SpeechClientProfileID, ModelKindSpeech, false},
+	} {
+		if item.clientID == "" {
+			if item.required {
+				// Preserve legacy behavior: an omitted conversation default leaves
+				// the current default unchanged and is valid for existing stores.
+			}
+			continue
+		}
+		profile, ok := profiles[item.clientID]
+		if !ok || profile.Deleted {
+			return ErrModelProfileNotFound
+		}
+		if profile.ModelKind != item.kind {
+			return ErrModelProfileInvalid
+		}
+	}
+	return nil
+}
+
+func (s *encryptedModelProfileStore) syncProfileDefaultsTx(ctx context.Context, tx *sql.Tx, ownerID string, requested ModelProfileDefaults) error {
+	requested = normalizeModelProfileDefaults(requested)
+	var current ModelProfileDefaults
+	_ = tx.QueryRowContext(ctx, `SELECT client_profile_id, embedding_client_profile_id, speech_client_profile_id FROM p2p_agent_model_profile_defaults WHERE owner_id=$1`, ownerID).Scan(&current.ConversationClientProfileID, &current.EmbeddingClientProfileID, &current.SpeechClientProfileID)
+	if requested.ConversationClientProfileID == "" {
+		requested.ConversationClientProfileID = current.ConversationClientProfileID
+	}
+	if requested.EmbeddingClientProfileID == "" {
+		requested.EmbeddingClientProfileID = current.EmbeddingClientProfileID
+	}
+	if requested.SpeechClientProfileID == "" {
+		requested.SpeechClientProfileID = current.SpeechClientProfileID
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT client_profile_id, model_kind FROM p2p_agent_model_profiles WHERE owner_id=$1 AND deleted_at IS NULL`, ownerID)
+	if err != nil {
+		return err
+	}
+	profiles := map[string]ModelProfile{}
+	for rows.Next() {
+		var clientID, kind string
+		if err := rows.Scan(&clientID, &kind); err != nil {
+			rows.Close()
+			return err
+		}
+		profiles[clientID] = ModelProfile{ClientProfileID: clientID, ModelKind: kind}
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if err := validateDefaultKinds(requested, profiles); err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO p2p_agent_model_profile_defaults(owner_id, profile_id, client_profile_id, embedding_profile_id, embedding_client_profile_id, speech_profile_id, speech_client_profile_id) VALUES($1, NULLIF((SELECT profile_id FROM p2p_agent_model_profiles WHERE owner_id=$1 AND client_profile_id=$2),''), $2, NULLIF((SELECT profile_id FROM p2p_agent_model_profiles WHERE owner_id=$1 AND client_profile_id=$3),''), $3, NULLIF((SELECT profile_id FROM p2p_agent_model_profiles WHERE owner_id=$1 AND client_profile_id=$4),''), $4) ON CONFLICT(owner_id) DO UPDATE SET profile_id=EXCLUDED.profile_id,client_profile_id=EXCLUDED.client_profile_id,embedding_profile_id=EXCLUDED.embedding_profile_id,embedding_client_profile_id=EXCLUDED.embedding_client_profile_id,speech_profile_id=EXCLUDED.speech_profile_id,speech_client_profile_id=EXCLUDED.speech_client_profile_id`, ownerID, requested.ConversationClientProfileID, requested.EmbeddingClientProfileID, requested.SpeechClientProfileID)
+	return err
 }
 
 // ModelProfileStoreKeyDigest is useful in diagnostics without exposing the key.

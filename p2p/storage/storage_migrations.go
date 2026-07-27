@@ -881,6 +881,9 @@ func (s *DatabaseStore) migrate(ctx context.Context) error {
 					max_output_tokens BIGINT NOT NULL DEFAULT 0,
 					context_window BIGINT NOT NULL DEFAULT 0,
 					reasoning_effort TEXT NOT NULL DEFAULT '',
+					model_kind TEXT NOT NULL DEFAULT 'conversation',
+					input_modalities JSONB NOT NULL DEFAULT '["text"]'::jsonb,
+					provider_config JSONB NOT NULL DEFAULT '{}'::jsonb,
 					revision BIGINT NOT NULL CHECK (revision > 0),
 					api_key_version BIGINT NOT NULL DEFAULT 1,
 					api_key_nonce BYTEA NOT NULL DEFAULT ''::bytea,
@@ -905,9 +908,12 @@ func (s *DatabaseStore) migrate(ctx context.Context) error {
 				`CREATE INDEX IF NOT EXISTS p2p_agent_model_profiles_owner_idx ON p2p_agent_model_profiles(owner_id, client_profile_id, profile_id)`,
 				`CREATE TABLE IF NOT EXISTS p2p_agent_model_profile_defaults (
 					owner_id TEXT PRIMARY KEY NOT NULL,
-					profile_id TEXT NOT NULL,
+					profile_id TEXT,
 					client_profile_id TEXT NOT NULL,
-					FOREIGN KEY (owner_id, profile_id) REFERENCES p2p_agent_model_profiles(owner_id, profile_id) ON DELETE CASCADE
+					embedding_profile_id TEXT,
+					embedding_client_profile_id TEXT NOT NULL DEFAULT '',
+					speech_profile_id TEXT,
+					speech_client_profile_id TEXT NOT NULL DEFAULT ''
 				)`,
 				`CREATE TABLE IF NOT EXISTS p2p_agent_model_profile_syncs (
 					owner_id TEXT NOT NULL,
@@ -949,6 +955,9 @@ func (s *DatabaseStore) migrate(ctx context.Context) error {
 					max_output_tokens BIGINT NOT NULL DEFAULT 0,
 					context_window BIGINT NOT NULL DEFAULT 0,
 					reasoning_effort TEXT NOT NULL DEFAULT '',
+					model_kind TEXT NOT NULL DEFAULT 'conversation',
+					input_modalities JSONB NOT NULL DEFAULT '["text"]'::jsonb,
+					provider_config JSONB NOT NULL DEFAULT '{}'::jsonb,
 					credential_version BIGINT NOT NULL DEFAULT 0,
 					deleted_at TIMESTAMPTZ,
 					created_at TIMESTAMPTZ NOT NULL,
@@ -1057,6 +1066,28 @@ func (s *DatabaseStore) migrate(ctx context.Context) error {
 	m.AddMigrations(sqlutil.Migration{Version: "p2p: native agent memory idempotency keys v87", Up: func(ctx context.Context, txn *sql.Tx) error {
 		return execMigrationStatements(ctx, txn, []string{
 			`ALTER TABLE p2p_native_agent_memory_records DROP CONSTRAINT IF EXISTS p2p_native_agent_memory_records_owner_id_request_digest_key`,
+		})
+	}})
+	m.AddMigrations(sqlutil.Migration{Version: "p2p: role-aware model profiles v89", Up: func(ctx context.Context, txn *sql.Tx) error {
+		return execMigrationStatements(ctx, txn, []string{
+			`ALTER TABLE p2p_agent_model_profiles ADD COLUMN IF NOT EXISTS model_kind TEXT NOT NULL DEFAULT 'conversation'`,
+			`ALTER TABLE p2p_agent_model_profiles ADD COLUMN IF NOT EXISTS input_modalities JSONB NOT NULL DEFAULT '["text"]'::jsonb`,
+			`ALTER TABLE p2p_agent_model_profiles ADD COLUMN IF NOT EXISTS provider_config JSONB NOT NULL DEFAULT '{}'::jsonb`,
+			`ALTER TABLE p2p_agent_model_profile_revisions ADD COLUMN IF NOT EXISTS model_kind TEXT NOT NULL DEFAULT 'conversation'`,
+			`ALTER TABLE p2p_agent_model_profile_revisions ADD COLUMN IF NOT EXISTS input_modalities JSONB NOT NULL DEFAULT '["text"]'::jsonb`,
+			`ALTER TABLE p2p_agent_model_profile_revisions ADD COLUMN IF NOT EXISTS provider_config JSONB NOT NULL DEFAULT '{}'::jsonb`,
+			`ALTER TABLE p2p_agent_model_profile_defaults ADD COLUMN IF NOT EXISTS embedding_profile_id TEXT`,
+			`ALTER TABLE p2p_agent_model_profile_defaults ADD COLUMN IF NOT EXISTS embedding_client_profile_id TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE p2p_agent_model_profile_defaults ADD COLUMN IF NOT EXISTS speech_profile_id TEXT`,
+			`ALTER TABLE p2p_agent_model_profile_defaults ADD COLUMN IF NOT EXISTS speech_client_profile_id TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE p2p_agent_model_profile_defaults DROP CONSTRAINT IF EXISTS p2p_agent_model_profile_defaults_owner_id_profile_id_fkey`,
+			`ALTER TABLE p2p_agent_model_profile_defaults ALTER COLUMN profile_id DROP NOT NULL`,
+			`ALTER TABLE p2p_agent_model_profile_defaults ALTER COLUMN embedding_profile_id DROP NOT NULL`,
+			`ALTER TABLE p2p_agent_model_profile_defaults ALTER COLUMN speech_profile_id DROP NOT NULL`,
+			`UPDATE p2p_agent_model_profile_defaults SET profile_id=NULLIF(profile_id,''),embedding_profile_id=NULLIF(embedding_profile_id,''),speech_profile_id=NULLIF(speech_profile_id,'')`,
+			`ALTER TABLE p2p_agent_model_profile_defaults ADD CONSTRAINT p2p_agent_model_profile_defaults_owner_profile_fkey FOREIGN KEY (owner_id, profile_id) REFERENCES p2p_agent_model_profiles(owner_id, profile_id) ON DELETE RESTRICT`,
+			`ALTER TABLE p2p_agent_model_profile_defaults ADD CONSTRAINT p2p_agent_model_profile_defaults_owner_embedding_fkey FOREIGN KEY (owner_id, embedding_profile_id) REFERENCES p2p_agent_model_profiles(owner_id, profile_id) ON DELETE RESTRICT`,
+			`ALTER TABLE p2p_agent_model_profile_defaults ADD CONSTRAINT p2p_agent_model_profile_defaults_owner_speech_fkey FOREIGN KEY (owner_id, speech_profile_id) REFERENCES p2p_agent_model_profiles(owner_id, profile_id) ON DELETE RESTRICT`,
 		})
 	}})
 	return m.Up(ctx)

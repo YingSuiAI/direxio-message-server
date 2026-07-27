@@ -39,10 +39,10 @@ func TestDatabaseModelProfilePinUsesMetadataProjectionOnly(t *testing.T) {
 	}
 	defer db.Close()
 	store := &encryptedModelProfileStore{db: db}
-	query := `SELECT profile_id,client_profile_id,display_name,provider,base_url,model,system_prompt,temperature,top_p,max_output_tokens,context_window,reasoning_effort,revision,credential_version,created_at,updated_at FROM p2p_agent_model_profiles WHERE owner_id=$1 AND profile_id=$2 AND deleted_at IS NULL`
+	query := `SELECT profile_id,client_profile_id,display_name,provider,base_url,model,system_prompt,temperature,top_p,max_output_tokens,context_window,reasoning_effort,model_kind,input_modalities,provider_config,revision,credential_version,created_at,updated_at FROM p2p_agent_model_profiles WHERE owner_id=$1 AND profile_id=$2 AND deleted_at IS NULL`
 	// The expectation contains the exact dedicated projection; ciphertext and
 	// nonce must never be selected on the schedule acceptance path.
-	mock.ExpectQuery(regexp.QuoteMeta(query)).WithArgs("owner", "profile").WillReturnRows(sqlmock.NewRows([]string{"profile_id", "client_profile_id", "display_name", "provider", "base_url", "model", "system_prompt", "temperature", "top_p", "max_output_tokens", "context_window", "reasoning_effort", "revision", "credential_version", "created_at", "updated_at"}).AddRow("profile", "client", "name", "openai", "https://example.invalid", "m", "", nil, nil, 0, 0, "", 7, 9, time.Now(), time.Now()))
+	mock.ExpectQuery(regexp.QuoteMeta(query)).WithArgs("owner", "profile").WillReturnRows(sqlmock.NewRows([]string{"profile_id", "client_profile_id", "display_name", "provider", "base_url", "model", "system_prompt", "temperature", "top_p", "max_output_tokens", "context_window", "reasoning_effort", "model_kind", "input_modalities", "provider_config", "revision", "credential_version", "created_at", "updated_at"}).AddRow("profile", "client", "name", "openai", "https://example.invalid", "m", "", nil, nil, 0, 0, "", "conversation", []byte(`["text"]`), []byte(`{}`), 7, 9, time.Now(), time.Now()))
 	pin, err := store.ResolveModelProfilePin(context.Background(), "owner", "profile")
 	if err != nil {
 		t.Fatal(err)
