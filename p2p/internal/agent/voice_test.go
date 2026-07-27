@@ -18,7 +18,9 @@ func TestVoiceSessionPinsRoleProfilesAndOwnerFence(t *testing.T) {
 		t.Fatal(err)
 	}
 	v := newVoiceCoordinator(store, func() string { return "owner-a" })
-	generation := uint64(1); v.generation = func() uint64 { return generation }; v.active = func(string) bool { return true }
+	generation := uint64(1)
+	v.generation = func() uint64 { return generation }
+	v.active = func(string) bool { return true }
 	v.cfg.WebhookSecret, v.cfg.CustomLLMURL = "callback-secret", "https://voice.example.test/custom"
 	response, apiErr := v.create(context.Background(), "owner-a", map[string]any{"conversation_id": "conv-1"})
 	if apiErr != nil {
@@ -34,7 +36,10 @@ func TestVoiceSessionPinsRoleProfilesAndOwnerFence(t *testing.T) {
 	if _, apiErr = v.end(context.Background(), "owner-b", map[string]any{"session_id": projection["session_id"]}); apiErr == nil || apiErr.Status != 403 {
 		t.Fatalf("owner fence = %#v", apiErr)
 	}
-	generation = 2; if _, apiErr = v.end(context.Background(), "owner-a", map[string]any{"session_id": projection["session_id"]}); apiErr == nil || apiErr.Status != 401 { t.Fatalf("generation fence = %#v", apiErr) }
+	generation = 2
+	if _, apiErr = v.end(context.Background(), "owner-a", map[string]any{"session_id": projection["session_id"]}); apiErr == nil || apiErr.Status != 401 {
+		t.Fatalf("generation fence = %#v", apiErr)
+	}
 	var secrets map[string]string
 	speech, _, _ := store.GetModelProfile(context.Background(), "owner-a", projection["speech_profile_id"].(string))
 	if err := json.Unmarshal([]byte(speech.APIKey), &secrets); err != nil || secrets["rtc_app_key"] != "rtc-secret" {
