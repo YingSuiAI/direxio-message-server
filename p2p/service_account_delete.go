@@ -101,6 +101,9 @@ func (s *Service) deleteAccountAfterDesiredState(ctx context.Context) (any, *api
 	if deprovisioner == nil {
 		return nil, statusError(http.StatusServiceUnavailable, "account deprovisioner unavailable")
 	}
+	if s.agentModule != nil {
+		s.agentModule.AbortVoiceSessions(ctx)
+	}
 	if err := deprovisioner.DeprovisionAccount(ctx); err != nil {
 		return nil, internalError(err)
 	}

@@ -2,7 +2,10 @@ package p2p
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
+	"strings"
 
 	"github.com/YingSuiAI/dirextalk-message-server/internal/dirextalkmcp"
 	actionbase "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/action"
@@ -24,7 +27,104 @@ func Register(router *mux.Router, service *Service) {
 	router.HandleFunc("/query", product).Methods(http.MethodPost, http.MethodOptions)
 	router.HandleFunc("/command", product).Methods(http.MethodPost, http.MethodOptions)
 	router.HandleFunc("/ws", realtimeWSHandler(service)).Methods(http.MethodGet, http.MethodOptions)
+	router.HandleFunc("/agent/voice/volc/custom-llm", voiceCustomLLMHandler(service)).Methods(http.MethodPost, http.MethodOptions)
+	router.HandleFunc("/agent/voice/webhook", voiceCustomLLMHandler(service)).Methods(http.MethodPost, http.MethodOptions)
 	router.HandleFunc("/health", httpapi.HealthHandler(nil)).Methods(http.MethodGet, http.MethodOptions)
+}
+
+func voiceCustomLLMHandler(service *Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if service == nil || service.agentModule == nil {
+			http.Error(w, "voice unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		sessionID := strings.TrimSpace(r.URL.Query().Get("session_id"))
+		token := strings.TrimSpace(r.Header.Get("Authorization"))
+		token = strings.TrimSpace(strings.TrimPrefix(token, "Bearer "))
+		if token == "" {
+			token = strings.TrimSpace(r.Header.Get("X-Voice-Callback-Token"))
+		}
+		body, err := io.ReadAll(io.LimitReader(r.Body, 64<<10))
+		if err != nil {
+			http.Error(w, "invalid callback", http.StatusBadRequest)
+			return
+		}
+		var payload map[string]any
+		if json.Unmarshal(body, &payload) != nil {
+			http.Error(w, "invalid callback", http.StatusBadRequest)
+			return
+		}
+		transcript := voiceCallbackTranscript(payload)
+		if transcript == "" {
+			http.Error(w, "transcript required", http.StatusBadRequest)
+			return
+		}
+		if err := service.agentModule.AuthorizeVoiceCallback(sessionID, token); err != nil {
+			http.Error(w, "voice callback rejected", http.StatusUnauthorized)
+			return
+		}
+		if err := service.agentModule.ValidateVoiceProviderPayload(sessionID, payload); err != nil {
+			http.Error(w, "voice callback rejected", http.StatusUnauthorized)
+			return
+		}
+		requestID := voiceCallbackRequestID(payload)
+		if requestID == "" {
+			http.Error(w, "provider request id required", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		flusher, _ := w.(http.Flusher)
+		writeChunk := func(text string) error {
+			chunk, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]any{"content": text}}}})
+			_, err := w.Write([]byte("data: " + string(chunk) + "\n\n"))
+			if flusher != nil {
+				flusher.Flush()
+			}
+			return err
+		}
+		runErr := service.agentModule.RunVoiceCustomLLMStream(r.Context(), sessionID, token, transcript, writeChunk, requestID)
+		if runErr != nil {
+			_, _ = w.Write([]byte("data: {\"error\":\"voice callback rejected\"}\n\n"))
+			if flusher != nil {
+				flusher.Flush()
+			}
+			return
+		}
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+}
+
+func voiceCallbackRequestID(payload map[string]any) string {
+	for _, key := range []string{"request_id", "event_id", "RequestId", "EventId", "task_id"} {
+		if value, ok := payload[key].(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func voiceCallbackTranscript(payload map[string]any) string {
+	for _, key := range []string{"transcript_final", "text", "input", "prompt"} {
+		if text, ok := payload[key].(string); ok && strings.TrimSpace(text) != "" {
+			return strings.TrimSpace(text)
+		}
+	}
+	if messages, ok := payload["messages"].([]any); ok && len(messages) > 0 {
+		if item, ok := messages[len(messages)-1].(map[string]any); ok {
+			if text, ok := item["content"].(string); ok {
+				return strings.TrimSpace(text)
+			}
+		}
+	}
+	return ""
 }
 
 func RegisterMCP(router *mux.Router, service *Service) {

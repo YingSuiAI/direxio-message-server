@@ -37,6 +37,9 @@ type Config struct {
 	PersistentMemoryReady bool
 	ModelProfiles         storage.ModelProfileStore
 	ModelProfileResolver  nativeagent.ModelProfileResolver
+	VoiceEnabled          bool
+	VoiceActive           func(string) bool
+	VoiceGeneration       func() uint64
 	ScheduleTools         []nativeagent.Tool
 }
 
@@ -48,7 +51,11 @@ type Module struct {
 	turnErr       error
 	ownerID       func() string
 	modelProfiles storage.ModelProfileStore
+	voice         *voiceCoordinator
 }
+
+type pinnedProfileContextKey struct{}
+type pinnedProfileContext struct{ revision, credential int64 }
 
 func New(cfg Config) *Module {
 	runner := cfg.Runner
@@ -64,7 +71,26 @@ func New(cfg Config) *Module {
 		})}
 	}
 	turns, turnErr := agentturns.NewCoordinator(context.Background(), cfg.Turns)
-	return &Module{runner: runner, account: cfg.Account, turns: turns, turnErr: turnErr, ownerID: cfg.OwnerID, modelProfiles: cfg.ModelProfiles}
+	module := &Module{runner: runner, account: cfg.Account, turns: turns, turnErr: turnErr, ownerID: cfg.OwnerID, modelProfiles: cfg.ModelProfiles}
+	if cfg.VoiceEnabled {
+		module.voice = newVoiceCoordinator(cfg.ModelProfiles, cfg.OwnerID)
+		module.voice.active = cfg.VoiceActive
+		module.voice.generation = cfg.VoiceGeneration
+		module.voice.durable = func(ctx context.Context, owner string, params map[string]any, emit func(agentturns.StreamEvent) error) error {
+			revision, credential := actionbase.Int64(params["_voice_revision"]), actionbase.Int64(params["_voice_credential"])
+			delete(params, "_voice_revision")
+			delete(params, "_voice_credential")
+			return module.durablePinnedStream(ctx, owner, "agent.chat.stream", params, revision, credential, emit)
+		}
+		module.voice.stop = func(ctx context.Context, owner, turnID string) error {
+			if module.turns == nil {
+				return fmt.Errorf("native agent turn coordinator is not configured")
+			}
+			_, _, err := module.turns.Stop(ctx, owner, turnID)
+			return err
+		}
+	}
+	return module
 }
 
 // Handlers returns the complete Agent ProductCore action surface.
@@ -78,12 +104,22 @@ func (m *Module) Handlers() map[string]actionbase.Handler {
 	handlers[actionConfigGet] = m.getConfig
 	handlers[actionConfigUpdate] = m.updateConfig
 	handlers["agent.chat.stream"] = streamOnly
+	if m.voice != nil {
+		handlers["agent.voice.session.stream"] = streamOnly
+	}
 	handlers["agent.chat.turn.stop"] = m.stopTurn
 	handlers["agent.chat.turns.list"] = m.listTurns
 	handlers["agent.model_profiles.sync"] = m.modelProfileSync
 	handlers["agent.model_profiles.list"] = m.modelProfileList
 	handlers["agent.model_profiles.get"] = m.modelProfileGet
 	handlers["agent.model_profiles.delete"] = m.modelProfileDelete
+	if m.voice != nil {
+		handlers["agent.voice.session.create"] = m.createVoiceSession
+		handlers["agent.voice.session.start"] = m.startVoiceSession
+		handlers["agent.voice.session.transcript"] = m.submitVoiceTranscript
+		handlers["agent.voice.session.interrupt"] = m.interruptVoiceSession
+		handlers["agent.voice.session.end"] = m.endVoiceSession
+	}
 	return handlers
 }
 
@@ -100,6 +136,9 @@ func (m *Module) Stream(ctx context.Context, action string, params map[string]an
 	if m == nil || m.runner == nil {
 		return fmt.Errorf("native agent runtime is not configured")
 	}
+	if strings.TrimSpace(action) == "agent.voice.session.stream" && m.voice != nil {
+		return m.voice.stream(ctx, m.currentOwnerID(), params, emit)
+	}
 	return m.runner.Stream(ctx, strings.TrimSpace(action), cloneMap(params), emit)
 }
 
@@ -111,6 +150,10 @@ func (m *Module) DurableStream(ctx context.Context, ownerID, action string, para
 	conversationID := nativeagent.ConversationID(params)
 	profileID := durableServerModelProfileID(params)
 	var pinnedRevision, pinnedCredential int64
+	requestedRevision, requestedCredential := int64(0), int64(0)
+	if pin, ok := ctx.Value(pinnedProfileContextKey{}).(pinnedProfileContext); ok {
+		requestedRevision, requestedCredential = pin.revision, pin.credential
+	}
 	if profileID != "" && turnID != "" {
 		if existing, ok, getErr := m.turns.Get(context.Background(), ownerID, turnID); getErr == nil && ok && existing.ModelProfileID == profileID {
 			pinnedRevision, pinnedCredential = existing.ModelProfileRevision, existing.CredentialVersion
@@ -120,7 +163,13 @@ func (m *Module) DurableStream(ctx context.Context, ownerID, action string, para
 		if m.modelProfiles == nil {
 			return fmt.Errorf("server model profiles are unavailable")
 		}
-		profile, resolveErr := m.modelProfiles.ResolveModelProfile(ctx, strings.TrimSpace(ownerID), profileID)
+		var profile storage.ModelProfile
+		var resolveErr error
+		if requestedRevision > 0 {
+			profile, resolveErr = m.modelProfiles.ResolveModelProfilePinned(ctx, strings.TrimSpace(ownerID), profileID, requestedRevision, requestedCredential)
+		} else {
+			profile, resolveErr = m.modelProfiles.ResolveModelProfile(ctx, strings.TrimSpace(ownerID), profileID)
+		}
 		if resolveErr != nil {
 			return resolveErr
 		}
@@ -138,6 +187,8 @@ func (m *Module) DurableStream(ctx context.Context, ownerID, action string, para
 	return m.turns.Stream(ctx, request, func(runCtx context.Context, runtimeEmit func(agentturns.RuntimeEvent) error) error {
 		runParams := cloneMap(params)
 		delete(runParams, "after_seq")
+		delete(runParams, "model_profile_revision")
+		delete(runParams, "credential_version")
 		if request.ModelProfileID != "" {
 			if m.modelProfiles == nil {
 				return fmt.Errorf("server model profiles are unavailable")
@@ -154,6 +205,11 @@ func (m *Module) DurableStream(ctx context.Context, ownerID, action string, para
 			return runtimeEmit(agentturns.RuntimeEvent{Event: event.Event, Data: event.Data})
 		})
 	}, emit)
+}
+
+func (m *Module) durablePinnedStream(ctx context.Context, owner, action string, params map[string]any, revision, credential int64, emit func(agentturns.StreamEvent) error) error {
+	ctx = context.WithValue(ctx, pinnedProfileContextKey{}, pinnedProfileContext{revision: revision, credential: credential})
+	return m.DurableStream(ctx, owner, action, params, emit)
 }
 
 func durableServerModelProfileID(params map[string]any) string {

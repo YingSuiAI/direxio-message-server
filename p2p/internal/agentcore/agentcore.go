@@ -74,6 +74,7 @@ type Config struct {
 	EmbeddedModelProfilesReady func() bool
 	EmbeddedSchedulesReady     func() bool
 	EmbeddedMemoryReady        func() bool
+	EmbeddedVoiceReady         func() bool
 }
 
 func (c Config) withDefaults() Config {
@@ -938,12 +939,16 @@ func (c *Client) backendsGet(ctx context.Context, _ map[string]any) (any, *actio
 	embeddedCapabilities := []string{"chat", "models.query", "bundled_tools"}
 	if c.cfg.EmbeddedModelProfilesReady != nil && c.cfg.EmbeddedModelProfilesReady() {
 		embeddedCapabilities = append(embeddedCapabilities, "model_profiles.server")
+		embeddedCapabilities = append(embeddedCapabilities, "model_roles.server")
 	}
 	if c.cfg.EmbeddedSchedulesReady != nil && c.cfg.EmbeddedSchedulesReady() {
 		embeddedCapabilities = append(embeddedCapabilities, "schedules.server")
 	}
 	if c.cfg.EmbeddedMemoryReady != nil && c.cfg.EmbeddedMemoryReady() {
 		embeddedCapabilities = append(embeddedCapabilities, "memory.server")
+	}
+	if c.cfg.EmbeddedVoiceReady != nil && c.cfg.EmbeddedVoiceReady() {
+		embeddedCapabilities = append(embeddedCapabilities, "voice.server")
 	}
 	return map[string]any{
 		"embedded": map[string]any{"available": true, "capabilities": embeddedCapabilities},

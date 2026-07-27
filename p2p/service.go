@@ -881,6 +881,11 @@ func newService(cfg Config, store Store, transport Transport, state portalState,
 		Store: nativeAgentConfigStore{service: service}, MCP: service.mcpCapabilities,
 		ScheduleTools: service.scheduleModule.Tools(), Account: serviceAgentAccountPort{service: service}, Turns: service.store,
 		OwnerID: service.OwnerMXID, ModelProfiles: service.modelProfiles,
+		VoiceEnabled: true,
+		VoiceActive: func(owner string) bool {
+			return strings.TrimSpace(owner) == strings.TrimSpace(service.OwnerMXID()) && !service.accountIsDeprovisioned()
+		},
+		VoiceGeneration: func() uint64 { service.mu.Lock(); defer service.mu.Unlock(); return service.portalSessionGeneration },
 		Memory: func() nativeagent.ConversationMemoryStore {
 			if candidate, ok := store.(nativeagent.ConversationMemoryStore); ok {
 				return candidate
@@ -900,6 +905,7 @@ func newService(cfg Config, store Store, transport Transport, state portalState,
 	coreConfig.EmbeddedModelProfilesReady = func() bool { return service.modelProfiles != nil && service.modelProfiles.ModelProfileStoreReady() }
 	coreConfig.EmbeddedSchedulesReady = service.EmbeddedSchedulesReady
 	coreConfig.EmbeddedMemoryReady = func() bool { _, ok := store.(*p2pstorage.DatabaseStore); return ok }
+	coreConfig.EmbeddedVoiceReady = service.agentModule.VoiceReady
 	service.agentCore, service.agentCoreInitErr = agentcoremodule.New(coreConfig)
 	if service.agentCore == nil {
 		service.agentCore, _ = agentcoremodule.New(agentcoremodule.Config{})

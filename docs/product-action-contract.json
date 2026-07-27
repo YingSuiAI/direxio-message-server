@@ -7628,6 +7628,202 @@
       "transport": "http_and_ws_request"
     },
     {
+      "name": "agent.voice.session.create",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "conversation_id": {
+            "type": "string",
+            "required": true
+          },
+          "conversation_profile_id": {
+            "type": "string"
+          },
+          "speech_profile_id": {
+            "type": "string"
+          }
+        },
+        "response": {
+          "ai_user_id": {
+            "type": "string"
+          },
+          "app_id": {
+            "type": "string"
+          },
+          "client_transcript_submit_enabled": {
+            "type": "boolean"
+          },
+          "conversation_id": {
+            "type": "string"
+          },
+          "conversation_profile_id": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string"
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "room_id": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "speech_profile_id": {
+            "type": "string"
+          },
+          "token": {
+            "type": "string"
+          },
+          "user_id": {
+            "type": "string"
+          },
+          "voice_chat_app_id": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.voice.session.start",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "session_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "ended": {
+            "type": "boolean"
+          },
+          "interrupted": {
+            "type": "boolean"
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "started": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.voice.session.transcript",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "session_id": {
+            "type": "string",
+            "required": true
+          },
+          "transcript_delta": {
+            "type": "string"
+          },
+          "transcript_final": {
+            "type": "string"
+          }
+        },
+        "response": {
+          "accepted": {
+            "type": "boolean"
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.voice.session.interrupt",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "session_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "ended": {
+            "type": "boolean"
+          },
+          "interrupted": {
+            "type": "boolean"
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "started": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.voice.session.end",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "session_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "ended": {
+            "type": "boolean"
+          },
+          "interrupted": {
+            "type": "boolean"
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "started": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.voice.session.stream",
+      "auth": "owner",
+      "transport": "ws_stream_only",
+      "schema": {
+        "request": {
+          "session_id": {
+            "type": "string",
+            "required": true
+          }
+        }
+      }
+    },
+    {
       "name": "agent.chat.conversations.create",
       "auth": "owner",
       "transport": "http_and_ws_request",
