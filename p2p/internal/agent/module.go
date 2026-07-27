@@ -187,6 +187,16 @@ func (m *Module) DurableStream(ctx context.Context, ownerID, action string, para
 		}
 	}
 	var pinnedRevision, pinnedCredential int64
+	if profileID == "" && action != "" && (action == "agent.chat" || action == "agent.chat.stream") && m.modelProfiles != nil {
+		if _, inline := params["model_profile"]; !inline {
+			profile, resolveErr := m.modelProfiles.ResolveDefaultModelProfilePin(ctx, strings.TrimSpace(ownerID), storage.ModelKindConversation)
+			if resolveErr == nil {
+				profileID, pinnedRevision, pinnedCredential = profile.ProfileID, profile.Revision, profile.CredentialVersion
+			} else {
+				return resolveErr
+			}
+		}
+	}
 	requestedRevision, requestedCredential := int64(0), int64(0)
 	if pin, ok := ctx.Value(pinnedProfileContextKey{}).(pinnedProfileContext); ok {
 		requestedRevision, requestedCredential = pin.revision, pin.credential

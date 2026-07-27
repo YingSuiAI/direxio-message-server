@@ -491,3 +491,5 @@ Revisit Dragonfly/Redis only if measured data shows one of these:
 - high-frequency ephemeral state such as typing, presence, online counters, or short-lived locks where PostgreSQL writes become wasteful;
 - distributed rate limiting or background job queues across multiple app processes;
 - p95/p99 endpoint latency dominated by PostgreSQL despite correct indexes and query plans.
+
+Native Agent model profiles are server-owned encrypted records with default conversation roles. Chat, stream, and compression resolve the owner default when model fields are omitted; inline profile/key input is legacy compatibility only. `agent.models.list` remains an explicit request-scoped lookup and does not persist profiles.

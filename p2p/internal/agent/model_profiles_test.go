@@ -77,6 +77,28 @@ func TestServerModelProfileActionsRejectLooseNumericDTOsAndPreserveZero(t *testi
 	}
 }
 
+func TestServerModelProfileActionsAcceptJSONIntegerNumbers(t *testing.T) {
+	store := storage.NewMemoryStore()
+	module := New(Config{ModelProfiles: store, OwnerID: func() string { return "owner" }})
+	syncAction := module.Handlers()["agent.model_profiles.sync"]
+	value, actionErr := syncAction(context.Background(), map[string]any{"idempotency_key": "json-number", "entries": []any{map[string]any{"client_profile_id": "json-client", "provider": "openai", "model": "gpt", "max_output_tokens": json.Number("4096"), "context_window": json.Number("8192")}}})
+	if actionErr != nil {
+		t.Fatalf("JSON integer sync: %v", actionErr)
+	}
+	if value == nil {
+		t.Fatal("JSON integer sync returned nil")
+	}
+	if _, actionErr := module.Handlers()["agent.model_profiles.list"](context.Background(), map[string]any{"page_size": json.Number("20")}); actionErr != nil {
+		t.Fatalf("JSON integer page_size: %v", actionErr)
+	}
+	deleteAction := module.Handlers()["agent.model_profiles.delete"]
+	for _, value := range []any{int64(-1), json.Number("-1")} {
+		if _, actionErr := deleteAction(context.Background(), map[string]any{"idempotency_key": "delete-negative", "profile_id": "missing", "expected_revision": value}); actionErr == nil || actionErr.Status != 400 {
+			t.Fatalf("negative expected_revision %#v status=%v", value, actionErr)
+		}
+	}
+}
+
 func TestServerModelProfileActionsRejectNonStringDTOsWithoutMutation(t *testing.T) {
 	store := storage.NewMemoryStore()
 	module := New(Config{ModelProfiles: store, OwnerID: func() string { return "owner" }})
@@ -252,6 +274,18 @@ func TestDurableImageTurnValidatesBeforeReserveAndSupportsDigestOnlyReattach(t *
 	defer runner.mu.Unlock()
 	if runner.executions != 1 {
 		t.Fatalf("reattach reran runtime: %d", runner.executions)
+	}
+}
+
+func TestDurableChatDefaultProfileMissingFailsBeforeReserve(t *testing.T) {
+	store := storage.NewMemoryStore()
+	module := New(Config{Runner: &pinnedTurnRunner{}, Turns: store, ModelProfiles: store, OwnerID: func() string { return "owner" }})
+	params := map[string]any{"turn_id": "default-missing", "conversation_id": "conversation", "prompt": "hello"}
+	if err := module.DurableStream(context.Background(), "owner", "agent.chat.stream", params, func(agentturns.StreamEvent) error { return nil }); err == nil {
+		t.Fatal("missing default profile accepted")
+	}
+	if _, ok, _ := store.GetAgentTurn(context.Background(), "owner", "default-missing"); ok {
+		t.Fatal("missing default profile reserved a turn")
 	}
 }
 

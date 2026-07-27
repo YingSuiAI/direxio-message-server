@@ -21,8 +21,10 @@ func (r *Runtime) compressMemory(ctx context.Context, params map[string]any) (ma
 	if window <= 0 {
 		window = nativeAgentDefaultMemoryWindow
 	}
-	profile, resolveErr := r.resolveModelProfileForRequest(ctx, params)
-	if hasModelProfile(params) || trimString(params["model_profile_id"]) != "" || trimString(params["client_model_profile_id"]) != "" {
+	profile := nativeModelProfile{}
+	if r.modelProfiles != nil || hasModelProfile(params) {
+		var resolveErr error
+		profile, resolveErr = r.resolveModelProfileForRequest(ctx, params)
 		if resolveErr != nil {
 			return nil, resolveErr
 		}

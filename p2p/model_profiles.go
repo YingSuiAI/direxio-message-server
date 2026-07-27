@@ -29,3 +29,11 @@ func (r nativeModelProfileResolver) ResolveModelProfile(ctx context.Context, pro
 		Revision: profile.Revision, CredentialVersion: profile.CredentialVersion,
 	}, nil
 }
+
+func (r nativeModelProfileResolver) ResolveDefaultModelProfile(ctx context.Context, kind string) (nativeagent.ServerModelProfile, error) {
+	profile, err := r.store.ResolveDefaultModelProfile(ctx, r.owner(), kind)
+	if err != nil {
+		return nativeagent.ServerModelProfile{}, err
+	}
+	return nativeagent.ServerModelProfile{ProfileID: profile.ProfileID, ClientProfileID: profile.ClientProfileID, DisplayName: profile.DisplayName, Provider: profile.Provider, BaseURL: profile.BaseURL, Model: profile.Model, SystemPrompt: profile.SystemPrompt, APIKey: profile.APIKey, APIKeyConfigured: profile.APIKeyConfigured, Temperature: profile.Temperature, TopP: profile.TopP, MaxOutputTokens: profile.MaxOutputTokens, ContextWindow: profile.ContextWindow, ReasoningEffort: profile.ReasoningEffort, ModelKind: profile.ModelKind, InputModalities: append([]string(nil), profile.InputModalities...), Revision: profile.Revision, CredentialVersion: profile.CredentialVersion}, nil
+}

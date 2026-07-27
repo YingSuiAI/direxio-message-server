@@ -10,6 +10,8 @@
 > `io.dirextalk.agent` plugin config is only a sanitized, idempotent startup
 > migration source.
 
+Model profiles are server-owned encrypted records with default roles. Chat, stream, and compression resolve the owner default conversation profile when model fields are omitted; inline profile/key input is legacy compatibility only. `agent.models.list` remains an explicit request-scoped lookup and does not persist profiles.
+
 ## Scope
 
 Dirextalk message server embeds Native Agent as a native server feature. The old Agent Docker/plugin-runtime reuse path is deprecated for Agent only. `dirextalk-plugins` is not changed in this version, and non-Agent plugins such as `io.dirextalk.ops` may continue to use the Docker plugin runner.
@@ -25,14 +27,16 @@ Clients use the current call surface:
 ## Runtime Requirements
 
 - Native Agent owner actions always route to the native runtime, never to a Docker Agent container.
-- Native Agent runtime config is stored in native portal Agent config storage. Model profile lists are current-client local state and are sent request-by-request; `agent.config.update` is not the current model profile store. On startup, old hidden Agent plugin config/runtime state is imported once in a sanitized, idempotent way; current clients must not use plugin management as the Native Agent contract.
-- Native Agent uses CloudWeGo Eino as the only model orchestration path. The runtime must track the latest stable Eino release, use Eino ReAct for model/tool loops, use maintained Eino model components for OpenAI and DeepSeek, use direct-only Anthropic Messages API as an Eino `ToolCallingChatModel` adapter, and use Eino official MCP tooling backed by `modelcontextprotocol/go-sdk`.
-- Native Agent supports `openai`, `anthropic`, `deepseek`, `gemini`, `xai`, `openai_compatible`, and `openrouter`. Client-visible provider bases include their version roots: Anthropic `https://api.anthropic.com/v1`, DeepSeek `https://api.deepseek.com/v1`, Gemini `https://generativelanguage.googleapis.com/v1beta`, and xAI `https://api.x.ai/v1`. The `gemini` provider uses the native Gemini `/models`, `generateContent`, and `streamGenerateContent` routes with `x-goog-api-key` on both Google's host and custom Gemini-native gateways. A gateway that exposes only OpenAI-compatible chat should be configured as `openai_compatible`. Provider API keys remain request-scoped.
-- `anthropic` support is direct Anthropic API only; managed-cloud adapters and their SDK dependencies are not part of this provider.
+
+- Native Agent runtime config is stored in native portal Agent config storage. The server persists encrypted model profiles and default roles. Chat, stream, and compression resolve the owner default conversation profile when model fields are omitted; inline profile/key input is legacy compatibility only. `agent.config.update` is not the model profile store.
+
+- Native Agent supports `openai`, `anthropic`, `deepseek`, `gemini`, `xai`, `openai_compatible`, and `openrouter`. Provider API keys remain server-owned; `agent.models.list` is an explicit request-scoped lookup and does not persist profiles.
+
 - `litellm` and `vertex` are not Native Agent providers. Requests using either identifier must be rejected; custom OpenAI-compatible endpoints use `openai_compatible`.
-- Model-backed requests must pass `model_profile` with non-empty `provider`, `model`, `base_url`, and `api_key`; `temperature`, `top_p`, `max_output_tokens`, and `context_window` remain optional. The backend must reject missing required fields and must not select a model or API address for the client. Empty or omitted optional tuning fields are not forwarded, so provider/model defaults apply. Anthropic's native Messages API is the protocol exception because it requires a positive `max_tokens`; when `max_output_tokens` is omitted, the direct Anthropic adapter supplies an internal positive limit rather than sending an empty or zero value.
-- `agent.models.list` uses request-scoped provider/base_url/api_key to fetch real provider model lists and rejects a provider fetch without an explicit `base_url`. Anthropic calls its native `GET /v1/models` endpoint with `x-api-key` and `anthropic-version`; Gemini calls its native `GET /v1beta/models` route with `x-goog-api-key`; xAI and OpenAI-compatible providers use versioned `/models` routes with bearer authentication. It must not persist API keys, maintain server-side model profiles for the current client, or invent model context/temperature/top_p/max-output/reasoning defaults.
-- API keys are request-local or temporary environment values only. They must not be persisted, logged, committed, or returned by config APIs.
+
+- Model-backed chat, stream, and compression omit model fields and resolve the owner default conversation profile. Legacy inline `model_profile` with a key remains compatibility-only; optional tuning fields remain optional and provider defaults apply.
+
+- API keys are server-owned encrypted profile credentials; they must not be logged, committed, or returned by config APIs.
 - System prompts start with the built-in Dirextalk Native Agent product rules, then append native Agent config, request overrides, and enabled static skills. User-provided system prompts must not override the built-in rules for using first-class Native Agent tools for skills, MCP, runtime, and Dirextalk product operations.
 - `agent.chat` returns a complete response.
 - Native stream emits `delta`, `error`, `trace`, and `done` events through `server.native_agent_stream.*` frames and respects client cancellation. Runtime/provider failures emit their safe provider detail through `error` after request secrets are redacted, rather than collapsing every failure into the generic `native agent turn failed` text.

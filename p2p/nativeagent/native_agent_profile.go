@@ -57,6 +57,19 @@ func (r *Runtime) resolveModelProfileForRequest(ctx context.Context, params map[
 		serverID = legacyID
 	}
 	if serverID == "" {
+		if r != nil && r.modelProfiles != nil {
+			resolver, ok := r.modelProfiles.(interface {
+				ResolveDefaultModelProfile(context.Context, string) (ServerModelProfile, error)
+			})
+			if !ok {
+				return r.resolveModelProfile(params), nil
+			}
+			profile, err := resolver.ResolveDefaultModelProfile(ctx, "conversation")
+			if err != nil {
+				return nativeModelProfile{}, err
+			}
+			return nativeModelProfile{Provider: strings.ToLower(strings.TrimSpace(profile.Provider)), Model: strings.TrimSpace(profile.Model), BaseURL: strings.TrimRight(strings.TrimSpace(profile.BaseURL), "/"), APIKey: profile.APIKey, SystemPrompt: strings.TrimSpace(profile.SystemPrompt), Temperature: profile.Temperature, TopP: profile.TopP, MaxOutputTokens: profile.MaxOutputTokens, ContextWindow: profile.ContextWindow, ReasoningMode: normalizedReasoningMode(profile.ReasoningEffort), ModelKind: profile.ModelKind, InputModalities: append([]string(nil), profile.InputModalities...)}, nil
+		}
 		return r.resolveModelProfile(params), nil
 	}
 	if r == nil || r.modelProfiles == nil {

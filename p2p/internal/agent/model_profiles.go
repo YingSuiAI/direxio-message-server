@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"math"
 	"net/http"
@@ -147,7 +148,7 @@ func (m *Module) modelProfileDelete(ctx context.Context, params map[string]any) 
 	var rev *int64
 	if _, ok := params["expected_revision"]; ok {
 		v, parseErr := strictProfileInt64(params["expected_revision"])
-		if parseErr != nil {
+		if parseErr != nil || v < 0 {
 			return nil, actionbase.BadRequest("expected_revision must be an integer")
 		}
 		rev = &v
@@ -312,14 +313,14 @@ func parseProfileEntry(raw map[string]any) (storage.ModelProfileSyncEntry, *acti
 	}
 	if v, ok := raw["max_output_tokens"]; ok {
 		n, parseErr := strictProfileInt64(v)
-		if parseErr != nil {
+		if parseErr != nil || n < 0 {
 			return storage.ModelProfileSyncEntry{}, actionbase.BadRequest("max_output_tokens must be an integer")
 		}
 		entry.MaxOutputTokens = int(n)
 	}
 	if v, ok := raw["context_window"]; ok {
 		n, parseErr := strictProfileInt64(v)
-		if parseErr != nil {
+		if parseErr != nil || n < 0 {
 			return storage.ModelProfileSyncEntry{}, actionbase.BadRequest("context_window must be an integer")
 		}
 		entry.ContextWindow = int(n)
@@ -333,7 +334,7 @@ func parseProfileEntry(raw map[string]any) (storage.ModelProfileSyncEntry, *acti
 	}
 	if v, ok := raw["expected_revision"]; ok {
 		x, parseErr := strictProfileInt64(v)
-		if parseErr != nil {
+		if parseErr != nil || x < 0 {
 			return storage.ModelProfileSyncEntry{}, actionbase.BadRequest("expected_revision must be an integer")
 		}
 		entry.ExpectedRevision = &x
@@ -383,6 +384,9 @@ func strictProfileInt64(value any) (int64, error) {
 			return 0, errors.New("integer overflow")
 		}
 		return int64(v), nil
+	case json.Number:
+		n, err := v.Int64()
+		return n, err
 	case float64:
 		if math.IsNaN(v) || math.IsInf(v, 0) || math.Trunc(v) != v || v < math.MinInt64 || v > math.MaxInt64 {
 			return 0, errors.New("invalid integer")
@@ -424,6 +428,12 @@ func strictProfileFloat64(value any) (float64, error) {
 		return float64(v), nil
 	case uint64:
 		return float64(v), nil
+	case json.Number:
+		n, err := v.Float64()
+		if err != nil || math.IsNaN(n) || math.IsInf(n, 0) {
+			return 0, errors.New("non-finite number")
+		}
+		return n, nil
 	default:
 		return 0, errors.New("invalid number type")
 	}

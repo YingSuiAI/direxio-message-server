@@ -123,9 +123,6 @@ func nativeAgentImageProfileAllowed(params map[string]any, profile nativeModelPr
 	if _, inline := params["model_profile"]; inline && !serverPinned {
 		return validationErrorf("image attachments require a server model profile")
 	}
-	if !serverPinned && trimString(params["model_profile_id"]) == "" && trimString(params["client_model_profile_id"]) == "" {
-		return validationErrorf("image attachments require a server model profile")
-	}
 	if profile.ModelKind != "conversation" {
 		return validationErrorf("image attachments require a conversation model profile")
 	}
