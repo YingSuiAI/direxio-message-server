@@ -90,6 +90,27 @@ OpenRouter-only and use its dedicated `/embeddings/models` endpoint, while
 conversation lists use provider text/chat filters where available and exclude
 explicitly non-text models.
 
+模型列表的 `input_modalities` 只取上游模型响应中明确声明的
+`input_modalities` 或 `architecture.input_modalities`，服务端只规范化已知的
+`text`/`image` 值，不根据模型 ID、名称、provider 或 URL 猜测图片能力。客户端
+可以据此自动勾选图片输入；已保存 profile 的显式设置仍优先于一次列表查询的
+元数据。
+
+Native Agent 知识库由服务端按 owner 管理。`agent.knowledge.sources.list`、
+`.delete`、`agent.knowledge.upload.start`、`.chunk`、`.finish` 提供知识源
+上传和生命周期；V1 只接受合法 UTF-8 的 `text/plain`、`text/markdown`、
+`text/csv`、`application/json`，文件大小不超过 10 MiB，分片使用 canonical
+base64 且每片不超过 256 KiB。上传阶段返回按字节计算的 `progress`；向量化
+阶段只有在所有向量和 ready source 记录原子提交后才算完成。索引始终解析
+服务端当前 owner 默认向量 profile，知识 API 不接收或返回 provider、base URL
+或任何模型密钥。
+
+`agent.knowledge.memory.create` 是 Eino remember/recall 的单条写入工具；
+`agent.knowledge.memories.list`、`.update`、`.delete` 管理可查看和编辑的
+长期记忆记录。它们与对话摘要 memory 以及知识源切分块相互独立；更新和删除
+使用 owner 范围、revision 前置条件和幂等键。所有 action 的可校验元数据以
+`docs/product-action-contract.json` 为准。
+
 官方 Ops 插件 `io.dirextalk.ops` 面向单机私有部署运维，动作包括 `ops.status.get`、`ops.containers.list`、`ops.logs.tail`、`ops.backups.list`、`ops.backup.create`、`ops.backup.status`、`ops.backup.download_chunk`、`ops.backup.delete`、`ops.cleanup.plan`、`ops.cleanup.run`、`ops.rooms.cleanup.plan`、`ops.rooms.cleanup.run`、`ops.media.orphans.plan`、`ops.migration.export`、`ops.restore.plan`、`ops.restore.run`。Ops 是唯一允许由 Docker runner 挂载 Docker socket 和专用备份 volume 的官方插件；启用时注入 `OPS_BACKUP_ROOT`、`OPS_MAX_BACKUPS`、`OPS_MESSAGE_SERVER_CONTAINER`、`OPS_POSTGRES_CONTAINER`、`OPS_POSTGRES_USER`、`OPS_POSTGRES_PASSWORD`。备份创建可异步返回任务并通过 `ops.backup.status` 轮询进度；备份下载通过 `ops.backup.download_chunk` 分片返回，客户端本地保存文件。`ops.restore.run` 必须显式传入 `confirm="restore_backup"`，用于从已有备份包恢复 Postgres dump。第一版清理必须先 plan 后 confirm：聊天记录清理只做本地缓存、隐藏/归档计划和受控安全操作，不允许 Ops 插件直接 SQL 删除 Matrix 事件表；媒体清理默认只清缓存或明确孤儿文件，仍被消息/频道引用的媒体不删除。
 
 ## 3. 运行时结构

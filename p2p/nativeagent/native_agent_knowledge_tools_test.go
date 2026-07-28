@@ -2,11 +2,39 @@ package nativeagent
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/agentmemory"
 )
+
+func TestKnowledgeUploadRuntimeRejectsCredentialsAndInvalidChunkEncoding(t *testing.T) {
+	store := agentmemory.NewInMemoryStore()
+	runtime := New(Config{KnowledgeSources: store, OwnerID: func() string { return "owner-a" }})
+	start := map[string]any{"filename": "doc.txt", "mime_type": "text/plain", "size": int64(3), "idempotency_key": "start"}
+	withCredential := map[string]any{"filename": "doc.txt", "mime_type": "text/plain", "size": int64(3), "idempotency_key": "start", "api_key": "forbidden"}
+	if _, err := runtime.Invoke(context.Background(), "agent.knowledge.upload.start", withCredential); err == nil {
+		t.Fatal("credential field accepted")
+	}
+	result, err := runtime.Invoke(context.Background(), "agent.knowledge.upload.start", start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	uploadID := result["upload_id"].(string)
+	raw := []byte("abc")
+	sum := sha256.Sum256(raw)
+	bad := map[string]any{"upload_id": uploadID, "offset": int64(0), "data": base64.RawStdEncoding.EncodeToString(raw), "chunk_sha256": "00", "idempotency_key": "append"}
+	if _, err := runtime.Invoke(context.Background(), "agent.knowledge.upload.chunk", bad); err == nil {
+		t.Fatal("noncanonical base64/hash accepted")
+	}
+	wrongOffset := map[string]any{"upload_id": uploadID, "offset": int64(1), "data": base64.StdEncoding.EncodeToString(raw), "chunk_sha256": fmt.Sprintf("%x", sum), "idempotency_key": "append"}
+	if _, err := runtime.Invoke(context.Background(), "agent.knowledge.upload.chunk", wrongOffset); err == nil {
+		t.Fatal("wrong offset accepted")
+	}
+}
 
 func knowledgeToolRuntime(ready bool) (*Runtime, *agentmemory.InMemoryStore) {
 	store := agentmemory.NewInMemoryStore()

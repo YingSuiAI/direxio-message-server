@@ -1,6 +1,36 @@
 # API Interface Change Record
 
-Last updated: 2026-07-23
+Last updated: 2026-07-28
+
+## 2026-07-28 Native Agent model input modalities and managed knowledge
+
+`agent.models.list` now preserves upstream `input_modalities` metadata only
+when the provider explicitly returns it at the model or architecture level.
+The server normalizes the declared `text` and `image` values, ignores unknown
+modality labels, and does not infer image support from a model ID, display
+name, provider, or endpoint. Clients may use the returned `image` value to
+preselect image-input support; existing saved profile metadata remains
+authoritative until the user changes it.
+
+Native Agent knowledge is server-managed and owner-scoped. The V1 source
+surface is `agent.knowledge.sources.list`, `.delete`,
+`agent.knowledge.upload.start`, `.chunk`, and `.finish`. Uploads accept only
+valid UTF-8 `text/plain`, `text/markdown`, `text/csv`, or `application/json`
+content (the client may use `.txt`, `.md`, `.markdown`, `.csv`, or `.json`
+filenames), are capped at 10 MiB, and use canonical base64 chunks no larger
+than 256 KiB. Upload responses expose byte `progress`; the embedding stage is
+not reported as complete until all vectors and the ready source record are
+committed atomically. Indexing resolves the server's current owner default
+embedding profile. Knowledge actions never accept or return provider, base
+URL, model credentials, or embedding API keys.
+
+`agent.knowledge.memory.create` is the singular Native Agent remember tool.
+The editable durable-memory surface is `agent.knowledge.memories.list`,
+`.update`, and `.delete`; these records are the Eino remember/recall records
+and are distinct from conversation-summary memory and uploaded source chunks.
+Memory updates and deletes use owner scope, revision preconditions, and
+idempotency keys. The canonical action metadata is generated in
+`docs/product-action-contract.json`.
 
 ## 2026-07-27 Embedded schedules (Stage A)
 

@@ -2,8 +2,125 @@ package agentmemory
 
 import (
 	"context"
+	"crypto/sha256"
+	"errors"
 	"testing"
 )
+
+func testEmbedding(vector []float32, err error) KnowledgeEmbeddingSessionFunc {
+	return func(context.Context) (KnowledgeEmbeddingSession, error) {
+		return KnowledgeEmbeddingSession{ProfileID: "profile", Revision: 1, Model: "model", Embed: func(context.Context, string) ([]float32, error) { return vector, err }}, nil
+	}
+}
+
+func TestKnowledgeSourceUploadReplayConflictAndOwnerBoundary(t *testing.T) {
+	s := NewInMemoryStore()
+	ctx := context.Background()
+	u, replay, err := s.StartKnowledgeUpload(ctx, "owner-a", "a.txt", "text/plain", 3, "start")
+	if err != nil || replay {
+		t.Fatalf("start replay=%v err=%v", replay, err)
+	}
+	if again, replay, err := s.StartKnowledgeUpload(ctx, "owner-a", "a.txt", "text/plain", 3, "start"); err != nil || !replay || again.ID != u.ID {
+		t.Fatalf("start replay=%+v replay=%v err=%v", again, replay, err)
+	}
+	if _, _, err := s.StartKnowledgeUpload(ctx, "owner-a", "changed.txt", "text/plain", 3, "start"); !errors.Is(err, ErrIdempotencyConflict) {
+		t.Fatalf("changed start err=%v", err)
+	}
+	data := []byte("abc")
+	sum := sha256.Sum256(data)
+	if _, err := s.AppendKnowledgeUpload(ctx, "owner-b", u.ID, 0, data, "append", sum); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-owner append err=%v", err)
+	}
+	if _, err := s.AppendKnowledgeUpload(ctx, "owner-a", u.ID, 1, data, "append", sum); err == nil {
+		t.Fatal("offset mismatch accepted")
+	}
+	bad := sha256.Sum256([]byte("different"))
+	if _, err := s.AppendKnowledgeUpload(ctx, "owner-a", u.ID, 0, data, "append", bad); err == nil {
+		t.Fatal("bad chunk digest accepted")
+	}
+	if _, err := s.AppendKnowledgeUpload(ctx, "owner-a", u.ID, 0, data, "append", sum); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AppendKnowledgeUpload(ctx, "owner-a", u.ID, 0, data, "append", sum); err != nil {
+		t.Fatalf("append replay: %v", err)
+	}
+}
+
+func TestKnowledgeSourceFinishAtomicSuccessAndDeleteReplay(t *testing.T) {
+	s := NewInMemoryStore()
+	ctx := context.Background()
+	data := []byte("first paragraph\n\nsecond paragraph")
+	u, _, err := s.StartKnowledgeUpload(ctx, "owner-a", "a.txt", "text/plain", int64(len(data)), "start")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(data)
+	if _, err := s.AppendKnowledgeUpload(ctx, "owner-a", u.ID, 0, data, "append", sum); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.FinishKnowledgeUpload(ctx, "owner-a", u.ID, "doc", sum, "finish", testEmbedding(nil, errors.New("embed down"))); err == nil {
+		t.Fatal("embedding failure accepted")
+	}
+	if sources, _, err := s.ListKnowledgeSources(ctx, "owner-a", 10, ""); err != nil || len(sources) != 0 {
+		t.Fatalf("failure left sources=%v err=%v", sources, err)
+	}
+	if items, _, err := s.SearchKnowledgeMemory(ctx, "owner-a", "", 10, ""); err != nil || len(items) != 0 {
+		t.Fatalf("failure left chunks=%v err=%v", items, err)
+	}
+	src, err := s.FinishKnowledgeUpload(ctx, "owner-a", u.ID, "doc", sum, "finish", testEmbedding([]float32{1, 0}, nil))
+	if err != nil || src.TotalChunks != 2 {
+		t.Fatalf("finish src=%+v err=%v", src, err)
+	}
+	if sources, _, err := s.ListKnowledgeSources(ctx, "owner-a", 10, ""); err != nil || len(sources) != 1 || sources[0].ID != src.ID {
+		t.Fatalf("sources=%v err=%v", sources, err)
+	}
+	if items, _, err := s.SearchKnowledgeMemory(ctx, "owner-a", "paragraph", 10, ""); err != nil || len(items) != 2 {
+		t.Fatalf("indexed chunks=%v err=%v", items, err)
+	}
+	d := sha256.Sum256([]byte("delete"))
+	if _, replay, err := s.DeleteKnowledgeSource(ctx, "owner-a", src.ID, src.Revision, "delete", d); err != nil || replay {
+		t.Fatalf("delete replay=%v err=%v", replay, err)
+	}
+	if _, replay, err := s.DeleteKnowledgeSource(ctx, "owner-a", src.ID, src.Revision, "delete", d); err != nil || !replay {
+		t.Fatalf("delete replay=%v err=%v", replay, err)
+	}
+	if items, _, err := s.SearchKnowledgeMemory(ctx, "owner-a", "", 10, ""); err != nil || len(items) != 0 {
+		t.Fatalf("delete left chunks=%v err=%v", items, err)
+	}
+}
+
+func TestManagedKnowledgeExcludesSourceChunksAndCursorAdvances(t *testing.T) {
+	s := NewInMemoryStore()
+	ctx := context.Background()
+	data := []byte("document")
+	u, _, err := s.StartKnowledgeUpload(ctx, "owner", "doc.txt", "text/plain", int64(len(data)), "start")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(data)
+	if _, err := s.AppendKnowledgeUpload(ctx, "owner", u.ID, 0, data, "append", sum); err != nil {
+		t.Fatal(err)
+	}
+	src, err := s.FinishKnowledgeUpload(ctx, "owner", u.ID, "doc", sum, "finish", testEmbedding([]float32{1}, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	managed, _, err := s.CreateKnowledgeMemory(ctx, "owner", "managed", "note", nil, "managed", KnowledgeDigest("managed", "note", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, token, err := s.ListKnowledgeMemories(ctx, "owner", 1, "")
+	if err != nil || len(items) != 1 || items[0].ID != managed.ID || token != "" {
+		t.Fatalf("items=%+v token=%q err=%v", items, token, err)
+	}
+	digest := KnowledgeDigest("x", "y", nil)
+	if _, _, err := s.UpdateKnowledgeMemory(ctx, "owner", src.ID+"-0", "x", "y", nil, 1, "update-source", digest, nil); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("source update err=%v", err)
+	}
+	if _, _, err := s.DeleteKnowledgeMemory(ctx, "owner", src.ID+"-0", 1, "delete-source", digest); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("source delete err=%v", err)
+	}
+}
 
 func TestInMemorySemanticReplayStaleAndOwnerIsolation(t *testing.T) {
 	s := NewInMemoryStore()

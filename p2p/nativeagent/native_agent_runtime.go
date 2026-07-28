@@ -39,6 +39,7 @@ type Config struct {
 	OwnerID               func() string
 	Memory                ConversationMemoryStore
 	Knowledge             KnowledgeStore
+	KnowledgeSources      agentmemory.KnowledgeSourceStore
 	Conversations         ConversationStore
 	PersistentMemoryReady bool
 	EmbeddingSession      agentmemory.KnowledgeEmbeddingSessionFunc
@@ -86,6 +87,7 @@ type Runtime struct {
 	ownerID               func() string
 	memory                ConversationMemoryStore
 	knowledge             KnowledgeStore
+	sources               agentmemory.KnowledgeSourceStore
 	persistentMemoryReady bool
 	embedding             agentmemory.KnowledgeEmbeddingSessionFunc
 	conversations         ConversationStore
@@ -117,6 +119,12 @@ func New(config Config) *Runtime {
 			knowledge = candidate
 		}
 	}
+	sources := config.KnowledgeSources
+	if sources == nil {
+		if candidate, ok := memory.(agentmemory.KnowledgeSourceStore); ok {
+			sources = candidate
+		}
+	}
 	conversations := config.Conversations
 	if conversations == nil {
 		if candidate, ok := memory.(ConversationStore); ok {
@@ -132,6 +140,7 @@ func New(config Config) *Runtime {
 		ownerID:               config.OwnerID,
 		memory:                memory,
 		knowledge:             knowledge,
+		sources:               sources,
 		persistentMemoryReady: config.PersistentMemoryReady,
 		embedding:             config.EmbeddingSession,
 		conversations:         conversations,
@@ -228,12 +237,26 @@ func (r *Runtime) Invoke(ctx context.Context, action string, params map[string]a
 		return nil, embeddedExtensionsForbidden()
 	case "agent.mcp.registry.search":
 		return nil, embeddedExtensionsForbidden()
-	case "agent.knowledge.config.get", "agent.knowledge.config.update", "agent.knowledge.sources.list",
-		"agent.knowledge.sources.delete", "agent.knowledge.upload.start", "agent.knowledge.upload.chunk",
-		"agent.knowledge.upload.finish":
+	case "agent.knowledge.config.get", "agent.knowledge.config.update":
 		return map[string]any{"supported": false, "status": "unsupported"}, nil
+	case "agent.knowledge.sources.list":
+		return r.listKnowledgeSources(ctx, params)
+	case "agent.knowledge.sources.delete":
+		return r.deleteKnowledgeSource(ctx, params)
+	case "agent.knowledge.upload.start":
+		return r.startKnowledgeUpload(ctx, params)
+	case "agent.knowledge.upload.chunk":
+		return r.chunkKnowledgeUpload(ctx, params)
+	case "agent.knowledge.upload.finish":
+		return r.finishKnowledgeUpload(ctx, params)
 	case "agent.knowledge.memory.create":
 		return r.createKnowledgeMemory(ctx, params)
+	case "agent.knowledge.memories.list":
+		return r.listKnowledgeMemories(ctx, params)
+	case "agent.knowledge.memories.update":
+		return r.updateKnowledgeMemory(ctx, params)
+	case "agent.knowledge.memories.delete":
+		return r.deleteKnowledgeMemory(ctx, params)
 	case "agent.knowledge.search":
 		return r.searchKnowledgeMemory(ctx, params)
 	case "agent.knowledge.status":

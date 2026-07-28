@@ -11,7 +11,28 @@ import (
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/agentmemory"
 	actionbase "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/action"
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/nativeagent"
+	"github.com/YingSuiAI/dirextalk-message-server/p2p/serviceapi"
 )
+
+func TestManagedKnowledgeActionSpecsHaveRuntimeHandlers(t *testing.T) {
+	handlers := New(Config{}).Handlers()
+	specs := make(map[string]bool)
+	for _, spec := range serviceapi.ActionSpecs() {
+		specs[spec.Name] = true
+	}
+	for _, action := range []string{
+		"agent.knowledge.memories.list",
+		"agent.knowledge.memories.update",
+		"agent.knowledge.memories.delete",
+	} {
+		if !specs[action] {
+			t.Fatalf("ActionSpecs omitted %s", action)
+		}
+		if handlers[action] == nil {
+			t.Fatalf("runtime handlers omitted %s", action)
+		}
+	}
+}
 
 func TestClientCannotForgeServerPinnedImageProfile(t *testing.T) {
 	runtime := nativeagent.New(nativeagent.Config{OwnerID: func() string { return "owner" }})

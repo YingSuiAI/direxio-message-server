@@ -212,6 +212,53 @@ func TestModelsListOpenRouterConversationFiltersNonTextModels(t *testing.T) {
 	}
 }
 
+func TestModelsListOpenRouterConversationPreservesInputModalities(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"openai/gpt-4o","architecture":{"input_modalities":[" TEXT ","image","IMAGE","audio",""]}}]}`))
+	}))
+	defer server.Close()
+
+	runtime := New(Config{DataDir: filepath.Join(t.TempDir(), "agent")})
+	result, err := runtime.Invoke(context.Background(), "agent.models.list", map[string]any{
+		"provider":   "openrouter",
+		"base_url":   server.URL + "/v1",
+		"api_key":    "openrouter-key",
+		"model_kind": "conversation",
+	})
+	if err != nil {
+		t.Fatalf("agent.models.list conversation: %v", err)
+	}
+	models := result["models"].([]map[string]any)
+	if got, want := models[0]["input_modalities"], []string{"text", "image"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected input modalities: got %#v want %#v", got, want)
+	}
+}
+
+func TestModelsListDoesNotInventInputModalities(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"openai/gpt-4o"},{"id":"openai/gpt-image-1"}]}`))
+	}))
+	defer server.Close()
+
+	runtime := New(Config{DataDir: filepath.Join(t.TempDir(), "agent")})
+	result, err := runtime.Invoke(context.Background(), "agent.models.list", map[string]any{
+		"provider": "openrouter",
+		"base_url": server.URL + "/v1",
+		"api_key":  "openrouter-key",
+	})
+	if err != nil {
+		t.Fatalf("agent.models.list conversation: %v", err)
+	}
+	models := result["models"].([]map[string]any)
+	for _, model := range models {
+		if _, present := model["input_modalities"]; present {
+			t.Fatalf("models.list must not infer input modalities: %#v", model)
+		}
+	}
+}
+
 func TestModelsListRejectsUnsupportedKindsBeforeProviderFetch(t *testing.T) {
 	for _, testCase := range []struct {
 		provider string

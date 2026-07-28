@@ -415,6 +415,42 @@ func modelOutputModalities(raw map[string]any) ([]string, bool) {
 	return modalities, present
 }
 
+func modelInputModalities(raw map[string]any) ([]string, bool) {
+	if modalities, present := stringListField(raw["input_modalities"]); present {
+		return normalizeModelInputModalities(modalities), true
+	}
+	architecture, ok := raw["architecture"].(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	modalities, present := stringListField(architecture["input_modalities"])
+	if !present {
+		return nil, false
+	}
+	return normalizeModelInputModalities(modalities), true
+}
+
+func normalizeModelInputModalities(modalities []string) []string {
+	known := map[string]struct{}{"text": {}, "image": {}}
+	result := make([]string, 0, len(modalities))
+	seen := make(map[string]struct{}, len(modalities))
+	for _, modality := range modalities {
+		modality = strings.ToLower(strings.TrimSpace(modality))
+		if modality == "" {
+			continue
+		}
+		if _, ok := known[modality]; !ok {
+			continue
+		}
+		if _, ok := seen[modality]; ok {
+			continue
+		}
+		seen[modality] = struct{}{}
+		result = append(result, modality)
+	}
+	return result
+}
+
 func stringListField(value any) ([]string, bool) {
 	items, ok := value.([]any)
 	if !ok {
@@ -490,6 +526,9 @@ func normalizeModelList(provider string, rawModels []map[string]any) []map[strin
 				"max_tokens", "input_token_limit", "output_token_limit":
 				model[key] = value
 			}
+		}
+		if inputModalities, present := modelInputModalities(raw); present && len(inputModalities) > 0 {
+			model["input_modalities"] = inputModalities
 		}
 		models = append(models, model)
 	}

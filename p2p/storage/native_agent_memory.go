@@ -119,6 +119,8 @@ func (s *DatabaseStore) SaveConversationSummary(ctx context.Context, owner, conv
 
 var _ agentmemory.Store = (*DatabaseStore)(nil)
 var _ agentmemory.ConversationStore = (*DatabaseStore)(nil)
+var _ agentmemory.ManagedKnowledgeStore = (*DatabaseStore)(nil)
+var _ agentmemory.KnowledgeSourceStore = (*DatabaseStore)(nil)
 
 func conversationMutationResponse(raw []byte) (agentmemory.Conversation, error) {
 	var c agentmemory.Conversation
@@ -451,6 +453,167 @@ func (s *DatabaseStore) KnowledgeStatus(ctx context.Context, owner string) (int,
 	var n int
 	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM p2p_native_agent_memory_records WHERE owner_id=$1`, owner).Scan(&n)
 	return n, err
+}
+
+func (s *DatabaseStore) ListKnowledgeMemories(ctx context.Context, owner string, limit int, token string) ([]agentmemory.KnowledgeMemory, string, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	cursor, err := decodeKnowledgeCursor(token)
+	if err != nil {
+		return nil, "", err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT memory_id,title,content,tags_json,revision,created_at,updated_at FROM p2p_native_agent_memory_records WHERE owner_id=$1 AND source_id IS NULL AND ($2='' OR created_at>$3 OR (created_at=$3 AND memory_id>$2)) ORDER BY created_at ASC,memory_id ASC LIMIT $4`, owner, cursor.ID, cursor.CreatedAt, limit+1)
+	if err != nil {
+		return nil, "", err
+	}
+	defer rows.Close()
+	out := []agentmemory.KnowledgeMemory{}
+	for rows.Next() {
+		var i agentmemory.KnowledgeMemory
+		var tags []byte
+		if err := rows.Scan(&i.ID, &i.Title, &i.Content, &tags, &i.Revision, &i.CreatedAt, &i.UpdatedAt); err != nil {
+			return nil, "", err
+		}
+		_ = json.Unmarshal(tags, &i.Tags)
+		out = append(out, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", err
+	}
+	next := ""
+	if len(out) > limit {
+		out = out[:limit]
+		next, err = encodeKnowledgeCursor(out[len(out)-1])
+		if err != nil {
+			return nil, "", err
+		}
+	}
+	return out, next, nil
+}
+
+func (s *DatabaseStore) UpdateKnowledgeMemory(ctx context.Context, owner, id, title, content string, tags []string, expected int64, idem string, digest [32]byte, openSession agentmemory.KnowledgeEmbeddingSessionFunc) (agentmemory.KnowledgeMemory, bool, error) {
+	owner, id = strings.TrimSpace(owner), strings.TrimSpace(id)
+	if owner == "" || id == "" || expected <= 0 || idem == "" {
+		return agentmemory.KnowledgeMemory{}, false, fmt.Errorf("owner, memory_id, expected_revision and idempotency_key are required")
+	}
+	var replayedItem agentmemory.KnowledgeMemory
+	if ok, err := readKnowledgeReceipt(ctx, s.db, owner, "knowledge.update", idem, digest, &replayedItem); err != nil {
+		return agentmemory.KnowledgeMemory{}, false, err
+	} else if ok {
+		return replayedItem, true, nil
+	}
+	var emb *agentmemory.KnowledgeEmbedding
+	if openSession != nil {
+		session, err := openSession(ctx)
+		if err != nil {
+			return agentmemory.KnowledgeMemory{}, false, err
+		}
+		if session.Embed != nil {
+			v, err := session.Embed(ctx, strings.TrimSpace(title)+"\n"+content)
+			if err != nil {
+				return agentmemory.KnowledgeMemory{}, false, err
+			}
+			e := &agentmemory.KnowledgeEmbedding{ProfileID: session.ProfileID, Revision: session.Revision, Model: session.Model, Vector: v}
+			if !validVector(v) {
+				return agentmemory.KnowledgeMemory{}, false, errors.New("invalid embedding vector")
+			}
+			if session.ValidateCurrent != nil {
+				if err := session.ValidateCurrent(ctx); err != nil {
+					return agentmemory.KnowledgeMemory{}, false, err
+				}
+			}
+			emb = e
+		}
+	}
+	tagsJSON, _ := json.Marshal(tags)
+	var item agentmemory.KnowledgeMemory
+	var replay bool
+	err := s.writer.Do(s.db, nil, func(tx *sql.Tx) error {
+		var oldDigest, response []byte
+		err := tx.QueryRowContext(ctx, `SELECT request_digest,response_json FROM p2p_native_agent_conversation_mutations WHERE owner_id=$1 AND action=$2 AND idempotency_key=$3`, owner, "knowledge.update", idem).Scan(&oldDigest, &response)
+		if err == nil {
+			if !bytes.Equal(oldDigest, digest[:]) {
+				return agentmemory.ErrIdempotencyConflict
+			}
+			replay = true
+			return json.Unmarshal(response, &item)
+		}
+		if err != sql.ErrNoRows {
+			return err
+		}
+		var created, updated time.Time
+		err = tx.QueryRowContext(ctx, `UPDATE p2p_native_agent_memory_records SET title=$3,content=$4,tags_json=$5,revision=revision+1,updated_at=NOW() WHERE owner_id=$1 AND memory_id=$2 AND source_id IS NULL AND revision=$6 RETURNING memory_id,title,content,tags_json,revision,created_at,updated_at`, owner, id, title, content, tagsJSON, expected).Scan(&item.ID, &item.Title, &item.Content, &tagsJSON, &item.Revision, &created, &updated)
+		if err == sql.ErrNoRows {
+			var rev int64
+			if e := tx.QueryRowContext(ctx, `SELECT revision FROM p2p_native_agent_memory_records WHERE owner_id=$1 AND memory_id=$2 AND source_id IS NULL`, owner, id).Scan(&rev); e == sql.ErrNoRows {
+				return agentmemory.ErrNotFound
+			}
+			return agentmemory.ErrRevisionConflict
+		}
+		if err != nil {
+			return err
+		}
+		item.CreatedAt, item.UpdatedAt = created, updated
+		_ = json.Unmarshal(tagsJSON, &item.Tags)
+		if emb != nil {
+			vals := make([]float64, len(emb.Vector))
+			for i, v := range emb.Vector {
+				vals[i] = float64(v)
+			}
+			res, err := tx.ExecContext(ctx, `INSERT INTO p2p_native_agent_memory_embeddings(owner_id,memory_id,profile_id,profile_revision,model,dimension,content_digest,vector,indexed_at) SELECT $1,$2,$3,$4,$5,$6,$7,$8,NOW() WHERE EXISTS (SELECT 1 FROM p2p_agent_model_profile_defaults d JOIN p2p_agent_model_profiles p ON p.owner_id=d.owner_id AND p.profile_id=d.embedding_profile_id WHERE d.owner_id=$1 AND d.embedding_profile_id=$3 AND p.revision=$4 AND p.model=$5 AND p.deleted_at IS NULL) ON CONFLICT(owner_id,memory_id) DO UPDATE SET profile_id=EXCLUDED.profile_id,profile_revision=EXCLUDED.profile_revision,model=EXCLUDED.model,dimension=EXCLUDED.dimension,content_digest=EXCLUDED.content_digest,vector=EXCLUDED.vector,indexed_at=EXCLUDED.indexed_at WHERE EXISTS (SELECT 1 FROM p2p_agent_model_profile_defaults d JOIN p2p_agent_model_profiles p ON p.owner_id=d.owner_id AND p.profile_id=d.embedding_profile_id WHERE d.owner_id=EXCLUDED.owner_id AND d.embedding_profile_id=EXCLUDED.profile_id AND p.revision=EXCLUDED.profile_revision AND p.model=EXCLUDED.model AND p.deleted_at IS NULL)`, owner, id, emb.ProfileID, emb.Revision, emb.Model, len(vals), digest[:], pq.Array(vals))
+			if err != nil {
+				return err
+			}
+			if affected, err := res.RowsAffected(); err == nil && affected == 0 {
+				return agentmemory.ErrEmbeddingSessionStale
+			}
+		}
+		encoded, _ := json.Marshal(item)
+		_, err = tx.ExecContext(ctx, `INSERT INTO p2p_native_agent_conversation_mutations(owner_id,action,idempotency_key,request_digest,response_json,created_at) VALUES($1,$2,$3,$4,$5::jsonb,NOW())`, owner, "knowledge.update", idem, digest[:], string(encoded))
+		return err
+	})
+	return item, replay, err
+}
+
+func (s *DatabaseStore) DeleteKnowledgeMemory(ctx context.Context, owner, id string, expected int64, idem string, digest [32]byte) (agentmemory.KnowledgeMemory, bool, error) {
+	owner, id = strings.TrimSpace(owner), strings.TrimSpace(id)
+	if owner == "" || id == "" || expected <= 0 || idem == "" {
+		return agentmemory.KnowledgeMemory{}, false, fmt.Errorf("owner, memory_id, expected_revision and idempotency_key are required")
+	}
+	var item agentmemory.KnowledgeMemory
+	var replay bool
+	err := s.writer.Do(s.db, nil, func(tx *sql.Tx) error {
+		var old, response []byte
+		err := tx.QueryRowContext(ctx, `SELECT request_digest,response_json FROM p2p_native_agent_conversation_mutations WHERE owner_id=$1 AND action=$2 AND idempotency_key=$3`, owner, "knowledge.delete", idem).Scan(&old, &response)
+		if err == nil {
+			if !bytes.Equal(old, digest[:]) {
+				return agentmemory.ErrIdempotencyConflict
+			}
+			replay = true
+			return json.Unmarshal(response, &item)
+		}
+		if err != sql.ErrNoRows {
+			return err
+		}
+		var tags []byte
+		err = tx.QueryRowContext(ctx, `DELETE FROM p2p_native_agent_memory_records WHERE owner_id=$1 AND memory_id=$2 AND source_id IS NULL AND revision=$3 RETURNING memory_id,title,content,tags_json,revision,created_at,updated_at`, owner, id, expected).Scan(&item.ID, &item.Title, &item.Content, &tags, &item.Revision, &item.CreatedAt, &item.UpdatedAt)
+		if err == sql.ErrNoRows {
+			var rev int64
+			if e := tx.QueryRowContext(ctx, `SELECT revision FROM p2p_native_agent_memory_records WHERE owner_id=$1 AND memory_id=$2 AND source_id IS NULL`, owner, id).Scan(&rev); e == sql.ErrNoRows {
+				return agentmemory.ErrNotFound
+			}
+			return agentmemory.ErrRevisionConflict
+		}
+		if err != nil {
+			return err
+		}
+		_ = json.Unmarshal(tags, &item.Tags)
+		encoded, _ := json.Marshal(item)
+		_, err = tx.ExecContext(ctx, `INSERT INTO p2p_native_agent_conversation_mutations(owner_id,action,idempotency_key,request_digest,response_json,created_at) VALUES($1,$2,$3,$4,$5::jsonb,NOW())`, owner, "knowledge.delete", idem, digest[:], string(encoded))
+		return err
+	})
+	return item, replay, err
 }
 
 func (s *DatabaseStore) CreateKnowledgeMemorySemantic(ctx context.Context, owner, title, content string, tags []string, idem string, digest [32]byte, openSession agentmemory.KnowledgeEmbeddingSessionFunc) (agentmemory.KnowledgeMemory, bool, bool, agentmemory.KnowledgeEmbedding, error) {

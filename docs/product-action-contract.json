@@ -8186,27 +8186,186 @@
     {
       "name": "agent.knowledge.sources.list",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "page_size": {
+            "type": "integer"
+          },
+          "page_token": {
+            "type": "string"
+          }
+        },
+        "response": {
+          "next_page_token": {
+            "type": "string"
+          },
+          "sources": {
+            "type": "array"
+          }
+        }
+      }
     },
     {
       "name": "agent.knowledge.sources.delete",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "expected_revision": {
+            "type": "integer",
+            "required": true
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          },
+          "source_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "replayed": {
+            "type": "boolean"
+          },
+          "source": {
+            "type": "object"
+          }
+        }
+      }
     },
     {
       "name": "agent.knowledge.upload.start",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "filename": {
+            "type": "string",
+            "required": true
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          },
+          "mime_type": {
+            "type": "string",
+            "required": true
+          },
+          "size": {
+            "type": "integer",
+            "required": true
+          }
+        },
+        "response": {
+          "max_chunk_bytes": {
+            "type": "integer"
+          },
+          "progress": {
+            "type": "number"
+          },
+          "received_size": {
+            "type": "integer"
+          },
+          "replayed": {
+            "type": "boolean"
+          },
+          "size": {
+            "type": "integer"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "upload_id": {
+            "type": "string"
+          }
+        }
+      }
     },
     {
       "name": "agent.knowledge.upload.chunk",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "chunk_sha256": {
+            "type": "string",
+            "required": true
+          },
+          "data": {
+            "type": "string",
+            "required": true
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          },
+          "offset": {
+            "type": "integer",
+            "required": true
+          },
+          "upload_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "max_chunk_bytes": {
+            "type": "integer"
+          },
+          "progress": {
+            "type": "number"
+          },
+          "received_size": {
+            "type": "integer"
+          },
+          "size": {
+            "type": "integer"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "upload_id": {
+            "type": "string"
+          }
+        }
+      }
     },
     {
       "name": "agent.knowledge.upload.finish",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "content_sha256": {
+            "type": "string",
+            "required": true
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          },
+          "title": {
+            "type": "string"
+          },
+          "upload_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "source": {
+            "type": "object"
+          }
+        }
+      }
     },
     {
       "name": "agent.knowledge.memory.create",
@@ -8258,6 +8417,133 @@
             "type": "array"
           },
           "title": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.knowledge.memories.list",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "page_size": {
+            "type": "integer"
+          },
+          "page_token": {
+            "type": "string"
+          }
+        },
+        "response": {
+          "items": {
+            "type": "array"
+          },
+          "next_page_token": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.knowledge.memories.update",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "content": {
+            "type": "string",
+            "required": true
+          },
+          "expected_revision": {
+            "type": "integer",
+            "required": true
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          },
+          "memory_id": {
+            "type": "string",
+            "required": true
+          },
+          "tags": {
+            "type": "array"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "response": {
+          "content": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "memory_id": {
+            "type": "string"
+          },
+          "replayed": {
+            "type": "boolean"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "tags": {
+            "type": "array"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.knowledge.memories.delete",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "expected_revision": {
+            "type": "integer",
+            "required": true
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          },
+          "memory_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "content": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "memory_id": {
+            "type": "string"
+          },
+          "replayed": {
+            "type": "boolean"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "tags": {
+            "type": "array"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
             "type": "string"
           }
         }

@@ -1103,6 +1103,27 @@ func (s *DatabaseStore) migrate(ctx context.Context) error {
 			`CREATE INDEX IF NOT EXISTS p2p_native_agent_memory_embeddings_profile_idx ON p2p_native_agent_memory_embeddings(owner_id,profile_id,profile_revision,model,dimension)`,
 		})
 	}})
+	m.AddMigrations(sqlutil.Migration{Version: "p2p: managed native agent knowledge v91", Up: func(ctx context.Context, txn *sql.Tx) error {
+		return execMigrationStatements(ctx, txn, []string{
+			`ALTER TABLE p2p_native_agent_memory_records ADD COLUMN IF NOT EXISTS revision BIGINT NOT NULL DEFAULT 1 CHECK (revision > 0)`,
+			`ALTER TABLE p2p_native_agent_memory_records ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`,
+			`CREATE INDEX IF NOT EXISTS p2p_native_agent_memory_records_updated_idx ON p2p_native_agent_memory_records(owner_id,updated_at,memory_id)`,
+		})
+	}})
+	m.AddMigrations(sqlutil.Migration{Version: "p2p: native agent knowledge sources v92", Up: func(ctx context.Context, txn *sql.Tx) error {
+		return execMigrationStatements(ctx, txn, []string{
+			`CREATE TABLE IF NOT EXISTS p2p_native_agent_knowledge_sources (owner_id TEXT NOT NULL, source_id TEXT NOT NULL, kind TEXT NOT NULL, status TEXT NOT NULL, title TEXT NOT NULL DEFAULT '', mime_type TEXT NOT NULL, size BIGINT NOT NULL, total_chunks BIGINT NOT NULL DEFAULT 0, indexed_chunks BIGINT NOT NULL DEFAULT 0, revision BIGINT NOT NULL DEFAULT 1, error_text TEXT NOT NULL DEFAULT '', created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL, PRIMARY KEY(owner_id,source_id))`,
+			`CREATE INDEX IF NOT EXISTS p2p_native_agent_knowledge_sources_cursor_idx ON p2p_native_agent_knowledge_sources(owner_id,created_at,source_id)`,
+			`CREATE TABLE IF NOT EXISTS p2p_native_agent_knowledge_uploads (owner_id TEXT NOT NULL, upload_id TEXT NOT NULL, source_id TEXT NOT NULL, filename TEXT NOT NULL, mime_type TEXT NOT NULL, size BIGINT NOT NULL, received_size BIGINT NOT NULL DEFAULT 0, data BYTEA NOT NULL DEFAULT '', created_at TIMESTAMPTZ NOT NULL, PRIMARY KEY(owner_id,upload_id))`,
+		})
+	}})
+	m.AddMigrations(sqlutil.Migration{Version: "p2p: native agent knowledge source chunks v93", Up: func(ctx context.Context, txn *sql.Tx) error {
+		return execMigrationStatements(ctx, txn, []string{
+			`ALTER TABLE p2p_native_agent_memory_records ADD COLUMN IF NOT EXISTS source_id TEXT`,
+			`ALTER TABLE p2p_native_agent_memory_records ADD COLUMN IF NOT EXISTS chunk_ordinal BIGINT`,
+			`CREATE INDEX IF NOT EXISTS p2p_native_agent_memory_records_source_idx ON p2p_native_agent_memory_records(owner_id,source_id,chunk_ordinal)`,
+		})
+	}})
 	return m.Up(ctx)
 }
 

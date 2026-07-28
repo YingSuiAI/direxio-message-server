@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 var ErrIdempotencyConflict = fmt.Errorf("idempotency conflict")
@@ -63,9 +64,12 @@ type Store interface {
 }
 
 type KnowledgeMemory struct {
-	ID, Title, Content string
-	Tags               []string
-	CreatedAt          time.Time
+	ID, Title, Content   string
+	SourceID             string
+	ChunkOrdinal         int64
+	Tags                 []string
+	Revision             int64
+	CreatedAt, UpdatedAt time.Time
 }
 type KnowledgeStore interface {
 	CreateKnowledgeMemory(context.Context, string, string, string, []string, string, [32]byte) (KnowledgeMemory, bool, error)
@@ -80,6 +84,35 @@ type SemanticKnowledgeStore interface {
 	CreateKnowledgeMemorySemantic(context.Context, string, string, string, []string, string, [32]byte, KnowledgeEmbeddingSessionFunc) (KnowledgeMemory, bool, bool, KnowledgeEmbedding, error)
 	SearchKnowledgeMemorySemantic(context.Context, string, string, int, string, KnowledgeEmbeddingSessionFunc) ([]KnowledgeMemory, string, KnowledgeEmbedding, error)
 	KnowledgeStatusSemantic(context.Context, string, KnowledgeEmbeddingSessionFunc) (total, indexed, stale int, profile KnowledgeEmbedding, err error)
+}
+
+// ManagedKnowledgeStore owns the user-editable Eino remember/recall records.
+// It is intentionally an optional extension so existing lexical test doubles
+// remain source compatible.
+type ManagedKnowledgeStore interface {
+	ListKnowledgeMemories(context.Context, string, int, string) ([]KnowledgeMemory, string, error)
+	UpdateKnowledgeMemory(context.Context, string, string, string, string, []string, int64, string, [32]byte, KnowledgeEmbeddingSessionFunc) (KnowledgeMemory, bool, error)
+	DeleteKnowledgeMemory(context.Context, string, string, int64, string, [32]byte) (KnowledgeMemory, bool, error)
+}
+
+type KnowledgeSource struct {
+	ID, Kind, Status, Title, MimeType, Error   string
+	Size, TotalChunks, IndexedChunks, Revision int64
+	CreatedAt, UpdatedAt                       time.Time
+}
+type KnowledgeUpload struct {
+	ID, SourceID, Owner, Filename, MimeType, Status string
+	Size, Received                                  int64
+	Data                                            []byte
+	Idempotency                                     map[string][32]byte
+	CreatedAt                                       time.Time
+}
+type KnowledgeSourceStore interface {
+	StartKnowledgeUpload(context.Context, string, string, string, int64, string) (KnowledgeUpload, bool, error)
+	AppendKnowledgeUpload(context.Context, string, string, int64, []byte, string, [32]byte) (KnowledgeUpload, error)
+	FinishKnowledgeUpload(context.Context, string, string, string, [32]byte, string, KnowledgeEmbeddingSessionFunc) (KnowledgeSource, error)
+	ListKnowledgeSources(context.Context, string, int, string) ([]KnowledgeSource, string, error)
+	DeleteKnowledgeSource(context.Context, string, string, int64, string, [32]byte) (KnowledgeSource, bool, error)
 }
 type Conversation struct {
 	ID, Title              string
@@ -97,11 +130,24 @@ type ConversationStore interface {
 	DeleteConversation(context.Context, string, string, int64, string, [32]byte) (Conversation, bool, error)
 }
 type InMemoryStore struct {
-	mu            sync.Mutex
-	data          map[string]*record
-	knowledge     map[string][]knowledgeRecord
-	conversations map[string]Conversation
-	receipts      map[string][32]byte
+	mu                sync.Mutex
+	data              map[string]*record
+	knowledge         map[string][]knowledgeRecord
+	conversations     map[string]Conversation
+	receipts          map[string][32]byte
+	knowledgeReceipts map[string]knowledgeReceipt
+	sourceReceipts    map[string]sourceReceipt
+	sources           map[string][]KnowledgeSource
+	uploads           map[string]KnowledgeUpload
+}
+type knowledgeReceipt struct {
+	digest [32]byte
+	item   KnowledgeMemory
+}
+type sourceReceipt struct {
+	digest [32]byte
+	upload KnowledgeUpload
+	source KnowledgeSource
 }
 type knowledgeRecord struct {
 	item       KnowledgeMemory
@@ -116,7 +162,7 @@ type record struct {
 }
 
 func NewInMemoryStore() *InMemoryStore {
-	return &InMemoryStore{data: map[string]*record{}, knowledge: map[string][]knowledgeRecord{}, conversations: map[string]Conversation{}, receipts: map[string][32]byte{}}
+	return &InMemoryStore{data: map[string]*record{}, knowledge: map[string][]knowledgeRecord{}, conversations: map[string]Conversation{}, receipts: map[string][32]byte{}, knowledgeReceipts: map[string]knowledgeReceipt{}, sourceReceipts: map[string]sourceReceipt{}, sources: map[string][]KnowledgeSource{}, uploads: map[string]KnowledgeUpload{}}
 }
 func key(o, c string) string { return strings.TrimSpace(o) + "\x00" + strings.TrimSpace(c) }
 func clone(m *schema.Message) *schema.Message {
@@ -219,9 +265,407 @@ func (s *InMemoryStore) CreateKnowledgeMemory(ctx context.Context, owner, title,
 	if id == "" {
 		id = fmt.Sprintf("memory-%d", len(items)+1)
 	}
-	item := KnowledgeMemory{ID: id, Title: strings.TrimSpace(title), Content: content, Tags: append([]string(nil), tags...), CreatedAt: time.Now().UTC()}
+	now := time.Now().UTC()
+	item := KnowledgeMemory{ID: id, Title: strings.TrimSpace(title), Content: content, Tags: append([]string(nil), tags...), Revision: 1, CreatedAt: now, UpdatedAt: now}
 	s.knowledge[owner] = append(items, knowledgeRecord{item: item, digest: digest})
 	return item, false, nil
+}
+
+func (s *InMemoryStore) ListKnowledgeMemories(ctx context.Context, owner string, limit int, token string) ([]KnowledgeMemory, string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, "", err
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	items := s.knowledge[strings.TrimSpace(owner)]
+	start := 0
+	if token != "" {
+		if _, err := fmt.Sscanf(token, "%d", &start); err != nil || start < 0 {
+			return nil, "", ErrInvalidCursor
+		}
+	}
+	out := make([]KnowledgeMemory, 0, limit)
+	nextIndex := start
+	for i := start; i < len(items) && len(out) < limit; i++ {
+		nextIndex = i + 1
+		if items[i].item.SourceID != "" {
+			continue
+		}
+		out = append(out, items[i].item)
+	}
+	next := ""
+	if nextIndex < len(items) {
+		next = fmt.Sprintf("%d", nextIndex)
+	}
+	return out, next, nil
+}
+
+func (s *InMemoryStore) UpdateKnowledgeMemory(ctx context.Context, owner, id, title, content string, tags []string, expected int64, idem string, digest [32]byte, openSession KnowledgeEmbeddingSessionFunc) (KnowledgeMemory, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return KnowledgeMemory{}, false, err
+	}
+	owner = strings.TrimSpace(owner)
+	id = strings.TrimSpace(id)
+	s.mu.Lock()
+	if old, ok := s.knowledgeReceipts[key(owner, "knowledge.update\x00"+idem)]; ok {
+		if old.digest != digest {
+			s.mu.Unlock()
+			return KnowledgeMemory{}, false, ErrIdempotencyConflict
+		}
+		s.mu.Unlock()
+		return old.item, true, nil
+	}
+	items := s.knowledge[owner]
+	idx := -1
+	for i := range items {
+		if items[i].item.ID == id {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		s.mu.Unlock()
+		return KnowledgeMemory{}, false, ErrNotFound
+	}
+	r := items[idx]
+	if r.item.SourceID != "" {
+		s.mu.Unlock()
+		return KnowledgeMemory{}, false, ErrNotFound
+	}
+	if expected <= 0 || r.item.Revision != expected {
+		s.mu.Unlock()
+		return r.item, false, ErrRevisionConflict
+	}
+	if idem != "" && r.digest == digest {
+		s.mu.Unlock()
+		return r.item, true, nil
+	}
+	s.mu.Unlock()
+	var emb *KnowledgeEmbedding
+	if openSession != nil {
+		session, err := openSession(ctx)
+		if err != nil {
+			return KnowledgeMemory{}, false, err
+		}
+		if session.Embed != nil {
+			v, err := session.Embed(ctx, strings.TrimSpace(title)+"\n"+content)
+			if err != nil {
+				return KnowledgeMemory{}, false, err
+			}
+			current := KnowledgeEmbedding{ProfileID: session.ProfileID, Revision: session.Revision, Model: session.Model, Vector: v}
+			if !validEmbedding(current) {
+				return KnowledgeMemory{}, false, errors.New("invalid embedding vector")
+			}
+			if session.ValidateCurrent != nil {
+				if err := session.ValidateCurrent(ctx); err != nil {
+					return KnowledgeMemory{}, false, err
+				}
+			}
+			emb = &current
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	items = s.knowledge[owner]
+	if idx >= len(items) || items[idx].item.ID != id {
+		return KnowledgeMemory{}, false, ErrNotFound
+	}
+	if items[idx].item.Revision != expected {
+		return items[idx].item, false, ErrRevisionConflict
+	}
+	now := time.Now().UTC()
+	item := items[idx].item
+	item.Title, item.Content, item.Tags = strings.TrimSpace(title), content, append([]string(nil), tags...)
+	item.Revision++
+	item.UpdatedAt = now
+	items[idx].item, items[idx].digest, items[idx].embedding = item, digest, emb
+	s.knowledge[owner] = items
+	s.knowledgeReceipts[key(owner, "knowledge.update\x00"+idem)] = knowledgeReceipt{digest: digest, item: item}
+	return item, false, nil
+}
+
+func (s *InMemoryStore) DeleteKnowledgeMemory(ctx context.Context, owner, id string, expected int64, idem string, digest [32]byte) (KnowledgeMemory, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return KnowledgeMemory{}, false, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	owner, id = strings.TrimSpace(owner), strings.TrimSpace(id)
+	items := s.knowledge[owner]
+	if old, ok := s.knowledgeReceipts[key(owner, "knowledge.delete\x00"+idem)]; ok {
+		if old.digest != digest {
+			return KnowledgeMemory{}, false, ErrIdempotencyConflict
+		}
+		return old.item, true, nil
+	}
+	for i := range items {
+		if items[i].item.ID != id {
+			continue
+		}
+		if items[i].item.SourceID != "" {
+			return KnowledgeMemory{}, false, ErrNotFound
+		}
+		if items[i].item.Revision != expected {
+			return items[i].item, false, ErrRevisionConflict
+		}
+		item := items[i].item
+		copy(items[i:], items[i+1:])
+		s.knowledge[owner] = items[:len(items)-1]
+		s.knowledgeReceipts[key(owner, "knowledge.delete\x00"+idem)] = knowledgeReceipt{digest: digest, item: item}
+		return item, false, nil
+	}
+	return KnowledgeMemory{}, false, ErrNotFound
+}
+
+func (s *InMemoryStore) StartKnowledgeUpload(ctx context.Context, owner, filename, mime string, size int64, idem string) (KnowledgeUpload, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return KnowledgeUpload{}, false, err
+	}
+	if strings.TrimSpace(owner) == "" || strings.TrimSpace(filename) == "" || size < 0 || size > 10*1024*1024 || idem == "" {
+		return KnowledgeUpload{}, false, fmt.Errorf("owner, filename, size and idempotency_key are required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	digest := sourceRequestDigest("upload.start", owner, filename, mime, fmt.Sprintf("%d", size))
+	keyID := key(owner, "upload.start\x00"+idem)
+	if old, ok := s.sourceReceipts[keyID]; ok {
+		if old.digest != digest {
+			return KnowledgeUpload{}, false, ErrIdempotencyConflict
+		}
+		return old.upload, true, nil
+	}
+	id := fmt.Sprintf("upload-%d", len(s.uploads)+1)
+	src := fmt.Sprintf("source-%d", len(s.sources[owner])+1)
+	now := time.Now().UTC()
+	u := KnowledgeUpload{ID: id, SourceID: src, Owner: owner, Filename: filename, MimeType: mime, Size: size, Status: "receiving", Idempotency: map[string][32]byte{}, CreatedAt: now}
+	s.uploads[id] = u
+	s.sourceReceipts[keyID] = sourceReceipt{digest: digest, upload: u}
+	return u, false, nil
+}
+func (s *InMemoryStore) AppendKnowledgeUpload(ctx context.Context, owner, uploadID string, offset int64, data []byte, idem string, digest [32]byte) (KnowledgeUpload, error) {
+	if err := ctx.Err(); err != nil {
+		return KnowledgeUpload{}, err
+	}
+	if idem == "" || len(data) > 256*1024 {
+		return KnowledgeUpload{}, fmt.Errorf("chunk exceeds 256 KiB")
+	}
+	if sha256.Sum256(data) != digest {
+		return KnowledgeUpload{}, fmt.Errorf("chunk_sha256 mismatch")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	request := sourceRequestDigest("upload.append", owner, uploadID, fmt.Sprintf("%d", offset), fmt.Sprintf("%x", digest))
+	if old, ok := s.sourceReceipts[key(owner, "upload.append\x00"+idem)]; ok {
+		if old.digest != request {
+			return KnowledgeUpload{}, ErrIdempotencyConflict
+		}
+		return old.upload, nil
+	}
+	u, ok := s.uploads[uploadID]
+	if !ok || u.ID != uploadID || u.Owner != strings.TrimSpace(owner) {
+		return KnowledgeUpload{}, ErrNotFound
+	}
+	if old, ok := u.Idempotency[idem]; ok {
+		if old != digest {
+			return KnowledgeUpload{}, ErrIdempotencyConflict
+		}
+		return u, nil
+	}
+	if offset != u.Received {
+		return KnowledgeUpload{}, fmt.Errorf("chunk offset mismatch")
+	}
+	if u.Received+int64(len(data)) > u.Size {
+		return KnowledgeUpload{}, fmt.Errorf("upload exceeds declared size")
+	}
+	u.Data = append(u.Data, data...)
+	u.Received += int64(len(data))
+	u.Idempotency[idem] = digest
+	s.uploads[uploadID] = u
+	s.sourceReceipts[key(owner, "upload.append\x00"+idem)] = sourceReceipt{digest: request, upload: u}
+	return u, nil
+}
+func (s *InMemoryStore) FinishKnowledgeUpload(ctx context.Context, owner, uploadID, title string, digest [32]byte, idem string, openSession KnowledgeEmbeddingSessionFunc) (KnowledgeSource, error) {
+	if err := ctx.Err(); err != nil {
+		return KnowledgeSource{}, err
+	}
+	if idem == "" {
+		return KnowledgeSource{}, fmt.Errorf("idempotency_key is required")
+	}
+	s.mu.Lock()
+	request := sourceRequestDigest("upload.finish", owner, uploadID, title, fmt.Sprintf("%x", digest))
+	if old, ok := s.sourceReceipts[key(owner, "upload.finish\x00"+idem)]; ok {
+		if old.digest != request {
+			s.mu.Unlock()
+			return KnowledgeSource{}, ErrIdempotencyConflict
+		}
+		s.mu.Unlock()
+		return old.source, nil
+	}
+	u, ok := s.uploads[uploadID]
+	if ok && u.Owner != strings.TrimSpace(owner) {
+		ok = false
+	}
+	if !ok || u.ID != uploadID {
+		s.mu.Unlock()
+		return KnowledgeSource{}, ErrNotFound
+	}
+	if u.Received != u.Size {
+		s.mu.Unlock()
+		return KnowledgeSource{}, fmt.Errorf("upload is incomplete")
+	}
+	if sha256.Sum256(u.Data) != digest {
+		s.mu.Unlock()
+		return KnowledgeSource{}, fmt.Errorf("content_sha256 mismatch")
+	}
+	if !utf8.Valid(u.Data) {
+		s.mu.Unlock()
+		return KnowledgeSource{}, fmt.Errorf("upload must be valid UTF-8")
+	}
+	u.Data = append([]byte(nil), u.Data...)
+	s.mu.Unlock()
+	if openSession == nil {
+		return KnowledgeSource{}, fmt.Errorf("default embedding profile is required")
+	}
+	session, err := openSession(ctx)
+	if err != nil || session.Embed == nil {
+		if err != nil {
+			return KnowledgeSource{}, err
+		}
+		return KnowledgeSource{}, fmt.Errorf("embedding session is not ready")
+	}
+	if session.ValidateCurrent != nil {
+		if err := session.ValidateCurrent(ctx); err != nil {
+			return KnowledgeSource{}, err
+		}
+	}
+	parts := boundedKnowledgeChunks(string(u.Data), 8192)
+	type indexedChunk struct {
+		ordinal int64
+		text    string
+		vector  []float32
+	}
+	prepared := make([]indexedChunk, 0, len(parts))
+	for ordinal, part := range parts {
+		if strings.TrimSpace(part) == "" {
+			continue
+		}
+		vector, e := session.Embed(ctx, part)
+		if e != nil {
+			return KnowledgeSource{}, e
+		}
+		if !validEmbedding(KnowledgeEmbedding{ProfileID: session.ProfileID, Revision: session.Revision, Model: session.Model, Vector: vector}) {
+			return KnowledgeSource{}, fmt.Errorf("invalid embedding vector")
+		}
+		prepared = append(prepared, indexedChunk{ordinal: int64(ordinal), text: part, vector: append([]float32(nil), vector...)})
+	}
+	if len(prepared) == 0 {
+		return KnowledgeSource{}, fmt.Errorf("upload contains no text")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, ok := s.uploads[uploadID]
+	if !ok || current.Owner != u.Owner || current.SourceID != u.SourceID || current.Received != u.Received || current.Size != u.Size || sha256.Sum256(current.Data) != digest {
+		return KnowledgeSource{}, fmt.Errorf("upload changed during indexing")
+	}
+	indexed := int64(len(prepared))
+	now := time.Now().UTC()
+	for _, chunk := range prepared {
+		item := KnowledgeMemory{ID: fmt.Sprintf("%s-%d", u.SourceID, chunk.ordinal), Title: strings.TrimSpace(title), Content: chunk.text, SourceID: u.SourceID, ChunkOrdinal: chunk.ordinal, Revision: 1, CreatedAt: now, UpdatedAt: now}
+		s.knowledge[u.Owner] = append(s.knowledge[u.Owner], knowledgeRecord{item: item, digest: KnowledgeDigest(item.Title, item.Content, nil), embedding: &KnowledgeEmbedding{ProfileID: session.ProfileID, Revision: session.Revision, Model: session.Model, Vector: chunk.vector}})
+	}
+	chunks := indexed
+	src := KnowledgeSource{ID: u.SourceID, Kind: "upload", Status: "ready", Title: strings.TrimSpace(title), MimeType: u.MimeType, Size: u.Size, TotalChunks: chunks, IndexedChunks: indexed, Revision: 1, CreatedAt: now, UpdatedAt: now}
+	s.sources[u.Owner] = append(s.sources[u.Owner], src)
+	delete(s.uploads, uploadID)
+	s.sourceReceipts[key(owner, "upload.finish\x00"+idem)] = sourceReceipt{digest: request, source: src}
+	return src, nil
+}
+func boundedKnowledgeChunks(text string, maxRunes int) []string {
+	if maxRunes <= 0 {
+		maxRunes = 8192
+	}
+	out := []string{}
+	for _, para := range strings.Split(text, "\n\n") {
+		r := []rune(para)
+		for len(r) > maxRunes {
+			out = append(out, string(r[:maxRunes]))
+			r = r[maxRunes:]
+		}
+		if len(strings.TrimSpace(string(r))) > 0 {
+			out = append(out, string(r))
+		}
+	}
+	return out
+}
+func (s *InMemoryStore) ListKnowledgeSources(ctx context.Context, owner string, limit int, token string) ([]KnowledgeSource, string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, "", err
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	items := s.sources[owner]
+	start := 0
+	if token != "" {
+		if _, err := fmt.Sscanf(token, "%d", &start); err != nil || start < 0 || start > len(items) {
+			return nil, "", ErrInvalidCursor
+		}
+	}
+	end := start + limit
+	if end > len(items) {
+		end = len(items)
+	}
+	next := ""
+	if end < len(items) {
+		next = fmt.Sprintf("%d", end)
+	}
+	return append([]KnowledgeSource(nil), items[start:end]...), next, nil
+}
+func (s *InMemoryStore) DeleteKnowledgeSource(ctx context.Context, owner, id string, expected int64, idem string, digest [32]byte) (KnowledgeSource, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return KnowledgeSource{}, false, err
+	}
+	if idem == "" || expected <= 0 {
+		return KnowledgeSource{}, false, fmt.Errorf("expected_revision and idempotency_key are required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if old, ok := s.sourceReceipts[key(owner, "source.delete\x00"+idem)]; ok {
+		if old.digest != digest {
+			return KnowledgeSource{}, false, ErrIdempotencyConflict
+		}
+		return old.source, true, nil
+	}
+	items := s.sources[owner]
+	for i, src := range items {
+		if src.ID != id {
+			continue
+		}
+		if src.Revision != expected {
+			return src, false, ErrRevisionConflict
+		}
+		copy(items[i:], items[i+1:])
+		s.sources[owner] = items[:len(items)-1]
+		mems := s.knowledge[owner]
+		kept := mems[:0]
+		for _, mem := range mems {
+			if mem.item.SourceID != id {
+				kept = append(kept, mem)
+			}
+		}
+		s.knowledge[owner] = kept
+		s.sourceReceipts[key(owner, "source.delete\x00"+idem)] = sourceReceipt{digest: digest, source: src}
+		return src, false, nil
+	}
+	return KnowledgeSource{}, false, ErrNotFound
+}
+func sourceRequestDigest(parts ...string) [32]byte {
+	return sha256.Sum256([]byte(strings.Join(parts, "\x00")))
 }
 func (s *InMemoryStore) SearchKnowledgeMemory(ctx context.Context, owner, query string, limit int, token string) ([]KnowledgeMemory, string, error) {
 	if err := ctx.Err(); err != nil {
@@ -310,7 +754,8 @@ func (s *InMemoryStore) CreateKnowledgeMemorySemantic(ctx context.Context, owner
 		if id == "" {
 			id = fmt.Sprintf("memory-%d", len(items)+1)
 		}
-		item := KnowledgeMemory{ID: id, Title: strings.TrimSpace(title), Content: content, Tags: append([]string(nil), tags...), CreatedAt: time.Now().UTC()}
+		now := time.Now().UTC()
+		item := KnowledgeMemory{ID: id, Title: strings.TrimSpace(title), Content: content, Tags: append([]string(nil), tags...), Revision: 1, CreatedAt: now, UpdatedAt: now}
 		s.knowledge[owner] = append(items, knowledgeRecord{item: item, digest: digest})
 		idx = len(s.knowledge[owner]) - 1
 	}

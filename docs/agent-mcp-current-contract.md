@@ -30,6 +30,26 @@ This document is the backend-owned current contract for Dirextalk Agent state, N
 - Native Agent is not installed, enabled, configured, or invoked through `plugins.*`. Backend `plugins.*` actions remain for non-Agent plugins.
 - Model-backed Native Agent chat and compression resolve the owner’s default `conversation` model profile when the request omits profile configuration. Legacy inline `model_profile` requests remain supported for compatibility, but server-owned profiles are preferred and model API keys must not be persisted, returned, or injected into plugin or runtime environment state.
 - Supported model-provider identifiers are `openai`, `anthropic`, `deepseek`, `gemini`, `xai`, `openai_compatible`, and `openrouter`. `litellm`, `vertex`, and unknown identifiers are rejected; clients use `openai_compatible` for custom compatible endpoints.
+- `agent.models.list` preserves upstream `input_modalities` only when the
+  provider explicitly returns it on the model or its `architecture`. The
+  server normalizes known `text` and `image` values and never infers image
+  support from a model ID, name, provider, or URL. A client may preselect its
+  image-input control from this metadata, while an existing saved profile's
+  explicit modalities remain authoritative.
+- Native Agent knowledge is an owner-scoped server surface. Source upload uses
+  `agent.knowledge.sources.list`, `.delete`, `agent.knowledge.upload.start`,
+  `.chunk`, and `.finish`; V1 accepts valid UTF-8 `text/plain`,
+  `text/markdown`, `text/csv`, and `application/json` files up to 10 MiB, with
+  canonical base64 chunks no larger than 256 KiB. Upload progress is byte-based;
+  a source is `ready` only after all vectors and the source record commit
+  atomically. The current owner default embedding profile is resolved by the
+  server, and knowledge actions never accept or return model credentials,
+  provider settings, or base URLs.
+- `agent.knowledge.memory.create` is the singular Eino remember/recall write
+  tool. `agent.knowledge.memories.list`, `.update`, and `.delete` expose the
+  editable durable-memory records; they are distinct from conversation
+  summaries and uploaded source chunks. Managed mutations are owner-scoped,
+  revision-checked, and idempotent.
 - Successful `agent.chat` responses and Native Agent stream `done` payloads may include additive `references[]` derived deterministically from the full successful built-in Dirextalk tool results from that run. Room references use `kind=room`, `room_id`, optional `room_type=direct|group|channel`, `title`, and optional `preview`; channel-post references use `kind=channel_post`, `room_id`, `channel_id`, `post_id`, `title`, and optional `preview`. References preserve tool/result order, deduplicate rooms and posts, never include message `event_id`, and are not inferred from model-authored text or third-party/runtime tool output.
 - `mcp.channel_posts.list` and the embedded `dirextalk_channel_posts_list` result envelope include both top-level `channel_id` and `room_id`, allowing a post reference to identify its product channel and Matrix room without parsing post content.
 
