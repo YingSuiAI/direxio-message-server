@@ -36,6 +36,18 @@ func TestModelProfileMasterKeyCreatesWithRestrictedPermissionsAndFailsClosed(t *
 	}
 }
 
+func TestModelProfileAPIKeyHintMasksConservatively(t *testing.T) {
+	if got := ModelProfileAPIKeyHint(ModelKindConversation, "sk-test-secret-0420"); got != "sk-********0420" {
+		t.Fatalf("API key hint = %q, want %q", got, "sk-********0420")
+	}
+	if got := ModelProfileAPIKeyHint(ModelKindConversation, "short"); got != "********" {
+		t.Fatalf("short API key hint = %q, want no suffix", got)
+	}
+	if got := ModelProfileAPIKeyHint(ModelKindSpeech, `{"access_key_id":"secret","secret_access_key":"private"}`); got != "" {
+		t.Fatalf("speech API key hint = %q, want empty", got)
+	}
+}
+
 func TestMemoryModelProfileSyncIdempotencyIsConcurrentSafe(t *testing.T) {
 	store := NewMemoryStore()
 	entry := []ModelProfileSyncEntry{{ClientProfileID: "client-1", Provider: "deepseek", Model: "deepseek-chat", APIKey: stringPtr("secret")}}

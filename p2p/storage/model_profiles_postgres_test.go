@@ -50,7 +50,7 @@ func TestPostgresModelProfileSyncReadbackAndRestart(t *testing.T) {
 		t.Fatal("ciphertext contains plaintext API key")
 	}
 	profile, err := profiles.ResolveModelProfile(ctx, "owner", result.Profiles[0].ProfileID)
-	if err != nil || profile.APIKey != "pg-secret" {
+	if err != nil || profile.APIKey != "pg-secret" || profile.APIKeyHint != "********" {
 		t.Fatalf("readback profile key configured=%v err=%v", profile.APIKeyConfigured, err)
 	}
 	if _, err := profiles.SyncModelProfiles(ctx, "owner", "sync-list-2", "", []ModelProfileSyncEntry{{ClientProfileID: "client-2", Provider: "openai", BaseURL: "https://api.openai.com/v1", Model: "gpt-4o"}}); err != nil {

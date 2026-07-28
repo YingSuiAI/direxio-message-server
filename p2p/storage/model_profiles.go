@@ -41,7 +41,8 @@ const (
 
 // ModelProfile is the server-owned, redacted profile projection. APIKey is
 // populated only for internal model construction and is never serialized by
-// ProductCore action handlers.
+// ProductCore action handlers. APIKeyHint is a display-only mask derived in
+// memory after credential decryption; it is not stored in the profile table.
 type ModelProfile struct {
 	ProfileID, ClientProfileID string
 	DisplayName, Provider      string
@@ -52,6 +53,7 @@ type ModelProfile struct {
 	BaseURL, Model             string
 	SystemPrompt               string
 	APIKey                     string `json:"-"`
+	APIKeyHint                 string `json:"api_key_hint,omitempty"`
 	APIKeyConfigured           bool
 	Temperature, TopP          *float64
 	MaxOutputTokens            int
@@ -692,6 +694,7 @@ func (s *encryptedModelProfileStore) scanProfile(row modelProfileScanner) (Model
 			return ModelProfile{}, err
 		}
 		p.APIKeyConfigured = true
+		p.APIKeyHint = ModelProfileAPIKeyHint(p.ModelKind, p.APIKey)
 		if p.ModelKind == ModelKindSpeech {
 			var secrets map[string]string
 			if json.Unmarshal([]byte(p.APIKey), &secrets) == nil {
@@ -703,6 +706,35 @@ func (s *encryptedModelProfileStore) scanProfile(row modelProfileScanner) (Model
 		}
 	}
 	return p, nil
+}
+
+// ModelProfileAPIKeyHint returns a conservative display-only credential mask.
+// It intentionally excludes speech provider bundles and never returns the
+// complete secret. It may be retained in a redacted idempotency response
+// cache for replay, but is never usable as a credential.
+func ModelProfileAPIKeyHint(modelKind, apiKey string) string {
+	if strings.TrimSpace(modelKind) == ModelKindSpeech {
+		return ""
+	}
+	key := strings.TrimSpace(apiKey)
+	if key == "" {
+		return ""
+	}
+	const stars = "********"
+	prefix := ""
+	lower := strings.ToLower(key)
+	for _, known := range []string{"sk-", "pk-", "rk-", "key-", "api-", "AIza"} {
+		if strings.HasPrefix(lower, strings.ToLower(known)) {
+			prefix = key[:len(known)]
+			break
+		}
+	}
+	// Short secrets do not reveal a suffix, even when they have a recognizable
+	// prefix. Long secrets expose only the final four characters for recognition.
+	if len(key) < 12 {
+		return prefix + stars
+	}
+	return prefix + stars + key[len(key)-4:]
 }
 
 func (s *encryptedModelProfileStore) GetModelProfile(ctx context.Context, ownerID, profileID string) (ModelProfile, bool, error) {

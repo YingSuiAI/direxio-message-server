@@ -36,7 +36,7 @@ Clients use the current call surface:
 
 - Model-backed chat, stream, and compression omit model fields and resolve the owner default conversation profile. Legacy inline `model_profile` with a key remains compatibility-only; optional tuning fields remain optional and provider defaults apply.
 
-- API keys are server-owned encrypted profile credentials; they must not be logged, committed, or returned by config APIs.
+- API keys are server-owned encrypted profile credentials; they must not be logged, committed, or returned by config APIs. Profile reads may expose only a display-only masked `api_key_hint` for non-speech credentials; the hint is never accepted as credential input or usable as a key, is not stored in the profile table (though a redacted idempotency response cache may retain it for replay), and speech profiles expose only provider secret status.
 - System prompts start with the built-in Dirextalk Native Agent product rules, then append native Agent config, request overrides, and enabled static skills. User-provided system prompts must not override the built-in rules for using first-class Native Agent tools for skills, MCP, runtime, and Dirextalk product operations.
 - `agent.chat` returns a complete response.
 - Native stream emits `delta`, `error`, `trace`, and `done` events through `server.native_agent_stream.*` frames and respects client cancellation. Runtime/provider failures emit their safe provider detail through `error` after request secrets are redacted, rather than collapsing every failure into the generic `native agent turn failed` text.

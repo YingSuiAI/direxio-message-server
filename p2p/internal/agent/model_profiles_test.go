@@ -21,14 +21,25 @@ func TestServerModelProfileActionsRedactAPIKeyAndPreserveOmission(t *testing.T) 
 	syncAction := module.Handlers()["agent.model_profiles.sync"]
 	result, actionErr := syncAction(context.Background(), map[string]any{
 		"idempotency_key": "batch-1",
-		"entries":         []any{map[string]any{"client_profile_id": "client-1", "provider": "deepseek", "model": "deepseek-chat", "base_url": "https://api.deepseek.com/v1", "api_key": "secret-key"}},
+		"entries":         []any{map[string]any{"client_profile_id": "client-1", "provider": "deepseek", "model": "deepseek-chat", "base_url": "https://api.deepseek.com/v1", "api_key": "sk-test-secret-0420"}},
 	})
 	if actionErr != nil {
 		t.Fatalf("sync: %#v", actionErr)
 	}
 	encoded, _ := json.Marshal(result)
-	if strings.Contains(string(encoded), "secret-key") || !strings.Contains(string(encoded), "api_key_configured") {
+	if strings.Contains(string(encoded), "sk-test-secret-0420") || strings.Contains(string(encoded), `"api_key":`) || !strings.Contains(string(encoded), `"api_key_hint":"sk-********0420"`) || !strings.Contains(string(encoded), "api_key_configured") {
 		t.Fatalf("redacted sync response = %s", encoded)
+	}
+	replayed, actionErr := syncAction(context.Background(), map[string]any{
+		"idempotency_key": "batch-1",
+		"entries":         []any{map[string]any{"client_profile_id": "client-1", "provider": "deepseek", "model": "deepseek-chat", "base_url": "https://api.deepseek.com/v1", "api_key": "sk-test-secret-0420"}},
+	})
+	if actionErr != nil {
+		t.Fatalf("sync replay: %#v", actionErr)
+	}
+	replayedJSON, _ := json.Marshal(replayed)
+	if !strings.Contains(string(replayedJSON), `"api_key_hint":"sk-********0420"`) || strings.Contains(string(replayedJSON), "sk-test-secret-0420") || strings.Contains(string(replayedJSON), `"api_key":`) {
+		t.Fatalf("redacted sync replay = %s", replayedJSON)
 	}
 
 	profiles := result.(map[string]any)["profiles"].([]map[string]any)
@@ -38,8 +49,35 @@ func TestServerModelProfileActionsRedactAPIKeyAndPreserveOmission(t *testing.T) 
 		t.Fatalf("sync omission: %#v", actionErr)
 	}
 	profile, ok, err := store.GetModelProfile(context.Background(), "owner", profileID)
-	if err != nil || !ok || profile.APIKey != "secret-key" {
+	if err != nil || !ok || profile.APIKey != "sk-test-secret-0420" {
 		t.Fatalf("preserved profile = %#v, %v, %v", profile, ok, err)
+	}
+}
+
+func TestServerModelProfileActionsExcludeSpeechAPIKeyHint(t *testing.T) {
+	store := storage.NewMemoryStore()
+	module := New(Config{ModelProfiles: store, OwnerID: func() string { return "owner" }})
+	result, actionErr := module.Handlers()["agent.model_profiles.sync"](context.Background(), map[string]any{
+		"idempotency_key": "speech-hint",
+		"entries": []any{map[string]any{
+			"client_profile_id": "speech-client",
+			"provider":          "volc_voice",
+			"provider_secrets": map[string]any{
+				"rtc_app_key":       "app-secret",
+				"access_key_id":     "access-id",
+				"secret_access_key": "private-secret",
+			},
+		}},
+	})
+	if actionErr != nil {
+		t.Fatalf("speech sync: %#v", actionErr)
+	}
+	encoded, _ := json.Marshal(result)
+	if strings.Contains(string(encoded), "api_key_hint") || strings.Contains(string(encoded), "app-secret") || strings.Contains(string(encoded), "private-secret") {
+		t.Fatalf("speech projection leaked credential hint/secret: %s", encoded)
+	}
+	if !strings.Contains(string(encoded), "provider_secret_status") {
+		t.Fatalf("speech projection omitted provider_secret_status: %s", encoded)
 	}
 }
 

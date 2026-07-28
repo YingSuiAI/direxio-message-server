@@ -38,7 +38,11 @@ Added owner-only `agent.model_profiles.sync`, `.list`, `.get`, and `.delete`
 actions. Profiles are persisted in PostgreSQL with an independently managed
 AES-GCM key under the updater-backed Message Server data root (or the protected
 `P2P_AGENT_MODEL_PROFILE_KEY_FILE` override). API keys are write-only and are
-never returned; reads expose only `api_key_configured` and credential version.
+never returned; reads expose `api_key_configured`, credential version, and an
+optional read-only `api_key_hint` mask (for example `sk-********0420`) for
+non-speech profiles. The hint is never accepted as a credential or stored in
+the profile table; a redacted idempotency response cache may retain the mask
+for replay. Speech profiles expose only their `provider_secret_status`.
 Profile revisions are separate from retained encrypted credential versions so
 long-running work can resolve a pinned version after restart. Server model
 profile resolution is selected by a profile ID; `agent.models.list` may add

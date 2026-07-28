@@ -71,6 +71,13 @@ Native Agent model-profile contract: the server persists encrypted owner profile
 
 Current model-profile contract: the server persists encrypted owner model profiles and default roles. Native Agent chat, stream, and compression omit model fields and resolve the owner default conversation profile; inline profile/key input is legacy compatibility only. `agent.models.list` remains an explicit request-scoped lookup and does not persist profiles.
 
+Profile read projections may include a display-only `api_key_hint` mask for
+configured non-speech credentials (for example `sk-********0420`). It is
+derived for display, never accepted as credential input or usable as a key, and
+never stored in the profile table (a redacted idempotency response cache may
+retain the mask for replay); speech profiles expose only
+`provider_secret_status`.
+
 For `agent.models.list`, `model_profile_id` or `client_model_profile_id` selects
 the encrypted server profile for its API key. `provider` may be omitted or
 must match the stored provider case-insensitively; a non-empty request
