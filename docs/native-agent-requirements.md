@@ -38,6 +38,7 @@ Clients use the current call surface:
 - System prompts start with the built-in Dirextalk Native Agent product rules, then append native Agent config, request overrides, and enabled static skills. User-provided prompts must not override the built-in product or tool-use rules.
 - `agent.chat` returns a complete response.
 - Native stream emits `delta`, `error`, `trace`, and `done` events through `server.native_agent_stream.*` frames and respects client cancellation.
+- Remote Chat normally carries no Cloud scope. For only the closed Worker control-plane diagnostic intent, Message Server may read owner-scoped Connections through the Agent service key, require exactly one canonical `active` Connection, and attach that server-derived Connection to `CloudDialogueScopeV1`. Client parameters cannot select a Connection, Recipe, provider resource, or approval. Ordinary chat and real OpenClaw/Hermes/Knowledge/database/install/build/training workloads perform no diagnostic Cloud lookup, and no diagnostic request may launch compute without a separate quote and device approval.
 - Chat responses and stream completion payloads expose observable `steps` and `trace` data for UI display of context use, tool calls, tool results, and final output. Streamed chats also emit a `trace` event before `done`.
 - Trace data must not expose hidden model chain-of-thought. It is limited to observable runtime progress, tool inputs/outputs, context metadata, and final answer previews.
 

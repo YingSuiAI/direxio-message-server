@@ -32,6 +32,7 @@ import (
 const testServiceKey = "svc_message.AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
 
 const modelProfileCanary = "model-profile-api-key-canary"
+const testCloudConnectionID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 
 func TestRunnerChatUsesTLS13MountedAuthenticationAndBoundOwner(t *testing.T) {
 	t.Parallel()
@@ -63,6 +64,9 @@ func TestRunnerChatUsesTLS13MountedAuthenticationAndBoundOwner(t *testing.T) {
 		request.GetMessage() != "hello" || !request.GetMemoryDisabled() || request.GetExpectedConversationRevision() != 7 {
 		t.Fatalf("unexpected request mapping: %#v", request)
 	}
+	if request.GetCloudDialogueScope() != nil {
+		t.Fatal("ordinary chat unexpectedly enabled cloud dialogue")
+	}
 	if _, err := uuid.Parse(request.GetIdempotencyKey()); err != nil {
 		t.Fatalf("generated idempotency key is not a UUID: %q", request.GetIdempotencyKey())
 	}
@@ -81,6 +85,97 @@ func TestRunnerChatUsesTLS13MountedAuthenticationAndBoundOwner(t *testing.T) {
 	steps, ok := result["steps"].([]map[string]any)
 	if !ok || len(steps) != 1 || steps[0]["kind"] != "tool_call" || steps[0]["tool_name"] != "lookup" {
 		t.Fatalf("unexpected step mapping: %#v", result["steps"])
+	}
+}
+
+func TestRunnerBindsServerReadCloudConnectionForWorkerDiagnosticOnly(t *testing.T) {
+	t.Parallel()
+	server := startRuntimeServer(t)
+	runner := newTestRunner(t, server, Config{UnaryTimeout: time.Second})
+	_, err := runner.Invoke(context.Background(), "agent.chat", map[string]any{
+		"idempotency_key": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+		"conversation_id": "diagnostic-conversation",
+		"prompt":          "启动一个云端 Worker 执行诊断任务",
+		"memory_disabled": true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.service.mu.Lock()
+	request := server.service.chatRequest
+	server.service.mu.Unlock()
+	server.cloud.mu.Lock()
+	listRequests := append([]*agentv1.ListCloudConnectionsRequest(nil), server.cloud.listRequests...)
+	authorization := server.cloud.authorization
+	server.cloud.mu.Unlock()
+	if request.GetCloudDialogueScope().GetCloudConnectionId() != testCloudConnectionID {
+		t.Fatalf("cloud dialogue scope = %#v", request.GetCloudDialogueScope())
+	}
+	if len(listRequests) != 1 || listRequests[0].GetOwnerId() != "owner-from-config" ||
+		listRequests[0].GetPageSize() != 100 || listRequests[0].GetPageToken() != "" {
+		t.Fatalf("cloud connection lookup = %#v", listRequests)
+	}
+	if authorization != "DTX-Service-Key "+testServiceKey {
+		t.Fatal("cloud lookup did not use the mounted service key")
+	}
+
+	server.cloud.mu.Lock()
+	server.cloud.listRequests = nil
+	server.cloud.mu.Unlock()
+	_, err = runner.Invoke(context.Background(), "agent.chat", map[string]any{
+		"prompt": "测试 Worker 安装 OpenClaw",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.service.mu.Lock()
+	request = server.service.chatRequest
+	server.service.mu.Unlock()
+	server.cloud.mu.Lock()
+	listCount := len(server.cloud.listRequests)
+	server.cloud.mu.Unlock()
+	if request.GetCloudDialogueScope() != nil || listCount != 0 {
+		t.Fatal("real workload was routed through the diagnostic profile")
+	}
+}
+
+func TestRunnerFailsBeforeChatWhenDiagnosticConnectionIsAmbiguous(t *testing.T) {
+	t.Parallel()
+	server := startRuntimeServer(t)
+	server.cloud.mu.Lock()
+	server.cloud.connections = append(server.cloud.connections, &agentv1.CloudConnection{
+		ConnectionId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", OwnerId: "owner-from-config", Status: "active",
+	})
+	server.cloud.mu.Unlock()
+	runner := newTestRunner(t, server, Config{})
+	_, err := runner.Invoke(context.Background(), "agent.chat", map[string]any{
+		"prompt": "Verify the Worker control-plane diagnostic",
+	})
+	if err == nil || err.Error() != "multiple active Agent cloud connections require an explicit selection" {
+		t.Fatalf("ambiguous connection error = %v", err)
+	}
+	server.service.mu.Lock()
+	request := server.service.chatRequest
+	server.service.mu.Unlock()
+	if request != nil {
+		t.Fatal("ambiguous diagnostic request reached RuntimeService")
+	}
+}
+
+func TestWorkerDiagnosticIntentUsesOnlyCurrentReplyText(t *testing.T) {
+	t.Parallel()
+	if !workerDiagnosticIntent("Quoted message from Agent:\n测试 Worker 安装 OpenClaw\n\nUser message:\n启动 Worker 诊断") {
+		t.Fatal("current diagnostic intent was hidden by quoted workload text")
+	}
+	if workerDiagnosticIntent("Quoted message from Agent:\n启动 Worker 诊断\n\nUser message:\n不要执行") {
+		t.Fatal("quoted diagnostic text activated cloud dialogue")
+	}
+	if workerDiagnosticIntent("Do not run the Worker diagnostic") ||
+		workerDiagnosticIntent("不要启动 Worker 诊断") {
+		t.Fatal("negated diagnostic intent activated cloud dialogue")
+	}
+	if workerDiagnosticIntent(strings.Repeat("a", 2049) + " Worker diagnostic") {
+		t.Fatal("oversized text activated cloud dialogue")
 	}
 }
 
@@ -237,6 +332,29 @@ func TestNewFailsClosedForInvalidSecurityConfiguration(t *testing.T) {
 	}
 }
 
+type cloudTestService struct {
+	agentv1.UnimplementedCloudControlServiceServer
+	mu            sync.Mutex
+	connections   []*agentv1.CloudConnection
+	listRequests  []*agentv1.ListCloudConnectionsRequest
+	authorization string
+}
+
+func (service *cloudTestService) ListCloudConnections(ctx context.Context, request *agentv1.ListCloudConnectionsRequest) (*agentv1.ListCloudConnectionsResponse, error) {
+	values := metadata.ValueFromIncomingContext(ctx, "authorization")
+	authorization := ""
+	if len(values) == 1 {
+		authorization = values[0]
+	}
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	service.listRequests = append(service.listRequests, request)
+	service.authorization = authorization
+	return &agentv1.ListCloudConnectionsResponse{
+		Connections: append([]*agentv1.CloudConnection(nil), service.connections...),
+	}, nil
+}
+
 type runtimeTestService struct {
 	agentv1.UnimplementedRuntimeServiceServer
 	mu                   sync.Mutex
@@ -330,6 +448,7 @@ type testRuntimeServer struct {
 	caFile  string
 	keyFile string
 	service *runtimeTestService
+	cloud   *cloudTestService
 }
 
 func startRuntimeServer(t *testing.T) testRuntimeServer {
@@ -340,10 +459,14 @@ func startRuntimeServer(t *testing.T) testRuntimeServer {
 		t.Fatal(err)
 	}
 	service := &runtimeTestService{}
+	cloud := &cloudTestService{connections: []*agentv1.CloudConnection{{
+		ConnectionId: testCloudConnectionID, OwnerId: "owner-from-config", Status: "active",
+	}}}
 	server := grpc.NewServer(grpc.Creds(credentials.NewTLS(&tls.Config{
 		Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13,
 	})))
 	agentv1.RegisterRuntimeServiceServer(server, service)
+	agentv1.RegisterCloudControlServiceServer(server, cloud)
 	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(func() { server.Stop(); _ = listener.Close() })
 	dir := t.TempDir()
@@ -355,7 +478,10 @@ func startRuntimeServer(t *testing.T) testRuntimeServer {
 	if err := os.WriteFile(keyFile, []byte(testServiceKey+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return testRuntimeServer{target: listener.Addr().String(), caFile: caFile, keyFile: keyFile, service: service}
+	return testRuntimeServer{
+		target: listener.Addr().String(), caFile: caFile, keyFile: keyFile,
+		service: service, cloud: cloud,
+	}
 }
 
 func newTestRunner(t *testing.T, server testRuntimeServer, override Config) *Runner {

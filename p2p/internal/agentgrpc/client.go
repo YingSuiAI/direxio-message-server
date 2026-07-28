@@ -18,6 +18,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	agentv1 "github.com/YingSuiAI/dirextalk-agent/api/gen/dirextalk/agent/v1"
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/nativeagent"
@@ -31,8 +32,10 @@ import (
 const (
 	defaultUnaryTimeout    = 90 * time.Second
 	defaultStreamTimeout   = 10 * time.Minute
+	cloudLookupTimeout     = 5 * time.Second
 	defaultMaxMessageBytes = 4 << 20
 	maximumSecretFileBytes = 4096
+	maxCloudLookupPages    = 8
 	authorizationScheme    = "DTX-Service-Key"
 )
 
@@ -62,6 +65,7 @@ type Config struct {
 type Runner struct {
 	connection    *grpc.ClientConn
 	runtime       agentv1.RuntimeServiceClient
+	cloud         agentv1.CloudControlServiceClient
 	ownerID       string
 	chainTimeout  time.Duration
 	streamTimeout time.Duration
@@ -109,7 +113,8 @@ func New(ctx context.Context, config Config) (*Runner, error) {
 		return nil, errors.New("create agent gRPC client: transport configuration rejected")
 	}
 	return &Runner{
-		connection: connection, runtime: agentv1.NewRuntimeServiceClient(connection), ownerID: config.OwnerID,
+		connection: connection, runtime: agentv1.NewRuntimeServiceClient(connection),
+		cloud: agentv1.NewCloudControlServiceClient(connection), ownerID: config.OwnerID,
 		chainTimeout: unaryTimeout, streamTimeout: streamTimeout,
 	}, nil
 }
@@ -136,7 +141,7 @@ func (runner *Runner) Invoke(ctx context.Context, action string, params map[stri
 	if strings.TrimSpace(action) != "agent.chat" {
 		return nil, errors.New("agent service action is not supported")
 	}
-	request, err := runner.chatRequest(params)
+	request, err := runner.chatRequest(ctx, params)
 	if err != nil {
 		return nil, err
 	}
@@ -161,7 +166,7 @@ func (runner *Runner) Stream(ctx context.Context, action string, params map[stri
 	if emit == nil {
 		return errors.New("agent stream emitter is required")
 	}
-	request, err := runner.streamChatRequest(params)
+	request, err := runner.streamChatRequest(ctx, params)
 	if err != nil {
 		return err
 	}
@@ -200,26 +205,118 @@ func (runner *Runner) Stream(ctx context.Context, action string, params map[stri
 	}
 }
 
-func (runner *Runner) chatRequest(params map[string]any) (*agentv1.ChatRequest, error) {
+func (runner *Runner) chatRequest(ctx context.Context, params map[string]any) (*agentv1.ChatRequest, error) {
 	request, err := runner.requestFields(params)
+	if err != nil {
+		return nil, err
+	}
+	cloudScope, err := runner.cloudDialogueScope(ctx, request.message)
 	if err != nil {
 		return nil, err
 	}
 	return &agentv1.ChatRequest{
 		IdempotencyKey: request.idempotencyKey, OwnerId: runner.ownerID, ConversationId: request.conversationID,
 		Message: request.message, MemoryDisabled: request.memoryDisabled, ExpectedConversationRevision: request.expectedRevision,
+		CloudDialogueScope: cloudScope,
 	}, nil
 }
 
-func (runner *Runner) streamChatRequest(params map[string]any) (*agentv1.StreamChatRequest, error) {
+func (runner *Runner) streamChatRequest(ctx context.Context, params map[string]any) (*agentv1.StreamChatRequest, error) {
 	request, err := runner.requestFields(params)
+	if err != nil {
+		return nil, err
+	}
+	cloudScope, err := runner.cloudDialogueScope(ctx, request.message)
 	if err != nil {
 		return nil, err
 	}
 	return &agentv1.StreamChatRequest{
 		IdempotencyKey: request.idempotencyKey, OwnerId: runner.ownerID, ConversationId: request.conversationID,
 		Message: request.message, MemoryDisabled: request.memoryDisabled, ExpectedConversationRevision: request.expectedRevision,
+		CloudDialogueScope: cloudScope,
 	}, nil
+}
+
+func (runner *Runner) cloudDialogueScope(ctx context.Context, message string) (*agentv1.CloudDialogueScopeV1, error) {
+	if !workerDiagnosticIntent(message) {
+		return nil, nil
+	}
+	if runner == nil || runner.cloud == nil {
+		return nil, errors.New("Agent cloud connection lookup is unavailable")
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, cloudLookupTimeout)
+	defer cancel()
+	pageToken := ""
+	seenTokens := map[string]struct{}{}
+	activeConnectionID := ""
+	for page := 0; page < maxCloudLookupPages; page++ {
+		response, err := runner.cloud.ListCloudConnections(lookupCtx, &agentv1.ListCloudConnectionsRequest{
+			OwnerId: runner.ownerID, PageSize: 100, PageToken: pageToken,
+		})
+		if err != nil || response == nil {
+			return nil, errors.New("Agent cloud connection lookup failed")
+		}
+		for _, connection := range response.GetConnections() {
+			if connection == nil || connection.GetOwnerId() != runner.ownerID {
+				return nil, errors.New("Agent cloud connection response is invalid")
+			}
+			if strings.TrimSpace(connection.GetStatus()) != "active" {
+				continue
+			}
+			connectionID := strings.TrimSpace(connection.GetConnectionId())
+			parsed, parseErr := uuid.Parse(connectionID)
+			if parseErr != nil || parsed == uuid.Nil || parsed.String() != connectionID {
+				return nil, errors.New("Agent cloud connection response is invalid")
+			}
+			if activeConnectionID != "" && activeConnectionID != connectionID {
+				return nil, errors.New("multiple active Agent cloud connections require an explicit selection")
+			}
+			activeConnectionID = connectionID
+		}
+		next := strings.TrimSpace(response.GetNextPageToken())
+		if next == "" {
+			if activeConnectionID == "" {
+				return nil, errors.New("an active Agent cloud connection is required")
+			}
+			return &agentv1.CloudDialogueScopeV1{CloudConnectionId: activeConnectionID}, nil
+		}
+		if _, duplicate := seenTokens[next]; duplicate {
+			return nil, errors.New("Agent cloud connection response is invalid")
+		}
+		seenTokens[next] = struct{}{}
+		pageToken = next
+	}
+	return nil, errors.New("Agent cloud connection response exceeded the page limit")
+}
+
+func workerDiagnosticIntent(message string) bool {
+	const currentUserMarker = "\nUser message:\n"
+	if index := strings.LastIndex(message, currentUserMarker); index >= 0 {
+		message = message[index+len(currentUserMarker):]
+	}
+	normalized := strings.ToLower(strings.TrimSpace(message))
+	if normalized == "" || utf8.RuneCountInString(normalized) > 2048 {
+		return false
+	}
+	if !containsAny(normalized, "worker", "工作节点") ||
+		!containsAny(normalized, "diagnostic", "diagnose", "control-plane", "control plane", "noop", "no-op", "诊断", "验收", "验证", "测试") {
+		return false
+	}
+	return !containsAny(
+		normalized,
+		"openclaw", "hermes", "qdrant", "postgres", "mysql", "redis", "mongodb", "ollama",
+		"安装", "部署软件", "知识库", "数据库", "模型训练", "训练模型", "微调", "编译", "构建",
+		"do not", "don't", "dont", "cancel", "stop", "不要", "别启动", "取消", "停止",
+	)
+}
+
+func containsAny(value string, candidates ...string) bool {
+	for _, candidate := range candidates {
+		if strings.Contains(value, candidate) {
+			return true
+		}
+	}
+	return false
 }
 
 type chatRequestFields struct {
