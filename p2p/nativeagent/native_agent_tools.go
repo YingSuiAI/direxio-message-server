@@ -49,6 +49,13 @@ func (r *Runtime) enabledTools(ctx context.Context, config map[string]any, param
 			}
 		}
 	}
+	// Durable knowledge tools are a compiled core capability. Keep them
+	// available after upgrades even when an older enabled_tools list omits them.
+	for _, tool := range availableTools {
+		if nativeAgentMemoryToolName(tool.Name) != "" {
+			enable(tool)
+		}
+	}
 	tools := make([]Tool, 0, len(availableTools))
 	for _, tool := range availableTools {
 		if enabled[tool.Name] {
@@ -114,6 +121,10 @@ func nativeToolAlias(value string) string {
 		"agent_channel_comments_list":   "dirextalk_channel_comments_list",
 		"agent_channel_comments_create": "dirextalk_channel_comments_create",
 		"agent_summarize":               "dirextalk_summarize",
+		"memory_remember":               "native_agent_memory_remember",
+		"remember":                      "native_agent_memory_remember",
+		"memory_search":                 "native_agent_memory_search",
+		"recall":                        "native_agent_memory_search",
 		"skills_list":                   "native_agent_skills_list",
 		"skills_install":                "native_agent_skills_install",
 		"skills_enable":                 "native_agent_skills_enable",
@@ -153,10 +164,23 @@ func nativeToolAlias(value string) string {
 }
 
 func (r *Runtime) availableTools() []Tool {
-	tools := make([]Tool, 0, len(r.tools))
+	tools := make([]Tool, 0, len(r.tools)+2)
+	seen := map[string]bool{}
 	for _, tool := range r.tools {
+		// These names are reserved for the compiled, owner-scoped handlers below.
+		if nativeAgentMemoryToolName(tool.Name) != "" {
+			continue
+		}
 		if embeddedDirextalkTool(tool.Name) {
 			tools = append(tools, tool)
+			seen[tool.Name] = true
+		}
+	}
+	if r.persistentMemoryReady && r.knowledge != nil {
+		for _, tool := range r.knowledgeEinoTools() {
+			if !seen[tool.Name] {
+				tools = append(tools, tool)
+			}
 		}
 	}
 	return tools
@@ -168,11 +192,23 @@ func embeddedDirextalkTool(name string) bool {
 	if name == "dirextalk_summarize" {
 		return true
 	}
+	if nativeAgentMemoryToolName(name) != "" {
+		return true
+	}
 	if strings.HasPrefix(name, "native_agent_schedules_") || strings.HasPrefix(name, "native_agent_schedule_runs_") {
 		return true
 	}
 	_, ok := dirextalkmcp.NativeToolAction(name)
 	return ok
+}
+
+func nativeAgentMemoryToolName(name string) string {
+	switch strings.TrimSpace(name) {
+	case "native_agent_memory_remember", "native_agent_memory_search":
+		return strings.TrimSpace(name)
+	default:
+		return ""
+	}
 }
 
 func (r *Runtime) invokeDirectTool(ctx context.Context, action string, params map[string]any) (map[string]any, error) {

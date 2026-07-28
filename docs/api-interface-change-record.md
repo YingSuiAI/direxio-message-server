@@ -41,9 +41,10 @@ AES-GCM key under the updater-backed Message Server data root (or the protected
 never returned; reads expose only `api_key_configured` and credential version.
 Profile revisions are separate from retained encrypted credential versions so
 long-running work can resolve a pinned version after restart. Server model
-profile resolution is selected only by ID-only requests; the previous inline
-`model_profile` plus request key remains accepted during the rolling upgrade
-window. `agent.backends.get.embedded.capabilities` advertises
+profile resolution is selected by a profile ID; `agent.models.list` may add
+the request-scoped provider/base URL rules documented below. The previous
+inline `model_profile` plus request key remains accepted during the rolling
+upgrade window. `agent.backends.get.embedded.capabilities` advertises
 `model_profiles.server` only when the encrypted store is ready.
 
 Profile edits are retained as immutable snapshots, logical deletion preserves
@@ -109,6 +110,20 @@ tokens, or upstream error text. Backend selection remains client-local.
 `agent.models.list` now fetches Anthropic's real `GET /v1/models` endpoint with the request-scoped `x-api-key` and `anthropic-version` headers. `gemini` and `xai` are now supported Native Agent providers. Gemini exposes `https://generativelanguage.googleapis.com/v1beta` as its client-visible provider base and uses its native `/models`, `generateContent`, and `streamGenerateContent` routes with `x-goog-api-key`; custom Gemini-native gateways use the same contract and a root URL is normalized to `/v1beta`. xAI uses `https://api.x.ai/v1`. Provider API keys remain request-scoped on the server and are never returned.
 
 Model-backed `agent.chat`, Native Agent streaming, and model compression resolve the owner default conversation profile when `model_profile` is omitted. Legacy inline `model_profile` remains compatible; provider-specific model-list fetches still require explicit `base_url`.
+
+`agent.models.list` may instead select a server-owned encrypted profile with
+`model_profile_id` or `client_model_profile_id`. In that form the request may
+omit `provider` or repeat the stored provider (case-insensitively), and may
+provide a temporary `base_url` override for this read only when it has the
+same scheme, hostname, and effective port as the stored profile URL. Malformed
+URLs, userinfo, and cross-origin overrides are rejected before any outbound
+request. A request `api_key` is rejected; the server uses the decrypted
+profile key for the outbound lookup. The optional `model_kind` defaults to
+`conversation`; V1 `embedding` lists are OpenRouter-only and use
+`{base_url}/embeddings/models`, while conversation lists request OpenRouter's
+text-output filter (and SiliconFlow's `type=text&sub_type=chat` filter) and
+remove explicitly non-text models. The action never
+persists or mutates the selected profile.
 
 Native Agent stream failures now preserve a safe provider/runtime error for the client while redacting the request API key. This replaces the generic `native agent turn failed` result for errors that occur after a durable turn has already been accepted.
 
@@ -351,7 +366,7 @@ Added protected owner-only plugin management actions on the existing body-action
 
 These actions require owner `access_token`. `agent_token` cannot call plugin management or plugin invoke actions. `plugins.catalog.list` returns an empty `plugins` list when the Docker plugin runner is not enabled, so clients should hide plugin entry points until catalog entries are available. Agent-specific plugin catalog/config/invoke details in this historical section are superseded by the 2026-07-08 Native Agent Backend Contract. Current plugin install/enable/disable/uninstall jobs are for non-Agent official plugins such as `io.dirextalk.ops`, and must use official catalog metadata whose Docker image belongs to the official `dirextalk` Docker Hub organization. Digest metadata is optional and is not required for first-version installs.
 
-Native Agent action details now live on the first-class `agent.*` product action surface. `agent.models.list` uses the request-scoped `provider`, `base_url`, and `api_key` to fetch the real model list from supported providers and returns provider-reported `models[]` entries such as `id`, `name`, and any raw capability fields the provider actually supplies, for example `context_length`, `max_output_tokens`, `temperature`, `top_p`, `reasoning_modes`, or `reasoning_effort_options`; it must not persist or echo API keys, and must not invent model defaults or capabilities. Clients should render optional model parameters from returned metadata when present, keep missing values unset, allow manual model IDs when listing is unavailable, and omit unset tuning parameters from chat requests so provider defaults apply. `agent.runtime.inspect` resolves request-scoped model settings without returning API keys and reports runtime status/tool counts for configured third-party MCP servers and CLI tools; model calls can also use read-only `native_agent_runtime_inspect` without dangerous-tools confirmation. `agent.runtime.install` installs allowed runtime CLI/package-manager capabilities, such as `agent-reach`, without expanding `agent_token` permissions. Knowledge action names remain reserved for compatibility, but first-version Agent returns `supported=false`/`status=unsupported` and clients should not render knowledge UI. The Native Agent owns standard MCP client orchestration and ships package-manager launch support for third-party MCP servers installed from registry metadata (`npx` for npm packages and `uvx` for Python packages), while the message-server exposes the standard `POST /mcp` endpoint to `agent_token`.
+Native Agent action details now live on the first-class `agent.*` product action surface. `agent.models.list` uses the request-scoped `provider`, `base_url`, and `api_key` to fetch the real model list from supported providers and returns provider-reported `models[]` entries such as `id`, `name`, and any raw capability fields the provider actually supplies, for example `context_length`, `max_output_tokens`, `temperature`, `top_p`, `reasoning_modes`, or `reasoning_effort_options`; it must not persist or echo API keys, and must not invent model defaults or capabilities. Clients should render optional model parameters from returned metadata when present, keep missing values unset, allow manual model IDs when listing is unavailable, and omit unset tuning parameters from chat requests so provider defaults apply. `agent.runtime.inspect` resolves request-scoped model settings without returning API keys and reports runtime status/tool counts for configured third-party MCP servers and CLI tools; model calls can also use read-only `native_agent_runtime_inspect` without dangerous-tools confirmation. `agent.runtime.install` installs allowed runtime CLI/package-manager capabilities, such as `agent-reach`, without expanding `agent_token` permissions. When durable knowledge storage is ready, Eino exposes exactly `native_agent_memory_remember` and `native_agent_memory_search` (aliases `memory_remember`/`memory_search` and `remember`/`recall`); owner and deterministic idempotency are server-derived. Explicit remember phrases are required for writes, recall phrases require a search before answering, and ordinary conversation is never silently stored. The Native Agent owns standard MCP client orchestration and ships package-manager launch support for third-party MCP servers installed from registry metadata (`npx` for npm packages and `uvx` for Python packages), while the message-server exposes the standard `POST /mcp` endpoint to `agent_token`.
 
 `plugins.invoke` calls an enabled official non-Agent plugin over the first-version Docker HTTP runner and returns `{ "plugin_id", "action", "result" }`. `plugins.invoke.stream` remains registered only to return `400 action requires websocket`; Native Agent streaming uses `client.native_agent_stream`, not the legacy Agent plugin stream frame. `client.request` remains unavailable for `plugins.*`.
 

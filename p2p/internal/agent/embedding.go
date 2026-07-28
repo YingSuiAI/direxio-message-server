@@ -77,7 +77,7 @@ func embedHTTP(ctx context.Context, profile storage.ModelProfile, inputs []strin
 		}
 	}
 	provider := strings.ToLower(strings.TrimSpace(profile.Provider))
-	if provider != "openai" && provider != "openai_compatible" && provider != "gemini" {
+	if provider != "openai" && provider != "openai_compatible" && provider != "openrouter" && provider != "gemini" {
 		return nil, errors.New("embedding provider is unsupported")
 	}
 	if client == nil {

@@ -3,12 +3,277 @@ package nativeagent
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
+
+type modelListProfileResolver struct {
+	profile ServerModelProfile
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func (r *modelListProfileResolver) ResolveModelProfile(context.Context, string) (ServerModelProfile, error) {
+	return r.profile, nil
+}
+
+func TestModelsListServerProfileUsesRequestBaseURLAndStoredKey(t *testing.T) {
+	var gotPath, gotAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"Qwen/Qwen3-32B"}]}`))
+	}))
+	defer server.Close()
+
+	resolver := &modelListProfileResolver{profile: ServerModelProfile{
+		Provider: "openai_compatible",
+		BaseURL:  server.URL + "/v1",
+		APIKey:   "stored-siliconflow-key",
+	}}
+	original := resolver.profile
+	runtime := New(Config{DataDir: filepath.Join(t.TempDir(), "agent"), ModelProfiles: resolver})
+	result, err := runtime.Invoke(context.Background(), "agent.models.list", map[string]any{
+		"model_profile_id": "profile-siliconflow",
+		"provider":         "OPENAI_COMPATIBLE",
+		"base_url":         server.URL + "/v1/edited-siliconflow",
+	})
+	if err != nil {
+		t.Fatalf("agent.models.list: %v", err)
+	}
+	if gotPath != "/v1/edited-siliconflow/models" || gotAuth != "Bearer stored-siliconflow-key" {
+		t.Fatalf("unexpected request path=%q authorization=%q", gotPath, gotAuth)
+	}
+	if models, ok := result["models"].([]map[string]any); !ok || len(models) != 1 || models[0]["id"] != "Qwen/Qwen3-32B" {
+		t.Fatalf("unexpected models: %#v", result["models"])
+	}
+	encoded, _ := json.Marshal(result)
+	if strings.Contains(string(encoded), "stored-siliconflow-key") {
+		t.Fatalf("models response must not echo stored API key: %s", encoded)
+	}
+	if !reflect.DeepEqual(resolver.profile, original) {
+		t.Fatalf("models.list must not mutate stored profile: before=%#v after=%#v", original, resolver.profile)
+	}
+}
+
+func TestModelsListServerProfileRejectsCrossOriginOverrideWithoutRequest(t *testing.T) {
+	var hostileRequests int
+	hostile := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hostileRequests++
+	}))
+	defer hostile.Close()
+	stored := httptest.NewServer(http.NotFoundHandler())
+	defer stored.Close()
+
+	runtime := New(Config{ModelProfiles: &modelListProfileResolver{profile: ServerModelProfile{
+		Provider: "openai_compatible",
+		BaseURL:  stored.URL + "/v1",
+		APIKey:   "stored-key-never-forwarded",
+	}}})
+	_, err := runtime.Invoke(context.Background(), "agent.models.list", map[string]any{
+		"model_profile_id": "profile-siliconflow",
+		"base_url":         hostile.URL + "/v1",
+	})
+	if err == nil || !strings.Contains(err.Error(), "stored model profile origin") {
+		t.Fatalf("expected cross-origin rejection, got %v", err)
+	}
+	if hostileRequests != 0 {
+		t.Fatalf("cross-origin override must not receive a request: %d", hostileRequests)
+	}
+}
+
+func TestModelsListServerProfileRejectsMalformedOverride(t *testing.T) {
+	runtime := New(Config{ModelProfiles: &modelListProfileResolver{profile: ServerModelProfile{
+		Provider: "openai_compatible",
+		BaseURL:  "https://api.siliconflow.cn/v1",
+		APIKey:   "stored-key",
+	}}})
+	for _, override := range []string{"not a URL", "https://user:pass@api.siliconflow.cn/v1", "https://api.siliconflow.cn:bad/v1"} {
+		_, err := runtime.Invoke(context.Background(), "agent.models.list", map[string]any{
+			"model_profile_id": "profile-siliconflow",
+			"base_url":         override,
+		})
+		if err == nil || !strings.Contains(err.Error(), "base_url override is invalid") {
+			t.Errorf("override %q error = %v, want malformed URL rejection", override, err)
+		}
+	}
+}
+
+func TestModelsListOpenRouterEmbeddingUsesDedicatedEndpoint(t *testing.T) {
+	var gotPath, gotQuery, gotAuth string
+	var genericRequests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotQuery, gotAuth = r.URL.Path, r.URL.RawQuery, r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/v1/models" {
+			genericRequests++
+			_, _ = w.Write([]byte(`{"data":[{"id":"chat-should-not-appear"}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":[{"id":"openai/text-embedding-3-small","name":"Embedding","architecture":{"output_modalities":["embeddings"]}},{"id":"openai/gpt-4o","architecture":{"output_modalities":["text"]}}]}`))
+	}))
+	defer server.Close()
+
+	runtime := New(Config{DataDir: filepath.Join(t.TempDir(), "agent")})
+	result, err := runtime.Invoke(context.Background(), "agent.models.list", map[string]any{
+		"provider":   "openrouter",
+		"base_url":   server.URL + "/v1",
+		"api_key":    "openrouter-key",
+		"model_kind": "EMBEDDING",
+	})
+	if err != nil {
+		t.Fatalf("agent.models.list embedding: %v", err)
+	}
+	if gotPath != "/v1/embeddings/models" || gotQuery != "" || gotAuth != "Bearer openrouter-key" {
+		t.Fatalf("unexpected embedding request path=%q query=%q authorization=%q", gotPath, gotQuery, gotAuth)
+	}
+	if genericRequests != 0 {
+		t.Fatalf("embedding lookup must not call generic models endpoint")
+	}
+	models := result["models"].([]map[string]any)
+	if len(models) != 1 || models[0]["id"] != "openai/text-embedding-3-small" {
+		t.Fatalf("unexpected embedding models: %#v", models)
+	}
+	encoded, _ := json.Marshal(result)
+	if strings.Contains(string(encoded), "openrouter-key") {
+		t.Fatalf("models response must not echo API key: %s", encoded)
+	}
+}
+
+func TestModelsListSiliconFlowConversationUsesChatFilter(t *testing.T) {
+	var gotPath, gotQuery string
+	var gotAuth string
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		gotPath, gotQuery = req.URL.Path, req.URL.RawQuery
+		gotAuth = req.Header.Get("Authorization")
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"data":[{"id":"text-embedding-3-small"},{"id":"rerank-v1"},{"id":"tts-1"},{"id":"whisper-1"},{"id":"dall-e-3"},{"id":"Qwen/Qwen3-32B"},{"id":"deepseek-chat"}]}`)),
+		}, nil
+	})}
+	runtime := New(Config{HTTPClient: client})
+	result, err := runtime.Invoke(context.Background(), "agent.models.list", map[string]any{
+		"provider": "openai_compatible",
+		"base_url": "https://api.siliconflow.cn/v1",
+		"api_key":  "siliconflow-key",
+	})
+	if err != nil {
+		t.Fatalf("agent.models.list: %v", err)
+	}
+	if gotPath != "/v1/models" || gotQuery != "sub_type=chat&type=text" {
+		t.Fatalf("unexpected SiliconFlow request URL path=%q query=%q", gotPath, gotQuery)
+	}
+	if gotAuth != "Bearer siliconflow-key" {
+		t.Fatalf("unexpected SiliconFlow authorization: %q", gotAuth)
+	}
+	models := result["models"].([]map[string]any)
+	if len(models) != 2 || models[0]["id"] != "Qwen/Qwen3-32B" || models[1]["id"] != "deepseek-chat" {
+		t.Fatalf("unexpected SiliconFlow conversation models: %#v", models)
+	}
+}
+
+func TestModelsListOpenRouterConversationFiltersNonTextModels(t *testing.T) {
+	var gotQuery string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"openai/text-embedding-3-small","architecture":{"output_modalities":["embedding"]}},{"id":"openai/gpt-4o","architecture":{"output_modalities":["text"]}}]}`))
+	}))
+	defer server.Close()
+
+	runtime := New(Config{DataDir: filepath.Join(t.TempDir(), "agent")})
+	result, err := runtime.Invoke(context.Background(), "agent.models.list", map[string]any{
+		"provider":   "openrouter",
+		"base_url":   server.URL + "/v1",
+		"api_key":    "openrouter-key",
+		"model_kind": "conversation",
+	})
+	if err != nil {
+		t.Fatalf("agent.models.list conversation: %v", err)
+	}
+	if gotQuery != "output_modalities=text" {
+		t.Fatalf("expected OpenRouter text-output filter query, got %q", gotQuery)
+	}
+	models := result["models"].([]map[string]any)
+	if len(models) != 1 || models[0]["id"] != "openai/gpt-4o" {
+		t.Fatalf("unexpected conversation models: %#v", models)
+	}
+}
+
+func TestModelsListRejectsUnsupportedKindsBeforeProviderFetch(t *testing.T) {
+	for _, testCase := range []struct {
+		provider string
+		kind     string
+	}{
+		{provider: "anthropic", kind: "embedding"},
+		{provider: "gemini", kind: "embedding"},
+		{provider: "anthropic", kind: "speech"},
+		{provider: "gemini", kind: "speech"},
+	} {
+		t.Run(testCase.provider+"/"+testCase.kind, func(t *testing.T) {
+			var requests int
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests++
+			}))
+			defer server.Close()
+			runtime := New(Config{DataDir: filepath.Join(t.TempDir(), "agent")})
+			_, err := runtime.Invoke(context.Background(), "agent.models.list", map[string]any{
+				"provider":   testCase.provider,
+				"base_url":   server.URL,
+				"api_key":    "test-key",
+				"model_kind": testCase.kind,
+			})
+			if err == nil || !strings.Contains(err.Error(), "model list kind") {
+				t.Fatalf("expected unsupported kind error, got %v", err)
+			}
+			if requests != 0 {
+				t.Fatalf("unsupported kind must not fetch provider models: %d requests", requests)
+			}
+		})
+	}
+}
+
+func TestModelsListServerProfileRejectsProviderMismatch(t *testing.T) {
+	runtime := New(Config{ModelProfiles: &modelListProfileResolver{profile: ServerModelProfile{
+		Provider: "openai_compatible",
+		BaseURL:  "https://api.siliconflow.cn/v1",
+		APIKey:   "stored-key",
+	}}})
+	_, err := runtime.Invoke(context.Background(), "agent.models.list", map[string]any{
+		"model_profile_id": "profile-siliconflow",
+		"provider":         "anthropic",
+	})
+	if err == nil || !strings.Contains(err.Error(), "does not match model profile provider") {
+		t.Fatalf("expected provider mismatch error, got %v", err)
+	}
+}
+
+func TestModelsListServerProfileRejectsRequestAPIKey(t *testing.T) {
+	runtime := New(Config{ModelProfiles: &modelListProfileResolver{profile: ServerModelProfile{
+		Provider: "openai_compatible",
+		BaseURL:  "https://api.siliconflow.cn/v1",
+		APIKey:   "stored-key",
+	}}})
+	_, err := runtime.Invoke(context.Background(), "agent.models.list", map[string]any{
+		"model_profile_id": "profile-siliconflow",
+		"api_key":          "attacker-key",
+	})
+	if err == nil || !strings.Contains(err.Error(), "api_key must not be provided") {
+		t.Fatalf("expected request api_key rejection, got %v", err)
+	}
+}
 
 func TestModelsListFetchesOpenAICompatibleProvider(t *testing.T) {
 	var gotPath string
@@ -59,6 +324,29 @@ func TestModelsListFetchesOpenAICompatibleProvider(t *testing.T) {
 		if strings.Contains(string(data), secret) {
 			t.Fatalf("models response must not echo upstream credentials: %s", data)
 		}
+	}
+}
+
+func TestModelsListConversationFiltersExplicitNonConversationKinds(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"embed-model","type":"embedding"},{"id":"chat-model","type":"chat"},{"id":"unknown-model"}]}`))
+	}))
+	defer server.Close()
+
+	runtime := New(Config{DataDir: filepath.Join(t.TempDir(), "agent")})
+	result, err := runtime.Invoke(context.Background(), "agent.models.list", map[string]any{
+		"provider":   "openai_compatible",
+		"base_url":   server.URL,
+		"api_key":    "test-key",
+		"model_kind": "conversation",
+	})
+	if err != nil {
+		t.Fatalf("agent.models.list: %v", err)
+	}
+	models := result["models"].([]map[string]any)
+	if len(models) != 2 || models[0]["id"] != "chat-model" || models[1]["id"] != "unknown-model" {
+		t.Fatalf("unexpected conversation models: %#v", models)
 	}
 }
 

@@ -39,6 +39,43 @@ func TestEmbedHTTPOpenAIHeadersAndOrder(t *testing.T) {
 	}
 }
 
+func TestEmbedHTTPOpenRouterUsesCompatibleEmbeddingsEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/embeddings" {
+			t.Fatalf("path=%q", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer openrouter-secret" {
+			t.Fatalf("authorization=%q", got)
+		}
+		var body struct {
+			Input []string `json:"input"`
+			Model string   `json:"model"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if len(body.Input) != 1 || body.Input[0] != "remember this" || body.Model != "openai/text-embedding-3-small" {
+			t.Fatalf("request=%+v", body)
+		}
+		_, _ = w.Write([]byte(`{"data":[{"embedding":[0.25,-0.5]}]}`))
+	}))
+	defer server.Close()
+
+	p := storage.ModelProfile{
+		Provider: "openrouter",
+		BaseURL:  server.URL + "/v1",
+		Model:    "openai/text-embedding-3-small",
+		APIKey:   "openrouter-secret",
+	}
+	vectors, err := embedHTTP(context.Background(), p, []string{"remember this"}, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(vectors) != 1 || len(vectors[0]) != 2 || vectors[0][0] != 0.25 || vectors[0][1] != -0.5 {
+		t.Fatalf("vectors=%v", vectors)
+	}
+}
+
 func TestEmbedHTTPRejectsOversizeMalformedAndSecretsInErrors(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(strings.Repeat("x", int(embeddingMaxBody)+1)))

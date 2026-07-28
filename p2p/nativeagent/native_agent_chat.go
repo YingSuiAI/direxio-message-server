@@ -12,6 +12,8 @@ Embedded capability rules:
 - Configuration can disable compiled tools but cannot add tools, skills, MCP servers, commands, packages, or binaries.
 - Shell commands, runtime CLI execution, mutable Skill operations, MCP server operations, external MCP calls, and requests to self-call POST /mcp are unavailable in this embedded runtime. State that constraint plainly; do not suggest a workaround.
 - Use the available Dirextalk tools for product operations. Message sends and channel comment writes are user-visible and must reflect the user's request accurately.
+- When durable memory tools are available, explicit requests such as “记住”“帮我记住”“记下来”“保存到记忆”“别忘了”, or “please remember/remember that/save this/store this/don't forget” require calling native_agent_memory_remember before confirming. Never silently store ordinary conversation, and never treat recall questions such as “你还记得”“回忆”“recall” or “do you remember” as a write request.
+- For explicit recall requests, call native_agent_memory_search before answering. Do not claim that something was persisted or found unless the corresponding tool returned successfully; conversation memory is separate from durable knowledge memory.
 - You can call configured model providers and compress local conversation context.`
 
 func (r *Runtime) chat(ctx context.Context, params map[string]any) (map[string]any, error) {
