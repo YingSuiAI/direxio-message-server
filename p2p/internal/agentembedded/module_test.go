@@ -14,6 +14,41 @@ type readyModelProfileStore struct {
 
 func (readyModelProfileStore) ModelProfileStoreReady() bool { return true }
 
+type modelRoleStore struct {
+	storage.ModelProfileStore
+	defaults storage.ModelProfileDefaults
+	entries  []storage.ModelProfileSyncEntry
+}
+
+func (*modelRoleStore) ModelProfileStoreReady() bool { return true }
+
+func (s *modelRoleStore) SyncModelProfilesWithDefaults(
+	_ context.Context,
+	_, _ string,
+	defaults storage.ModelProfileDefaults,
+	entries []storage.ModelProfileSyncEntry,
+) (storage.ModelProfileSyncResult, error) {
+	s.defaults = defaults
+	s.entries = entries
+	return storage.ModelProfileSyncResult{
+		DefaultClientProfileID: defaults.ConversationClientProfileID,
+		Defaults:               defaults,
+		Profiles: []storage.ModelProfile{{
+			ProfileID:            "server-embedding",
+			ClientProfileID:      entries[0].ClientProfileID,
+			Provider:             entries[0].Provider,
+			Model:                entries[0].Model,
+			ModelKind:            entries[0].ModelKind,
+			Revision:             4,
+			CredentialVersion:    2,
+			APIKeyConfigured:     true,
+			InputModalities:      entries[0].InputModalities,
+			ProviderConfig:       entries[0].ProviderConfig,
+			ProviderSecretStatus: map[string]bool{},
+		}},
+	}, nil
+}
+
 func TestHandlersRegisterEmbeddedAgentSurface(t *testing.T) {
 	h := New(Config{}).Handlers()
 	for _, name := range []string{
@@ -135,6 +170,43 @@ func TestBackendsPreserveModelRoleMemoryAndVoiceCapabilities(t *testing.T) {
 		if !found {
 			t.Fatalf("capability %q missing from %#v", capability, got)
 		}
+	}
+}
+
+func TestCoreModelProfileCompatibilityPreservesRolesDefaultsAndCredentialVersion(t *testing.T) {
+	store := &modelRoleStore{}
+	handler := New(Config{ModelProfiles: store}).Handlers()["agent.core.model_profiles.sync"]
+	result, apiErr := handler(context.Background(), map[string]any{
+		"idempotency_key":                     "00000000-0000-4000-8000-000000000001",
+		"default_embedding_client_profile_id": "client-embedding",
+		"entries": []any{map[string]any{
+			"client_profile_id": "client-embedding",
+			"provider":          "openai",
+			"model":             "text-embedding-3-small",
+			"model_kind":        "embedding",
+			"api_key":           "write-only",
+		}},
+	})
+	if apiErr != nil {
+		t.Fatalf("sync error: %#v", apiErr)
+	}
+	if store.defaults.EmbeddingClientProfileID != "client-embedding" ||
+		len(store.entries) != 1 ||
+		store.entries[0].ModelKind != storage.ModelKindEmbedding {
+		t.Fatalf("store input = %#v, %#v", store.defaults, store.entries)
+	}
+	response := result.(map[string]any)
+	if response["default_embedding_client_profile_id"] != "client-embedding" {
+		t.Fatalf("defaults response = %#v", response)
+	}
+	profile := response["profiles"].([]any)[0].(map[string]any)
+	if profile["model_kind"] != storage.ModelKindEmbedding ||
+		profile["credential_version"] != int64(2) ||
+		profile["revision"] != int64(4) {
+		t.Fatalf("profile response = %#v", profile)
+	}
+	if _, leaked := profile["api_key"]; leaked {
+		t.Fatalf("write-only key leaked: %#v", profile)
 	}
 }
 
