@@ -12,7 +12,6 @@ import (
 	"time"
 
 	actionbase "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/action"
-	"github.com/YingSuiAI/dirextalk-message-server/p2p/nativeagent"
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/storage"
 	"github.com/google/uuid"
 )
@@ -21,8 +20,12 @@ type ScheduledRunner interface {
 	ExecuteScheduled(context.Context, string, storage.ModelProfile, []string) (string, error)
 }
 type Config struct {
-	Store          storage.ScheduleStore
-	Profiles       storage.ModelProfileStore
+	Store        storage.ScheduleStore
+	Profiles     storage.ModelProfileStore
+	Materializer OccurrenceMaterializer
+	// Runner is retained only as a source-compatible field for older wiring.
+	// Scheduled execution no longer calls it; tasks are handed to the generic
+	// runtime through Materializer.
 	Runner         ScheduledRunner
 	OwnerID        func() string
 	SchedulerReady func() bool
@@ -31,6 +34,7 @@ type Config struct {
 type Module struct {
 	store          storage.ScheduleStore
 	profiles       storage.ModelProfileStore
+	materializer   OccurrenceMaterializer
 	runner         ScheduledRunner
 	ownerID        func() string
 	schedulerReady func() bool
@@ -39,17 +43,17 @@ type Module struct {
 }
 
 func New(c Config) *Module {
-	return &Module{store: c.Store, profiles: c.Profiles, runner: c.Runner, ownerID: c.OwnerID, schedulerReady: c.SchedulerReady, confirmations: c.Confirmations}
+	return &Module{store: c.Store, profiles: c.Profiles, materializer: c.Materializer, runner: c.Runner, ownerID: c.OwnerID, schedulerReady: c.SchedulerReady, confirmations: c.Confirmations}
 }
 func (m *Module) schedulerRunning() bool {
-	return m != nil && m.runner != nil && (m.schedulerReady == nil || m.schedulerReady())
+	return m != nil && m.materializer != nil && (m.schedulerReady == nil || m.schedulerReady())
 }
 func (m *Module) Ready() bool {
-	return m != nil && m.store != nil && m.profiles != nil && m.profiles.ModelProfileStoreReady() && m.runner != nil
+	return m != nil && m.store != nil && m.materializer != nil && (m.profiles == nil || m.profiles.ModelProfileStoreReady())
 }
 
 func (m *Module) Worker(ownerID, workerID string) Worker {
-	return Worker{Store: m.store, Profiles: m.profiles, Runner: m.runner, OwnerID: ownerID, WorkerID: workerID}
+	return Worker{Store: m.store, Materializer: m.materializer, OwnerID: ownerID, WorkerID: workerID}
 }
 func (m *Module) owner() string {
 	if m != nil && m.ownerID != nil {
@@ -649,92 +653,20 @@ func (m *Module) runNowOnce(ctx context.Context, p map[string]any) (any, *action
 	if e != nil || !ok {
 		return nil, actionbase.StatusError(http.StatusNotFound, "schedule not found")
 	}
-	claimOwner := "run-now:" + uuid.NewString()
-	v, e = m.store.ClaimScheduleNow(ctx, m.owner(), id, claimOwner, 30*time.Second)
-	if e == storage.ErrScheduleConflict {
-		return nil, actionbase.StatusError(http.StatusConflict, "schedule is already running")
-	}
+	scheduledFor := time.Now().UTC()
+	req, _ := occurrenceRequest(v, scheduledFor, deterministicRunID, key)
+	// run_now has request idempotency independent of wall-clock time; pin the
+	// occurrence/task identities to the mutation key rather than the timestamp.
+	req.OccurrenceID = deterministicRunID
+	req.TaskID = uuid.NewSHA1(uuid.Nil, []byte(deterministicRunID+"\x00task")).String()
+	run, e := m.materializer.MaterializeOccurrence(ctx, req)
 	if e != nil {
+		if e == storage.ErrScheduleConflict {
+			return nil, actionbase.StatusError(http.StatusConflict, "schedule is already running")
+		}
 		return nil, actionbase.InternalError(e)
 	}
-	// A mutation receipt reserves this deterministic run identity before the
-	// model call, so retries can only ever address the same authoritative run.
-	r := storage.ScheduleRun{RunID: deterministicRunID, ScheduleID: id, OwnerID: m.owner(), Status: "running", ScheduledFor: time.Now().UTC(), LeaseEpoch: v.LeaseEpoch}
-	if _, created, ce := m.store.CreateScheduleRun(ctx, r, claimOwner, v.Revision, v.LeaseEpoch); ce != nil {
-		e = ce
-		return nil, actionbase.InternalError(e)
-	} else if !created {
-		return nil, actionbase.StatusError(http.StatusConflict, "schedule run already exists")
-	}
-	pr, e := m.profiles.ResolveModelProfilePinned(ctx, m.owner(), v.ModelProfileID, v.ModelProfileRevision, v.CredentialVersion)
-	if e != nil {
-		if fe := m.store.FinishScheduleRun(ctx, m.owner(), r.RunID, claimOwner, v.LeaseEpoch, "", e.Error(), time.Now().UTC()); fe != nil {
-			return nil, actionbase.InternalError(fe)
-		}
-		if ae := m.store.AdvanceSchedule(ctx, m.owner(), id, claimOwner, v.Revision, v.LeaseEpoch, v.NextRunAt, "enabled"); ae != nil {
-			return nil, actionbase.InternalError(ae)
-		}
-		return nil, actionbase.StatusError(http.StatusBadGateway, e.Error())
-	}
-	result, e := m.executeWithLeaseHeartbeat(ctx, v, claimOwner, pr)
-	runErr := ""
-	if e != nil {
-		runErr = nativeagent.SanitizeScheduledText(e.Error(), pr.APIKey)
-	} else {
-		result = nativeagent.SanitizeScheduledText(result, pr.APIKey)
-	}
-	if fe := m.store.FinishScheduleRun(ctx, m.owner(), r.RunID, claimOwner, v.LeaseEpoch, result, runErr, time.Now().UTC()); fe != nil {
-		return nil, actionbase.InternalError(fe)
-	}
-	if ae := m.store.AdvanceSchedule(ctx, m.owner(), id, claimOwner, v.Revision, v.LeaseEpoch, v.NextRunAt, "enabled"); ae != nil {
-		return nil, actionbase.InternalError(ae)
-	}
-	if finished, ok, ge := m.store.GetScheduleRun(ctx, m.owner(), id, r.RunID); ge == nil && ok {
-		return map[string]any{"run": finished}, nil
-	}
-	return map[string]any{"run": r}, nil
-}
-
-// executeWithLeaseHeartbeat keeps run_now fenced for the full model call,
-// matching the background worker's lease renewal behavior.
-func (m *Module) executeWithLeaseHeartbeat(ctx context.Context, s storage.Schedule, leaseOwner string, profile storage.ModelProfile) (string, error) {
-	runCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	type outcome struct {
-		text string
-		err  error
-	}
-	done := make(chan outcome, 1)
-	go func() {
-		text, err := m.runner.ExecuteScheduled(runCtx, s.Prompt, profile, nativeagent.EmbeddedAllowedTools())
-		done <- outcome{text, err}
-	}()
-	interval := 10 * time.Second
-	if s.LeaseUntil != nil {
-		remaining := time.Until(*s.LeaseUntil)
-		if remaining > 0 && remaining/3 < interval {
-			interval = remaining / 3
-		}
-	}
-	if interval <= 0 {
-		interval = time.Second
-	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case out := <-done:
-			return out.text, out.err
-		case <-ticker.C:
-			if err := m.store.RenewScheduleLease(ctx, s.OwnerID, s.ScheduleID, leaseOwner, s.LeaseEpoch, 30*time.Second); err != nil {
-				cancel()
-				return "", fmt.Errorf("schedule lease expired: %w", err)
-			}
-		case <-ctx.Done():
-			cancel()
-			return "", ctx.Err()
-		}
-	}
+	return map[string]any{"run": run}, nil
 }
 func (m *Module) runsList(ctx context.Context, p map[string]any) (any, *actionbase.Error) {
 	if e := rejectUnknown(p, "schedule_id", "limit", "cursor"); e != nil {

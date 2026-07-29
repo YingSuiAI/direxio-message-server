@@ -22,6 +22,7 @@ func NewProcessContext() *ProcessContext {
 		ctx:      ctx,
 		shutdown: shutdown,
 		wg:       sync.WaitGroup{},
+		degraded: make(map[string]struct{}),
 	}
 }
 

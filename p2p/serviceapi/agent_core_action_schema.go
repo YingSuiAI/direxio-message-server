@@ -121,16 +121,13 @@ func coreExtensionCandidateSchema() ActionFieldSchema {
 }
 
 func coreExtensionInspectionFields() map[string]ActionFieldSchema {
-	argv := ActionFieldSchema{Type: "array", Items: &ActionFieldSchema{Type: "string"}}
 	execution := map[string]ActionFieldSchema{
-		"stdio":  {Type: "object", Properties: map[string]ActionFieldSchema{"relative_path": {Type: "string", Required: true}, "digest": {Type: "string", Required: true}, "argv": argv}},
-		"remote": {Type: "object", Properties: map[string]ActionFieldSchema{"url": {Type: "string", Required: true}, "credential_reference_id": {Type: "string"}}},
-		"skill":  {Type: "object", Properties: map[string]ActionFieldSchema{"relative_path": {Type: "string", Required: true}, "digest": {Type: "string", Required: true}, "executable": {Type: "boolean", Required: true}, "argv": argv}},
+		"remote": {Type: "object", Properties: map[string]ActionFieldSchema{"url": {Type: "string", Required: true}, "credential_reference_id": {Type: "string", Required: true}}},
 	}
 	return map[string]ActionFieldSchema{
 		"candidate": coreExtensionCandidateSchema(), "content_digest": {Type: "string", Required: true}, "manifest_digest": {Type: "string", Required: true}, "execution_digest": {Type: "string", Required: true}, "network_schema_digest": {Type: "string", Required: true}, "secret_schema_digest": {Type: "string", Required: true},
 		"execution":      {Type: "object", Required: true, Properties: execution},
-		"network_grants": {Type: "array", Required: true, Items: &ActionFieldSchema{Type: "object", Properties: map[string]ActionFieldSchema{"scheme": {Type: "string", Required: true}, "host": {Type: "string", Required: true}, "port": {Type: "integer", Required: true}, "path_prefix": {Type: "string"}, "digest": {Type: "string", Required: true}}}},
+		"network_grants": {Type: "array", Required: true, Items: &ActionFieldSchema{Type: "object", Properties: map[string]ActionFieldSchema{"scheme": {Type: "string", Required: true}, "host": {Type: "string", Required: true}, "port": {Type: "integer", Required: true}, "path_prefix": {Type: "string", Required: true}, "digest": {Type: "string", Required: true}}}},
 		"secret_grants":  {Type: "array", Required: true, Items: &ActionFieldSchema{Type: "object", Properties: map[string]ActionFieldSchema{"reference_id": {Type: "string", Required: true}, "purpose": {Type: "string", Required: true}, "binding_digest": {Type: "string", Required: true}, "configured": {Type: "boolean", Required: true}}}},
 	}
 }
@@ -173,11 +170,18 @@ func coreExtensionExecuteSchema() *ActionSchema {
 func coreMCPExecuteSchema() *ActionSchema {
 	s := coreExtensionExecuteSchema()
 	s.Request["tool_name"] = ActionFieldSchema{Type: "string", Required: true}
+	expected := s.Request["expected_revision"]
+	expected.Required = true
+	s.Request["expected_revision"] = expected
 	return s
 }
 func coreSkillExecuteSchema() *ActionSchema { return coreExtensionExecuteSchema() }
 func coreMCPToolsSchema() *ActionSchema {
-	return coreActionSchema(coreMutationFields("installation_id"), map[string]ActionFieldSchema{"tools": {Type: "array", Items: &ActionFieldSchema{Type: "object"}}})
+	request := coreMutationFields("installation_id")
+	expected := request["expected_revision"]
+	expected.Required = true
+	request["expected_revision"] = expected
+	return coreActionSchema(request, map[string]ActionFieldSchema{"tools": {Type: "array", Items: &ActionFieldSchema{Type: "object"}}})
 }
 
 func workloadIdentityFields(required bool) map[string]ActionFieldSchema {
@@ -197,7 +201,7 @@ func workloadLimitsFields(required bool) map[string]ActionFieldSchema {
 	return map[string]ActionFieldSchema{"cpu": {Type: "integer", Required: required}, "memory_mb": {Type: "integer", Required: required}, "processes": {Type: "integer", Required: required}, "disk_mb": {Type: "integer", Required: required}, "timeout_seconds": {Type: "integer", Required: required}, "output_mb": {Type: "integer", Required: required}}
 }
 func workloadSecretGrantSchema() *ActionFieldSchema {
-	return &ActionFieldSchema{Type: "object", Properties: map[string]ActionFieldSchema{"reference_id": {Type: "string", Required: true}, "purpose": {Type: "string", Required: true}, "binding_digest": {Type: "string", Required: true}}}
+	return &ActionFieldSchema{Type: "object", Properties: map[string]ActionFieldSchema{"reference_id": {Type: "string", Required: true}, "purpose": {Type: "string", Required: true}, "secret_revision": {Type: "integer"}, "binding_digest": {Type: "string", Required: true}}}
 }
 func workloadPlanResponseFields() map[string]ActionFieldSchema {
 	return map[string]ActionFieldSchema{"plan_id": {Type: "string", Required: true}, "revision": {Type: "integer", Required: true}, "digest": {Type: "string", Required: true}, "summary": {Type: "string", Required: true}, "artifact": {Type: "string", Required: true}, "source": {Type: "string", Required: true}, "command_steps": {Type: "array", Required: true, Items: &ActionFieldSchema{Type: "string"}}, "image_digest": {Type: "string", Required: true}, "image_uri": {Type: "string", Required: true}, "target_kind": {Type: "string", Required: true}, "expires_at": {Type: "string", Required: true}, "created_at": {Type: "string", Required: true}, "typed_target": {Type: "object", Required: true, Properties: workloadTargetFields(true)}, "typed_resource_limits": {Type: "object", Properties: workloadLimitsFields(true)}, "typed_secret_grants": {Type: "array", Required: true, Items: workloadSecretGrantSchema()}}
@@ -254,6 +258,26 @@ func coreWorkloadOperationEventsSchema() *ActionSchema {
 }
 func coreWorkloadActualGetSchema() *ActionSchema {
 	return coreActionSchema(coreRequired("workload_id"), map[string]ActionFieldSchema{"workload": {Type: "object", Required: true, Properties: workloadActualFields()}})
+}
+
+func coreDashboardGetSchema() *ActionSchema {
+	return coreActionSchema(map[string]ActionFieldSchema{"recent_limit": {Type: "integer", Presence: &ActionPresenceSchema{Omitted: "bounded_default"}}}, map[string]ActionFieldSchema{"summary": {Type: "object", Required: true}, "deployments": {Type: "array", Required: true, Items: &ActionFieldSchema{Type: "object"}}, "partial": {Type: "boolean", Required: true}, "warnings": {Type: "array", Required: true, Items: &ActionFieldSchema{Type: "string"}}, "observed_at": {Type: "string", Required: true}})
+}
+func coreDeploymentsListSchema() *ActionSchema {
+	req := corePageFields()
+	req["status"] = ActionFieldSchema{Type: "string"}
+	req["target_kind"] = ActionFieldSchema{Type: "string"}
+	return coreActionSchema(req, map[string]ActionFieldSchema{"deployments": {Type: "array", Required: true, Items: &ActionFieldSchema{Type: "object"}}, "next_page_token": {Type: "string"}})
+}
+func coreDeploymentsGetSchema() *ActionSchema {
+	return coreActionSchema(coreRequired("workload_id"), map[string]ActionFieldSchema{"deployment": {Type: "object", Required: true}, "current_operation": {Type: "object"}, "actual": {Type: "object"}})
+}
+func coreDeploymentsEventsSchema() *ActionSchema {
+	req := coreRequired("workload_id")
+	req["after_sequence"] = ActionFieldSchema{Type: "integer"}
+	req["page_size"] = ActionFieldSchema{Type: "integer"}
+	event := map[string]ActionFieldSchema{"event_id": {Type: "string", Required: true}, "workload_id": {Type: "string", Required: true}, "operation_id": {Type: "string", Required: true}, "sequence": {Type: "integer", Required: true}, "type": {Type: "string", Required: true}, "status": {Type: "string", Required: true}, "message": {Type: "string", Required: true}, "occurred_at": {Type: "string", Required: true}, "actual": {Type: "object"}}
+	return coreActionSchema(req, map[string]ActionFieldSchema{"events": {Type: "array", Required: true, Items: &ActionFieldSchema{Type: "object", Properties: event}}, "next_after_sequence": {Type: "integer", Required: true}})
 }
 func coreAWSCredentialCreateSchema() *ActionSchema {
 	return coreActionSchema(map[string]ActionFieldSchema{"idempotency_key": {Type: "string", Required: true}, "name": {Type: "string", Required: true}, "region": {Type: "string", Required: true}, "access_key_id": {Type: "string", Required: true, WriteOnly: true}, "secret_access_key": {Type: "string", Required: true, WriteOnly: true}, "session_token": {Type: "string", WriteOnly: true}}, coreObjectResponse("credential"))

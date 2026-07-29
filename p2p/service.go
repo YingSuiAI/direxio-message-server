@@ -2,7 +2,6 @@ package p2p
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"net/http"
 	"os"
@@ -19,8 +18,8 @@ import (
 	"github.com/YingSuiAI/dirextalk-message-server/internal/releasecontrol"
 	agentmodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agent"
 	schedulesmodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agent/schedules"
-	agentcoremodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcore"
-	coreturns "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcoreturns"
+	agentruntime "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcontrol/runtime"
+	agentembeddedmodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentembedded"
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentturns"
 	blocksmodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/blocks"
 	callsmodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/calls"
@@ -59,10 +58,8 @@ type Config struct {
 	PluginRunner                    PluginRunner
 	NativeAgentRunner               NativeAgentRunner
 	NativeAgentDataDir              string
-	EmbeddedScheduleRunner          schedulesmodule.ScheduledRunner
-	EmbeddedScheduleRunnerFactory   func([]nativeagent.Tool) (schedulesmodule.ScheduledRunner, error)
 	ModelProfileKeyFile             string
-	AgentCore                       AgentCoreConfig
+	AgentSecretKeyringFile          string
 	ReleaseController               releasecontrol.Controller
 	CentralVersionSource            releasecontrol.CentralVersionSource
 }
@@ -116,9 +113,16 @@ type Service struct {
 	agentModule               *agentmodule.Module
 	scheduleModule            *schedulesmodule.Module
 	scheduleRunning           bool
-	agentCore                 *agentcoremodule.Client
-	coreTurns                 *coreturns.Ledger
-	agentCoreInitErr          error
+	agentRuntimeStarted       bool
+	agentEmbedded             *agentembeddedmodule.Module
+	agentTaskExecutor         *embeddedTaskExecutor
+	agentTaskRuntime          *agentruntime.Worker
+	agentScheduleLoop         *agentruntime.ScheduleLoop
+	agentRuntimeInitErr       error
+	agentSecretGuard          *p2pstorage.AgentSecretRuntimeGuard
+	agentSecretEnveloper      *p2pstorage.AgentSecretEnveloper
+	agentSecretKeyringFile    string
+	agentSecretReady          bool
 	modelProfiles             p2pstorage.ModelProfileStore
 	modelProfileInitErr       error
 	mcpModule                 *mcpmodule.Module
@@ -236,21 +240,9 @@ func NewServiceWithStoreAndTransport(ctx context.Context, cfg Config, store Stor
 	}
 	shouldPersist := !ok || !state.Initialized || strings.TrimSpace(state.Password) == "" || migratedAgentConfig
 	service := newService(cfg, store, transport, state, ok)
-	if service.modelProfileInitErr != nil {
-		return nil, service.modelProfileInitErr
-	}
 	if err := service.agentModule.ReadyError(); err != nil {
 		return nil, err
 	}
-	if service.agentCoreInitErr != nil {
-		return nil, service.agentCoreInitErr
-	}
-	if err := service.agentCore.ReadyError(); err != nil {
-		return nil, err
-	}
-	// A temporarily unreachable Core is represented as unavailable; it must not
-	// prevent Message Server startup.
-	_ = service.agentCore.Probe(ctx)
 	if err := service.pluginsModule.CheckStore(ctx); err != nil {
 		return nil, err
 	}
@@ -846,41 +838,79 @@ func newService(cfg Config, store Store, transport Transport, state portalState,
 	if profileStore, ok := store.(p2pstorage.ModelProfileStore); ok {
 		service.modelProfiles = profileStore
 	} else if dbStore, ok := store.(*p2pstorage.DatabaseStore); ok {
-		keyFile := strings.TrimSpace(cfg.ModelProfileKeyFile)
-		if keyFile == "" {
-			dataDir := strings.TrimSpace(cfg.NativeAgentDataDir)
-			if dataDir == "" {
-				dataDir = strings.TrimSpace(os.Getenv("P2P_NATIVE_AGENT_DATA_DIR"))
-			}
-			if dataDir == "" {
-				dataDir = "/var/dirextalk-message-server/agent"
-			}
-			keyFile = filepath.Join(dataDir, "model-profile.master.key")
+		dataDir := strings.TrimSpace(cfg.NativeAgentDataDir)
+		if dataDir == "" {
+			dataDir = strings.TrimSpace(os.Getenv("P2P_NATIVE_AGENT_DATA_DIR"))
 		}
-		service.modelProfiles, service.modelProfileInitErr = p2pstorage.NewDatabaseModelProfileStore(context.Background(), dbStore, keyFile)
+		if dataDir == "" {
+			dataDir = "/var/dirextalk-message-server/agent"
+		}
+		keyringFile := strings.TrimSpace(cfg.AgentSecretKeyringFile)
+		if keyringFile == "" {
+			keyringFile = filepath.Join(dataDir, "secret-keyring.json")
+		}
+		legacyKeyFile := strings.TrimSpace(cfg.ModelProfileKeyFile)
+		if legacyKeyFile == "" {
+			legacyKeyFile = filepath.Join(dataDir, "model-profile.master.key")
+		}
+		service.agentSecretKeyringFile = keyringFile
+		// A long-running server only verifies an existing keyring. Creating a
+		// missing keyring belongs exclusively to the offline agent-secretctl
+		// init command, otherwise a lost keyring could make encrypted rows
+		// permanently unreadable.
+		keyring, secretErr := p2pstorage.LoadAgentSecretKeyring(keyringFile)
+		if secretErr == nil {
+			service.agentSecretGuard, secretErr = p2pstorage.AcquireAgentSecretRuntimeGuard(context.Background(), dbStore.DB())
+		}
+		if secretErr == nil {
+			service.agentSecretEnveloper, secretErr = p2pstorage.NewAgentSecretEnveloper(keyring)
+		}
+		if secretErr == nil {
+			secretErr = p2pstorage.VerifyAgentSecretDatabase(context.Background(), dbStore.DB(), p2pstorage.AgentSecretRotationOptions{
+				KeyringFile:               keyringFile,
+				LegacyModelProfileKeyFile: legacyKeyFile,
+			})
+		}
+		if secretErr == nil {
+			service.modelProfiles, secretErr = p2pstorage.NewDatabaseModelProfileStoreWithKeyring(context.Background(), dbStore, keyringFile, legacyKeyFile)
+		}
+		if secretErr != nil {
+			if service.agentSecretGuard != nil {
+				_ = service.agentSecretGuard.Close()
+				service.agentSecretGuard = nil
+			}
+			service.agentSecretEnveloper = nil
+			service.modelProfileInitErr = secretErr
+		} else {
+			service.agentSecretReady = true
+		}
 	}
 	var scheduleStore p2pstorage.ScheduleStore
 	if candidate, ok := store.(p2pstorage.ScheduleStore); ok {
 		scheduleStore = candidate
 	}
-	scheduleRunner := cfg.EmbeddedScheduleRunner
-	if scheduleRunner == nil && cfg.EmbeddedScheduleRunnerFactory != nil {
-		scheduleRunner, _ = cfg.EmbeddedScheduleRunnerFactory(agentmodule.Tools(service.mcpCapabilities))
-	}
 	var confirmations p2pstorage.ScheduleConfirmationStore
 	if candidate, ok := store.(p2pstorage.ScheduleConfirmationStore); ok {
 		confirmations = candidate
 	}
-	service.scheduleModule = schedulesmodule.New(schedulesmodule.Config{Store: scheduleStore, Profiles: service.modelProfiles, Runner: scheduleRunner, Confirmations: confirmations, OwnerID: service.OwnerMXID, SchedulerReady: func() bool {
+	var scheduleMaterializer schedulesmodule.OccurrenceMaterializer
+	if dbStore, ok := store.(*p2pstorage.DatabaseStore); ok {
+		scheduleMaterializer = embeddedScheduleMaterializer{store: dbStore}
+	}
+	service.scheduleModule = schedulesmodule.New(schedulesmodule.Config{Store: scheduleStore, Profiles: service.modelProfiles, Materializer: scheduleMaterializer, Confirmations: confirmations, OwnerID: service.OwnerMXID, SchedulerReady: func() bool {
 		service.mu.Lock()
 		defer service.mu.Unlock()
 		return service.scheduleRunning
 	}})
+	agentModelProfiles := service.modelProfiles
+	if agentModelProfiles != nil && !agentModelProfiles.ModelProfileStoreReady() {
+		agentModelProfiles = nil
+	}
 	service.agentModule = agentmodule.New(agentmodule.Config{
 		Runner: cfg.NativeAgentRunner, DataDir: cfg.NativeAgentDataDir,
 		Store: nativeAgentConfigStore{service: service}, MCP: service.mcpCapabilities,
 		ScheduleTools: service.scheduleModule.Tools(), Account: serviceAgentAccountPort{service: service}, Turns: service.store,
-		OwnerID: service.OwnerMXID, ModelProfiles: service.modelProfiles,
+		OwnerID: service.OwnerMXID, ModelProfiles: agentModelProfiles,
 		VoiceEnabled: true,
 		VoiceActive: func(owner string) bool {
 			return strings.TrimSpace(owner) == strings.TrimSpace(service.OwnerMXID()) && !service.accountIsDeprovisioned()
@@ -900,21 +930,52 @@ func newService(cfg Config, store Store, transport Transport, state portalState,
 			return nativeModelProfileResolver{store: service.modelProfiles, owner: service.OwnerMXID}
 		}(),
 	})
-	// Agent Core config is deployment-owned and never persisted in portal state.
-	coreConfig := cfg.AgentCore
-	coreConfig.EmbeddedModelProfilesReady = func() bool { return service.modelProfiles != nil && service.modelProfiles.ModelProfileStoreReady() }
-	coreConfig.EmbeddedSchedulesReady = service.EmbeddedSchedulesReady
-	coreConfig.EmbeddedMemoryReady = func() bool { _, ok := store.(*p2pstorage.DatabaseStore); return ok }
-	coreConfig.EmbeddedVoiceReady = service.agentModule.VoiceReady
-	service.agentCore, service.agentCoreInitErr = agentcoremodule.New(coreConfig)
-	if service.agentCore == nil {
-		service.agentCore, _ = agentcoremodule.New(agentcoremodule.Config{})
+	embeddedConfig := agentembeddedmodule.Config{
+		OwnerID:         service.OwnerMXID,
+		ModelProfiles:   service.modelProfiles,
+		Schedules:       scheduleStore,
+		CapabilityReady: service.embeddedAgentCapabilityReady,
 	}
-	var coreDB *sql.DB
-	if dbStore, ok := store.(interface{ DB() *sql.DB }); ok {
-		coreDB = dbStore.DB()
+	if dbStore, ok := store.(*p2pstorage.DatabaseStore); ok {
+		ownerID := strings.TrimSpace(service.OwnerMXID())
+		taskStore := p2pstorage.NewDatabaseTaskStore(dbStore.DB())
+		confirmationStore := p2pstorage.NewDatabaseConfirmationStore(dbStore.DB())
+		controls := newEmbeddedControlRuntime(dbStore, taskStore, confirmationStore, ownerID, service.agentSecretEnveloper)
+		service.agentTaskExecutor = &embeddedTaskExecutor{
+			agent:           service.agentModule,
+			aws:             controls.aws,
+			workloadService: controls.workload,
+			workloadHandler: controls.handler,
+			mcp:             controls.mcp,
+		}
+		service.agentTaskRuntime, service.agentRuntimeInitErr = agentruntime.New(agentruntime.Config{
+			Store: taskStore, Executor: service.agentTaskExecutor, MaxConcurrent: 4,
+			LeaseTTL: 30 * time.Second, Holder: "dirextalk-message-server",
+		})
+		if service.agentRuntimeInitErr == nil {
+			service.agentScheduleLoop, service.agentRuntimeInitErr = agentruntime.NewScheduleLoop(dbStore, agentruntime.CronCalculator{}, time.Second)
+		}
+		embeddedConfig.Tasks = taskStore
+		embeddedConfig.TaskRetry = embeddedTaskRetryAdapter{store: taskStore}
+		embeddedConfig.Confirmations = confirmationStore
+		embeddedConfig.MCP = controls.mcpPort
+		embeddedConfig.AWS = controls.awsPort
+		embeddedConfig.Workloads = controls.workloadPort
+		if deployments := p2pstorage.NewWorkloadDeploymentSource(dbStore); deployments != nil {
+			embeddedConfig.Deployments = embeddedDeploymentAdapter{source: deployments}
+		}
+		if trigger, ok := any(dbStore).(interface {
+			TriggerSchedule(context.Context, string, string, string) (p2pstorage.Schedule, string, string, error)
+		}); ok {
+			embeddedConfig.ScheduleTrigger = trigger
+		}
 	}
-	service.coreTurns = coreturns.New(coreDB)
+	if embeddedConfig.Deployments == nil {
+		if ledger, ok := store.(embeddedDeploymentSource); ok {
+			embeddedConfig.Deployments = embeddedDeploymentAdapter{source: ledger}
+		}
+	}
+	service.agentEmbedded = agentembeddedmodule.New(embeddedConfig)
 	service.actions = service.actionHandlers()
 	service.realtimeModule = realtimewsmodule.New(realtimewsmodule.Dependencies{
 		Actions:      serviceRealtimeActionPort{service: service},
@@ -922,7 +983,6 @@ func newService(cfg Config, store Store, transport Transport, state portalState,
 		Sessions:     realtimeSessions,
 		Plugins:      service.pluginsModule,
 		Agent:        service.agentModule,
-		Core:         &agentCoreStreamAdapter{core: service.agentCore, ledger: service.coreTurns},
 		TicketActive: service.realtimeWSTicketActive,
 	}, realtimewsmodule.Config{
 		Now:               time.Now,

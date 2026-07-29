@@ -2,7 +2,12 @@ package p2p
 
 import (
 	"context"
+	"fmt"
 	"strings"
+	"time"
+
+	p2pstorage "github.com/YingSuiAI/dirextalk-message-server/p2p/storage"
+	"github.com/YingSuiAI/dirextalk-message-server/setup/process"
 )
 
 // EmbeddedSchedulesReady is fail-closed and intentionally distinct from the
@@ -14,23 +19,138 @@ func (s *Service) EmbeddedSchedulesReady() bool {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.scheduleModule != nil && s.scheduleModule.Ready() && s.scheduleRunning
+	return s.agentSecretRuntimeReadyLocked() &&
+		s.scheduleModule != nil &&
+		s.scheduleModule.Ready() &&
+		s.agentTaskRuntime != nil &&
+		s.agentScheduleLoop != nil &&
+		s.scheduleRunning
 }
 
-// StartEmbeddedScheduler starts the bounded background worker. Startup code
-// may call this after its lifecycle context is available; dependency failure
-// simply leaves the capability unavailable and does not affect other actions.
-func (s *Service) StartEmbeddedScheduler(ctx context.Context, workerID string) bool {
-	if s == nil || s.scheduleModule == nil || !s.scheduleModule.Ready() {
+func (s *Service) agentSecretRuntimeReadyLocked() bool {
+	return s.agentSecretReady &&
+		s.modelProfiles != nil &&
+		s.modelProfiles.ModelProfileStoreReady()
+}
+
+func (s *Service) embeddedAgentCapabilityReady(capability string) bool {
+	if s == nil {
 		return false
 	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch strings.TrimSpace(capability) {
+	case "model_profiles.server", "model_roles.server":
+		return s.agentSecretRuntimeReadyLocked()
+	case "memory.server":
+		_, ok := s.store.(*p2pstorage.DatabaseStore)
+		return ok
+	case "voice.server":
+		return s.agentModule != nil && s.agentModule.VoiceReady()
+	case "task", "confirmation", "schedules.server":
+		return s.agentSecretRuntimeReadyLocked() &&
+			s.scheduleRunning &&
+			s.agentTaskRuntime != nil &&
+			s.agentScheduleLoop != nil
+	case "mcp", "aws.control", "workload.aws_ssm", "workload.aws_ecs":
+		return s.agentSecretRuntimeReadyLocked() &&
+			s.scheduleRunning &&
+			s.agentTaskRuntime != nil &&
+			s.agentTaskExecutor != nil &&
+			s.agentTaskExecutor.ready(capability)
+	case "deployments.server":
+		_, ok := s.store.(embeddedDeploymentSource)
+		return ok
+	default:
+		return false
+	}
+}
+
+// StartEmbeddedScheduler starts the single generic schedule loop and task
+// worker. Shutdown stops claiming first, waits a bounded grace period for
+// in-flight calls, then cancels them so their leases can be reclaimed.
+func (s *Service) StartEmbeddedScheduler(processCtx *process.ProcessContext, workerID string) bool {
+	if s == nil || processCtx == nil {
+		return false
+	}
+	s.mu.Lock()
+	if s.agentRuntimeStarted {
+		ready := s.scheduleRunning
+		s.mu.Unlock()
+		return ready
+	}
+	s.agentRuntimeStarted = true
+	worker := s.agentTaskRuntime
+	loop := s.agentScheduleLoop
+	guard := s.agentSecretGuard
+	ready := s.agentSecretRuntimeReadyLocked() &&
+		s.scheduleModule != nil &&
+		s.scheduleModule.Ready() &&
+		worker != nil &&
+		loop != nil &&
+		s.agentRuntimeInitErr == nil
+	if !ready {
+		s.mu.Unlock()
+		if guard != nil {
+			processCtx.ComponentStarted()
+			go func() {
+				defer processCtx.ComponentFinished()
+				<-processCtx.Context().Done()
+				_ = guard.Close()
+			}()
+		}
+		return false
+	}
 	s.scheduleRunning = true
 	s.mu.Unlock()
-	owner := strings.TrimSpace(s.OwnerMXID())
+
+	_ = strings.TrimSpace(workerID) // Worker holder is fixed at construction.
+	processCtx.ComponentStarted()
 	go func() {
-		defer func() { s.mu.Lock(); s.scheduleRunning = false; s.mu.Unlock() }()
-		s.scheduleModule.Worker(owner, workerID).Run(ctx)
+		defer processCtx.ComponentFinished()
+		defer func() {
+			if guard != nil {
+				_ = guard.Close()
+			}
+			s.mu.Lock()
+			s.scheduleRunning = false
+			s.agentSecretReady = false
+			s.mu.Unlock()
+		}()
+
+		workerCtx, cancelWorker := context.WithCancel(context.Background())
+		scheduleCtx, cancelSchedule := context.WithCancel(context.Background())
+		defer cancelWorker()
+		defer cancelSchedule()
+		workerDone := make(chan error, 1)
+		scheduleDone := make(chan error, 1)
+		go func() { workerDone <- worker.Run(workerCtx) }()
+		go func() { scheduleDone <- loop.Run(scheduleCtx) }()
+
+		var runtimeErr error
+		select {
+		case <-processCtx.Context().Done():
+		case runtimeErr = <-workerDone:
+			if runtimeErr != nil {
+				runtimeErr = fmt.Errorf("embedded Agent task worker stopped: %w", runtimeErr)
+			}
+		case runtimeErr = <-scheduleDone:
+			if runtimeErr != nil {
+				runtimeErr = fmt.Errorf("embedded Agent schedule loop stopped: %w", runtimeErr)
+			}
+		}
+
+		cancelSchedule()
+		grace, cancelGrace := context.WithTimeout(context.Background(), 30*time.Second)
+		stopErr := worker.StopWithContext(grace)
+		cancelGrace()
+		cancelWorker()
+		if runtimeErr != nil {
+			processCtx.Degraded(runtimeErr)
+		}
+		if stopErr != nil && processCtx.Context().Err() == nil {
+			processCtx.Degraded(fmt.Errorf("embedded Agent worker shutdown: %w", stopErr))
+		}
 	}()
 	return true
 }

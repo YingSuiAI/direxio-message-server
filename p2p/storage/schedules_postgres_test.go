@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/sqlutil"
 	"github.com/YingSuiAI/dirextalk-message-server/setup/config"
 	"github.com/YingSuiAI/dirextalk-message-server/test"
@@ -22,7 +23,7 @@ func TestPostgresSchedulesRestartAndTwoClaimers(t *testing.T) {
 	}
 	defer a.Close()
 	n := time.Now().UTC().Add(-time.Minute)
-	v, err := a.CreateSchedule(ctx, Schedule{OwnerID: "owner", ScheduleID: "pg-s", Name: "n", Prompt: "p", TriggerKind: "one_time", TriggerValue: n.Format(time.RFC3339), Timezone: "UTC", Status: "enabled", NextRunAt: &n}, "idem")
+	v, err := a.CreateSchedule(ctx, Schedule{OwnerID: "owner", ScheduleID: "pg-s", Name: "n", Prompt: "p", TriggerKind: "one_time", TriggerValue: n.Format(time.RFC3339), Timezone: "UTC", Status: "enabled", TaskTemplate: json.RawMessage(`{"goal":"p","model_profile_id":"model"}`), TriggerJSON: json.RawMessage(`{"kind":"run_at","run_at":"` + n.Format(time.RFC3339) + `"}`), NextRunAt: &n}, "idem")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +32,7 @@ func TestPostgresSchedulesRestartAndTwoClaimers(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer b.Close()
-	if got, ok, _ := b.GetSchedule(ctx, "owner", v.ScheduleID); !ok || got.Prompt != "p" {
+	if got, ok, _ := b.GetSchedule(ctx, "owner", v.ScheduleID); !ok || got.Prompt != "p" || got.CoreState != "active" || string(got.TaskTemplate) != `{"goal":"p","model_profile_id":"model"}` || len(got.TriggerJSON) == 0 {
 		t.Fatal("restart readback failed")
 	}
 	var wg sync.WaitGroup
@@ -95,6 +96,58 @@ func TestPostgresSchedulesRestartAndTwoClaimers(t *testing.T) {
 	}
 	if err := a.AdvanceSchedule(ctx, "owner", v.ScheduleID, claimed.LeaseOwner, claimed.Revision, claimed.LeaseEpoch, nil, "disabled"); err != ErrScheduleClaimed {
 		t.Fatalf("stale advance after recovery=%v", err)
+	}
+}
+
+func TestPostgresScheduleMaterializationIsOwnerScoped(t *testing.T) {
+	ctx := context.Background()
+	conn, closeDB := test.PrepareDBConnectionString(t, test.DBTypePostgres)
+	defer closeDB()
+	opts := config.DatabaseOptions{ConnectionString: config.DataSource(conn)}
+	s, err := NewDatabaseStore(ctx, sqlutil.NewConnectionManager(nil, opts), &opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	const scheduleID = "00000000-0000-4000-8000-000000000042"
+	const profileID = "00000000-0000-4000-8000-000000000043"
+	at := time.Date(2026, 7, 29, 1, 2, 3, 0, time.UTC)
+	for _, owner := range []string{"owner-a", "owner-b"} {
+		if _, err := s.CreateSchedule(ctx, Schedule{
+			OwnerID: owner, ScheduleID: scheduleID, Name: "same-id", Prompt: "work",
+			TriggerKind: "one_time", TriggerValue: at.Format(time.RFC3339), Timezone: "UTC", Status: "enabled",
+			ModelProfileID: profileID, TaskTemplate: json.RawMessage(`{"goal":"work","model_profile_id":"` + profileID + `"}`),
+		}, ""); err != nil {
+			t.Fatalf("create %s: %v", owner, err)
+		}
+	}
+
+	occA, taskA, err := s.MaterializeScheduleTask(ctx, "owner-a", scheduleID, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	occB, taskB, err := s.MaterializeScheduleTask(ctx, "owner-b", scheduleID, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if occA == occB || taskA == taskB {
+		t.Fatalf("owner-local materializations collided: occurrence %q/%q task %q/%q", occA, occB, taskA, taskB)
+	}
+	// A retry must return the original owner-local projection, not the other
+	// owner's same schedule UUID/timestamp row.
+	if occurrence, taskID, err := s.MaterializeScheduleTask(ctx, "owner-a", scheduleID, at); err != nil || occurrence != occA || taskID != taskA {
+		t.Fatalf("owner-a retry occurrence=%q task=%q err=%v", occurrence, taskID, err)
+	}
+	var occurrences, runs int
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM agent_schedule_occurrences WHERE schedule_id=$1 AND scheduled_for=$2`, scheduleID, at).Scan(&occurrences); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM p2p_agent_schedule_runs WHERE schedule_id=$1 AND scheduled_for=$2`, scheduleID, at).Scan(&runs); err != nil {
+		t.Fatal(err)
+	}
+	if occurrences != 2 || runs != 2 {
+		t.Fatalf("owner-scoped rows occurrences=%d runs=%d", occurrences, runs)
 	}
 }
 

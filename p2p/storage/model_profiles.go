@@ -24,11 +24,12 @@ import (
 )
 
 var (
-	ErrModelProfileNotFound       = errors.New("model profile not found")
-	ErrModelProfileRevision       = errors.New("model profile revision conflict")
-	ErrModelProfileInvalid        = errors.New("invalid model profile")
-	ErrModelProfileKeyUnavailable = errors.New("model profile key unavailable")
-	ErrModelProfileIdempotency    = errors.New("model profile idempotency conflict")
+	ErrModelProfileNotFound        = errors.New("model profile not found")
+	ErrModelProfileRevision        = errors.New("model profile revision conflict")
+	ErrModelProfileInvalid         = errors.New("invalid model profile")
+	ErrModelProfileKeyUnavailable  = errors.New("model profile key unavailable")
+	ErrModelProfileUpgradeRequired = errors.New("model profile credential upgrade required")
+	ErrModelProfileIdempotency     = errors.New("model profile idempotency conflict")
 )
 
 const defaultModelProfilePageSize = 25
@@ -189,14 +190,28 @@ func (s *encryptedModelProfileStore) ResolveDefaultModelProfilePin(ctx context.C
 }
 
 type encryptedModelProfileStore struct {
-	db     *sql.DB
-	writer sqlutil.Writer
-	key    []byte
-	ready  bool
-	now    func() time.Time
+	db        *sql.DB
+	writer    sqlutil.Writer
+	key       []byte // legacy v1 raw key; read-only once a keyring is present.
+	enveloper *AgentSecretEnveloper
+	ready     bool
+	now       func() time.Time
 }
 
 func NewEncryptedModelProfileStore(ctx context.Context, db *sql.DB, writer sqlutil.Writer, keyFile string) (ModelProfileStore, error) {
+	if raw, err := os.ReadFile(strings.TrimSpace(keyFile)); err == nil && len(raw) == 32 {
+		return newEncryptedModelProfileStoreWithKeyring(ctx, db, writer, keyFile+".keyring.json", keyFile, true)
+	}
+	return newEncryptedModelProfileStoreWithKeyring(ctx, db, writer, keyFile, "", true)
+}
+
+// NewEncryptedModelProfileStoreWithKeyring separates active envelope keys from
+// the legacy raw key. The latter is read only and applies only to blank key_id.
+func NewEncryptedModelProfileStoreWithKeyring(ctx context.Context, db *sql.DB, writer sqlutil.Writer, keyringFile, legacyModelProfileKeyFile string) (ModelProfileStore, error) {
+	return newEncryptedModelProfileStoreWithKeyring(ctx, db, writer, keyringFile, legacyModelProfileKeyFile, false)
+}
+
+func newEncryptedModelProfileStoreWithKeyring(ctx context.Context, db *sql.DB, writer sqlutil.Writer, keyringFile, legacyModelProfileKeyFile string, allowLegacy bool) (ModelProfileStore, error) {
 	if db == nil {
 		return nil, fmt.Errorf("model profile database is unavailable")
 	}
@@ -209,48 +224,98 @@ func NewEncryptedModelProfileStore(ctx context.Context, db *sql.DB, writer sqlut
 	if !rows.Next() || rows.Scan(&encryptedCount) != nil {
 		return nil, fmt.Errorf("model profile key state is unavailable")
 	}
-	key, err := loadOrCreateModelProfileKey(keyFile, encryptedCount > 0)
+	key, enveloper, err := loadModelProfileSecretMaterial(keyringFile, legacyModelProfileKeyFile, encryptedCount > 0)
 	if err != nil {
 		return nil, err
 	}
-	store := &encryptedModelProfileStore{db: db, writer: writer, key: key, ready: true, now: time.Now}
+	store := &encryptedModelProfileStore{db: db, writer: writer, key: key, enveloper: enveloper, ready: true, now: time.Now}
 	if err := store.validateEncryptedRows(ctx); err != nil {
 		return nil, ErrModelProfileKeyUnavailable
+	}
+	if !allowLegacy {
+		var legacyRows int64
+		if err := db.QueryRowContext(ctx, `SELECT
+			(SELECT COUNT(*) FROM p2p_agent_model_profiles WHERE api_key_ciphertext<>''::bytea AND api_key_key_id='')+
+			(SELECT COUNT(*) FROM p2p_agent_model_profile_credentials WHERE api_key_ciphertext<>''::bytea AND api_key_key_id='')`).Scan(&legacyRows); err != nil {
+			return nil, ErrModelProfileKeyUnavailable
+		}
+		if legacyRows != 0 {
+			return nil, ErrModelProfileUpgradeRequired
+		}
 	}
 	return store, nil
 }
 
+func loadModelProfileSecretMaterial(keyringFile, legacyFile string, encryptedRows bool) ([]byte, *AgentSecretEnveloper, error) {
+	keyringFile, legacyFile = strings.TrimSpace(keyringFile), strings.TrimSpace(legacyFile)
+	if keyringFile == "" {
+		return nil, nil, ErrModelProfileKeyUnavailable
+	}
+	var legacyKey []byte
+	if legacyFile != "" {
+		raw, err := os.ReadFile(legacyFile)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, nil, ErrModelProfileKeyUnavailable
+		}
+		if err == nil {
+			if len(raw) != 32 {
+				return nil, nil, ErrModelProfileKeyUnavailable
+			}
+			if info, statErr := os.Stat(legacyFile); statErr != nil || info.Mode().Perm() != 0600 {
+				return nil, nil, ErrModelProfileKeyUnavailable
+			}
+			legacyKey = append([]byte(nil), raw...)
+		}
+	}
+	if encryptedRows {
+		if _, err := os.Stat(keyringFile); err != nil {
+			return nil, nil, ErrModelProfileKeyUnavailable
+		}
+	}
+	keyring, err := LoadOrCreateAgentSecretKeyring(keyringFile)
+	if err != nil {
+		return nil, nil, ErrModelProfileKeyUnavailable
+	}
+	enveloper, err := NewAgentSecretEnveloper(keyring)
+	if err != nil {
+		return nil, nil, ErrModelProfileKeyUnavailable
+	}
+	return legacyKey, enveloper, nil
+}
+
 func (s *encryptedModelProfileStore) validateEncryptedRows(ctx context.Context) error {
-	rows, err := s.db.QueryContext(ctx, `SELECT profile_id, provider, api_key_nonce, api_key_ciphertext FROM p2p_agent_model_profiles WHERE api_key_ciphertext <> ''`)
+	rows, err := s.db.QueryContext(ctx, `SELECT owner_id, profile_id, provider, revision, credential_version, api_key_key_id, api_key_profile_revision, api_key_nonce, api_key_ciphertext FROM p2p_agent_model_profiles WHERE api_key_ciphertext <> ''`)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var profileID, provider string
+		var ownerID, profileID, provider, keyID string
+		var revision, credentialVersion, boundRevision int64
 		var nonce, ciphertext []byte
-		if err := rows.Scan(&profileID, &provider, &nonce, &ciphertext); err != nil {
+		if err := rows.Scan(&ownerID, &profileID, &provider, &revision, &credentialVersion, &keyID, &boundRevision, &nonce, &ciphertext); err != nil {
 			return err
 		}
-		if _, err := s.decrypt(profileID, provider, nonce, ciphertext); err != nil {
+		if _, err := s.decryptCredential(ownerID, profileID, provider, revision, credentialVersion, keyID, boundRevision, nonce, ciphertext); err != nil {
 			return err
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	history, err := s.db.QueryContext(ctx, `SELECT profile_id, provider, api_key_nonce, api_key_ciphertext FROM p2p_agent_model_profile_credentials`)
+	history, err := s.db.QueryContext(ctx, `SELECT owner_id, profile_id, provider, credential_version, api_key_key_id, profile_revision, api_key_nonce, api_key_ciphertext FROM p2p_agent_model_profile_credentials`)
 	if err != nil {
 		return err
 	}
 	defer history.Close()
 	for history.Next() {
-		var profileID, provider string
+		var ownerID, profileID, provider, keyID string
+		var credentialVersion, boundRevision int64
 		var nonce, ciphertext []byte
-		if err := history.Scan(&profileID, &provider, &nonce, &ciphertext); err != nil {
+		if err := history.Scan(&ownerID, &profileID, &provider, &credentialVersion, &keyID, &boundRevision, &nonce, &ciphertext); err != nil {
 			return err
 		}
-		if _, err := s.decrypt(profileID, provider, nonce, ciphertext); err != nil {
+		if _, err := s.decryptCredential(ownerID, profileID, provider, boundRevision, credentialVersion, keyID, boundRevision, nonce, ciphertext); err != nil {
 			return err
 		}
 	}
@@ -262,6 +327,15 @@ func NewDatabaseModelProfileStore(ctx context.Context, store *DatabaseStore, key
 		return nil, fmt.Errorf("model profile database is unavailable")
 	}
 	return NewEncryptedModelProfileStore(ctx, store.db, store.writer, keyFile)
+}
+
+// NewDatabaseModelProfileStoreWithKeyring is the DatabaseStore convenience
+// wrapper for the explicit active-keyring/legacy-key constructor.
+func NewDatabaseModelProfileStoreWithKeyring(ctx context.Context, store *DatabaseStore, keyringFile, legacyModelProfileKeyFile string) (ModelProfileStore, error) {
+	if store == nil {
+		return nil, fmt.Errorf("model profile database is unavailable")
+	}
+	return NewEncryptedModelProfileStoreWithKeyring(ctx, store.db, store.writer, keyringFile, legacyModelProfileKeyFile)
 }
 
 func (s *encryptedModelProfileStore) ModelProfileStoreReady() bool { return s != nil && s.ready }
@@ -430,10 +504,19 @@ func (s *encryptedModelProfileStore) upsertProfileTx(ctx context.Context, tx *sq
 			}
 		}
 	}
+	var keyID string
+	var boundRevision int64
 	var nonce, ciphertext []byte
 	credentialRotated := entry.APIKey != nil
 	if entry.ModelKind == ModelKindSpeech {
 		credentialRotated = len(entry.ProviderSecrets) > 0
+	}
+	nextCredentialVersion := profile.CredentialVersion
+	if credentialRotated {
+		nextCredentialVersion++
+		if nextCredentialVersion <= 0 {
+			nextCredentialVersion = 1
+		}
 	}
 	if isNew || entry.APIKey != nil || len(entry.ProviderSecrets) > 0 {
 		if entry.ModelKind == ModelKindSpeech && len(entry.ProviderSecrets) > 0 {
@@ -441,53 +524,59 @@ func (s *encryptedModelProfileStore) upsertProfileTx(ctx context.Context, tx *sq
 			if encodeErr != nil {
 				return ErrModelProfileInvalid
 			}
-			nonce, ciphertext, err = s.encrypt(profile.ProfileID, provider, encoded)
+			keyID, boundRevision, nonce, ciphertext, err = s.encryptCredential(ownerID, profile.ProfileID, provider, revision, nextCredentialVersion, encoded)
 			if err != nil {
 				return err
 			}
 		} else if entry.APIKey != nil {
 			var err error
-			nonce, ciphertext, err = s.encrypt(profile.ProfileID, provider, []byte(*entry.APIKey))
+			keyID, boundRevision, nonce, ciphertext, err = s.encryptCredential(ownerID, profile.ProfileID, provider, revision, nextCredentialVersion, []byte(*entry.APIKey))
 			if err != nil {
 				return err
 			}
 		} else if !isNew {
-			if err := tx.QueryRowContext(ctx, `SELECT api_key_nonce,api_key_ciphertext FROM p2p_agent_model_profiles WHERE owner_id=$1 AND profile_id=$2`, ownerID, profile.ProfileID).Scan(&nonce, &ciphertext); err != nil {
+			if err := tx.QueryRowContext(ctx, `SELECT api_key_key_id,api_key_profile_revision,api_key_nonce,api_key_ciphertext FROM p2p_agent_model_profiles WHERE owner_id=$1 AND profile_id=$2`, ownerID, profile.ProfileID).Scan(&keyID, &boundRevision, &nonce, &ciphertext); err != nil {
 				return err
 			}
 		}
 	} else {
-		if err := tx.QueryRowContext(ctx, `SELECT api_key_nonce,api_key_ciphertext FROM p2p_agent_model_profiles WHERE owner_id=$1 AND profile_id=$2`, ownerID, profile.ProfileID).Scan(&nonce, &ciphertext); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT api_key_key_id,api_key_profile_revision,api_key_nonce,api_key_ciphertext FROM p2p_agent_model_profiles WHERE owner_id=$1 AND profile_id=$2`, ownerID, profile.ProfileID).Scan(&keyID, &boundRevision, &nonce, &ciphertext); err != nil {
 			return err
 		}
 	}
 	if !isNew && entry.APIKey == nil && len(entry.ProviderSecrets) == 0 && len(ciphertext) > 0 && profile.Provider != provider {
-		apiKey, err := s.decrypt(profile.ProfileID, profile.Provider, nonce, ciphertext)
+		apiKey, err := s.decryptCredential(ownerID, profile.ProfileID, profile.Provider, profile.Revision, profile.CredentialVersion, keyID, boundRevision, nonce, ciphertext)
 		if err != nil {
 			return err
 		}
-		nonce, ciphertext, err = s.encrypt(profile.ProfileID, provider, []byte(apiKey))
+		credentialRotated = true
+		nextCredentialVersion = profile.CredentialVersion + 1
+		keyID, boundRevision, nonce, ciphertext, err = s.encryptCredential(ownerID, profile.ProfileID, provider, revision, nextCredentialVersion, []byte(apiKey))
 		if err != nil {
 			return err
 		}
 		credentialRotated = true
 	}
 	if credentialRotated {
-		profile.CredentialVersion++
-		if profile.CredentialVersion <= 0 {
-			profile.CredentialVersion = 1
-		}
+		profile.CredentialVersion = nextCredentialVersion
 	}
 	modalitiesJSON, _ := json.Marshal(entry.InputModalities)
 	providerConfigJSON, _ := json.Marshal(entry.ProviderConfig)
 	args := []any{ownerID, profile.ProfileID, entry.ClientProfileID, strings.TrimSpace(entry.DisplayName), provider, strings.TrimRight(strings.TrimSpace(entry.BaseURL), "/"), strings.TrimSpace(entry.Model), strings.TrimSpace(entry.SystemPrompt), nullableFloat(entry.Temperature), nullableFloat(entry.TopP), entry.MaxOutputTokens, entry.ContextWindow, strings.TrimSpace(entry.ReasoningEffort), entry.ModelKind, string(modalitiesJSON), string(providerConfigJSON), revision}
 	if isNew {
-		_, err = tx.ExecContext(ctx, `INSERT INTO p2p_agent_model_profiles(owner_id,profile_id,client_profile_id,display_name,provider,base_url,model,system_prompt,temperature,top_p,max_output_tokens,context_window,reasoning_effort,model_kind,input_modalities,provider_config,revision,api_key_version,api_key_nonce,api_key_ciphertext,credential_version,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16::jsonb,$17,1,$18,$19,$20,$21,$21)`, append(args, nonce, ciphertext, profile.CredentialVersion, s.now())...)
+		_, err = tx.ExecContext(ctx, `INSERT INTO p2p_agent_model_profiles(owner_id,profile_id,client_profile_id,display_name,provider,base_url,model,system_prompt,temperature,top_p,max_output_tokens,context_window,reasoning_effort,model_kind,input_modalities,provider_config,revision,api_key_version,api_key_key_id,api_key_profile_revision,api_key_nonce,api_key_ciphertext,credential_version,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16::jsonb,$17,2,$18,$19,$20,$21,$22,$23,$23)`, append(args, keyID, boundRevision, nonce, ciphertext, profile.CredentialVersion, s.now())...)
 	} else {
-		_, err = tx.ExecContext(ctx, `UPDATE p2p_agent_model_profiles SET display_name=$4,provider=$5,base_url=$6,model=$7,system_prompt=$8,temperature=$9,top_p=$10,max_output_tokens=$11,context_window=$12,reasoning_effort=$13,model_kind=$14,input_modalities=$15::jsonb,provider_config=$16::jsonb,revision=$17,api_key_version=1,api_key_nonce=$18,api_key_ciphertext=$19,credential_version=$20,deleted_at=NULL,updated_at=$21 WHERE owner_id=$1 AND profile_id=$2 AND client_profile_id=$3`, append(args, nonce, ciphertext, profile.CredentialVersion, s.now())...)
+		_, err = tx.ExecContext(ctx, `UPDATE p2p_agent_model_profiles SET display_name=$4,provider=$5,base_url=$6,model=$7,system_prompt=$8,temperature=$9,top_p=$10,max_output_tokens=$11,context_window=$12,reasoning_effort=$13,model_kind=$14,input_modalities=$15::jsonb,provider_config=$16::jsonb,revision=$17,api_key_version=2,api_key_key_id=$18,api_key_profile_revision=$19,api_key_nonce=$20,api_key_ciphertext=$21,credential_version=$22,deleted_at=NULL,updated_at=$23 WHERE owner_id=$1 AND profile_id=$2 AND client_profile_id=$3`, append(args, keyID, boundRevision, nonce, ciphertext, profile.CredentialVersion, s.now())...)
 	}
 	if err == nil && credentialRotated {
-		_, err = tx.ExecContext(ctx, `INSERT INTO p2p_agent_model_profile_credentials(owner_id,profile_id,credential_version,provider,api_key_nonce,api_key_ciphertext,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)`, ownerID, profile.ProfileID, profile.CredentialVersion, provider, nonce, ciphertext, s.now())
+		_, err = tx.ExecContext(ctx, `INSERT INTO p2p_agent_model_profile_credentials(owner_id,profile_id,credential_version,provider,api_key_key_id,profile_revision,api_key_nonce,api_key_ciphertext,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, ownerID, profile.ProfileID, profile.CredentialVersion, provider, keyID, boundRevision, nonce, ciphertext, s.now())
+		if err == nil {
+			envelope := AgentSecretEnvelope{KeyID: keyID, Nonce: nonce, Ciphertext: ciphertext}
+			err = upsertAgentSecretUsageTx(ctx, tx, "model_profile.current", ownerID, profile.ProfileID, boundRevision, "model_profile_credential", provider, envelope)
+			if err == nil {
+				err = upsertAgentSecretUsageTx(ctx, tx, "model_profile.history", ownerID, profile.ProfileID, boundRevision, "model_profile_credential", provider, envelope)
+			}
+		}
 	}
 	if err == nil {
 		err = s.snapshotProfileTx(ctx, tx, ownerID, profile.ProfileID, revision)
@@ -507,23 +596,31 @@ func nullableFloat(value *float64) any {
 	return *value
 }
 
-func (s *encryptedModelProfileStore) encrypt(profileID, provider string, plaintext []byte) ([]byte, []byte, error) {
-	block, err := aes.NewCipher(s.key)
+func (s *encryptedModelProfileStore) encryptCredential(ownerID, profileID, provider string, profileRevision, credentialVersion int64, plaintext []byte) (string, int64, []byte, []byte, error) {
+	if s.enveloper == nil {
+		return "", 0, nil, nil, ErrModelProfileKeyUnavailable
+	}
+	row, err := SealModelProfileCredential(s.enveloper, ownerID, profileID, provider, profileRevision, credentialVersion, plaintext)
 	if err != nil {
-		return nil, nil, ErrModelProfileKeyUnavailable
+		return "", 0, nil, nil, ErrModelProfileKeyUnavailable
 	}
-	aead, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, nil, ErrModelProfileKeyUnavailable
-	}
-	nonce := make([]byte, aead.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return nil, nil, ErrModelProfileKeyUnavailable
-	}
-	return nonce, aead.Seal(nil, nonce, plaintext, []byte(profileID+"\x00"+provider)), nil
+	return row.KeyID, profileRevision, row.Nonce, row.Ciphertext, nil
 }
 
-func (s *encryptedModelProfileStore) decrypt(profileID, provider string, nonce, ciphertext []byte) (string, error) {
+func (s *encryptedModelProfileStore) decryptCredential(ownerID, profileID, provider string, profileRevision, credentialVersion int64, keyID string, boundRevision int64, nonce, ciphertext []byte) (string, error) {
+	if strings.TrimSpace(keyID) != "" {
+		if boundRevision < 1 {
+			return "", ErrModelProfileKeyUnavailable
+		}
+		plaintext, err := OpenModelProfileCredential(s.enveloper, ownerID, profileID, provider, boundRevision, ModelProfileCredentialEnvelope{AgentSecretEnvelope: AgentSecretEnvelope{KeyID: keyID, Nonce: nonce, Ciphertext: ciphertext}, CredentialVersion: credentialVersion}, nil)
+		if err != nil {
+			return "", ErrModelProfileKeyUnavailable
+		}
+		return string(plaintext), nil
+	}
+	if len(s.key) != 32 {
+		return "", ErrModelProfileKeyUnavailable
+	}
 	block, err := aes.NewCipher(s.key)
 	if err != nil {
 		return "", ErrModelProfileKeyUnavailable
@@ -594,7 +691,7 @@ func (s *encryptedModelProfileStore) listProfiles(ctx context.Context, ownerID s
 			return ModelProfileListResult{}, ErrModelProfileInvalid
 		}
 	}
-	query := `SELECT profile_id,client_profile_id,display_name,provider,base_url,model,system_prompt,temperature,top_p,max_output_tokens,context_window,reasoning_effort,model_kind,input_modalities,provider_config,revision,credential_version,api_key_nonce,api_key_ciphertext,created_at,updated_at,deleted_at FROM p2p_agent_model_profiles WHERE owner_id=$1 AND deleted_at IS NULL`
+	query := `SELECT profile_id,client_profile_id,display_name,provider,base_url,model,system_prompt,temperature,top_p,max_output_tokens,context_window,reasoning_effort,model_kind,input_modalities,provider_config,revision,credential_version,api_key_key_id,api_key_profile_revision,api_key_nonce,api_key_ciphertext,created_at,updated_at,deleted_at FROM p2p_agent_model_profiles WHERE owner_id=$1 AND deleted_at IS NULL`
 	args := []any{ownerID}
 	if pageToken != "" {
 		query += ` AND (client_profile_id,profile_id) > ($2,$3)`
@@ -609,7 +706,7 @@ func (s *encryptedModelProfileStore) listProfiles(ctx context.Context, ownerID s
 	defer rows.Close()
 	profiles := make([]ModelProfile, 0, pageSize+1)
 	for rows.Next() {
-		profile, scanErr := s.scanProfile(rows)
+		profile, scanErr := s.scanProfile(rows, ownerID)
 		if scanErr != nil {
 			return ModelProfileListResult{}, scanErr
 		}
@@ -645,14 +742,14 @@ func decodeModelProfilePageToken(token string) (string, string, error) {
 }
 
 func (s *encryptedModelProfileStore) listProfilesTx(ctx context.Context, tx *sql.Tx, ownerID string, pageSize int, pageToken string) ([]ModelProfile, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT profile_id,client_profile_id,display_name,provider,base_url,model,system_prompt,temperature,top_p,max_output_tokens,context_window,reasoning_effort,model_kind,input_modalities,provider_config,revision,credential_version,api_key_nonce,api_key_ciphertext,created_at,updated_at,deleted_at FROM p2p_agent_model_profiles WHERE owner_id=$1 AND deleted_at IS NULL ORDER BY client_profile_id,profile_id`, ownerID)
+	rows, err := tx.QueryContext(ctx, `SELECT profile_id,client_profile_id,display_name,provider,base_url,model,system_prompt,temperature,top_p,max_output_tokens,context_window,reasoning_effort,model_kind,input_modalities,provider_config,revision,credential_version,api_key_key_id,api_key_profile_revision,api_key_nonce,api_key_ciphertext,created_at,updated_at,deleted_at FROM p2p_agent_model_profiles WHERE owner_id=$1 AND deleted_at IS NULL ORDER BY client_profile_id,profile_id`, ownerID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	profiles := make([]ModelProfile, 0)
 	for rows.Next() {
-		p, err := s.scanProfile(rows)
+		p, err := s.scanProfile(rows, ownerID)
 		if err != nil {
 			return nil, err
 		}
@@ -663,13 +760,15 @@ func (s *encryptedModelProfileStore) listProfilesTx(ctx context.Context, tx *sql
 
 type modelProfileScanner interface{ Scan(...any) error }
 
-func (s *encryptedModelProfileStore) scanProfile(row modelProfileScanner) (ModelProfile, error) {
+func (s *encryptedModelProfileStore) scanProfile(row modelProfileScanner, ownerID string) (ModelProfile, error) {
 	var p ModelProfile
+	var keyID string
+	var boundRevision int64
 	var nonce, ciphertext []byte
 	var temperature, topP sql.NullFloat64
 	var deletedAt sql.NullTime
 	var modalitiesJSON, providerConfigJSON []byte
-	err := row.Scan(&p.ProfileID, &p.ClientProfileID, &p.DisplayName, &p.Provider, &p.BaseURL, &p.Model, &p.SystemPrompt, &temperature, &topP, &p.MaxOutputTokens, &p.ContextWindow, &p.ReasoningEffort, &p.ModelKind, &modalitiesJSON, &providerConfigJSON, &p.Revision, &p.CredentialVersion, &nonce, &ciphertext, &p.CreatedAt, &p.UpdatedAt, &deletedAt)
+	err := row.Scan(&p.ProfileID, &p.ClientProfileID, &p.DisplayName, &p.Provider, &p.BaseURL, &p.Model, &p.SystemPrompt, &temperature, &topP, &p.MaxOutputTokens, &p.ContextWindow, &p.ReasoningEffort, &p.ModelKind, &modalitiesJSON, &providerConfigJSON, &p.Revision, &p.CredentialVersion, &keyID, &boundRevision, &nonce, &ciphertext, &p.CreatedAt, &p.UpdatedAt, &deletedAt)
 	if err != nil {
 		return p, err
 	}
@@ -689,7 +788,7 @@ func (s *encryptedModelProfileStore) scanProfile(row modelProfileScanner) (Model
 	}
 	p.Deleted = deletedAt.Valid
 	if len(ciphertext) > 0 {
-		p.APIKey, err = s.decrypt(p.ProfileID, p.Provider, nonce, ciphertext)
+		p.APIKey, err = s.decryptCredential(ownerID, p.ProfileID, p.Provider, p.Revision, p.CredentialVersion, keyID, boundRevision, nonce, ciphertext)
 		if err != nil {
 			return ModelProfile{}, err
 		}
@@ -738,8 +837,8 @@ func ModelProfileAPIKeyHint(modelKind, apiKey string) string {
 }
 
 func (s *encryptedModelProfileStore) GetModelProfile(ctx context.Context, ownerID, profileID string) (ModelProfile, bool, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT profile_id,client_profile_id,display_name,provider,base_url,model,system_prompt,temperature,top_p,max_output_tokens,context_window,reasoning_effort,model_kind,input_modalities,provider_config,revision,credential_version,api_key_nonce,api_key_ciphertext,created_at,updated_at,deleted_at FROM p2p_agent_model_profiles WHERE owner_id=$1 AND profile_id=$2 AND deleted_at IS NULL`, ownerID, profileID)
-	p, err := s.scanProfile(row)
+	row := s.db.QueryRowContext(ctx, `SELECT profile_id,client_profile_id,display_name,provider,base_url,model,system_prompt,temperature,top_p,max_output_tokens,context_window,reasoning_effort,model_kind,input_modalities,provider_config,revision,credential_version,api_key_key_id,api_key_profile_revision,api_key_nonce,api_key_ciphertext,created_at,updated_at,deleted_at FROM p2p_agent_model_profiles WHERE owner_id=$1 AND profile_id=$2 AND deleted_at IS NULL`, ownerID, profileID)
+	p, err := s.scanProfile(row, ownerID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ModelProfile{}, false, nil
 	}
@@ -798,16 +897,17 @@ func (s *encryptedModelProfileStore) ResolveModelProfileVersion(ctx context.Cont
 	if err != nil || credentialVersion <= 0 || credentialVersion == profile.CredentialVersion {
 		return profile, err
 	}
-	var provider string
+	var provider, keyID string
+	var boundRevision int64
 	var nonce, ciphertext []byte
-	err = s.db.QueryRowContext(ctx, `SELECT provider,api_key_nonce,api_key_ciphertext FROM p2p_agent_model_profile_credentials WHERE owner_id=$1 AND profile_id=$2 AND credential_version=$3`, ownerID, profileID, credentialVersion).Scan(&provider, &nonce, &ciphertext)
+	err = s.db.QueryRowContext(ctx, `SELECT provider,api_key_key_id,profile_revision,api_key_nonce,api_key_ciphertext FROM p2p_agent_model_profile_credentials WHERE owner_id=$1 AND profile_id=$2 AND credential_version=$3`, ownerID, profileID, credentialVersion).Scan(&provider, &keyID, &boundRevision, &nonce, &ciphertext)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ModelProfile{}, ErrModelProfileNotFound
 	}
 	if err != nil {
 		return ModelProfile{}, err
 	}
-	apiKey, err := s.decrypt(profileID, provider, nonce, ciphertext)
+	apiKey, err := s.decryptCredential(ownerID, profileID, provider, profile.Revision, credentialVersion, keyID, boundRevision, nonce, ciphertext)
 	if err != nil {
 		return ModelProfile{}, err
 	}
@@ -846,15 +946,16 @@ func (s *encryptedModelProfileStore) ResolveModelProfilePinned(ctx context.Conte
 		credentialVersion = profile.CredentialVersion
 	}
 	if credentialVersion > 0 {
-		var provider string
+		var provider, keyID string
+		var boundRevision int64
 		var nonce, ciphertext []byte
-		if err := s.db.QueryRowContext(ctx, `SELECT provider,api_key_nonce,api_key_ciphertext FROM p2p_agent_model_profile_credentials WHERE owner_id=$1 AND profile_id=$2 AND credential_version=$3`, ownerID, profileID, credentialVersion).Scan(&provider, &nonce, &ciphertext); err != nil {
+		if err := s.db.QueryRowContext(ctx, `SELECT provider,api_key_key_id,profile_revision,api_key_nonce,api_key_ciphertext FROM p2p_agent_model_profile_credentials WHERE owner_id=$1 AND profile_id=$2 AND credential_version=$3`, ownerID, profileID, credentialVersion).Scan(&provider, &keyID, &boundRevision, &nonce, &ciphertext); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return ModelProfile{}, ErrModelProfileNotFound
 			}
 			return ModelProfile{}, err
 		}
-		apiKey, err := s.decrypt(profileID, provider, nonce, ciphertext)
+		apiKey, err := s.decryptCredential(ownerID, profileID, provider, profile.Revision, credentialVersion, keyID, boundRevision, nonce, ciphertext)
 		if err != nil {
 			return ModelProfile{}, err
 		}

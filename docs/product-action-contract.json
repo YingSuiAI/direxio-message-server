@@ -2399,51 +2399,10 @@
                     "type": "object",
                     "properties": {
                       "credential_reference_id": {
-                        "type": "string"
+                        "type": "string",
+                        "required": true
                       },
                       "url": {
-                        "type": "string",
-                        "required": true
-                      }
-                    }
-                  },
-                  "skill": {
-                    "type": "object",
-                    "properties": {
-                      "argv": {
-                        "type": "array",
-                        "items": {
-                          "type": "string"
-                        }
-                      },
-                      "digest": {
-                        "type": "string",
-                        "required": true
-                      },
-                      "executable": {
-                        "type": "boolean",
-                        "required": true
-                      },
-                      "relative_path": {
-                        "type": "string",
-                        "required": true
-                      }
-                    }
-                  },
-                  "stdio": {
-                    "type": "object",
-                    "properties": {
-                      "argv": {
-                        "type": "array",
-                        "items": {
-                          "type": "string"
-                        }
-                      },
-                      "digest": {
-                        "type": "string",
-                        "required": true
-                      },
-                      "relative_path": {
                         "type": "string",
                         "required": true
                       }
@@ -2474,7 +2433,8 @@
                       "required": true
                     },
                     "path_prefix": {
-                      "type": "string"
+                      "type": "string",
+                      "required": true
                     },
                     "port": {
                       "type": "integer",
@@ -2662,51 +2622,10 @@
                     "type": "object",
                     "properties": {
                       "credential_reference_id": {
-                        "type": "string"
+                        "type": "string",
+                        "required": true
                       },
                       "url": {
-                        "type": "string",
-                        "required": true
-                      }
-                    }
-                  },
-                  "skill": {
-                    "type": "object",
-                    "properties": {
-                      "argv": {
-                        "type": "array",
-                        "items": {
-                          "type": "string"
-                        }
-                      },
-                      "digest": {
-                        "type": "string",
-                        "required": true
-                      },
-                      "executable": {
-                        "type": "boolean",
-                        "required": true
-                      },
-                      "relative_path": {
-                        "type": "string",
-                        "required": true
-                      }
-                    }
-                  },
-                  "stdio": {
-                    "type": "object",
-                    "properties": {
-                      "argv": {
-                        "type": "array",
-                        "items": {
-                          "type": "string"
-                        }
-                      },
-                      "digest": {
-                        "type": "string",
-                        "required": true
-                      },
-                      "relative_path": {
                         "type": "string",
                         "required": true
                       }
@@ -2737,7 +2656,8 @@
                       "required": true
                     },
                     "path_prefix": {
-                      "type": "string"
+                      "type": "string",
+                      "required": true
                     },
                     "port": {
                       "type": "integer",
@@ -2958,51 +2878,10 @@
                     "type": "object",
                     "properties": {
                       "credential_reference_id": {
-                        "type": "string"
+                        "type": "string",
+                        "required": true
                       },
                       "url": {
-                        "type": "string",
-                        "required": true
-                      }
-                    }
-                  },
-                  "skill": {
-                    "type": "object",
-                    "properties": {
-                      "argv": {
-                        "type": "array",
-                        "items": {
-                          "type": "string"
-                        }
-                      },
-                      "digest": {
-                        "type": "string",
-                        "required": true
-                      },
-                      "executable": {
-                        "type": "boolean",
-                        "required": true
-                      },
-                      "relative_path": {
-                        "type": "string",
-                        "required": true
-                      }
-                    }
-                  },
-                  "stdio": {
-                    "type": "object",
-                    "properties": {
-                      "argv": {
-                        "type": "array",
-                        "items": {
-                          "type": "string"
-                        }
-                      },
-                      "digest": {
-                        "type": "string",
-                        "required": true
-                      },
-                      "relative_path": {
                         "type": "string",
                         "required": true
                       }
@@ -3033,7 +2912,8 @@
                       "required": true
                     },
                     "path_prefix": {
-                      "type": "string"
+                      "type": "string",
+                      "required": true
                     },
                     "port": {
                       "type": "integer",
@@ -3164,6 +3044,7 @@
         "request": {
           "expected_revision": {
             "type": "integer",
+            "required": true,
             "presence": {
               "omitted": "no_revision_check",
               "present": "must_match_current_revision"
@@ -3196,6 +3077,7 @@
         "request": {
           "expected_revision": {
             "type": "integer",
+            "required": true,
             "presence": {
               "omitted": "no_revision_check",
               "present": "must_match_current_revision"
@@ -3500,51 +3382,10 @@
                     "type": "object",
                     "properties": {
                       "credential_reference_id": {
-                        "type": "string"
+                        "type": "string",
+                        "required": true
                       },
                       "url": {
-                        "type": "string",
-                        "required": true
-                      }
-                    }
-                  },
-                  "skill": {
-                    "type": "object",
-                    "properties": {
-                      "argv": {
-                        "type": "array",
-                        "items": {
-                          "type": "string"
-                        }
-                      },
-                      "digest": {
-                        "type": "string",
-                        "required": true
-                      },
-                      "executable": {
-                        "type": "boolean",
-                        "required": true
-                      },
-                      "relative_path": {
-                        "type": "string",
-                        "required": true
-                      }
-                    }
-                  },
-                  "stdio": {
-                    "type": "object",
-                    "properties": {
-                      "argv": {
-                        "type": "array",
-                        "items": {
-                          "type": "string"
-                        }
-                      },
-                      "digest": {
-                        "type": "string",
-                        "required": true
-                      },
-                      "relative_path": {
                         "type": "string",
                         "required": true
                       }
@@ -3575,7 +3416,8 @@
                       "required": true
                     },
                     "path_prefix": {
-                      "type": "string"
+                      "type": "string",
+                      "required": true
                     },
                     "port": {
                       "type": "integer",
@@ -3763,51 +3605,10 @@
                     "type": "object",
                     "properties": {
                       "credential_reference_id": {
-                        "type": "string"
+                        "type": "string",
+                        "required": true
                       },
                       "url": {
-                        "type": "string",
-                        "required": true
-                      }
-                    }
-                  },
-                  "skill": {
-                    "type": "object",
-                    "properties": {
-                      "argv": {
-                        "type": "array",
-                        "items": {
-                          "type": "string"
-                        }
-                      },
-                      "digest": {
-                        "type": "string",
-                        "required": true
-                      },
-                      "executable": {
-                        "type": "boolean",
-                        "required": true
-                      },
-                      "relative_path": {
-                        "type": "string",
-                        "required": true
-                      }
-                    }
-                  },
-                  "stdio": {
-                    "type": "object",
-                    "properties": {
-                      "argv": {
-                        "type": "array",
-                        "items": {
-                          "type": "string"
-                        }
-                      },
-                      "digest": {
-                        "type": "string",
-                        "required": true
-                      },
-                      "relative_path": {
                         "type": "string",
                         "required": true
                       }
@@ -3838,7 +3639,8 @@
                       "required": true
                     },
                     "path_prefix": {
-                      "type": "string"
+                      "type": "string",
+                      "required": true
                     },
                     "port": {
                       "type": "integer",
@@ -4059,51 +3861,10 @@
                     "type": "object",
                     "properties": {
                       "credential_reference_id": {
-                        "type": "string"
+                        "type": "string",
+                        "required": true
                       },
                       "url": {
-                        "type": "string",
-                        "required": true
-                      }
-                    }
-                  },
-                  "skill": {
-                    "type": "object",
-                    "properties": {
-                      "argv": {
-                        "type": "array",
-                        "items": {
-                          "type": "string"
-                        }
-                      },
-                      "digest": {
-                        "type": "string",
-                        "required": true
-                      },
-                      "executable": {
-                        "type": "boolean",
-                        "required": true
-                      },
-                      "relative_path": {
-                        "type": "string",
-                        "required": true
-                      }
-                    }
-                  },
-                  "stdio": {
-                    "type": "object",
-                    "properties": {
-                      "argv": {
-                        "type": "array",
-                        "items": {
-                          "type": "string"
-                        }
-                      },
-                      "digest": {
-                        "type": "string",
-                        "required": true
-                      },
-                      "relative_path": {
                         "type": "string",
                         "required": true
                       }
@@ -4134,7 +3895,8 @@
                       "required": true
                     },
                     "path_prefix": {
-                      "type": "string"
+                      "type": "string",
+                      "required": true
                     },
                     "port": {
                       "type": "integer",
@@ -4383,6 +4145,9 @@
                 "reference_id": {
                   "type": "string",
                   "required": true
+                },
+                "secret_revision": {
+                  "type": "integer"
                 }
               }
             }
@@ -4624,6 +4389,9 @@
                     "reference_id": {
                       "type": "string",
                       "required": true
+                    },
+                    "secret_revision": {
+                      "type": "integer"
                     }
                   }
                 }
@@ -4910,6 +4678,9 @@
                     "reference_id": {
                       "type": "string",
                       "required": true
+                    },
+                    "secret_revision": {
+                      "type": "integer"
                     }
                   }
                 }
@@ -5209,6 +4980,9 @@
                       "reference_id": {
                         "type": "string",
                         "required": true
+                      },
+                      "secret_revision": {
+                        "type": "integer"
                       }
                     }
                   }
@@ -5664,6 +5438,9 @@
                         "reference_id": {
                           "type": "string",
                           "required": true
+                        },
+                        "secret_revision": {
+                          "type": "integer"
                         }
                       }
                     }
@@ -6166,6 +5943,9 @@
                         "reference_id": {
                           "type": "string",
                           "required": true
+                        },
+                        "secret_revision": {
+                          "type": "integer"
                         }
                       }
                     }
@@ -6657,6 +6437,9 @@
                         "reference_id": {
                           "type": "string",
                           "required": true
+                        },
+                        "secret_revision": {
+                          "type": "integer"
                         }
                       }
                     }
@@ -7277,6 +7060,182 @@
                 "required": true
               }
             }
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.dashboard.get",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "recent_limit": {
+            "type": "integer",
+            "presence": {
+              "omitted": "bounded_default"
+            }
+          }
+        },
+        "response": {
+          "deployments": {
+            "type": "array",
+            "required": true,
+            "items": {
+              "type": "object"
+            }
+          },
+          "observed_at": {
+            "type": "string",
+            "required": true
+          },
+          "partial": {
+            "type": "boolean",
+            "required": true
+          },
+          "summary": {
+            "type": "object",
+            "required": true
+          },
+          "warnings": {
+            "type": "array",
+            "required": true,
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.deployments.list",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "page_size": {
+            "type": "integer",
+            "presence": {
+              "omitted": "server_default"
+            }
+          },
+          "page_token": {
+            "type": "string",
+            "presence": {
+              "omitted": "first_page"
+            }
+          },
+          "status": {
+            "type": "string"
+          },
+          "target_kind": {
+            "type": "string"
+          }
+        },
+        "response": {
+          "deployments": {
+            "type": "array",
+            "required": true,
+            "items": {
+              "type": "object"
+            }
+          },
+          "next_page_token": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.deployments.get",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "workload_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "actual": {
+            "type": "object"
+          },
+          "current_operation": {
+            "type": "object"
+          },
+          "deployment": {
+            "type": "object",
+            "required": true
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.deployments.events",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "after_sequence": {
+            "type": "integer"
+          },
+          "page_size": {
+            "type": "integer"
+          },
+          "workload_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "events": {
+            "type": "array",
+            "required": true,
+            "items": {
+              "type": "object",
+              "properties": {
+                "actual": {
+                  "type": "object"
+                },
+                "event_id": {
+                  "type": "string",
+                  "required": true
+                },
+                "message": {
+                  "type": "string",
+                  "required": true
+                },
+                "occurred_at": {
+                  "type": "string",
+                  "required": true
+                },
+                "operation_id": {
+                  "type": "string",
+                  "required": true
+                },
+                "sequence": {
+                  "type": "integer",
+                  "required": true
+                },
+                "status": {
+                  "type": "string",
+                  "required": true
+                },
+                "type": {
+                  "type": "string",
+                  "required": true
+                },
+                "workload_id": {
+                  "type": "string",
+                  "required": true
+                }
+              }
+            }
+          },
+          "next_after_sequence": {
+            "type": "integer",
+            "required": true
           }
         }
       }

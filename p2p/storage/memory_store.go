@@ -55,6 +55,8 @@ type MemoryStore struct {
 	scheduleRuns                     map[string]ScheduleRun
 	scheduleMutations                map[string]memoryScheduleMutation
 	scheduleConfirmations            map[string]ScheduleConfirmation
+	deployments                      map[string]deploymentRow
+	deploymentEvents                 map[string]deploymentEventRow
 }
 
 // NewMemoryStore returns an empty, concurrency-safe store. It deliberately has
@@ -95,6 +97,8 @@ func NewMemoryStore() *MemoryStore {
 		scheduleRuns:                     make(map[string]ScheduleRun),
 		scheduleMutations:                make(map[string]memoryScheduleMutation),
 		scheduleConfirmations:            make(map[string]ScheduleConfirmation),
+		deployments:                      make(map[string]deploymentRow),
+		deploymentEvents:                 make(map[string]deploymentEventRow),
 	}
 }
 

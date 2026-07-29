@@ -2,10 +2,33 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"testing"
 	"time"
 )
+
+func TestMemoryScheduleCoreProjectionDeepCopiesJSON(t *testing.T) {
+	s := NewMemoryStore()
+	template := json.RawMessage(`{"goal":"ship"}`)
+	trigger := json.RawMessage(`{"kind":"run_at","run_at":"2026-07-29T00:00:00Z"}`)
+	v, err := s.CreateSchedule(context.Background(), Schedule{OwnerID: "o", ScheduleID: "core", Status: "enabled", TaskTemplate: template, TriggerJSON: trigger}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	template[2] = 'X'
+	trigger[2] = 'X'
+	got, ok, err := s.GetSchedule(context.Background(), "o", v.ScheduleID)
+	if err != nil || !ok {
+		t.Fatalf("get=%#v ok=%v err=%v", got, ok, err)
+	}
+	if string(got.TaskTemplate) != `{"goal":"ship"}` || string(got.TriggerJSON) != `{"kind":"run_at","run_at":"2026-07-29T00:00:00Z"}` {
+		t.Fatalf("json was aliased: %#v", got)
+	}
+	if got.CoreState != "active" {
+		t.Fatalf("core state=%q", got.CoreState)
+	}
+}
 
 func TestMemoryScheduleLeaseAndRunFencing(t *testing.T) {
 	s := NewMemoryStore()

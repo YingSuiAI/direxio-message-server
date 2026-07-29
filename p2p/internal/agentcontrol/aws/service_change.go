@@ -1,0 +1,70 @@
+package aws
+
+import (
+	"context"
+	coreconfirmation "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcontrol/confirmation"
+)
+
+func (s *Service) GetChange(ctx context.Context, id string) (Change, error) {
+	if s == nil || s.repo == nil || !validUUID(id) {
+		return Change{}, ErrInvalid
+	}
+	return s.repo.GetChange(ctx, id)
+}
+func (s *Service) ListChanges(ctx context.Context, size int, planID, token string) (ChangePage, error) {
+	if s == nil || s.repo == nil {
+		return ChangePage{}, ErrInvalid
+	}
+	return s.repo.ListChanges(ctx, size, planID, token)
+}
+
+type RequestChangeInput struct {
+	PlanID, IdempotencyKey string
+	Binding                coreconfirmation.Binding
+}
+type ChangeRequestResult struct {
+	Change       Change
+	Task         Task
+	Confirmation coreconfirmation.Confirmation
+}
+
+func (s *Service) RequestChange(ctx context.Context, in RequestChangeInput) (ChangeRequestResult, error) {
+	if s == nil || s.coordinator == nil || !validUUID(in.PlanID) || !validUUID(in.IdempotencyKey) {
+		return ChangeRequestResult{}, ErrInvalid
+	}
+	return s.coordinator.RequestChange(ctx, in)
+}
+
+func (s *Service) ConsumeChange(ctx context.Context, cmd ConsumeChangeCommand) (Reservation, error) {
+	if s == nil || s.coordinator == nil || !validUUID(cmd.ChangeID) || !validUUID(cmd.ConfirmationID) || !validUUID(cmd.TaskID) || !validUUID(cmd.IdempotencyKey) || cmd.Attempt == 0 || cmd.LeaseEpoch == 0 {
+		return Reservation{}, ErrInvalid
+	}
+	return s.coordinator.ConsumeChange(ctx, cmd)
+}
+
+// ExecutionFence returns the current durable change/task/confirmation fence
+// for the in-process worker. It exposes no credential material and exists so
+// the generic task lease can be consumed without a transport adapter.
+func (s *Service) ExecutionFence(ctx context.Context, confirmationID string) (ExecutionFence, error) {
+	if s == nil || s.coordinator == nil || !validUUID(confirmationID) {
+		return ExecutionFence{}, ErrInvalid
+	}
+	return s.coordinator.ExecutionFence(ctx, confirmationID)
+}
+
+func (s *Service) CompleteChange(ctx context.Context, cmd CompleteChangeCommand) (Change, error) {
+	if s == nil || s.coordinator == nil || !validUUID(cmd.ChangeID) || !validUUID(cmd.ConfirmationID) || cmd.ExpectedChangeRevision < 1 || cmd.Status != ChangeSucceeded && cmd.Status != ChangeFailed && cmd.Status != ChangeCanceled {
+		return Change{}, ErrInvalid
+	}
+	if cmd.OperationKey == "" {
+		fence, err := s.coordinator.ExecutionFence(ctx, cmd.ConfirmationID)
+		if err != nil {
+			return Change{}, err
+		}
+		cmd.OperationKey = operationKey(cmd.ChangeID, fence.Change.ProviderToken, "complete:"+string(cmd.Status), cmd.Attempt, cmd.LeaseEpoch)
+	}
+	return s.coordinator.CompleteChange(ctx, cmd)
+}
+func (s *Service) repoChangeByConfirmation(ctx context.Context, id string) (Change, error) {
+	return s.repo.GetChangeByConfirmation(ctx, id)
+}

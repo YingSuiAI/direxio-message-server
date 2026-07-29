@@ -62,27 +62,24 @@ Only mark an item after implementation and verification are complete. Do not pre
 
 ## Skills
 
-- [x] Skill install works from explicit `SKILL.md` content.
-- [x] Skill install works from URL/GitHub raw source.
-- [x] Skills list/enable/disable/uninstall work.
-- [x] Enabled skills are read statically into system prompt.
-- [x] Remote skill scripts are not executed.
+- [x] Built-in Message Server instructions and first-party tools remain available.
+- [x] Third-party Skill install/manage/execute paths are unavailable.
+- [x] The embedded backend never advertises the `skill` capability.
 
 ## MCP
 
-- [x] MCP server install/list works.
-- [x] `stdio` MCP transport works.
-- [x] Remote HTTP/SSE MCP transport works.
-- [x] Streamable HTTP MCP transport works.
-- [x] Discovered MCP tools are callable by Agent.
-- [x] MCP server enable/disable/uninstall work.
+- [x] Durable `agent.core.mcp.*` install/list/execute uses pinned HTTPS
+  Streamable HTTP only.
+- [x] stdio, local MCP, HTTP/SSE and subprocess candidates are rejected before
+  side effects.
+- [x] Dirextalk's authenticated `POST /mcp` contract remains independent.
+- [x] Native Agent does not dynamically load third-party MCP tools.
 
 ## Runtime CLI
 
-- [x] Runtime CLI install records tool metadata under Agent data dir.
-- [x] Runtime CLI install can run a bounded install command.
-- [x] Runtime CLI which finds installed tools.
-- [x] Runtime CLI run executes with bounded timeout and returns stdout/stderr/exit status.
+- [x] Runtime CLI and shell execution are unavailable in the single-process
+  deployment.
+- [x] No Agent child process, runner or sidecar is started.
 
 ## Verification
 

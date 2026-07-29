@@ -2,11 +2,6 @@ package p2p
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
-	"errors"
-	"io"
-	"os"
 
 	legacygatewaymodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/legacygateway"
 	roomserverAPI "github.com/YingSuiAI/dirextalk-message-server/roomserver/api"
@@ -27,43 +22,6 @@ type LegacyAgentGatewayConfig struct {
 	ConversationID string
 	Ingress        LegacyAgentGatewayIngress
 	SenderResolver LegacyAgentGatewaySenderResolver
-}
-
-type LegacyAgentGatewayClientConfig struct {
-	Target         string
-	TenantID       string
-	ServerName     string
-	RootCAFile     string
-	ClientCertFile string
-	ClientKeyFile  string
-}
-
-func NewLegacyAgentGatewayClient(
-	cfg LegacyAgentGatewayClientConfig,
-) (LegacyAgentGatewayIngress, io.Closer, error) {
-	rootPEM, err := os.ReadFile(cfg.RootCAFile)
-	if err != nil {
-		return nil, nil, errors.New("read Legacy Agent Gateway root CA")
-	}
-	roots := x509.NewCertPool()
-	if !roots.AppendCertsFromPEM(rootPEM) {
-		return nil, nil, errors.New("parse Legacy Agent Gateway root CA")
-	}
-	certificate, err := tls.LoadX509KeyPair(cfg.ClientCertFile, cfg.ClientKeyFile)
-	if err != nil {
-		return nil, nil, errors.New("load Legacy Agent Gateway client identity")
-	}
-	client, err := legacygatewaymodule.NewGRPCIngress(legacygatewaymodule.ClientConfig{
-		Target:            cfg.Target,
-		TenantID:          cfg.TenantID,
-		ServerName:        cfg.ServerName,
-		RootCAs:           roots,
-		ClientCertificate: certificate,
-	})
-	if err != nil {
-		return nil, nil, errors.New("configure Legacy Agent Gateway client")
-	}
-	return client, client, nil
 }
 
 // ConfigureLegacyAgentGateway prepares the compatibility module but does not

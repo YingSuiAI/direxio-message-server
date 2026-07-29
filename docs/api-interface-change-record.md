@@ -1,6 +1,61 @@
 # API Interface Change Record
 
-Last updated: 2026-07-28
+Last updated: 2026-07-29
+
+## 2026-07-29 Single-service Embedded Eino ownership
+
+The selectable/deployment-bound Agent Core service is retired. Message Server
+embeds Eino and publishes current Agent and management readiness only through
+`agent.backends.get.embedded`. The legacy `core` discovery object remains
+temporarily as an unavailable compatibility projection, and legacy
+`agent.core.*` action names remain wire-compatible names while implementations
+migrate in-process; neither implies a second service.
+
+`deployments.server` now reads the canonical in-process
+`core_workloads/core_workload_operations/core_workload_events` tables directly,
+not an external Core reconciliation projection. Public event sequence is
+allocated by a locked per-workload PostgreSQL counter.
+
+Task, confirmation, schedule, remote HTTPS MCP, AWS CloudFormation and typed
+AWS SSM/ECS workload implementations now run in-process and are checked for
+readiness both at discovery and invocation time. `skill` and
+`workload.core_runner` remain unavailable and are never advertised.
+
+Remote MCP discovery is bounded to the fixed Official Registry, Smithery,
+Glama and GitHub catalogs. Existing `agent.core.mcp.*` DTOs keep their
+hyphenated source/transport/purpose names and flat installation/version
+projections. Install/update re-inspects the immutable source pin, secret
+inputs remain write-only, and tool schemas are fixed by a transactional
+empty-to-pinned CAS before execution.
+
+Agent secrets use the versioned AES-256-GCM keyring selected by
+`P2P_AGENT_SECRET_KEYRING_FILE`; keyring failure removes secret-dependent Agent
+capabilities without disabling ordinary Matrix/ProductCore routes. The same
+image exposes one-shot `agent-secretctl init|verify|rotate`.
+
+## 2026-07-28 Agent Core deployment ledger and dashboard
+
+Added owner-only read actions `agent.core.dashboard.get`,
+`agent.core.deployments.list`, `.get`, and `.events`. The server maintains an
+owner-fenced PostgreSQL deployment projection and ordered operation events for
+the canonical `agent.core.workloads.*` apply/destroy mutations. Deployment
+objects expose sanitized target identity and nullable cost fields; credentials,
+secret grants, raw templates, and provider payloads are never persisted.
+`deployments.server` is advertised when durable deployment storage is
+configured. It is returned in
+`agent.backends.get.embedded.capabilities` because the deployment ledger is
+Message Server-owned; clients do not require Core readiness for ledger reads.
+
+Dashboard aggregation is additive and honest: the response includes required
+`partial` and `warnings` fields. Warning values are stable non-sensitive codes
+(`tasks_unavailable`, `schedules_unavailable`, or
+`confirmations_unavailable`) when an auxiliary aggregate cannot be read;
+deployment projection data remains available.
+Deployment event readbacks expose a deterministic `event_id`, owner-workload
+monotonic `sequence`, `type`, `status`, empty redacted `message`,
+`occurred_at`, and optional sanitized `actual`. Core operation sequence cursors
+remain internal so an apply/destroy sequence restart cannot move the public
+workload cursor backwards.
 
 ## 2026-07-28 Native Agent model input modalities and managed knowledge
 
@@ -106,38 +161,40 @@ normalized at the ProductCore boundary. Core status capabilities gate every
 optional family, so absent token capabilities return a precondition result.
 Projections omit upstream errors, credentials, token/endpoint values,
 secret bytes, install material, and runtime/artifact paths; summaries are
-bounded and sanitized. Core gRPC statuses use the stable
-`agent_core_*` mapping documented by the integration contract. The
-versioned Schedule, Confirmation, Task, and Extension protobuf snapshots are
-copied from Agent baseline `11eed51e2a9e6431f28039a542f2424f290e6fff`.
+bounded and sanitized. The external Agent gRPC client surface is retired and
+unavailable; only the internal Release Gate M parser/store compatibility
+remains. Core gRPC statuses use the stable `agent_core_*` mapping documented by
+the integration contract for historical compatibility only. The versioned
+Schedule, Confirmation, Task, and Extension protobuf snapshots are copied from
+Agent baseline `11eed51e2a9e6431f28039a542f2424f290e6fff`.
 
 ## 2026-07-25 Agent Core model profiles
 
 Added owner-only `agent.core.model_profiles.sync`, `.list`, `.get`, and
-`.delete` actions. The adapter calls the versioned Core `ModelProfileService`
-over authenticated TLS with bounded unary deadlines. Sync forwards one atomic
-batch, complete non-secret settings, optional expected revisions, the selected
-default client profile, and API-key presence only when explicitly supplied;
-keys are write-only and are never persisted, logged, echoed, or included in
-responses. Profile projections expose only safe metadata and
-`api_key_configured`. Core gRPC statuses map to stable ProductCore status/code
-pairs (`agent_core_invalid_argument`, `agent_core_trust_failed`,
+`.delete` actions. The external TLS/gRPC Core client path is retired and
+unavailable; the current adapter uses the embedded Message Server runtime and
+its local persistence only. Sync forwards one atomic batch, complete
+non-secret settings, optional expected revisions, the selected default client
+profile, and API-key presence only when explicitly supplied; keys are write-
+only and are never persisted, logged, echoed, or included in responses.
+Profile projections expose only safe metadata and `api_key_configured`. Core
+gRPC statuses map to stable ProductCore status/code pairs
+(`agent_core_invalid_argument`, `agent_core_trust_failed`,
 `agent_core_not_found`, `agent_core_conflict`,
 `agent_core_precondition_failed`, `agent_core_unavailable`, and
 `agent_core_upstream_failed`) without forwarding upstream text. The
-`model.profile` capability is now implemented; Core remains incompatible until
-the required conversation adapter is present.
+`model.profile` capability is now implemented; Core remains incompatible and
+has no live client surface.
 
 ## 2026-07-25 Agent Core Discovery
 
 Owner-only `agent.backends.get` and `agent.core.status.get` expose the
-deployment-bound Agent Core discovery projection. Core is configured only by
-protected `P2P_AGENT_CORE_*` deployment inputs and is probed over authenticated
-TLS 1.3 gRPC `AgentService` v1. An incomplete enabled configuration fails
-startup; an unreachable peer is reported as `unavailable` without blocking
-startup. Responses contain only the fixed capability intersection and model
-provider identifiers and never expose Core addresses, certificate/token paths,
-tokens, or upstream error text. Backend selection remains client-local.
+deployment-bound Agent Core discovery projection. The external TLS 1.3 gRPC
+`AgentService` v1 client is retired and unavailable; the embedded runtime now
+reports only the local capability intersection and model provider identifiers.
+Responses never expose Core addresses, certificate/token paths, tokens, or
+upstream error text. Backend selection remains client-local, but the only live
+backend is embedded.
 
 ## 2026-07-23 Native Agent Anthropic, Gemini, And xAI Model Lists
 

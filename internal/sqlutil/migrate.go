@@ -46,6 +46,7 @@ type Migrator struct {
 	db              *sql.DB
 	migrations      []Migration
 	knownMigrations map[string]struct{}
+	addErr          error
 	mutex           *sync.Mutex
 	insertStmt      *sql.Stmt
 }
@@ -60,21 +61,33 @@ func NewMigrator(db *sql.DB) *Migrator {
 	}
 }
 
-// AddMigrations appends migrations to the list of migrations. Migrations are executed
-// in the order they are added to the list. De-duplicates migrations using their Version field.
+// AddMigrations appends migrations to the list of migrations. Migrations are
+// executed in the order they are added. Duplicate versions are retained as a
+// configuration error and make Up fail before executing any migration; silently
+// dropping one can leave a database only partially upgraded.
 func (m *Migrator) AddMigrations(migrations ...Migration) {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 	for _, mig := range migrations {
-		if _, ok := m.knownMigrations[mig.Version]; !ok {
-			m.migrations = append(m.migrations, mig)
-			m.knownMigrations[mig.Version] = struct{}{}
+		if _, ok := m.knownMigrations[mig.Version]; ok {
+			if m.addErr == nil {
+				m.addErr = fmt.Errorf("duplicate database migration version %q", mig.Version)
+			}
+			continue
 		}
+		m.migrations = append(m.migrations, mig)
+		m.knownMigrations[mig.Version] = struct{}{}
 	}
 }
 
 // Up executes all migrations in order they were added.
 func (m *Migrator) Up(ctx context.Context) error {
+	m.mutex.Lock()
+	addErr := m.addErr
+	m.mutex.Unlock()
+	if addErr != nil {
+		return addErr
+	}
 	// ensure there is a table for known migrations
 	executedMigrations, err := m.ExecutedMigrations(ctx)
 	if err != nil {

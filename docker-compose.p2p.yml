@@ -29,12 +29,15 @@ services:
     environment:
       MESSAGE_SERVER_NAME: ${MESSAGE_SERVER_NAME:-localhost}
       MESSAGE_CLIENT_BASE_URL: ${MESSAGE_CLIENT_BASE_URL:-http://localhost:8008}
+      P2P_AGENT_SECRET_KEYRING_FILE: /var/dirextalk-message-server/agent/secret-keyring.json
+      P2P_AGENT_SECRET_DATABASE_DSN: postgres://dirextalk_message_server:dirextalk_message_server@postgres/dirextalk_message_server?sslmode=disable
     restart: "no"
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
         set -eu
         mkdir -p /etc/dirextalk-message-server /var/dirextalk-message-server
+        install -d -m 0700 /var/dirextalk-message-server/agent
         if [ ! -f /etc/dirextalk-message-server/matrix_key.pem ]; then
           /usr/bin/generate-keys -private-key /etc/dirextalk-message-server/matrix_key.pem
         fi
@@ -52,9 +55,11 @@ services:
             > /etc/dirextalk-message-server/message-server.yaml
         fi
         sed -i 's|well_known_client_name: .*|well_known_client_name: "'"${MESSAGE_CLIENT_BASE_URL:-http://localhost:8008}"'"|' /etc/dirextalk-message-server/message-server.yaml
+        /usr/bin/agent-secretctl init
     volumes:
       - p2p_message_server_config:/etc/dirextalk-message-server
       - p2p_message_server_data:/var/dirextalk-message-server
+      - p2p_agent_data:/var/dirextalk-message-server/agent
     depends_on:
       postgres:
         condition: service_healthy
@@ -64,10 +69,10 @@ services:
     restart: unless-stopped
     environment:
       P2P_PORTAL_CREDENTIALS_FILE: /var/dirextalk-message-server/p2p/bootstrap.json
-      P2P_PLUGIN_DOCKER_ENABLED: "true"
-      P2P_PLUGIN_DOCKER_NETWORK: dirextalk-p2p_default
+      P2P_PLUGIN_DOCKER_ENABLED: "false"
       P2P_PLUGIN_BACKEND_BASE_URL: http://message-server:8008
       P2P_NATIVE_AGENT_DATA_DIR: /var/dirextalk-message-server/agent
+      P2P_AGENT_SECRET_KEYRING_FILE: /var/dirextalk-message-server/agent/secret-keyring.json
     command:
       - --config
       - /etc/dirextalk-message-server/message-server.yaml
@@ -81,7 +86,6 @@ services:
     volumes:
       - p2p_message_server_config:/etc/dirextalk-message-server
       - p2p_message_server_data:/var/dirextalk-message-server
-      - ${P2P_PLUGIN_DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
       - p2p_plugins_data:/var/dirextalk-message-server/plugins
       - p2p_agent_data:/var/dirextalk-message-server/agent
     depends_on:

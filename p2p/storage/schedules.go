@@ -44,8 +44,15 @@ type Schedule struct {
 	LeaseOwner           string     `json:"lease_owner,omitempty"`
 	LeaseUntil           *time.Time `json:"lease_until,omitempty"`
 	LeaseEpoch           int64      `json:"lease_epoch"`
-	CreatedAt            time.Time  `json:"created_at"`
-	UpdatedAt            time.Time  `json:"updated_at"`
+	// TaskTemplate is the generic Agent task projection. Legacy prompt/trigger
+	// fields remain populated for existing agent.schedules clients.
+	TaskTemplate json.RawMessage `json:"task_template,omitempty"`
+	// CoreState and TriggerJSON are lossless projections for agent.core.schedules.
+	// Legacy agent.schedules continues to use Status/TriggerKind/TriggerValue.
+	CoreState   string          `json:"core_state,omitempty"`
+	TriggerJSON json.RawMessage `json:"trigger,omitempty"`
+	CreatedAt   time.Time       `json:"created_at"`
+	UpdatedAt   time.Time       `json:"updated_at"`
 }
 type ScheduleRun struct {
 	RunID        string     `json:"run_id"`
@@ -195,6 +202,8 @@ func (s *MemoryStore) ensureSchedules() {
 	}
 }
 func cloneSchedule(v Schedule) Schedule {
+	v.TaskTemplate = append(json.RawMessage(nil), v.TaskTemplate...)
+	v.TriggerJSON = append(json.RawMessage(nil), v.TriggerJSON...)
 	if v.NextRunAt != nil {
 		t := *v.NextRunAt
 		v.NextRunAt = &t
@@ -220,6 +229,43 @@ func cloneRun(v ScheduleRun) ScheduleRun {
 	}
 	return v
 }
+func compactScheduleJSON(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		return nil
+	}
+	var v any
+	if json.Unmarshal(raw, &v) != nil {
+		return append(json.RawMessage(nil), raw...)
+	}
+	out, err := json.Marshal(v)
+	if err != nil {
+		return append(json.RawMessage(nil), raw...)
+	}
+	return json.RawMessage(out)
+}
+func normalizeScheduleProjection(v *Schedule) {
+	if v.CoreState == "" {
+		if v.Status == "disabled" {
+			v.CoreState = "paused"
+		} else {
+			v.CoreState = "active"
+		}
+	}
+	if len(v.TaskTemplate) == 0 && (v.Prompt != "" || v.ModelProfileID != "") {
+		v.TaskTemplate, _ = json.Marshal(map[string]any{"goal": v.Prompt, "model_profile_id": v.ModelProfileID})
+	}
+	if len(v.TriggerJSON) == 0 {
+		kind := v.TriggerKind
+		if kind == "one_time" {
+			kind = "run_at"
+		}
+		if kind == "run_at" && v.TriggerValue != "" {
+			v.TriggerJSON, _ = json.Marshal(map[string]any{"kind": kind, "run_at": v.TriggerValue})
+		} else if kind == "cron" {
+			v.TriggerJSON, _ = json.Marshal(map[string]any{"kind": kind, "expression": v.TriggerValue, "timezone": v.Timezone})
+		}
+	}
+}
 func (s *MemoryStore) CreateSchedule(_ context.Context, v Schedule, _ string) (Schedule, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -230,6 +276,7 @@ func (s *MemoryStore) CreateSchedule(_ context.Context, v Schedule, _ string) (S
 	if v.Status == "" {
 		v.Status = "enabled"
 	}
+	normalizeScheduleProjection(&v)
 	if v.Revision == 0 {
 		v.Revision = 1
 	}
@@ -242,7 +289,7 @@ func (s *MemoryStore) CreateSchedule(_ context.Context, v Schedule, _ string) (S
 	if _, ok := s.schedules[k]; ok {
 		return Schedule{}, ErrScheduleConflict
 	}
-	s.schedules[k] = v
+	s.schedules[k] = cloneSchedule(v)
 	return cloneSchedule(v), nil
 }
 func (s *MemoryStore) GetSchedule(_ context.Context, o, id string) (Schedule, bool, error) {
@@ -313,9 +360,26 @@ func (s *MemoryStore) UpdateScheduleCAS(_ context.Context, v Schedule, expected 
 		return Schedule{}, ErrScheduleConflict
 	}
 	v.Revision = old.Revision + 1
+	if v.CoreState == "" {
+		v.CoreState = old.CoreState
+		if v.CoreState == "" {
+			if v.Status == "disabled" {
+				v.CoreState = "paused"
+			} else {
+				v.CoreState = "active"
+			}
+		}
+	}
+	normalizeScheduleProjection(&v)
+	if len(v.TaskTemplate) == 0 {
+		v.TaskTemplate = append(json.RawMessage(nil), old.TaskTemplate...)
+	}
+	if len(v.TriggerJSON) == 0 {
+		v.TriggerJSON = append(json.RawMessage(nil), old.TriggerJSON...)
+	}
 	v.CreatedAt = old.CreatedAt
 	v.UpdatedAt = time.Now().UTC()
-	s.schedules[k] = v
+	s.schedules[k] = cloneSchedule(v)
 	return cloneSchedule(v), nil
 }
 func (s *MemoryStore) DeleteSchedule(_ context.Context, o, id, _ string) error {
@@ -358,8 +422,10 @@ func (s *MemoryStore) SetScheduleStatusCAS(_ context.Context, o, id string, expe
 	}
 	if en {
 		v.Status = "enabled"
+		v.CoreState = "active"
 	} else {
 		v.Status = "disabled"
+		v.CoreState = "paused"
 	}
 	v.Revision++
 	v.UpdatedAt = time.Now().UTC()
@@ -546,7 +612,7 @@ func (s *MemoryStore) ClaimDueSchedules(_ context.Context, now time.Time, worker
 	s.ensureSchedules()
 	a := []Schedule{}
 	for k, v := range s.schedules {
-		if len(a) >= limit || (v.Status != "enabled" && !(v.Status == "running" && v.LeaseUntil != nil && !v.LeaseUntil.After(now))) || v.NextRunAt == nil || v.NextRunAt.After(now) {
+		if len(a) >= limit || v.CoreState == "paused" || (v.Status != "enabled" && !(v.Status == "running" && v.LeaseUntil != nil && !v.LeaseUntil.After(now))) || v.NextRunAt == nil || v.NextRunAt.After(now) {
 			continue
 		}
 		v.Status = "running"
@@ -725,6 +791,11 @@ func (s *MemoryStore) AdvanceSchedule(_ context.Context, owner, id, leaseOwner s
 	now := time.Now().UTC()
 	v.LatestRunAt = &now
 	v.Status = status
+	if status == "disabled" {
+		v.CoreState = "paused"
+	} else if status == "enabled" {
+		v.CoreState = "active"
+	}
 	v.LeaseOwner = ""
 	v.LeaseUntil = nil
 	v.Revision++
@@ -739,6 +810,7 @@ func (s *DatabaseStore) CreateSchedule(ctx context.Context, v Schedule, key stri
 	if v.Status == "" {
 		v.Status = "enabled"
 	}
+	normalizeScheduleProjection(&v)
 	if v.Revision == 0 {
 		v.Revision = 1
 	}
@@ -747,18 +819,27 @@ func (s *DatabaseStore) CreateSchedule(ctx context.Context, v Schedule, key stri
 		v.CreatedAt = n
 	}
 	v.UpdatedAt = n
-	_, e := s.db.ExecContext(ctx, `INSERT INTO p2p_agent_schedules(schedule_id,owner_id,name,prompt,trigger_kind,trigger_value,timezone,skip_if_running,status,revision,model_profile_id,model_profile_revision,credential_version,next_run_at,created_at,updated_at,idempotency_key) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`, v.ScheduleID, v.OwnerID, v.Name, v.Prompt, v.TriggerKind, v.TriggerValue, v.Timezone, v.SkipIfRunning, v.Status, v.Revision, v.ModelProfileID, v.ModelProfileRevision, v.CredentialVersion, v.NextRunAt, v.CreatedAt, v.UpdatedAt, key)
+	_, e := s.db.ExecContext(ctx, `INSERT INTO p2p_agent_schedules(schedule_id,owner_id,name,prompt,trigger_kind,trigger_value,timezone,skip_if_running,status,core_state,revision,model_profile_id,model_profile_revision,credential_version,next_run_at,task_template,trigger_json,created_at,updated_at,idempotency_key) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb,$17::jsonb,$18,$19,$20)`, v.ScheduleID, v.OwnerID, v.Name, v.Prompt, v.TriggerKind, v.TriggerValue, v.Timezone, v.SkipIfRunning, v.Status, v.CoreState, v.Revision, v.ModelProfileID, v.ModelProfileRevision, v.CredentialVersion, v.NextRunAt, stringOrEmptyJSON(v.TaskTemplate), stringOrEmptyJSON(v.TriggerJSON), v.CreatedAt, v.UpdatedAt, key)
 	if e != nil {
 		return Schedule{}, e
 	}
 	return v, nil
 }
+
+func stringOrEmptyJSON(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return "{}"
+	}
+	return string(raw)
+}
 func (s *DatabaseStore) GetSchedule(ctx context.Context, o, id string) (Schedule, bool, error) {
 	var v Schedule
-	e := s.db.QueryRowContext(ctx, `SELECT schedule_id,owner_id,name,prompt,trigger_kind,trigger_value,timezone,skip_if_running,status,revision,model_profile_id,model_profile_revision,credential_version,next_run_at,latest_run_at,lease_owner,lease_until,lease_epoch,created_at,updated_at FROM p2p_agent_schedules WHERE owner_id=$1 AND schedule_id=$2 AND deleted_at IS NULL`, o, id).Scan(&v.ScheduleID, &v.OwnerID, &v.Name, &v.Prompt, &v.TriggerKind, &v.TriggerValue, &v.Timezone, &v.SkipIfRunning, &v.Status, &v.Revision, &v.ModelProfileID, &v.ModelProfileRevision, &v.CredentialVersion, &v.NextRunAt, &v.LatestRunAt, &v.LeaseOwner, &v.LeaseUntil, &v.LeaseEpoch, &v.CreatedAt, &v.UpdatedAt)
+	e := s.db.QueryRowContext(ctx, `SELECT schedule_id,owner_id,name,prompt,trigger_kind,trigger_value,timezone,skip_if_running,status,core_state,revision,model_profile_id,model_profile_revision,credential_version,next_run_at,latest_run_at,lease_owner,lease_until,lease_epoch,task_template,trigger_json,created_at,updated_at FROM p2p_agent_schedules WHERE owner_id=$1 AND schedule_id=$2 AND deleted_at IS NULL`, o, id).Scan(&v.ScheduleID, &v.OwnerID, &v.Name, &v.Prompt, &v.TriggerKind, &v.TriggerValue, &v.Timezone, &v.SkipIfRunning, &v.Status, &v.CoreState, &v.Revision, &v.ModelProfileID, &v.ModelProfileRevision, &v.CredentialVersion, &v.NextRunAt, &v.LatestRunAt, &v.LeaseOwner, &v.LeaseUntil, &v.LeaseEpoch, &v.TaskTemplate, &v.TriggerJSON, &v.CreatedAt, &v.UpdatedAt)
 	if errors.Is(e, sql.ErrNoRows) {
 		return Schedule{}, false, nil
 	}
+	v.TaskTemplate = compactScheduleJSON(v.TaskTemplate)
+	v.TriggerJSON = compactScheduleJSON(v.TriggerJSON)
 	return v, e == nil, e
 }
 func (s *DatabaseStore) GetScheduleIncludingDeleted(ctx context.Context, o, id string) (ScheduleTombstone, bool, error) {
@@ -777,7 +858,7 @@ func (s *DatabaseStore) ListSchedules(ctx context.Context, o string, limit int, 
 	if err != nil {
 		return SchedulePage{}, err
 	}
-	rows, e := s.db.QueryContext(ctx, `SELECT schedule_id,owner_id,name,prompt,trigger_kind,trigger_value,timezone,skip_if_running,status,revision,model_profile_id,model_profile_revision,credential_version,next_run_at,latest_run_at,lease_owner,lease_until,lease_epoch,created_at,updated_at FROM p2p_agent_schedules WHERE owner_id=$1 AND deleted_at IS NULL AND schedule_id>$2 ORDER BY schedule_id LIMIT $3`, o, start, limit+1)
+	rows, e := s.db.QueryContext(ctx, `SELECT schedule_id,owner_id,name,prompt,trigger_kind,trigger_value,timezone,skip_if_running,status,core_state,revision,model_profile_id,model_profile_revision,credential_version,next_run_at,latest_run_at,lease_owner,lease_until,lease_epoch,task_template,trigger_json,created_at,updated_at FROM p2p_agent_schedules WHERE owner_id=$1 AND deleted_at IS NULL AND schedule_id>$2 ORDER BY schedule_id LIMIT $3`, o, start, limit+1)
 	if e != nil {
 		return SchedulePage{}, e
 	}
@@ -785,9 +866,11 @@ func (s *DatabaseStore) ListSchedules(ctx context.Context, o string, limit int, 
 	p := SchedulePage{}
 	for rows.Next() {
 		var v Schedule
-		if e = rows.Scan(&v.ScheduleID, &v.OwnerID, &v.Name, &v.Prompt, &v.TriggerKind, &v.TriggerValue, &v.Timezone, &v.SkipIfRunning, &v.Status, &v.Revision, &v.ModelProfileID, &v.ModelProfileRevision, &v.CredentialVersion, &v.NextRunAt, &v.LatestRunAt, &v.LeaseOwner, &v.LeaseUntil, &v.LeaseEpoch, &v.CreatedAt, &v.UpdatedAt); e != nil {
+		if e = rows.Scan(&v.ScheduleID, &v.OwnerID, &v.Name, &v.Prompt, &v.TriggerKind, &v.TriggerValue, &v.Timezone, &v.SkipIfRunning, &v.Status, &v.CoreState, &v.Revision, &v.ModelProfileID, &v.ModelProfileRevision, &v.CredentialVersion, &v.NextRunAt, &v.LatestRunAt, &v.LeaseOwner, &v.LeaseUntil, &v.LeaseEpoch, &v.TaskTemplate, &v.TriggerJSON, &v.CreatedAt, &v.UpdatedAt); e != nil {
 			return p, e
 		}
+		v.TaskTemplate = compactScheduleJSON(v.TaskTemplate)
+		v.TriggerJSON = compactScheduleJSON(v.TriggerJSON)
 		p.Schedules = append(p.Schedules, v)
 	}
 	if len(p.Schedules) > limit {
@@ -805,7 +888,15 @@ func (s *DatabaseStore) UpdateScheduleCAS(ctx context.Context, v Schedule, expec
 	if expected == 0 {
 		expected = v.Revision - 1
 	}
-	r, e := s.db.ExecContext(ctx, `UPDATE p2p_agent_schedules SET name=$1,prompt=$2,trigger_kind=$3,trigger_value=$4,timezone=$5,skip_if_running=$6,status=$7,revision=$8,model_profile_id=$9,model_profile_revision=$10,credential_version=$11,next_run_at=$12,updated_at=$13 WHERE owner_id=$14 AND schedule_id=$15 AND revision=$16 AND deleted_at IS NULL AND status<>'running'`, v.Name, v.Prompt, v.TriggerKind, v.TriggerValue, v.Timezone, v.SkipIfRunning, v.Status, v.Revision, v.ModelProfileID, v.ModelProfileRevision, v.CredentialVersion, v.NextRunAt, v.UpdatedAt, v.OwnerID, v.ScheduleID, expected)
+	if v.CoreState == "" {
+		if v.Status == "disabled" {
+			v.CoreState = "paused"
+		} else {
+			v.CoreState = "active"
+		}
+	}
+	normalizeScheduleProjection(&v)
+	r, e := s.db.ExecContext(ctx, `UPDATE p2p_agent_schedules SET name=$1,prompt=$2,trigger_kind=$3,trigger_value=$4,timezone=$5,skip_if_running=$6,status=$7,core_state=$8,revision=$9,model_profile_id=$10,model_profile_revision=$11,credential_version=$12,next_run_at=$13,task_template=$14::jsonb,trigger_json=$15::jsonb,updated_at=$16 WHERE owner_id=$17 AND schedule_id=$18 AND revision=$19 AND deleted_at IS NULL AND status<>'running'`, v.Name, v.Prompt, v.TriggerKind, v.TriggerValue, v.Timezone, v.SkipIfRunning, v.Status, v.CoreState, v.Revision, v.ModelProfileID, v.ModelProfileRevision, v.CredentialVersion, v.NextRunAt, stringOrEmptyJSON(v.TaskTemplate), stringOrEmptyJSON(v.TriggerJSON), v.UpdatedAt, v.OwnerID, v.ScheduleID, expected)
 	if e != nil {
 		return Schedule{}, e
 	}
@@ -851,10 +942,14 @@ func (s *DatabaseStore) SetScheduleStatusCAS(ctx context.Context, o, id string, 
 	if en {
 		status = "enabled"
 	}
-	query := `UPDATE p2p_agent_schedules SET status=$1,revision=revision+1,updated_at=NOW() WHERE owner_id=$2 AND schedule_id=$3 AND deleted_at IS NULL AND status<>'running'`
-	args := []any{status, o, id}
+	coreState := "paused"
+	if en {
+		coreState = "active"
+	}
+	query := `UPDATE p2p_agent_schedules SET status=$1,core_state=$2,revision=revision+1,updated_at=NOW() WHERE owner_id=$3 AND schedule_id=$4 AND deleted_at IS NULL AND status<>'running'`
+	args := []any{status, coreState, o, id}
 	if expected != 0 {
-		query += ` AND revision=$4`
+		query += ` AND revision=$5`
 		args = append(args, expected)
 	}
 	r, e := s.db.ExecContext(ctx, query, args...)
@@ -1067,7 +1162,7 @@ func (s *DatabaseStore) ClaimDueSchedules(ctx context.Context, now time.Time, wo
 		return nil, e
 	}
 	defer tx.Rollback()
-	rows, e := tx.QueryContext(ctx, `SELECT schedule_id,owner_id,name,prompt,trigger_kind,trigger_value,timezone,skip_if_running,status,revision,model_profile_id,model_profile_revision,credential_version,next_run_at,latest_run_at,lease_owner,lease_until,lease_epoch,created_at,updated_at FROM p2p_agent_schedules WHERE deleted_at IS NULL AND next_run_at<=$1 AND (status='enabled' OR (status='running' AND lease_until<=$1)) ORDER BY next_run_at FOR UPDATE SKIP LOCKED LIMIT $2`, now, limit)
+	rows, e := tx.QueryContext(ctx, `SELECT schedule_id,owner_id,name,prompt,trigger_kind,trigger_value,timezone,skip_if_running,status,core_state,revision,model_profile_id,model_profile_revision,credential_version,next_run_at,latest_run_at,lease_owner,lease_until,lease_epoch,task_template,trigger_json,created_at,updated_at FROM p2p_agent_schedules WHERE deleted_at IS NULL AND core_state='active' AND next_run_at<=$1 AND (status='enabled' OR (status='running' AND lease_until<=$1)) ORDER BY next_run_at FOR UPDATE SKIP LOCKED LIMIT $2`, now, limit)
 	if e != nil {
 		return nil, e
 	}
@@ -1075,9 +1170,11 @@ func (s *DatabaseStore) ClaimDueSchedules(ctx context.Context, now time.Time, wo
 	out := []Schedule{}
 	for rows.Next() {
 		var v Schedule
-		if e = rows.Scan(&v.ScheduleID, &v.OwnerID, &v.Name, &v.Prompt, &v.TriggerKind, &v.TriggerValue, &v.Timezone, &v.SkipIfRunning, &v.Status, &v.Revision, &v.ModelProfileID, &v.ModelProfileRevision, &v.CredentialVersion, &v.NextRunAt, &v.LatestRunAt, &v.LeaseOwner, &v.LeaseUntil, &v.LeaseEpoch, &v.CreatedAt, &v.UpdatedAt); e != nil {
+		if e = rows.Scan(&v.ScheduleID, &v.OwnerID, &v.Name, &v.Prompt, &v.TriggerKind, &v.TriggerValue, &v.Timezone, &v.SkipIfRunning, &v.Status, &v.CoreState, &v.Revision, &v.ModelProfileID, &v.ModelProfileRevision, &v.CredentialVersion, &v.NextRunAt, &v.LatestRunAt, &v.LeaseOwner, &v.LeaseUntil, &v.LeaseEpoch, &v.TaskTemplate, &v.TriggerJSON, &v.CreatedAt, &v.UpdatedAt); e != nil {
 			return nil, e
 		}
+		v.TaskTemplate = compactScheduleJSON(v.TaskTemplate)
+		v.TriggerJSON = compactScheduleJSON(v.TriggerJSON)
 		row := tx.QueryRowContext(ctx, `UPDATE p2p_agent_schedules SET status='running',revision=revision+1,lease_owner=$1,lease_until=$2,lease_epoch=lease_epoch+1,updated_at=$3 WHERE schedule_id=$4 AND owner_id=$5 RETURNING revision,lease_owner,lease_until,lease_epoch`, worker, now.Add(lease), now, v.ScheduleID, v.OwnerID)
 		if e = row.Scan(&v.Revision, &v.LeaseOwner, &v.LeaseUntil, &v.LeaseEpoch); e != nil {
 			return nil, e
@@ -1092,7 +1189,7 @@ func (s *DatabaseStore) ClaimDueSchedules(ctx context.Context, now time.Time, wo
 func (s *DatabaseStore) ClaimScheduleNow(ctx context.Context, owner, id, worker string, lease time.Duration) (Schedule, error) {
 	now := time.Now().UTC()
 	var v Schedule
-	e := s.db.QueryRowContext(ctx, `UPDATE p2p_agent_schedules SET status='running',revision=revision+1,lease_owner=$1,lease_until=$2,lease_epoch=lease_epoch+1,updated_at=$3 WHERE owner_id=$4 AND schedule_id=$5 AND deleted_at IS NULL AND NOT (status='running' AND lease_until>$3) RETURNING schedule_id,owner_id,name,prompt,trigger_kind,trigger_value,timezone,skip_if_running,status,revision,model_profile_id,model_profile_revision,credential_version,next_run_at,latest_run_at,lease_owner,lease_until,lease_epoch,created_at,updated_at`, worker, now.Add(lease), now, owner, id).Scan(&v.ScheduleID, &v.OwnerID, &v.Name, &v.Prompt, &v.TriggerKind, &v.TriggerValue, &v.Timezone, &v.SkipIfRunning, &v.Status, &v.Revision, &v.ModelProfileID, &v.ModelProfileRevision, &v.CredentialVersion, &v.NextRunAt, &v.LatestRunAt, &v.LeaseOwner, &v.LeaseUntil, &v.LeaseEpoch, &v.CreatedAt, &v.UpdatedAt)
+	e := s.db.QueryRowContext(ctx, `UPDATE p2p_agent_schedules SET status='running',core_state='active',revision=revision+1,lease_owner=$1,lease_until=$2,lease_epoch=lease_epoch+1,updated_at=$3 WHERE owner_id=$4 AND schedule_id=$5 AND deleted_at IS NULL AND core_state='active' AND NOT (status='running' AND lease_until>$3) RETURNING schedule_id,owner_id,name,prompt,trigger_kind,trigger_value,timezone,skip_if_running,status,core_state,revision,model_profile_id,model_profile_revision,credential_version,next_run_at,latest_run_at,lease_owner,lease_until,lease_epoch,task_template,trigger_json,created_at,updated_at`, worker, now.Add(lease), now, owner, id).Scan(&v.ScheduleID, &v.OwnerID, &v.Name, &v.Prompt, &v.TriggerKind, &v.TriggerValue, &v.Timezone, &v.SkipIfRunning, &v.Status, &v.CoreState, &v.Revision, &v.ModelProfileID, &v.ModelProfileRevision, &v.CredentialVersion, &v.NextRunAt, &v.LatestRunAt, &v.LeaseOwner, &v.LeaseUntil, &v.LeaseEpoch, &v.TaskTemplate, &v.TriggerJSON, &v.CreatedAt, &v.UpdatedAt)
 	if errors.Is(e, sql.ErrNoRows) {
 		if _, ok, ge := s.GetSchedule(ctx, owner, id); ge != nil {
 			return v, ge
@@ -1101,10 +1198,12 @@ func (s *DatabaseStore) ClaimScheduleNow(ctx context.Context, owner, id, worker 
 		}
 		return v, ErrScheduleNotFound
 	}
+	v.TaskTemplate = compactScheduleJSON(v.TaskTemplate)
+	v.TriggerJSON = compactScheduleJSON(v.TriggerJSON)
 	return v, e
 }
 func (s *DatabaseStore) ListOverlappingSchedules(ctx context.Context, now time.Time, limit int) ([]Schedule, error) {
-	rows, e := s.db.QueryContext(ctx, `SELECT schedule_id,owner_id,name,prompt,trigger_kind,trigger_value,timezone,skip_if_running,status,revision,model_profile_id,model_profile_revision,credential_version,next_run_at,latest_run_at,lease_owner,lease_until,lease_epoch,created_at,updated_at FROM p2p_agent_schedules WHERE deleted_at IS NULL AND status='running' AND skip_if_running AND next_run_at<=$1 AND lease_until>$1 ORDER BY next_run_at LIMIT $2`, now, limit)
+	rows, e := s.db.QueryContext(ctx, `SELECT schedule_id,owner_id,name,prompt,trigger_kind,trigger_value,timezone,skip_if_running,status,core_state,revision,model_profile_id,model_profile_revision,credential_version,next_run_at,latest_run_at,lease_owner,lease_until,lease_epoch,task_template,trigger_json,created_at,updated_at FROM p2p_agent_schedules WHERE deleted_at IS NULL AND core_state='active' AND status='running' AND skip_if_running AND next_run_at<=$1 AND lease_until>$1 ORDER BY next_run_at LIMIT $2`, now, limit)
 	if e != nil {
 		return nil, e
 	}
@@ -1112,9 +1211,11 @@ func (s *DatabaseStore) ListOverlappingSchedules(ctx context.Context, now time.T
 	out := []Schedule{}
 	for rows.Next() {
 		var v Schedule
-		if e = rows.Scan(&v.ScheduleID, &v.OwnerID, &v.Name, &v.Prompt, &v.TriggerKind, &v.TriggerValue, &v.Timezone, &v.SkipIfRunning, &v.Status, &v.Revision, &v.ModelProfileID, &v.ModelProfileRevision, &v.CredentialVersion, &v.NextRunAt, &v.LatestRunAt, &v.LeaseOwner, &v.LeaseUntil, &v.LeaseEpoch, &v.CreatedAt, &v.UpdatedAt); e != nil {
+		if e = rows.Scan(&v.ScheduleID, &v.OwnerID, &v.Name, &v.Prompt, &v.TriggerKind, &v.TriggerValue, &v.Timezone, &v.SkipIfRunning, &v.Status, &v.CoreState, &v.Revision, &v.ModelProfileID, &v.ModelProfileRevision, &v.CredentialVersion, &v.NextRunAt, &v.LatestRunAt, &v.LeaseOwner, &v.LeaseUntil, &v.LeaseEpoch, &v.TaskTemplate, &v.TriggerJSON, &v.CreatedAt, &v.UpdatedAt); e != nil {
 			return nil, e
 		}
+		v.TaskTemplate = compactScheduleJSON(v.TaskTemplate)
+		v.TriggerJSON = compactScheduleJSON(v.TriggerJSON)
 		out = append(out, v)
 	}
 	return out, rows.Err()
@@ -1167,7 +1268,7 @@ func (s *DatabaseStore) AcquireScheduleRunRecoveryLease(ctx context.Context, own
 		lease = 30 * time.Second
 	}
 	var v Schedule
-	e := s.db.QueryRowContext(ctx, `UPDATE p2p_agent_schedules s SET revision=s.revision+1,lease_owner=$1,lease_until=NOW()+$2::interval,lease_epoch=s.lease_epoch+1,updated_at=NOW() WHERE s.owner_id=$3 AND s.schedule_id=$4 AND s.deleted_at IS NULL AND s.status='running' AND s.lease_until<=NOW() AND EXISTS (SELECT 1 FROM p2p_agent_schedule_runs r WHERE r.run_id=$5 AND r.owner_id=s.owner_id AND r.schedule_id=s.schedule_id) RETURNING s.schedule_id,s.owner_id,s.name,s.prompt,s.trigger_kind,s.trigger_value,s.timezone,s.skip_if_running,s.status,s.revision,s.model_profile_id,s.model_profile_revision,s.credential_version,s.next_run_at,s.latest_run_at,s.lease_owner,s.lease_until,s.lease_epoch,s.created_at,s.updated_at`, recoveryOwner, lease.String(), owner, scheduleID, runID).Scan(&v.ScheduleID, &v.OwnerID, &v.Name, &v.Prompt, &v.TriggerKind, &v.TriggerValue, &v.Timezone, &v.SkipIfRunning, &v.Status, &v.Revision, &v.ModelProfileID, &v.ModelProfileRevision, &v.CredentialVersion, &v.NextRunAt, &v.LatestRunAt, &v.LeaseOwner, &v.LeaseUntil, &v.LeaseEpoch, &v.CreatedAt, &v.UpdatedAt)
+	e := s.db.QueryRowContext(ctx, `UPDATE p2p_agent_schedules s SET revision=s.revision+1,lease_owner=$1,lease_until=NOW()+$2::interval,lease_epoch=s.lease_epoch+1,updated_at=NOW() WHERE s.owner_id=$3 AND s.schedule_id=$4 AND s.deleted_at IS NULL AND s.status='running' AND s.core_state='active' AND s.lease_until<=NOW() AND EXISTS (SELECT 1 FROM p2p_agent_schedule_runs r WHERE r.run_id=$5 AND r.owner_id=s.owner_id AND r.schedule_id=s.schedule_id) RETURNING s.schedule_id,s.owner_id,s.name,s.prompt,s.trigger_kind,s.trigger_value,s.timezone,s.skip_if_running,s.status,s.core_state,s.revision,s.model_profile_id,s.model_profile_revision,s.credential_version,s.next_run_at,s.latest_run_at,s.lease_owner,s.lease_until,s.lease_epoch,s.task_template,s.trigger_json,s.created_at,s.updated_at`, recoveryOwner, lease.String(), owner, scheduleID, runID).Scan(&v.ScheduleID, &v.OwnerID, &v.Name, &v.Prompt, &v.TriggerKind, &v.TriggerValue, &v.Timezone, &v.SkipIfRunning, &v.Status, &v.CoreState, &v.Revision, &v.ModelProfileID, &v.ModelProfileRevision, &v.CredentialVersion, &v.NextRunAt, &v.LatestRunAt, &v.LeaseOwner, &v.LeaseUntil, &v.LeaseEpoch, &v.TaskTemplate, &v.TriggerJSON, &v.CreatedAt, &v.UpdatedAt)
 	if errors.Is(e, sql.ErrNoRows) {
 		return Schedule{}, ErrScheduleClaimed
 	}
@@ -1201,7 +1302,11 @@ func (s *DatabaseStore) FinishScheduleRun(ctx context.Context, o, rid, leaseOwne
 	return nil
 }
 func (s *DatabaseStore) AdvanceSchedule(ctx context.Context, owner, id, leaseOwner string, revision, epoch int64, next *time.Time, status string) error {
-	r, e := s.db.ExecContext(ctx, `UPDATE p2p_agent_schedules SET next_run_at=$1,latest_run_at=NOW(),status=$2,lease_owner='',lease_until=NULL,revision=revision+1,updated_at=NOW() WHERE owner_id=$3 AND schedule_id=$4 AND lease_owner=$5 AND lease_epoch=$6 AND status='running' AND lease_until>NOW() AND deleted_at IS NULL`, next, status, owner, id, leaseOwner, epoch)
+	coreState := "active"
+	if status == "disabled" {
+		coreState = "paused"
+	}
+	r, e := s.db.ExecContext(ctx, `UPDATE p2p_agent_schedules SET next_run_at=$1,latest_run_at=NOW(),status=$2,core_state=$3,lease_owner='',lease_until=NULL,revision=revision+1,updated_at=NOW() WHERE owner_id=$4 AND schedule_id=$5 AND lease_owner=$6 AND lease_epoch=$7 AND status='running' AND lease_until>NOW() AND deleted_at IS NULL`, next, status, coreState, owner, id, leaseOwner, epoch)
 	if e != nil {
 		return e
 	}

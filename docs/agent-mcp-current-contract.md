@@ -1,10 +1,10 @@
 # Current Agent and MCP Contract
 
-> Agent Core integration source behavior is recorded in
+> Embedded Agent control source behavior is recorded in
 > [`agent-core-integration-development-contract.md`](agent-core-integration-development-contract.md)
-> and is capability/readiness gated. This document remains the backend-owned
-> contract for the currently active Agent room, Native Agent, and external MCP
-> paths; it does not claim live Core or AWS activation.
+> and is capability/readiness gated. There is no external Core runtime. This
+> document remains the backend-owned contract for the Agent room, Native Agent,
+> and public Dirextalk MCP paths.
 
 This document is the backend-owned current contract for Dirextalk Agent state, Native Agent, and external MCP access. It describes existing behavior; it does not add a compatibility surface.
 
@@ -69,9 +69,9 @@ This document is the backend-owned current contract for Dirextalk Agent state, N
 
 ## vNext Legacy Matrix Gateway Foundation (Release Gate M)
 
-- The internal Gateway adapter accepts only owner-authored `io.dirextalk.agent.invoke.v1` timeline events from the configured real `agent_room_id`. Its consumer uses an independent JetStream durable, so an Agent Control outage cannot block normal ProductCore projections.
+- The internal Gateway adapter accepts only owner-authored `io.dirextalk.agent.invoke.v1` timeline events from the configured real `agent_room_id`. Its consumer uses an independent JetStream durable, so an Agent Control outage cannot block normal ProductCore projections. The old external Agent Run gRPC ingress is retired and unavailable; this adapter is the only live legacy gateway surface.
 - Invoke content is capped at 16 KiB and strictly contains `request_id`, `installation_id`, optional `preferred_connector_id`, `dispatch_mode`, `grant_version`, `input_event_id`, `required_capabilities`, and `idempotency_key`. UUIDs are canonical UUIDv7; capabilities are bounded, lowercase, unique, and sorted. Unknown/duplicate fields, trailing JSON, unsafe grant versions, the wrong room, and non-owner senders are ignored without creating a Run.
 - PostgreSQL migration v38 stores one reservation per `(matrix_room_id, request_id)`, with unique source event and tenant/room/idempotency digest constraints. It stores the local Matrix input reference and normalized routing facts, but never the prompt body or raw idempotency key. Crash replay returns the first generated opaque request event and request digest; accepted/rejected terminal facts are source-digest fenced and immutable.
-- Agent Control is called through the frozen `dirextalk.agent_gateway.v1.AgentRunIngress/CreateAgentRun` contract. The client requires TLS 1.3, HTTP/2, explicit server roots, a clientAuth-only certificate with exactly `spiffe://dirextalk.internal/v1/tenants/<tenant>/services/legacy-matrix-gateway`, 64 KiB message limits, and a deadline no longer than 20 seconds. Request and idempotency digests use the frozen LP/COMMIT transcript.
+- The frozen `dirextalk.agent_gateway.v1.AgentRunIngress/CreateAgentRun` contract is historical only and no longer has a live client implementation in Message Server. TLS 1.3, HTTP/2, explicit server roots, clientAuth-only certificates, 64 KiB message limits, and the LP/COMMIT transcript remain documented for archived compatibility review, but the production monolith does not use or expose that gRPC path.
 - The production monolith does not expose a startup switch for this adapter yet. Activation remains deliberately unavailable until deployment can prove the old Connect room consumer is stopped and fenced; otherwise one Matrix input could execute through both paths.
 - This foundation durably creates or replays an Agent Run. Exclusive-consumer cutover, Run completion/evidence ingress, `io.dirextalk.agent.result.v1` / `io.dirextalk.agent.error.v1` projection, and restricted plain-text fallback remain later Release Gate M work; the server must not fabricate completion or evidence from an admission receipt.

@@ -64,41 +64,34 @@ The external `POST /mcp` transport must call the same `internal/dirextalkmcp` se
 
 ## Skills
 
-- Skills can be installed, listed, enabled, disabled, and uninstalled.
-- Installed skill content is cached below the native Agent data directory.
-- Only static `SKILL.md` text is read into the prompt. Remote scripts or arbitrary skill code are not executed.
-- Skill install supports explicit `content` and URL/GitHub raw retrieval.
-- Agent conversations expose native skill management tools, so the model can install, list, enable, disable, and uninstall skills when the user explicitly asks for that operation. These management tools are base Agent capabilities and remain available even when older `enabled_tools` config/request values list only Dirextalk content tools.
-- Skill install requests that look like CLI examples, such as `npx skills add https://github.com/owner/repo --skill name`, should be handled through `native_agent_skills_install` rather than shell. When given `repo_url` plus `name` or `id`, the backend tries common GitHub monorepo paths such as `skills/<name>/SKILL.md`, `<name>/SKILL.md`, and root `SKILL.md`.
-- A newly installed or re-enabled skill affects the next Agent turn after the system prompt is rebuilt.
+- Message Server's built-in Agent instructions and first-party tools remain part
+  of the native runtime.
+- Third-party Skill installation, management and execution are unavailable.
+  The server does not fetch Skill content or execute Skill scripts, and the
+  embedded backend never advertises the `skill` capability.
 
 ## MCP
 
-- Third-party MCP servers can be installed, listed, enabled, disabled, and uninstalled.
-- Supported transports are `stdio`, remote HTTP/SSE, and streamable HTTP.
+- Third-party MCP lifecycle and execution use the durable
+  `agent.core.mcp.*` control plane. Only pinned HTTPS Streamable HTTP
+  installations are accepted; stdio, local MCP, HTTP/SSE and subprocess
+  transports are rejected before any side effect.
 - Dirextalk's own standard MCP server endpoint is `POST /mcp`. It supports JSON-RPC `initialize`, `tools/list`, and `tools/call` over POST, requires `Authorization: Bearer <agent_token>`, rejects query-string tokens, validates `Origin`, returns 405 for GET/SSE while server-to-client streaming is unused, and must not pass the inbound bearer token to downstream services.
-- MCP tools discovered from enabled servers become dynamic Agent tools.
-- MCP discovery and tool invocation must go through `github.com/cloudwego/eino-ext/components/tool/mcp/officialmcp` and `github.com/modelcontextprotocol/go-sdk/mcp`, not a custom JSON-RPC client.
-- MCP server command/env configuration may be stored, but secrets must be passed through request-local values or temporary env references.
-- Agent conversations expose native MCP server management tools, so the model can install, list, enable, disable, and uninstall MCP servers when the user explicitly asks for that operation. These management tools are base Agent capabilities and remain available even when older `enabled_tools` config/request values list only Dirextalk content tools.
-- MCP tools discovered during a dialogue install become callable on the next Agent turn after the Eino tool list is rebuilt.
+- Native Agent conversations do not dynamically load third-party MCP tools.
+  Remote credentials are immutable encrypted secret revisions and are resolved
+  only for a pinned, confirmed control-plane execution.
 
 ## Runtime CLI Tools
 
-- Runtime CLI tools can be installed, recorded, found, and executed under the native Agent data directory.
-- Supported actions include install, inspect, which, and run.
-- Execution is bounded by timeout and returns stdout/stderr/exit status.
-- Install and run commands must work in minimal Alpine runtime images that provide `sh` but not `bash`; the official runtime image also installs `bash` for bash-based deployment scripts.
-- Timed-out install and run commands must clean up their child process groups so dynamic dependency installs cannot continue indefinitely after the request is cancelled.
-- Enabled installed runtime CLI tools can be exposed to the Agent as Eino tools without a request confirmation field, so the model can call them inside the same orchestration loop and summarize their results.
-- Agent conversations can expose a built-in `runtime__shell` Eino tool for explicit command execution requests without a request confirmation field. Multi-step runtime workflows use a default 48-tool-call / 100-graph-step budget, accept configurable `max_tool_calls` or `max_steps`, and cap explicit graph steps at 240 server-side.
-- Runtime CLI, shell, and stdio MCP child processes must use a reduced runtime environment rather than inheriting all message-server environment variables. Stdio MCP servers may receive only explicitly configured extra `env` values.
+- Runtime CLI install/inspect/which/run and `runtime__shell` are unavailable.
+  The single-process server does not launch Agent child processes.
 
 ## Storage And Data Directory
 
 - `P2P_NATIVE_AGENT_DATA_DIR` configures the Agent data directory.
 - Default data dir is `/var/dirextalk-message-server/agent`.
-- Docker compose must mount a durable Agent data volume for skills, MCP metadata, and runtime CLI tools.
+- Docker compose mounts the durable Agent data directory for the secret keyring;
+  PostgreSQL owns task, confirmation, extension and workload metadata.
 - Homeserver/sync DB access is read-only. Native Agent must not write Matrix tables directly.
 
 ## Acceptance

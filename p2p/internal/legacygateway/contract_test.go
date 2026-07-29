@@ -1,9 +1,10 @@
 package legacygateway
 
 import (
-	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -158,13 +159,14 @@ func TestBuildCandidateKeepsSourceIdentityStableAcrossCrashRetry(t *testing.T) {
 	}
 }
 
-func TestVendoredGatewayProtocolSHA(t *testing.T) {
-	content, err := os.ReadFile("agentgatewayv1/agent_gateway.proto")
-	if err != nil {
-		t.Fatal(err)
-	}
-	digest := sha256.Sum256(content)
-	if got := hex.EncodeToString(digest[:]); got != "4f8ab24ec3b39c729e2b21f6e81aaa2f4359c39c3d80892d29af76bb978dc1cf" {
-		t.Fatalf("vendored agent_gateway.proto sha256 = %s", got)
+func TestRetiredGrpcClientArtifactsAreAbsent(t *testing.T) {
+	for _, path := range []string{
+		filepath.Join("agentgatewayv1", "agent_gateway.proto"),
+		filepath.Join("agentgatewayv1", "agent_gateway.pb.go"),
+		filepath.Join("agentgatewayv1", "agent_gateway_grpc.pb.go"),
+	} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("retired gRPC artifact %s must be absent, got %v", path, err)
+		}
 	}
 }

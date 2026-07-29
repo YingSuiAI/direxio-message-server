@@ -134,7 +134,13 @@ base64 且每片不超过 256 KiB。上传阶段返回按字节计算的 `progre
 - `internal/dirextalkdomain`：跨包共享的产品 value records 和纯 domain helper，例如 portal/agent config、conversation records、member/channel records、blocks、calls、favorites、reports、P2P event bounds 等；业务 response DTO 由各自的 `p2p/internal` 模块持有。
 - `internal/dirextalkplugin`：非 Agent plugin catalog/instance/job/secret record shapes；`p2p/internal/plugins` 拥有 plugin action orchestration、Docker runner 和 Native Agent/plugin 隔离规则。
 - `p2p/projector.go`、`p2p/projector_ports.go`：只保留投影公开 facade、账户生命周期门禁和 Matrix/业务模块适配；纯投影 helper 由 `internal/dirextalkprojection` 持有。
-- `p2p/internal/legacygateway`：Release Gate M 的受限 Matrix→vNext Agent Control 兼容边界；独立消费结构化 invoke、严格校验、冻结 digest、持久化幂等 reservation，并通过 tenant-scoped mTLS gRPC 创建 Agent Run。它不保存 prompt、不拥有 Run 结果事实，也不阻塞普通 projector。
+- `p2p/internal/agentcontrol` 与 `p2p/internal/agentembedded`：Message Server
+  进程内的任务/确认/调度、远程 HTTPS MCP、AWS、SSM/ECS Workload 与
+  deployment dashboard 边界。旧 `agent.core.*` 仅是 wire 兼容名称，不代表
+  第二个服务；Skill、stdio MCP、Core Runner 与 Core conversation 均不可用。
+- `p2p/internal/legacygateway`：历史 Release Gate M 兼容代码；它只保留
+  内部解析/存储兼容，不再包含外部 gRPC Agent 客户端，也不属于
+  embedded Agent control 的运行路径，更不参与生产单镜像 Agent 能力发布。
 - `p2p/consumer.go`：保留订阅 consumer 的公开 facade，实现在 `p2p/internal/projector`。
 - `internal/productpolicy`：Matrix Client-Server 写入前的 Dirextalk 产品策略校验。
 

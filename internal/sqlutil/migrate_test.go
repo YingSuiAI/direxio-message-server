@@ -27,13 +27,6 @@ var dummyMigrations = []sqlutil.Migration{
 		},
 	},
 	{
-		Version: "v2", // duplicate, this migration will be skipped
-		Up: func(ctx context.Context, txn *sql.Tx) error {
-			_, err := txn.ExecContext(ctx, "ALTER TABLE dummy ADD COLUMN test2 TEXT;")
-			return err
-		},
-	},
-	{
 		Version: "multiple execs",
 		Up: func(ctx context.Context, txn *sql.Tx) error {
 			_, err := txn.ExecContext(ctx, "ALTER TABLE dummy ADD COLUMN test3 TEXT;")
@@ -125,4 +118,16 @@ func Test_insertMigration(t *testing.T) {
 			t.Fatalf("unable to insert migration: %s", err)
 		}
 	})
+}
+
+func TestMigratorRejectsDuplicateVersionsBeforeOpeningDatabase(t *testing.T) {
+	m := sqlutil.NewMigrator(nil)
+	m.AddMigrations(
+		sqlutil.Migration{Version: "duplicate"},
+		sqlutil.Migration{Version: "duplicate"},
+	)
+	err := m.Up(context.Background())
+	if err == nil || err.Error() != `duplicate database migration version "duplicate"` {
+		t.Fatalf("Up() error = %v, want duplicate-version error", err)
+	}
 }

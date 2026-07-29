@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"strings"
 
 	"github.com/YingSuiAI/dirextalk-message-server/internal/sqlutil"
 )
@@ -1124,6 +1125,222 @@ func (s *DatabaseStore) migrate(ctx context.Context) error {
 			`CREATE INDEX IF NOT EXISTS p2p_native_agent_memory_records_source_idx ON p2p_native_agent_memory_records(owner_id,source_id,chunk_ordinal)`,
 		})
 	}})
+	m.AddMigrations(sqlutil.Migration{Version: "p2p: agent deployment ledger v94", Up: func(ctx context.Context, txn *sql.Tx) error {
+		return execMigrationStatements(ctx, txn, []string{
+			`CREATE TABLE IF NOT EXISTS p2p_agent_deployments (
+				owner_id TEXT NOT NULL, workload_id TEXT NOT NULL, operation_id TEXT NOT NULL DEFAULT '',
+				status TEXT NOT NULL, target_kind TEXT NOT NULL DEFAULT '', object_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+				actual_json JSONB NOT NULL DEFAULT '{}'::jsonb, quote_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+				PRIMARY KEY(owner_id, workload_id)
+			)`,
+			`CREATE INDEX IF NOT EXISTS p2p_agent_deployments_owner_updated_idx ON p2p_agent_deployments(owner_id, updated_at DESC, workload_id)`,
+			`CREATE INDEX IF NOT EXISTS p2p_agent_deployments_owner_status_idx ON p2p_agent_deployments(owner_id, status, target_kind)`,
+			`CREATE TABLE IF NOT EXISTS p2p_agent_deployment_events (
+				owner_id TEXT NOT NULL, workload_id TEXT NOT NULL, operation_id TEXT NOT NULL, sequence BIGINT NOT NULL CHECK(sequence > 0),
+				event_json JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+				PRIMARY KEY(owner_id, operation_id, sequence)
+			)`,
+			`CREATE INDEX IF NOT EXISTS p2p_agent_deployment_events_owner_workload_idx ON p2p_agent_deployment_events(owner_id, workload_id, sequence)`,
+		})
+	}})
+	m.AddMigrations(sqlutil.Migration{Version: "p2p: agent deployment ledger operation snapshot v95", Up: func(ctx context.Context, txn *sql.Tx) error {
+		return execMigrationStatements(ctx, txn, []string{`ALTER TABLE p2p_agent_deployments ADD COLUMN IF NOT EXISTS operation_json JSONB NOT NULL DEFAULT '{}'::jsonb`, `ALTER TABLE p2p_agent_deployments ADD COLUMN IF NOT EXISTS revision BIGINT NOT NULL DEFAULT 1`, `ALTER TABLE p2p_agent_deployments ADD COLUMN IF NOT EXISTS lease_owner TEXT NOT NULL DEFAULT ''`, `ALTER TABLE p2p_agent_deployments ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ`})
+	}})
+	m.AddMigrations(sqlutil.Migration{Version: "p2p: agent deployment public event cursor v96", Up: func(ctx context.Context, txn *sql.Tx) error {
+		return execMigrationStatements(ctx, txn, []string{
+			`ALTER TABLE p2p_agent_deployment_events ADD COLUMN IF NOT EXISTS public_sequence BIGINT`,
+			`ALTER TABLE p2p_agent_deployment_events ADD COLUMN IF NOT EXISTS event_id TEXT`,
+			`WITH ranked AS (SELECT owner_id,workload_id,operation_id,sequence,ROW_NUMBER() OVER (PARTITION BY owner_id,workload_id ORDER BY created_at,operation_id,sequence) AS n FROM p2p_agent_deployment_events) UPDATE p2p_agent_deployment_events e SET public_sequence=r.n FROM ranked r WHERE e.owner_id=r.owner_id AND e.workload_id=r.workload_id AND e.operation_id=r.operation_id AND e.sequence=r.sequence AND e.public_sequence IS NULL`,
+			`CREATE UNIQUE INDEX IF NOT EXISTS p2p_agent_deployment_events_public_cursor_idx ON p2p_agent_deployment_events(owner_id,workload_id,public_sequence) WHERE public_sequence IS NOT NULL`,
+			`UPDATE p2p_agent_deployments SET operation_json=operation_json-'failure_summary', object_json=CASE WHEN object_json ? 'error' THEN jsonb_set(jsonb_set(object_json,'{error,summary}','"Deployment failed"'::jsonb,true),'{current_operation}',COALESCE(object_json->'current_operation','{}'::jsonb)-'failure_summary',true) ELSE object_json END`,
+			`UPDATE p2p_agent_deployment_events SET event_json=jsonb_set(event_json,'{message}','""'::jsonb,true) WHERE event_json ? 'message'`,
+		})
+	}})
+	m.AddMigrations(sqlutil.Migration{Version: "p2p: agent secret envelopes v97", Up: func(ctx context.Context, txn *sql.Tx) error {
+		return execMigrationStatements(ctx, txn, []string{
+			`CREATE TABLE IF NOT EXISTS p2p_agent_secrets (
+				secret_domain TEXT NOT NULL CHECK (secret_domain <> ''),
+				owner_id TEXT NOT NULL CHECK (owner_id <> ''),
+				entity_id TEXT NOT NULL CHECK (entity_id <> ''),
+				secret_revision BIGINT NOT NULL CHECK (secret_revision > 0),
+				purpose TEXT NOT NULL CHECK (purpose <> ''),
+				reference TEXT NOT NULL CHECK (reference <> ''),
+				binding_digest BYTEA NOT NULL CHECK (octet_length(binding_digest) = 32),
+				envelope_version SMALLINT NOT NULL DEFAULT 1 CHECK (envelope_version = 1),
+				aad_version SMALLINT NOT NULL DEFAULT 1 CHECK (aad_version = 1),
+				key_id TEXT NOT NULL CHECK (key_id <> ''),
+				nonce BYTEA NOT NULL CHECK (octet_length(nonce) = 12),
+				ciphertext BYTEA NOT NULL CHECK (octet_length(ciphertext) >= 16),
+				created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+				PRIMARY KEY (secret_domain, owner_id, entity_id, secret_revision, purpose, reference)
+			)`,
+			`CREATE INDEX IF NOT EXISTS p2p_agent_secrets_key_usage_idx
+				ON p2p_agent_secrets(key_id, secret_domain, owner_id, entity_id, secret_revision)`,
+			`CREATE TABLE IF NOT EXISTS p2p_agent_secret_key_usage (
+				secret_domain TEXT NOT NULL,
+				owner_id TEXT NOT NULL,
+				entity_id TEXT NOT NULL,
+				secret_revision BIGINT NOT NULL CHECK (secret_revision > 0),
+				purpose TEXT NOT NULL,
+				reference TEXT NOT NULL,
+				key_id TEXT NOT NULL CHECK (key_id <> ''),
+				envelope_digest BYTEA NOT NULL CHECK (octet_length(envelope_digest) = 32),
+				updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+				PRIMARY KEY (secret_domain, owner_id, entity_id, secret_revision, purpose, reference)
+			)`,
+			`CREATE INDEX IF NOT EXISTS p2p_agent_secret_key_usage_key_idx
+				ON p2p_agent_secret_key_usage(key_id, secret_domain)`,
+			`CREATE TABLE IF NOT EXISTS p2p_agent_secret_rotations (
+				rotation_id UUID PRIMARY KEY,
+				state TEXT NOT NULL CHECK (state IN ('rewrapping','verifying','complete','failed')),
+				from_key_ids TEXT[] NOT NULL,
+				to_key_id TEXT NOT NULL CHECK (to_key_id <> ''),
+				lease_owner TEXT NOT NULL DEFAULT '',
+				lease_epoch BIGINT NOT NULL DEFAULT 0 CHECK (lease_epoch >= 0),
+				lease_expires_at TIMESTAMPTZ,
+				cursor_domain TEXT NOT NULL DEFAULT '',
+				cursor_owner_id TEXT NOT NULL DEFAULT '',
+				cursor_entity_id TEXT NOT NULL DEFAULT '',
+				cursor_revision BIGINT NOT NULL DEFAULT 0 CHECK (cursor_revision >= 0),
+				rewrapped_rows BIGINT NOT NULL DEFAULT 0 CHECK (rewrapped_rows >= 0),
+				verified_rows BIGINT NOT NULL DEFAULT 0 CHECK (verified_rows >= 0),
+				error_code TEXT NOT NULL DEFAULT '',
+				created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+				updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+				completed_at TIMESTAMPTZ
+			)`,
+			`CREATE UNIQUE INDEX IF NOT EXISTS p2p_agent_secret_rotations_live_idx
+				ON p2p_agent_secret_rotations((TRUE))
+				WHERE state IN ('rewrapping','verifying')`,
+			`ALTER TABLE p2p_agent_model_profiles ADD COLUMN IF NOT EXISTS api_key_key_id TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE p2p_agent_model_profiles ADD COLUMN IF NOT EXISTS api_key_profile_revision BIGINT NOT NULL DEFAULT 0`,
+			`ALTER TABLE p2p_agent_model_profile_credentials ADD COLUMN IF NOT EXISTS api_key_key_id TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE p2p_agent_model_profile_credentials ADD COLUMN IF NOT EXISTS profile_revision BIGINT NOT NULL DEFAULT 0`,
+		})
+	}})
+	m.AddMigrations(sqlutil.Migration{Version: "p2p: agent tasks and confirmations v98", Up: func(ctx context.Context, txn *sql.Tx) error {
+		if err := execMigrationDDL(ctx, txn, AgentTaskDDL); err != nil {
+			return err
+		}
+		return execMigrationDDL(ctx, txn, AgentConfirmationDDL)
+	}})
+	m.AddMigrations(sqlutil.Migration{Version: "p2p: agent extension lifecycle v99", Up: func(ctx context.Context, txn *sql.Tx) error {
+		return execMigrationDDL(ctx, txn, AgentExtensionDDL)
+	}})
+	m.AddMigrations(sqlutil.Migration{Version: "p2p: AWS control plane v100", Up: func(ctx context.Context, txn *sql.Tx) error {
+		return execMigrationDDL(ctx, txn, AgentAWSDDL)
+	}})
+	m.AddMigrations(sqlutil.Migration{Version: "p2p: workload control plane v101", Up: func(ctx context.Context, txn *sql.Tx) error {
+		if err := execMigrationDDL(ctx, txn, AgentWorkloadDDL); err != nil {
+			return err
+		}
+		return execMigrationStatements(ctx, txn, []string{
+			`CREATE TABLE IF NOT EXISTS core_workload_event_counters (
+				owner_id text NOT NULL, operation_id uuid NOT NULL,
+				next_sequence bigint NOT NULL DEFAULT 1 CHECK (next_sequence > 0),
+				PRIMARY KEY(owner_id, operation_id)
+			)`,
+		})
+	}})
+	m.AddMigrations(sqlutil.Migration{Version: "p2p: generic schedules and deployment cursors v102", Up: func(ctx context.Context, txn *sql.Tx) error {
+		if err := execMigrationStatements(ctx, txn, []string{
+			`ALTER TABLE p2p_agent_schedules ADD COLUMN IF NOT EXISTS task_template JSONB NOT NULL DEFAULT '{}'::jsonb`,
+			`ALTER TABLE p2p_agent_schedules ADD COLUMN IF NOT EXISTS core_state TEXT NOT NULL DEFAULT 'active' CHECK (core_state IN ('active','paused'))`,
+			`ALTER TABLE p2p_agent_schedules ADD COLUMN IF NOT EXISTS trigger_json JSONB NOT NULL DEFAULT '{}'::jsonb`,
+			`UPDATE p2p_agent_schedules SET task_template=jsonb_strip_nulls(jsonb_build_object('goal',prompt,'model_profile_id',NULLIF(model_profile_id,''))) WHERE task_template='{}'::jsonb AND (prompt<>'' OR model_profile_id<>'')`,
+			`UPDATE p2p_agent_schedules SET core_state=CASE WHEN status='disabled' THEN 'paused' ELSE 'active' END`,
+			`UPDATE p2p_agent_schedules SET trigger_json=CASE LOWER(trigger_kind) WHEN 'run_at' THEN jsonb_build_object('kind','run_at','run_at',trigger_value) WHEN 'one_time' THEN jsonb_build_object('kind','run_at','run_at',trigger_value) WHEN 'cron' THEN jsonb_build_object('kind','cron','expression',trigger_value,'timezone',timezone) ELSE '{}'::jsonb END WHERE trigger_json='{}'::jsonb`,
+			`ALTER TABLE p2p_agent_schedule_runs ADD COLUMN IF NOT EXISTS occurrence_id UUID`,
+			`ALTER TABLE p2p_agent_schedule_runs ADD COLUMN IF NOT EXISTS task_id UUID`,
+			`CREATE UNIQUE INDEX IF NOT EXISTS p2p_agent_schedule_runs_occurrence_link_idx ON p2p_agent_schedule_runs(owner_id,schedule_id,occurrence_id) WHERE occurrence_id IS NOT NULL`,
+			`CREATE INDEX IF NOT EXISTS p2p_agent_schedule_runs_task_idx ON p2p_agent_schedule_runs(owner_id,task_id) WHERE task_id IS NOT NULL`,
+			`CREATE INDEX IF NOT EXISTS agent_schedule_occurrences_owner_schedule_idx ON agent_schedule_occurrences(owner_id,schedule_id,scheduled_for)`,
+			`CREATE INDEX IF NOT EXISTS agent_schedule_occurrences_owner_task_idx ON agent_schedule_occurrences(owner_id,task_id)`,
+			`UPDATE p2p_agent_schedule_runs r SET occurrence_id=o.occurrence_id,task_id=o.task_id FROM agent_schedule_occurrences o WHERE r.occurrence_id IS NULL AND o.run_id::text=r.run_id AND o.owner_id=r.owner_id`,
+			`CREATE TABLE IF NOT EXISTS p2p_agent_deployment_event_cursors (
+				owner_id TEXT NOT NULL, workload_id TEXT NOT NULL,
+				last_sequence BIGINT NOT NULL DEFAULT 0 CHECK (last_sequence >= 0),
+				updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+				PRIMARY KEY(owner_id, workload_id)
+			)`,
+			`ALTER TABLE core_workload_events ADD COLUMN IF NOT EXISTS workload_id UUID`,
+			`ALTER TABLE core_workload_events ADD COLUMN IF NOT EXISTS public_sequence BIGINT`,
+			`UPDATE core_workload_events e
+			 SET workload_id=o.workload_id
+			 FROM core_workload_operations o
+			 WHERE e.owner_id=o.owner_id AND e.operation_id=o.operation_id AND e.workload_id IS NULL`,
+			`WITH ranked AS (
+				SELECT e.owner_id,e.operation_id,e.sequence,
+				       ROW_NUMBER() OVER (PARTITION BY e.owner_id,e.workload_id ORDER BY e.at,e.operation_id,e.sequence) AS public_sequence
+				FROM core_workload_events e
+			 )
+			 UPDATE core_workload_events e
+			 SET public_sequence=r.public_sequence
+			 FROM ranked r
+			 WHERE e.owner_id=r.owner_id AND e.operation_id=r.operation_id AND e.sequence=r.sequence
+			   AND e.public_sequence IS NULL`,
+			`ALTER TABLE core_workload_events ALTER COLUMN workload_id SET NOT NULL`,
+			`ALTER TABLE core_workload_events ALTER COLUMN public_sequence SET NOT NULL`,
+			`CREATE UNIQUE INDEX IF NOT EXISTS core_workload_events_public_sequence_idx
+			 ON core_workload_events(owner_id,workload_id,public_sequence)`,
+			`DO $$ BEGIN
+			 IF NOT EXISTS (
+				SELECT 1 FROM pg_constraint
+				WHERE conname='core_workload_events_workload_fk'
+				  AND conrelid=to_regclass('core_workload_events')
+				  AND connamespace=(SELECT relnamespace FROM pg_class WHERE oid=to_regclass('core_workload_events'))
+			 ) THEN
+				ALTER TABLE core_workload_events
+				ADD CONSTRAINT core_workload_events_workload_fk
+				FOREIGN KEY(owner_id,workload_id) REFERENCES core_workloads(owner_id,workload_id) ON DELETE RESTRICT;
+			 END IF;
+			 END $$`,
+			`INSERT INTO p2p_agent_deployment_event_cursors(owner_id,workload_id,last_sequence,updated_at)
+			 SELECT owner_id,workload_id,COALESCE(MAX(public_sequence),0),COALESCE(MAX(created_at),NOW())
+			 FROM p2p_agent_deployment_events GROUP BY owner_id,workload_id
+			 ON CONFLICT(owner_id,workload_id) DO UPDATE SET last_sequence=GREATEST(p2p_agent_deployment_event_cursors.last_sequence,EXCLUDED.last_sequence),updated_at=GREATEST(p2p_agent_deployment_event_cursors.updated_at,EXCLUDED.updated_at)`,
+			`INSERT INTO p2p_agent_deployment_event_cursors(owner_id,workload_id,last_sequence,updated_at)
+			 SELECT owner_id,workload_id,COALESCE(MAX(public_sequence),0),COALESCE(MAX(at),NOW())
+			 FROM core_workload_events GROUP BY owner_id,workload_id
+			 ON CONFLICT(owner_id,workload_id) DO UPDATE SET last_sequence=GREATEST(p2p_agent_deployment_event_cursors.last_sequence,EXCLUDED.last_sequence),updated_at=GREATEST(p2p_agent_deployment_event_cursors.updated_at,EXCLUDED.updated_at)`,
+		}); err != nil {
+			return err
+		}
+		// A partially-applied deployment may already have created the named
+		// foreign key. Check the catalog before adding it so v102 remains
+		// restart-safe without registering a second migration version.
+		var exists bool
+		if err := txn.QueryRowContext(ctx, `SELECT EXISTS (
+			SELECT 1
+			FROM pg_constraint c
+			WHERE c.conname='p2p_agent_schedule_runs_task_fk'
+			  AND c.conrelid=to_regclass('p2p_agent_schedule_runs')
+			  AND c.connamespace=(SELECT relnamespace FROM pg_class WHERE oid=to_regclass('p2p_agent_schedule_runs'))
+		)`).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			if _, err := txn.ExecContext(ctx, `ALTER TABLE p2p_agent_schedule_runs ADD CONSTRAINT p2p_agent_schedule_runs_task_fk FOREIGN KEY (owner_id,task_id) REFERENCES agent_tasks(owner_id,task_id) ON DELETE SET NULL (task_id)`); err != nil {
+				return err
+			}
+		}
+		if err := txn.QueryRowContext(ctx, `SELECT EXISTS (
+			SELECT 1
+			FROM pg_constraint c
+			WHERE c.conname='p2p_agent_schedule_runs_schedule_fk'
+			  AND c.conrelid=to_regclass('p2p_agent_schedule_runs')
+			  AND c.connamespace=(SELECT relnamespace FROM pg_class WHERE oid=to_regclass('p2p_agent_schedule_runs'))
+		)`).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			if _, err := txn.ExecContext(ctx, `ALTER TABLE p2p_agent_schedule_runs ADD CONSTRAINT p2p_agent_schedule_runs_schedule_fk FOREIGN KEY (owner_id,schedule_id) REFERENCES p2p_agent_schedules(owner_id,schedule_id) ON DELETE RESTRICT`); err != nil {
+				return err
+			}
+		}
+		return nil
+	}})
 	return m.Up(ctx)
 }
 
@@ -1161,4 +1378,14 @@ func execMigrationStatements(ctx context.Context, txn *sql.Tx, statements []stri
 		}
 	}
 	return nil
+}
+
+func execMigrationDDL(ctx context.Context, txn *sql.Tx, ddl string) error {
+	statements := make([]string, 0)
+	for _, statement := range strings.Split(ddl, ";") {
+		if statement = strings.TrimSpace(statement); statement != "" {
+			statements = append(statements, statement)
+		}
+	}
+	return execMigrationStatements(ctx, txn, statements)
 }
