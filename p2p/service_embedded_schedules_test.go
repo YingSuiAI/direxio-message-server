@@ -65,6 +65,31 @@ func TestDatabaseServiceMissingAgentKeyringFailsClosedWithoutCreatingIt(t *testi
 	if service.embeddedAgentCapabilityReady("model_profiles.server") || service.embeddedAgentCapabilityReady("task") {
 		t.Fatal("Agent capability published without a verified keyring")
 	}
+	if !service.embeddedAgentCapabilityReady("memory.server") {
+		t.Fatal("in-process PostgreSQL knowledge and memory must remain ready without an Agent keyring")
+	}
+	backends, apiErr := service.Handle(ctx, "agent.backends.get", nil)
+	if apiErr != nil {
+		t.Fatalf("agent.backends.get: %v", apiErr)
+	}
+	embedded, ok := backends.(map[string]any)["embedded"].(map[string]any)
+	if !ok {
+		t.Fatalf("embedded backend missing from response: %#v", backends)
+	}
+	capabilities, ok := embedded["capabilities"].([]string)
+	if !ok {
+		t.Fatalf("embedded capabilities have unexpected type: %#v", embedded["capabilities"])
+	}
+	memoryReady := false
+	for _, capability := range capabilities {
+		if capability == "memory.server" {
+			memoryReady = true
+			break
+		}
+	}
+	if !memoryReady {
+		t.Fatalf("single-image PostgreSQL backend did not advertise memory.server: %#v", capabilities)
+	}
 	if _, apiErr := service.Handle(ctx, "profile.get", nil); apiErr != nil {
 		t.Fatalf("ordinary ProductCore remains available: %v", apiErr)
 	}
