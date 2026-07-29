@@ -71,8 +71,11 @@ func New(cfg Config) *Module {
 
 // Handlers returns the complete Agent ProductCore action surface.
 func (m *Module) Handlers() map[string]actionbase.Handler {
-	handlers := make(map[string]actionbase.Handler, len(runtimeActions)+9)
+	handlers := make(map[string]actionbase.Handler, len(runtimeActions)+len(remoteAgentActions)+9)
 	for _, action := range runtimeActions {
+		handlers[action] = m.invoke(action)
+	}
+	for _, action := range remoteAgentActions {
 		handlers[action] = m.invoke(action)
 	}
 	handlers[actionPassword] = m.accountPassword
@@ -205,7 +208,8 @@ func (m *Module) runnerForAction(action string) Runner {
 	if m == nil {
 		return nil
 	}
-	if strings.TrimSpace(action) == "agent.chat" {
+	action = strings.TrimSpace(action)
+	if action == "agent.chat" || strings.HasPrefix(action, "agent.cloud.") {
 		return m.chatRunner
 	}
 	return m.runner
@@ -281,4 +285,18 @@ var runtimeActions = []string{
 	"agent.channel_comments.list",
 	"agent.channel_comments.create",
 	"agent.summarize",
+}
+
+var remoteAgentActions = []string{
+	"agent.cloud.tasks.list",
+	"agent.cloud.tasks.get",
+	"agent.cloud.tasks.cancel",
+	"agent.cloud.plans.list",
+	"agent.cloud.plans.get",
+	"agent.cloud.plans.confirmation.prepare",
+	"agent.cloud.plans.approve",
+	"agent.cloud.deployments.list",
+	"agent.cloud.deployments.get",
+	"agent.cloud.workers.list",
+	"agent.cloud.workers.get",
 }

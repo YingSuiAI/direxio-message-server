@@ -9,6 +9,9 @@ const (
 	RealtimeWSTicketAction          = "realtime.ws_ticket.create"
 	AgentRuntimeProfileGetAction    = "agent.runtime.profile.get"
 	AgentRuntimeProfileUpdateAction = "agent.runtime.profile.update"
+	AgentCloudTaskCancelAction      = "agent.cloud.tasks.cancel"
+	AgentCloudPlanPrepareAction     = "agent.cloud.plans.confirmation.prepare"
+	AgentCloudPlanApproveAction     = "agent.cloud.plans.approve"
 )
 
 type ActionAuth string
@@ -65,6 +68,17 @@ var actionSpecs = []ActionSpec{
 	{Name: "agent.chat.stream", Auth: ActionAuthOwner, Transport: ActionTransportWSStreamOnly},
 	{Name: "agent.chat.turn.stop", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
 	{Name: "agent.chat.turns.list", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
+	{Name: "agent.cloud.tasks.list", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
+	{Name: "agent.cloud.tasks.get", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
+	{Name: AgentCloudTaskCancelAction, Auth: ActionAuthOwner, Transport: ActionTransportHTTPOnly},
+	{Name: "agent.cloud.plans.list", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
+	{Name: "agent.cloud.plans.get", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
+	{Name: AgentCloudPlanPrepareAction, Auth: ActionAuthOwner, Transport: ActionTransportHTTPOnly},
+	{Name: AgentCloudPlanApproveAction, Auth: ActionAuthOwner, Transport: ActionTransportHTTPOnly},
+	{Name: "agent.cloud.deployments.list", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
+	{Name: "agent.cloud.deployments.get", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
+	{Name: "agent.cloud.workers.list", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
+	{Name: "agent.cloud.workers.get", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
 	{Name: "agent.context.compress", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
 	{Name: "agent.models.list", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
 	{Name: "agent.runtime.inspect", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},

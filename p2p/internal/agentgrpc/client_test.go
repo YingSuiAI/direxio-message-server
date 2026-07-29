@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/pem"
 	"math/big"
 	"net"
@@ -27,12 +28,22 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const testServiceKey = "svc_message.AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
 
 const modelProfileCanary = "model-profile-api-key-canary"
 const testCloudConnectionID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+const testCloudTaskID = "11111111-1111-4111-8111-111111111111"
+const testCloudStepID = "22222222-2222-4222-8222-222222222222"
+const testCloudPlanID = "33333333-3333-4333-8333-333333333333"
+const testCloudQuoteID = "44444444-4444-4444-8444-444444444444"
+const testCloudDeploymentID = "55555555-5555-4555-8555-555555555555"
+const testCloudWorkerID = "66666666-6666-4666-8666-666666666666"
+const testApprovalID = "77777777-7777-4777-8777-777777777777"
+const testApprovalKeyID = "cloud-device-0123456789abcdef01234567"
 
 func TestRunnerChatUsesTLS13MountedAuthenticationAndBoundOwner(t *testing.T) {
 	t.Parallel()
@@ -176,6 +187,200 @@ func TestWorkerDiagnosticIntentUsesOnlyCurrentReplyText(t *testing.T) {
 	}
 	if workerDiagnosticIntent(strings.Repeat("a", 2049) + " Worker diagnostic") {
 		t.Fatal("oversized text activated cloud dialogue")
+	}
+}
+
+func TestRunnerCloudTaskFacadeBindsOwnerAndRedactsInternalReferences(t *testing.T) {
+	t.Parallel()
+	server := startRuntimeServer(t)
+	runner := newTestRunner(t, server, Config{UnaryTimeout: time.Second})
+
+	result, err := runner.Invoke(context.Background(), actionCloudTasksGet, map[string]any{
+		"task_id": testCloudTaskID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result["task_id"] != testCloudTaskID || result["execution_status"] != "awaiting_approval" {
+		t.Fatalf("unexpected task result: %#v", result)
+	}
+	steps, ok := result["steps"].([]map[string]any)
+	if !ok || len(steps) != 1 || steps[0]["checkpoint_available"] != true || steps[0]["result_available"] != true {
+		t.Fatalf("unexpected task steps: %#v", result["steps"])
+	}
+	if _, exposed := steps[0]["checkpoint_ref"]; exposed {
+		t.Fatal("checkpoint_ref crossed the ProductCore boundary")
+	}
+	if _, exposed := steps[0]["result_ref"]; exposed {
+		t.Fatal("result_ref crossed the ProductCore boundary")
+	}
+
+	server.tasks.mu.Lock()
+	getRequest := server.tasks.getRequest
+	listStepsRequest := server.tasks.listStepsRequest
+	server.tasks.mu.Unlock()
+	if getRequest.GetTaskId() != testCloudTaskID || listStepsRequest.GetTaskId() != testCloudTaskID {
+		t.Fatalf("unexpected task RPC requests: get=%#v steps=%#v", getRequest, listStepsRequest)
+	}
+
+	cancelID := "88888888-8888-4888-8888-888888888888"
+	canceled, err := runner.Invoke(context.Background(), actionCloudTasksCancel, map[string]any{
+		"idempotency_key": cancelID, "task_id": testCloudTaskID, "expected_revision": 3, "reason": "user canceled",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if canceled["outcome_status"] != "canceled" {
+		t.Fatalf("unexpected canceled task: %#v", canceled)
+	}
+	server.tasks.mu.Lock()
+	cancelRequest := server.tasks.cancelRequest
+	server.tasks.mu.Unlock()
+	if cancelRequest.GetIdempotencyKey() != cancelID || cancelRequest.GetTaskId() != testCloudTaskID ||
+		cancelRequest.GetExpectedRevision() != 3 || cancelRequest.GetReason() != "user canceled" {
+		t.Fatalf("unexpected cancel request: %#v", cancelRequest)
+	}
+}
+
+func TestRunnerCloudPlanApprovalUsesOpaqueDeviceSignatureAndBoundOwner(t *testing.T) {
+	t.Parallel()
+	server := startRuntimeServer(t)
+	runner := newTestRunner(t, server, Config{UnaryTimeout: time.Second})
+
+	result, err := runner.Invoke(context.Background(), actionCloudPlansGet, map[string]any{"plan_id": testCloudPlanID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	quote, ok := result["quote"].(map[string]any)
+	if !ok || quote["currency"] != "USD" || quote["maximum_launch_amount_micros"] != uint64(32000) {
+		t.Fatalf("unexpected plan quote: %#v", result["quote"])
+	}
+	if _, exposed := result["plan_hash"]; exposed {
+		t.Fatal("plan_hash crossed the ProductCore boundary")
+	}
+	resource := result["resource"].(map[string]any)
+	for _, field := range []string{"worker_image_id", "worker_image_digest", "vpc_id", "subnet_id", "security_group_id"} {
+		if _, exposed := resource[field]; exposed {
+			t.Fatalf("%s crossed the ProductCore boundary", field)
+		}
+	}
+
+	challengeRequestID := "99999999-9999-4999-8999-999999999999"
+	challenge, err := runner.Invoke(context.Background(), actionCloudPlanConfirmation, map[string]any{
+		"idempotency_key": challengeRequestID, "plan_id": testCloudPlanID,
+		"expected_revision": 1, "signer_key_id": testApprovalKeyID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(challenge["signing_payload_base64url"].(string))
+	if err != nil || string(payload) != "opaque-canonical-cbor" {
+		t.Fatalf("unexpected signing payload: %#v, %v", challenge, err)
+	}
+	server.cloud.mu.Lock()
+	prepareRequest := server.cloud.challengeRequest
+	server.cloud.mu.Unlock()
+	if prepareRequest.GetOwnerId() != "owner-from-config" || prepareRequest.GetPlanId() != testCloudPlanID ||
+		prepareRequest.GetSignerKeyId() != testApprovalKeyID {
+		t.Fatalf("unexpected challenge request: %#v", prepareRequest)
+	}
+
+	signature := base64.RawURLEncoding.EncodeToString(make([]byte, 64))
+	approved, err := runner.Invoke(context.Background(), actionCloudPlanApprove, map[string]any{
+		"idempotency_key":   "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+		"plan_id":           testCloudPlanID,
+		"expected_revision": 1,
+		"approval": map[string]any{
+			"approval_id": testApprovalID, "challenge_id": "challenge_" + strings.Repeat("A", 43),
+			"signer_key_id": testApprovalKeyID, "expires_at": time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano),
+			"signature_base64url": signature,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if approved["status"] != "approved" || approved["revision"] != int64(2) {
+		t.Fatalf("unexpected approved plan: %#v", approved)
+	}
+	server.cloud.mu.Lock()
+	approveRequest := server.cloud.approveRequest
+	server.cloud.mu.Unlock()
+	if approveRequest.GetOwnerId() != "owner-from-config" ||
+		approveRequest.GetApproval().GetSignerKeyId() != testApprovalKeyID ||
+		len(approveRequest.GetApproval().GetSignature()) != 64 {
+		t.Fatalf("unexpected approve request: %#v", approveRequest)
+	}
+}
+
+func TestRunnerCloudMutationsFailBeforeRPCOnUnboundInput(t *testing.T) {
+	t.Parallel()
+	server := startRuntimeServer(t)
+	runner := newTestRunner(t, server, Config{UnaryTimeout: time.Second})
+
+	for _, test := range []struct {
+		action string
+		params map[string]any
+	}{
+		{actionCloudTasksCancel, map[string]any{
+			"idempotency_key": uuid.NewString(), "task_id": testCloudTaskID,
+			"expected_revision": 3, "owner_id": "attacker",
+		}},
+		{actionCloudPlanConfirmation, map[string]any{
+			"idempotency_key": uuid.NewString(), "plan_id": testCloudPlanID,
+			"expected_revision": 1, "signer_key_id": "device-alias",
+		}},
+		{actionCloudPlanApprove, map[string]any{
+			"idempotency_key": uuid.NewString(), "plan_id": testCloudPlanID, "expected_revision": 1,
+			"approval": map[string]any{
+				"approval_id": testApprovalID, "challenge_id": "challenge_" + strings.Repeat("A", 43),
+				"signer_key_id": testApprovalKeyID, "expires_at": time.Now().UTC().Format(time.RFC3339Nano),
+				"signature_base64url": base64.RawURLEncoding.EncodeToString(make([]byte, 63)),
+			},
+		}},
+	} {
+		if _, err := runner.Invoke(context.Background(), test.action, test.params); err == nil {
+			t.Fatalf("%s accepted invalid parameters", test.action)
+		}
+	}
+	server.tasks.mu.Lock()
+	cancelRequest := server.tasks.cancelRequest
+	server.tasks.mu.Unlock()
+	server.cloud.mu.Lock()
+	challengeRequest := server.cloud.challengeRequest
+	approveRequest := server.cloud.approveRequest
+	server.cloud.mu.Unlock()
+	if cancelRequest != nil || challengeRequest != nil || approveRequest != nil {
+		t.Fatalf("invalid mutation reached Agent: cancel=%#v challenge=%#v approve=%#v", cancelRequest, challengeRequest, approveRequest)
+	}
+}
+
+func TestRunnerCloudDeploymentAndWorkerReadsExposeOnlyPublicState(t *testing.T) {
+	t.Parallel()
+	server := startRuntimeServer(t)
+	runner := newTestRunner(t, server, Config{UnaryTimeout: time.Second})
+
+	deployment, err := runner.Invoke(context.Background(), actionCloudDeploymentsGet, map[string]any{
+		"deployment_id": testCloudDeploymentID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources := deployment["resources"].(map[string]any)
+	if resources["status"] != "active" || resources["existing"] != uint32(1) {
+		t.Fatalf("unexpected deployment resources: %#v", resources)
+	}
+	if _, exposed := resources["provider_id"]; exposed {
+		t.Fatal("provider_id crossed the ProductCore boundary")
+	}
+
+	worker, err := runner.Invoke(context.Background(), actionCloudWorkersGet, map[string]any{
+		"deployment_id": testCloudDeploymentID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if worker["status"] != "leased" || worker["result_available"] != false || worker["evidence_count"] != uint32(2) {
+		t.Fatalf("unexpected worker: %#v", worker)
 	}
 }
 
@@ -332,12 +537,63 @@ func TestNewFailsClosedForInvalidSecurityConfiguration(t *testing.T) {
 	}
 }
 
+type taskTestService struct {
+	agentv1.UnimplementedTaskServiceServer
+	mu               sync.Mutex
+	task             *agentv1.Task
+	step             *agentv1.Step
+	getRequest       *agentv1.GetTaskRequest
+	listStepsRequest *agentv1.ListStepsRequest
+	cancelRequest    *agentv1.CancelTaskRequest
+}
+
+func (service *taskTestService) ListTasks(_ context.Context, request *agentv1.ListTasksRequest) (*agentv1.ListTasksResponse, error) {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	if request.GetOwnerId() != "owner-from-config" {
+		return nil, status.Error(codes.PermissionDenied, "wrong owner")
+	}
+	return &agentv1.ListTasksResponse{Tasks: []*agentv1.Task{proto.Clone(service.task).(*agentv1.Task)}}, nil
+}
+
+func (service *taskTestService) GetTask(_ context.Context, request *agentv1.GetTaskRequest) (*agentv1.GetTaskResponse, error) {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	service.getRequest = proto.Clone(request).(*agentv1.GetTaskRequest)
+	return &agentv1.GetTaskResponse{Task: proto.Clone(service.task).(*agentv1.Task)}, nil
+}
+
+func (service *taskTestService) ListSteps(_ context.Context, request *agentv1.ListStepsRequest) (*agentv1.ListStepsResponse, error) {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	service.listStepsRequest = proto.Clone(request).(*agentv1.ListStepsRequest)
+	return &agentv1.ListStepsResponse{Steps: []*agentv1.Step{proto.Clone(service.step).(*agentv1.Step)}}, nil
+}
+
+func (service *taskTestService) CancelTask(_ context.Context, request *agentv1.CancelTaskRequest) (*agentv1.CancelTaskResponse, error) {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	service.cancelRequest = proto.Clone(request).(*agentv1.CancelTaskRequest)
+	task := proto.Clone(service.task).(*agentv1.Task)
+	task.ExecutionStatus = agentv1.ExecutionStatus_EXECUTION_STATUS_FINISHED
+	task.OutcomeStatus = agentv1.OutcomeStatus_OUTCOME_STATUS_CANCELED
+	task.Revision++
+	task.UpdatedAt = timestamppb.Now()
+	return &agentv1.CancelTaskResponse{Task: task}, nil
+}
+
 type cloudTestService struct {
 	agentv1.UnimplementedCloudControlServiceServer
-	mu            sync.Mutex
-	connections   []*agentv1.CloudConnection
-	listRequests  []*agentv1.ListCloudConnectionsRequest
-	authorization string
+	mu               sync.Mutex
+	connections      []*agentv1.CloudConnection
+	plan             *agentv1.CloudPlan
+	quote            *agentv1.CloudQuote
+	deployment       *agentv1.CloudDeployment
+	worker           *agentv1.CloudWorker
+	listRequests     []*agentv1.ListCloudConnectionsRequest
+	challengeRequest *agentv1.CreateApprovalChallengeRequest
+	approveRequest   *agentv1.ApproveCloudPlanRequest
+	authorization    string
 }
 
 func (service *cloudTestService) ListCloudConnections(ctx context.Context, request *agentv1.ListCloudConnectionsRequest) (*agentv1.ListCloudConnectionsResponse, error) {
@@ -353,6 +609,92 @@ func (service *cloudTestService) ListCloudConnections(ctx context.Context, reque
 	return &agentv1.ListCloudConnectionsResponse{
 		Connections: append([]*agentv1.CloudConnection(nil), service.connections...),
 	}, nil
+}
+
+func (service *cloudTestService) ListCloudPlans(_ context.Context, request *agentv1.ListCloudPlansRequest) (*agentv1.ListCloudPlansResponse, error) {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	if request.GetOwnerId() != "owner-from-config" {
+		return nil, status.Error(codes.PermissionDenied, "wrong owner")
+	}
+	return &agentv1.ListCloudPlansResponse{Plans: []*agentv1.CloudPlan{proto.Clone(service.plan).(*agentv1.CloudPlan)}}, nil
+}
+
+func (service *cloudTestService) GetCloudPlan(_ context.Context, request *agentv1.GetCloudPlanRequest) (*agentv1.GetCloudPlanResponse, error) {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	if request.GetOwnerId() != "owner-from-config" || request.GetPlanId() != testCloudPlanID {
+		return nil, status.Error(codes.NotFound, "not found")
+	}
+	return &agentv1.GetCloudPlanResponse{Plan: proto.Clone(service.plan).(*agentv1.CloudPlan)}, nil
+}
+
+func (service *cloudTestService) GetCloudQuote(_ context.Context, request *agentv1.GetCloudQuoteRequest) (*agentv1.GetCloudQuoteResponse, error) {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	if request.GetOwnerId() != "owner-from-config" || request.GetQuoteId() != testCloudQuoteID {
+		return nil, status.Error(codes.NotFound, "not found")
+	}
+	return &agentv1.GetCloudQuoteResponse{Quote: proto.Clone(service.quote).(*agentv1.CloudQuote)}, nil
+}
+
+func (service *cloudTestService) CreateApprovalChallenge(_ context.Context, request *agentv1.CreateApprovalChallengeRequest) (*agentv1.CreateApprovalChallengeResponse, error) {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	service.challengeRequest = proto.Clone(request).(*agentv1.CreateApprovalChallengeRequest)
+	return &agentv1.CreateApprovalChallengeResponse{Challenge: &agentv1.ApprovalChallenge{
+		ApprovalId: testApprovalID, ChallengeId: "challenge_" + strings.Repeat("A", 43),
+		SignerKeyId: request.GetSignerKeyId(), PlanId: request.GetPlanId(),
+		PlanRevision: request.GetExpectedRevision(), OwnerId: request.GetOwnerId(),
+		ExpiresAt: timestamppb.New(time.Now().Add(time.Minute)), SigningPayloadCbor: []byte("opaque-canonical-cbor"),
+		Revision: 1,
+	}}, nil
+}
+
+func (service *cloudTestService) ApproveCloudPlan(_ context.Context, request *agentv1.ApproveCloudPlanRequest) (*agentv1.ApproveCloudPlanResponse, error) {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	service.approveRequest = proto.Clone(request).(*agentv1.ApproveCloudPlanRequest)
+	plan := proto.Clone(service.plan).(*agentv1.CloudPlan)
+	plan.Status = agentv1.CloudPlanStatus_CLOUD_PLAN_STATUS_APPROVED
+	plan.Revision++
+	return &agentv1.ApproveCloudPlanResponse{Plan: plan}, nil
+}
+
+func (service *cloudTestService) ListCloudDeployments(_ context.Context, request *agentv1.ListCloudDeploymentsRequest) (*agentv1.ListCloudDeploymentsResponse, error) {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	if request.GetOwnerId() != "owner-from-config" {
+		return nil, status.Error(codes.PermissionDenied, "wrong owner")
+	}
+	return &agentv1.ListCloudDeploymentsResponse{Deployments: []*agentv1.CloudDeployment{proto.Clone(service.deployment).(*agentv1.CloudDeployment)}}, nil
+}
+
+func (service *cloudTestService) GetCloudDeployment(_ context.Context, request *agentv1.GetCloudDeploymentRequest) (*agentv1.GetCloudDeploymentResponse, error) {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	if request.GetOwnerId() != "owner-from-config" || request.GetDeploymentId() != testCloudDeploymentID {
+		return nil, status.Error(codes.NotFound, "not found")
+	}
+	return &agentv1.GetCloudDeploymentResponse{Deployment: proto.Clone(service.deployment).(*agentv1.CloudDeployment)}, nil
+}
+
+func (service *cloudTestService) ListCloudWorkers(_ context.Context, request *agentv1.ListCloudWorkersRequest) (*agentv1.ListCloudWorkersResponse, error) {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	if request.GetOwnerId() != "owner-from-config" {
+		return nil, status.Error(codes.PermissionDenied, "wrong owner")
+	}
+	return &agentv1.ListCloudWorkersResponse{Workers: []*agentv1.CloudWorker{proto.Clone(service.worker).(*agentv1.CloudWorker)}}, nil
+}
+
+func (service *cloudTestService) GetCloudWorker(_ context.Context, request *agentv1.GetCloudWorkerRequest) (*agentv1.GetCloudWorkerResponse, error) {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	if request.GetOwnerId() != "owner-from-config" || request.GetDeploymentId() != testCloudDeploymentID {
+		return nil, status.Error(codes.NotFound, "not found")
+	}
+	return &agentv1.GetCloudWorkerResponse{Worker: proto.Clone(service.worker).(*agentv1.CloudWorker)}, nil
 }
 
 type runtimeTestService struct {
@@ -443,11 +785,101 @@ func chatResponse() *agentv1.ChatResponse {
 	}
 }
 
+func newTaskTestService() *taskTestService {
+	now := time.Date(2026, time.July, 29, 3, 0, 0, 0, time.UTC)
+	return &taskTestService{
+		task: &agentv1.Task{
+			TaskId: testCloudTaskID, OwnerId: "owner-from-config", Goal: "Run the Worker diagnostic",
+			ExecutionStatus: agentv1.ExecutionStatus_EXECUTION_STATUS_AWAITING_APPROVAL,
+			OutcomeStatus:   agentv1.OutcomeStatus_OUTCOME_STATUS_PENDING,
+			RetentionPolicy: agentv1.RetentionPolicy_RETENTION_POLICY_EPHEMERAL_AUTO_DESTROY,
+			CurrentStepId:   testCloudStepID, ApprovedPlanId: testCloudPlanID, Revision: 3,
+			CreatedAt: timestamppb.New(now), UpdatedAt: timestamppb.New(now.Add(time.Minute)),
+		},
+		step: &agentv1.Step{
+			StepId: testCloudStepID, TaskId: testCloudTaskID, Name: "prepare_resource_candidates",
+			ExecutorKind:    agentv1.ExecutorKind_EXECUTOR_KIND_CONTROL_PLANE,
+			ExecutionStatus: agentv1.ExecutionStatus_EXECUTION_STATUS_FINISHED,
+			OutcomeStatus:   agentv1.OutcomeStatus_OUTCOME_STATUS_SUCCEEDED,
+			Attempt:         1, LeaseEpoch: 2, CheckpointRef: "s3://private/checkpoint",
+			ResultRef: "postgres://private/result", Revision: 4,
+			CreatedAt: timestamppb.New(now), UpdatedAt: timestamppb.New(now.Add(time.Minute)),
+		},
+	}
+}
+
+func newCloudTestService() *cloudTestService {
+	now := time.Date(2026, time.July, 29, 3, 0, 0, 0, time.UTC)
+	scopeDigest := "sha256:" + strings.Repeat("a", 64)
+	quoteDigest := "sha256:" + strings.Repeat("b", 64)
+	plan := &agentv1.CloudPlan{
+		PlanId: testCloudPlanID, OwnerId: "owner-from-config", ConnectionId: testCloudConnectionID,
+		Recipe:  &agentv1.CloudRecipeBinding{RecipeId: "dirextalk-worker-diagnostic-v1", Maturity: "experimental"},
+		QuoteId: testCloudQuoteID, QuoteDigest: quoteDigest, QuoteScopeDigest: scopeDigest,
+		CandidateProfile: agentv1.CloudCandidateProfile_CLOUD_CANDIDATE_PROFILE_RECOMMENDED,
+		QuoteValidUntil:  timestamppb.New(now.Add(15 * time.Minute)),
+		Resource: &agentv1.CloudResourceScope{
+			CandidateProfile: agentv1.CloudCandidateProfile_CLOUD_CANDIDATE_PROFILE_RECOMMENDED,
+			Region:           "ap-northeast-3", InstanceType: "t3.small", InstanceCount: 1,
+			Architecture: "amd64", Vcpu: 2, MemoryMib: 2048, DiskGib: 16,
+			PurchaseOption: agentv1.CloudPurchaseOption_CLOUD_PURCHASE_OPTION_ON_DEMAND,
+			WorkerImageId:  "ami-04965f4bf928dda7b", WorkerImageDigest: "sha256:" + strings.Repeat("c", 64),
+		},
+		Network: &agentv1.CloudNetworkScope{
+			VpcId: "vpc-private", SubnetId: "subnet-private", SecurityGroupId: "sg-private",
+			PublicExposure: false, PublicIpv4: false, TlsRequired: true, AuthenticationRequired: true,
+		},
+		Retention: &agentv1.CloudRetentionScope{
+			RetentionClass: agentv1.CloudRetentionClass_CLOUD_RETENTION_CLASS_EPHEMERAL,
+			AutoDestroy:    true, GracePeriodSeconds: 60, MaxLifetimeSeconds: 3600,
+		},
+		Status:   agentv1.CloudPlanStatus_CLOUD_PLAN_STATUS_READY_FOR_CONFIRMATION,
+		PlanHash: "sha256:" + strings.Repeat("d", 64), Revision: 1,
+	}
+	return &cloudTestService{
+		connections: []*agentv1.CloudConnection{{
+			ConnectionId: testCloudConnectionID, OwnerId: "owner-from-config", Status: "active",
+		}},
+		plan: plan,
+		quote: &agentv1.CloudQuote{
+			QuoteId: testCloudQuoteID, QuotedAt: timestamppb.New(now), ValidUntil: timestamppb.New(now.Add(15 * time.Minute)),
+			Currency: "USD", Digest: quoteDigest,
+			Candidates: []*agentv1.CloudQuoteCandidate{{
+				CandidateProfile: agentv1.CloudCandidateProfile_CLOUD_CANDIDATE_PROFILE_RECOMMENDED,
+				ScopeDigest:      scopeDigest, HourlyEstimateMicros: 22000, MonthlyEstimateMicros: 16060000,
+				MaximumLaunchAmountMicros: 32000,
+			}},
+			Assumptions: []string{"One hour maximum runtime"}, Exclusions: []string{"Data transfer beyond the estimate"},
+		},
+		deployment: &agentv1.CloudDeployment{
+			DeploymentId: testCloudDeploymentID, OwnerId: "owner-from-config", TaskId: testCloudTaskID,
+			StepId: testCloudStepID, WorkerId: testCloudWorkerID, PlanId: testCloudPlanID,
+			ConnectionId: testCloudConnectionID, ExecutionStatus: agentv1.ExecutionStatus_EXECUTION_STATUS_RUNNING,
+			OutcomeStatus: agentv1.OutcomeStatus_OUTCOME_STATUS_PENDING,
+			Resources: &agentv1.CloudResourceSummary{
+				Status: agentv1.CloudResourceStatus_CLOUD_RESOURCE_STATUS_ACTIVE, Revision: 3,
+				ReadBack: &agentv1.CloudReadBackSummary{
+					TotalResources: 1, ObservedResources: 1, ExistingResources: 1,
+					LastObservedAt: timestamppb.New(now.Add(2 * time.Minute)),
+				},
+			},
+			Revision: 4, CreatedAt: timestamppb.New(now), UpdatedAt: timestamppb.New(now.Add(2 * time.Minute)),
+		},
+		worker: &agentv1.CloudWorker{
+			DeploymentId: testCloudDeploymentID, OwnerId: "owner-from-config", WorkerId: testCloudWorkerID,
+			Status: agentv1.CloudWorkerStatus_CLOUD_WORKER_STATUS_LEASED, Attempt: 1, LeaseEpoch: 2,
+			LeaseExpiresAt: timestamppb.New(now.Add(10 * time.Minute)), LastHeartbeatAt: timestamppb.New(now.Add(2 * time.Minute)),
+			EvidenceCount: 2, Revision: 3, CreatedAt: timestamppb.New(now), UpdatedAt: timestamppb.New(now.Add(2 * time.Minute)),
+		},
+	}
+}
+
 type testRuntimeServer struct {
 	target  string
 	caFile  string
 	keyFile string
 	service *runtimeTestService
+	tasks   *taskTestService
 	cloud   *cloudTestService
 }
 
@@ -459,13 +891,13 @@ func startRuntimeServer(t *testing.T) testRuntimeServer {
 		t.Fatal(err)
 	}
 	service := &runtimeTestService{}
-	cloud := &cloudTestService{connections: []*agentv1.CloudConnection{{
-		ConnectionId: testCloudConnectionID, OwnerId: "owner-from-config", Status: "active",
-	}}}
+	tasks := newTaskTestService()
+	cloud := newCloudTestService()
 	server := grpc.NewServer(grpc.Creds(credentials.NewTLS(&tls.Config{
 		Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13,
 	})))
 	agentv1.RegisterRuntimeServiceServer(server, service)
+	agentv1.RegisterTaskServiceServer(server, tasks)
 	agentv1.RegisterCloudControlServiceServer(server, cloud)
 	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(func() { server.Stop(); _ = listener.Close() })
@@ -480,7 +912,7 @@ func startRuntimeServer(t *testing.T) testRuntimeServer {
 	}
 	return testRuntimeServer{
 		target: listener.Addr().String(), caFile: caFile, keyFile: keyFile,
-		service: service, cloud: cloud,
+		service: service, tasks: tasks, cloud: cloud,
 	}
 }
 

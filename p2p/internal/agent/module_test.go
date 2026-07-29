@@ -65,7 +65,12 @@ func TestDedicatedChatRunnerDoesNotTakeOverOtherRuntimeActions(t *testing.T) {
 	if actionErr != nil || models.(map[string]any)["source"] != "local" {
 		t.Fatalf("agent.models.list = %#v, %v", models, actionErr)
 	}
-	if len(remote.invokes) != 1 || remote.invokes[0] != "agent.chat" || len(local.invokes) != 1 || local.invokes[0] != "agent.models.list" {
+	tasks, actionErr := module.Handlers()["agent.cloud.tasks.list"](context.Background(), nil)
+	if actionErr != nil || tasks.(map[string]any)["source"] != "remote" {
+		t.Fatalf("agent.cloud.tasks.list = %#v, %v", tasks, actionErr)
+	}
+	if len(remote.invokes) != 2 || remote.invokes[0] != "agent.chat" || remote.invokes[1] != "agent.cloud.tasks.list" ||
+		len(local.invokes) != 1 || local.invokes[0] != "agent.models.list" {
 		t.Fatalf("runner routing local=%v remote=%v", local.invokes, remote.invokes)
 	}
 

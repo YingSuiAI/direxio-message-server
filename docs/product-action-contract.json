@@ -143,6 +143,61 @@
       "transport": "http_and_ws_request"
     },
     {
+      "name": "agent.cloud.tasks.list",
+      "auth": "owner",
+      "transport": "http_and_ws_request"
+    },
+    {
+      "name": "agent.cloud.tasks.get",
+      "auth": "owner",
+      "transport": "http_and_ws_request"
+    },
+    {
+      "name": "agent.cloud.tasks.cancel",
+      "auth": "owner",
+      "transport": "http_only"
+    },
+    {
+      "name": "agent.cloud.plans.list",
+      "auth": "owner",
+      "transport": "http_and_ws_request"
+    },
+    {
+      "name": "agent.cloud.plans.get",
+      "auth": "owner",
+      "transport": "http_and_ws_request"
+    },
+    {
+      "name": "agent.cloud.plans.confirmation.prepare",
+      "auth": "owner",
+      "transport": "http_only"
+    },
+    {
+      "name": "agent.cloud.plans.approve",
+      "auth": "owner",
+      "transport": "http_only"
+    },
+    {
+      "name": "agent.cloud.deployments.list",
+      "auth": "owner",
+      "transport": "http_and_ws_request"
+    },
+    {
+      "name": "agent.cloud.deployments.get",
+      "auth": "owner",
+      "transport": "http_and_ws_request"
+    },
+    {
+      "name": "agent.cloud.workers.list",
+      "auth": "owner",
+      "transport": "http_and_ws_request"
+    },
+    {
+      "name": "agent.cloud.workers.get",
+      "auth": "owner",
+      "transport": "http_and_ws_request"
+    },
+    {
       "name": "agent.context.compress",
       "auth": "owner",
       "transport": "http_and_ws_request"

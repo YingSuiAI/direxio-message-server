@@ -65,6 +65,7 @@ type Config struct {
 type Runner struct {
 	connection    *grpc.ClientConn
 	runtime       agentv1.RuntimeServiceClient
+	tasks         agentv1.TaskServiceClient
 	cloud         agentv1.CloudControlServiceClient
 	ownerID       string
 	chainTimeout  time.Duration
@@ -114,7 +115,7 @@ func New(ctx context.Context, config Config) (*Runner, error) {
 	}
 	return &Runner{
 		connection: connection, runtime: agentv1.NewRuntimeServiceClient(connection),
-		cloud: agentv1.NewCloudControlServiceClient(connection), ownerID: config.OwnerID,
+		tasks: agentv1.NewTaskServiceClient(connection), cloud: agentv1.NewCloudControlServiceClient(connection), ownerID: config.OwnerID,
 		chainTimeout: unaryTimeout, streamTimeout: streamTimeout,
 	}, nil
 }
@@ -133,12 +134,19 @@ func (runner *Runner) Apply(context.Context, string) error {
 	return errors.New("agent service action is not supported")
 }
 
-// Invoke maps agent.chat to RuntimeService.Chat.
+// Invoke maps the isolated Native Agent action surface to typed Agent RPCs.
 func (runner *Runner) Invoke(ctx context.Context, action string, params map[string]any) (map[string]any, error) {
-	if runner == nil || runner.runtime == nil {
+	if runner == nil {
 		return nil, errors.New("agent service client is unavailable")
 	}
-	if strings.TrimSpace(action) != "agent.chat" {
+	action = strings.TrimSpace(action)
+	if isCloudAction(action) {
+		return runner.invokeCloudAction(ctx, action, params)
+	}
+	if runner.runtime == nil {
+		return nil, errors.New("agent service client is unavailable")
+	}
+	if action != "agent.chat" {
 		return nil, errors.New("agent service action is not supported")
 	}
 	request, err := runner.chatRequest(ctx, params)
