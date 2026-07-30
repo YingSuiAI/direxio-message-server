@@ -372,6 +372,16 @@ func SecretGrantBindingDigest(reference string, purpose coreconfirmation.SecretP
 	}{"aws-secret-binding-v1", arn, purpose})
 }
 
+// SecretGrantAggregateDigestForTypedRefs returns the canonical aggregate
+// digest used by workload confirmation bindings when the plan has no legacy
+// string grants. Per-grant BindingDigest values remain independent pins.
+func SecretGrantAggregateDigestForTypedRefs(refs []SecretGrantRef) string {
+	return canonicalDigest(struct {
+		Legacy []string
+		Typed  []SecretGrantRef
+	}{nil, refs})
+}
+
 func RedactText(s string) string {
 	if strings.TrimSpace(s) == "" {
 		return ""
