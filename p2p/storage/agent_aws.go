@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -100,7 +101,7 @@ func (r *PostgresAWSRepository) CreateEC2Provision(ctx context.Context, plan age
 		return agentaws.Plan{}, agentaws.Provision{}, err
 	}
 	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, r.ownerID+"\x00ec2-provision-create\x00"+key); err != nil {
+	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, canonicalAdvisoryLockIdentity("aws", r.ownerID, "ec2-provision-create", key)); err != nil {
 		return agentaws.Plan{}, agentaws.Provision{}, err
 	}
 	var priorHash string
@@ -259,7 +260,7 @@ func (r *PostgresAWSRepository) RetryProvision(ctx context.Context, provisionID 
 		return agentaws.Provision{}, err
 	}
 	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, r.ownerID+"\x00provision-retry\x00"+idempotencyKey); err != nil {
+	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, canonicalAdvisoryLockIdentity("aws", r.ownerID, "provision-retry", idempotencyKey)); err != nil {
 		return agentaws.Provision{}, err
 	}
 	digest := stringDigest(struct {
@@ -432,6 +433,26 @@ func stringDigest(v any) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// canonicalAdvisoryLockIdentity returns a deterministic, collision-safe and
+// NUL-free identity for PostgreSQL advisory locks. Length-prefixing each
+// component keeps distinct part boundaries distinct before hashing, while the
+// explicit domain prevents unrelated lock namespaces from sharing identities.
+func canonicalAdvisoryLockIdentity(domain string, parts ...string) string {
+	h := sha256.New()
+	var length [8]byte
+	writePart := func(part string) {
+		value := []byte(part)
+		binary.BigEndian.PutUint64(length[:], uint64(len(value)))
+		_, _ = h.Write(length[:])
+		_, _ = h.Write(value)
+	}
+	writePart(domain)
+	for _, part := range parts {
+		writePart(part)
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 // ReplayCredential reads the durable response snapshot before a caller tries
 // to reconstruct a mutation from current state (which may already have moved
 // on or be tombstoned after a lost response).
@@ -465,7 +486,7 @@ func credentialReplayTx(ctx context.Context, tx *sql.Tx, owner, operation, key, 
 	// A missing replay row has no row lock. Serialize that key explicitly so
 	// concurrent lost-response retries cannot both perform the side effect and
 	// race only at the final replay insert.
-	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, owner+"\x00"+operation+"\x00"+key); err != nil {
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, canonicalAdvisoryLockIdentity("aws", owner, operation, key)); err != nil {
 		return agentaws.CredentialView{}, false, err
 	}
 	var hash string
@@ -516,7 +537,7 @@ func (r *PostgresAWSRepository) RequestChange(ctx context.Context, in agentaws.R
 		return agentaws.ChangeRequestResult{}, err
 	}
 	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, r.ownerID+"\x00change-request\x00"+in.IdempotencyKey); err != nil {
+	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, canonicalAdvisoryLockIdentity("aws", r.ownerID, "change-request", in.IdempotencyKey)); err != nil {
 		return agentaws.ChangeRequestResult{}, err
 	}
 	replayDigest := stringDigest(struct {
@@ -539,7 +560,7 @@ func (r *PostgresAWSRepository) RequestChange(ctx context.Context, in agentaws.R
 		return agentaws.ChangeRequestResult{}, e
 	}
 	if in.ProvisionID != "" {
-		if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, r.ownerID+"\x00geolibre-provision\x00"+in.ProvisionID); err != nil {
+		if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, canonicalAdvisoryLockIdentity("aws", r.ownerID, "geolibre-provision", in.ProvisionID)); err != nil {
 			return agentaws.ChangeRequestResult{}, err
 		}
 		// The durable lease is the cross-transaction fence held while a typed
@@ -1027,10 +1048,11 @@ func (r *PostgresAWSRepository) SaveCredentialIdempotent(ctx context.Context, v 
 		return agentaws.CredentialView{}, err
 	}
 	defer tx.Rollback()
-	if replay, hit, e := credentialReplayTx(ctx, tx, r.ownerID, "credential-save", key, digest); hit {
-		if e != nil {
-			return agentaws.CredentialView{}, e
-		}
+	replay, hit, replayErr := credentialReplayTx(ctx, tx, r.ownerID, "credential-save", key, digest)
+	if replayErr != nil {
+		return agentaws.CredentialView{}, replayErr
+	}
+	if hit {
 		return replay, tx.Commit()
 	}
 	if _, err = tx.ExecContext(ctx, `INSERT INTO core_aws_credentials(owner_id,credential_id,revision,envelope_version,aad_version,key_id,nonce,ciphertext,envelope_digest,name,region,account_id,user_arn,verified_revision,created_at,updated_at) VALUES($1,$2,$3,1,1,'',NULL,NULL,$4,$5,$6,$7,$8,$9,$10,$11)`, r.ownerID, v.ID, v.Revision, hex.EncodeToString(sum[:]), v.Name, v.Region, v.AccountID, v.UserARN, v.VerifiedRevision, v.CreatedAt, v.UpdatedAt); err != nil {
@@ -1340,10 +1362,11 @@ func (r *PostgresAWSRepository) DeleteCredentialIdempotent(ctx context.Context, 
 		return err
 	}
 	defer tx.Rollback()
-	if _, hit, e := credentialReplayTx(ctx, tx, r.ownerID, "credential-delete", key, digest); hit {
-		if e != nil {
-			return e
-		}
+	_, hit, replayErr := credentialReplayTx(ctx, tx, r.ownerID, "credential-delete", key, digest)
+	if replayErr != nil {
+		return replayErr
+	}
+	if hit {
 		return tx.Commit()
 	}
 	res, err := tx.ExecContext(ctx, `UPDATE core_aws_credential_current SET deleted_at=clock_timestamp() WHERE owner_id=$1 AND credential_id=$2 AND revision=$3 AND deleted_at IS NULL`, r.ownerID, id, rev)
@@ -1472,10 +1495,11 @@ func (r *PostgresAWSRepository) ReplaceCredentialIdempotent(ctx context.Context,
 		return agentaws.CredentialView{}, err
 	}
 	defer tx.Rollback()
-	if replay, hit, e := credentialReplayTx(ctx, tx, r.ownerID, "credential-replace", key, digest); hit {
-		if e != nil {
-			return agentaws.CredentialView{}, e
-		}
+	replay, hit, replayErr := credentialReplayTx(ctx, tx, r.ownerID, "credential-replace", key, digest)
+	if replayErr != nil {
+		return agentaws.CredentialView{}, replayErr
+	}
+	if hit {
 		return replay, tx.Commit()
 	}
 	res, err := tx.ExecContext(ctx, `INSERT INTO core_aws_credentials(owner_id,credential_id,revision,envelope_version,aad_version,key_id,nonce,ciphertext,envelope_digest,name,region,account_id,user_arn,verified_revision,created_at,updated_at) SELECT owner_id,$2,$3,1,1,'',NULL,NULL,$4,$5,$6,$7,$8,$9,created_at,$10 FROM core_aws_credentials WHERE owner_id=$1 AND credential_id=$2 AND revision=$11`, r.ownerID, v.ID, v.Revision, hex.EncodeToString(sum[:]), v.Name, v.Region, v.AccountID, v.UserARN, v.VerifiedRevision, v.UpdatedAt, expected)
@@ -1828,7 +1852,7 @@ func (r *PostgresAWSRepository) CompleteChange(ctx context.Context, cmd agentaws
 	defer tx.Rollback()
 	completionDigest := stringDigest(cmd)
 	if cmd.OperationKey != "" {
-		if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, r.ownerID+"\x00change-complete\x00"+cmd.OperationKey); err != nil {
+		if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, canonicalAdvisoryLockIdentity("aws", r.ownerID, "change-complete", cmd.OperationKey)); err != nil {
 			return agentaws.Change{}, err
 		}
 		var priorHash string
