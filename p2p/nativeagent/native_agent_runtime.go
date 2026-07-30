@@ -152,6 +152,7 @@ type requestContextKey string
 const (
 	requestOwnerKey        requestContextKey = "nativeagent.owner"
 	requestConversationKey requestContextKey = "nativeagent.conversation"
+	requestIntentKey       requestContextKey = "nativeagent.intent"
 	requestUserTextKey     requestContextKey = "nativeagent.current_user_text"
 )
 
@@ -167,9 +168,22 @@ func RequestContext(ctx context.Context) (owner, conversation, userText string) 
 // WithRequestContext is used by server-owned adapters and focused tests; model
 // tool arguments are never merged into this context.
 func WithRequestContext(ctx context.Context, owner, conversation, userText string) context.Context {
+	return WithRequestContextIntent(ctx, owner, conversation, "", userText)
+}
+
+// WithRequestContextIntent extends the server-owned scope with the stable
+// turn/invocation intent used for write idempotency. It is never read from
+// model-authored tool arguments.
+func WithRequestContextIntent(ctx context.Context, owner, conversation, intent, userText string) context.Context {
 	ctx = context.WithValue(ctx, requestOwnerKey, strings.TrimSpace(owner))
 	ctx = context.WithValue(ctx, requestConversationKey, strings.TrimSpace(conversation))
+	ctx = context.WithValue(ctx, requestIntentKey, strings.TrimSpace(intent))
 	return context.WithValue(ctx, requestUserTextKey, userText)
+}
+
+func RequestIntent(ctx context.Context) string {
+	value, _ := ctx.Value(requestIntentKey).(string)
+	return strings.TrimSpace(value)
 }
 func (r *Runtime) withRequestContext(ctx context.Context, params map[string]any) context.Context {
 	owner := ""
@@ -177,12 +191,14 @@ func (r *Runtime) withRequestContext(ctx context.Context, params map[string]any)
 		owner = strings.TrimSpace(r.ownerID())
 	}
 	conversation := ConversationID(params)
+	intent := trimString(params["turn_id"])
 	userText := trimString(params["prompt"])
 	if userText == "" {
 		userText = trimString(params["message"])
 	}
 	ctx = context.WithValue(ctx, requestOwnerKey, owner)
 	ctx = context.WithValue(ctx, requestConversationKey, conversation)
+	ctx = context.WithValue(ctx, requestIntentKey, intent)
 	return context.WithValue(ctx, requestUserTextKey, userText)
 }
 

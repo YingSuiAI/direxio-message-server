@@ -13,7 +13,11 @@ type Tool struct {
 	Description string
 	Parameters  map[string]any
 	Write       bool
-	Handler     func(context.Context, map[string]any) (any, error)
+	// Available is evaluated whenever the tool registry is built. It is used
+	// for server capabilities that can become ready after startup; nil means
+	// available for backwards-compatible first-party/test tools.
+	Available func() bool
+	Handler   func(context.Context, map[string]any) (any, error)
 }
 
 func (r *Runtime) enabledTools(ctx context.Context, config map[string]any, params map[string]any) []Tool {
@@ -89,13 +93,6 @@ func nativeToolAlias(value string) string {
 		"agent_schedules_get":           "native_agent_schedules_get",
 		"agent_schedule_runs_list":      "native_agent_schedule_runs_list",
 		"agent_schedule_runs_get":       "native_agent_schedule_runs_get",
-		"agent_schedules_disable":       "native_agent_schedules_disable",
-		"agent_schedules_create":        "native_agent_schedules_create",
-		"agent_schedules_update":        "native_agent_schedules_update",
-		"agent_schedules_enable":        "native_agent_schedules_enable",
-		"agent_schedules_delete":        "native_agent_schedules_delete",
-		"agent_schedules_run_now":       "native_agent_schedules_run_now",
-		"agent_schedules_confirm":       "native_agent_schedules_confirm",
 		"contacts_list":                 "dirextalk_contacts_list",
 		"search_contacts":               "dirextalk_contacts_search",
 		"contacts_search":               "dirextalk_contacts_search",
@@ -167,6 +164,9 @@ func (r *Runtime) availableTools() []Tool {
 	tools := make([]Tool, 0, len(r.tools)+2)
 	seen := map[string]bool{}
 	for _, tool := range r.tools {
+		if tool.Available != nil && !tool.Available() {
+			continue
+		}
 		// These names are reserved for the compiled, owner-scoped handlers below.
 		if nativeAgentMemoryToolName(tool.Name) != "" {
 			continue
@@ -178,6 +178,9 @@ func (r *Runtime) availableTools() []Tool {
 	}
 	if r.persistentMemoryReady && r.knowledge != nil {
 		for _, tool := range r.knowledgeEinoTools() {
+			if tool.Available != nil && !tool.Available() {
+				continue
+			}
 			if !seen[tool.Name] {
 				tools = append(tools, tool)
 			}
@@ -195,7 +198,17 @@ func embeddedDirextalkTool(name string) bool {
 	if nativeAgentMemoryToolName(name) != "" {
 		return true
 	}
-	if strings.HasPrefix(name, "native_agent_schedules_") || strings.HasPrefix(name, "native_agent_schedule_runs_") {
+	// Control and schedule names are a closed set. Prefix checks would publish
+	// future confirm/create/delete actions merely because they share a prefix.
+	switch name {
+	case "native_agent_schedules_list", "native_agent_schedules_get",
+		"native_agent_schedule_runs_list", "native_agent_schedule_runs_get",
+		"native_agent_aws_credentials_list", "native_agent_aws_credentials_test",
+		"native_agent_workloads_list",
+		"native_agent_workloads_get", "native_agent_workloads_quote",
+		"native_agent_workload_operations_get", "native_agent_workload_operations_events",
+		"native_agent_deployments_list", "native_agent_deployments_get",
+		"native_agent_deployments_events":
 		return true
 	}
 	_, ok := dirextalkmcp.NativeToolAction(name)

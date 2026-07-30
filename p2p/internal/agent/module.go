@@ -25,12 +25,54 @@ type Runner interface {
 	Stream(context.Context, string, map[string]any, func(nativeagent.Event) error) error
 }
 
+// ControlInvoker is the narrow, owner-bound seam for compiled Native Agent
+// control tools. The service wiring owns the binding to the authenticated
+// owner and the embedded action handlers; the runtime never accepts an owner
+// identifier from model-authored tool arguments.
+type ControlInvoker interface {
+	Invoke(context.Context, string, map[string]any) (any, error)
+	Available(string) bool
+}
+
+// ControlInvokerFunc adapts a late-bound embedded handler while preserving the
+// small ControlInvoker contract used by Native Agent tools and tests.
+type ControlInvokerFunc func(context.Context, string, map[string]any) (any, error)
+
+func (f ControlInvokerFunc) Invoke(ctx context.Context, action string, params map[string]any) (any, error) {
+	if f == nil {
+		return nil, fmt.Errorf("native agent control is unavailable")
+	}
+	return f(ctx, action, params)
+}
+
+func (f ControlInvokerFunc) Available(string) bool { return f != nil }
+
+// ControlInvokerAdapter binds action readiness separately from invocation. This
+// keeps unavailable capabilities out of the model tool registry while still
+// allowing the service to resolve handlers late during startup/shutdown.
+type ControlInvokerAdapter struct {
+	Ready func(string) bool
+	Call  func(context.Context, string, map[string]any) (any, error)
+}
+
+func (a ControlInvokerAdapter) Available(action string) bool {
+	return a.Ready != nil && a.Ready(strings.TrimSpace(action))
+}
+
+func (a ControlInvokerAdapter) Invoke(ctx context.Context, action string, params map[string]any) (any, error) {
+	if a.Call == nil || !a.Available(action) {
+		return nil, fmt.Errorf("native agent control action %q is unavailable", strings.TrimSpace(action))
+	}
+	return a.Call(ctx, action, params)
+}
+
 // Config contains the runtime dependencies owned outside the Agent module.
 type Config struct {
 	Runner                Runner
 	DataDir               string
 	Store                 nativeagent.ConfigStore
 	MCP                   *dirextalkmcp.Service
+	Control               ControlInvoker
 	Account               AccountPort
 	Turns                 agentturns.Store
 	OwnerID               func() string
@@ -64,7 +106,7 @@ func New(cfg Config) *Module {
 		runner = runtimeRunner{runtime: nativeagent.New(nativeagent.Config{
 			DataDir:               cfg.DataDir,
 			Store:                 cfg.Store,
-			Tools:                 append(Tools(cfg.MCP), cfg.ScheduleTools...),
+			Tools:                 append(append(Tools(cfg.MCP), ControlTools(cfg.Control)...), cfg.ScheduleTools...),
 			ModelProfiles:         cfg.ModelProfileResolver,
 			OwnerID:               cfg.OwnerID,
 			Memory:                cfg.Memory,

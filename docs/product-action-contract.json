@@ -7618,6 +7618,73 @@
           }
         },
         "response": {
+          "references": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "action": {
+                  "type": "string"
+                },
+                "channel_id": {
+                  "type": "string"
+                },
+                "confirmation_id": {
+                  "type": "string"
+                },
+                "expires_at": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string",
+                  "required": true
+                },
+                "operation_id": {
+                  "type": "string"
+                },
+                "plan_digest": {
+                  "type": "string"
+                },
+                "plan_id": {
+                  "type": "string"
+                },
+                "post_id": {
+                  "type": "string"
+                },
+                "preview": {
+                  "type": "string"
+                },
+                "revision": {
+                  "type": "integer"
+                },
+                "room_id": {
+                  "type": "string"
+                },
+                "room_type": {
+                  "type": "string"
+                },
+                "summary": {
+                  "type": "string"
+                },
+                "target_kind": {
+                  "type": "string"
+                },
+                "task_id": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "workload_id": {
+                  "type": "string"
+                }
+              }
+            },
+            "presence": {
+              "omitted": "No room, channel, or pending confirmation references were produced.",
+              "present": "References are immutable projections. Pending confirmation references are actionable only after the client reads the authoritative confirmation/operation state."
+            }
+          },
           "text": {
             "type": "string"
           },
@@ -7682,6 +7749,73 @@
           }
         },
         "response": {
+          "references": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "action": {
+                  "type": "string"
+                },
+                "channel_id": {
+                  "type": "string"
+                },
+                "confirmation_id": {
+                  "type": "string"
+                },
+                "expires_at": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string",
+                  "required": true
+                },
+                "operation_id": {
+                  "type": "string"
+                },
+                "plan_digest": {
+                  "type": "string"
+                },
+                "plan_id": {
+                  "type": "string"
+                },
+                "post_id": {
+                  "type": "string"
+                },
+                "preview": {
+                  "type": "string"
+                },
+                "revision": {
+                  "type": "integer"
+                },
+                "room_id": {
+                  "type": "string"
+                },
+                "room_type": {
+                  "type": "string"
+                },
+                "summary": {
+                  "type": "string"
+                },
+                "target_kind": {
+                  "type": "string"
+                },
+                "task_id": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "workload_id": {
+                  "type": "string"
+                }
+              }
+            },
+            "presence": {
+              "omitted": "No room, channel, or pending confirmation references were produced.",
+              "present": "References are immutable projections. Pending confirmation references are actionable only after the client reads the authoritative confirmation/operation state."
+            }
+          },
           "text": {
             "type": "string"
           },

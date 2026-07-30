@@ -3,6 +3,7 @@ package p2p
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -909,6 +910,44 @@ func newService(cfg Config, store Store, transport Transport, state portalState,
 	service.agentModule = agentmodule.New(agentmodule.Config{
 		Runner: cfg.NativeAgentRunner, DataDir: cfg.NativeAgentDataDir,
 		Store: nativeAgentConfigStore{service: service}, MCP: service.mcpCapabilities,
+		Control: agentmodule.ControlInvokerAdapter{
+			Ready: func(action string) bool {
+				capability := ""
+				switch strings.TrimSpace(action) {
+				case "agent.core.aws.credentials.list", "agent.core.aws.credentials.test":
+					capability = "aws.control"
+				case "agent.core.workloads.plan", "agent.core.workloads.list", "agent.core.workloads.get", "agent.core.workloads.quote", "agent.core.workloads.apply", "agent.core.workloads.destroy", "agent.core.workloads.operations.get", "agent.core.workloads.operations.events":
+					capability = "workload.aws_ssm"
+					if service.embeddedAgentCapabilityReady("workload.aws_ecs") {
+						capability = "workload.aws_ecs"
+					}
+				case "agent.core.deployments.list", "agent.core.deployments.get", "agent.core.deployments.events":
+					capability = "deployments.server"
+				default:
+					return false
+				}
+				module := service.agentEmbedded
+				return service.embeddedAgentCapabilityReady(capability) && module != nil && module.Handlers()[strings.TrimSpace(action)] != nil
+			},
+			Call: func(ctx context.Context, action string, params map[string]any) (any, error) {
+				// The embedded module and its late-bound ports are assembled below.
+				// Resolving the handler at invocation time keeps capability readiness
+				// dynamic and avoids capturing a partially initialized service.
+				module := service.agentEmbedded
+				if module == nil {
+					return nil, agentembeddedmodule.ErrUnavailable
+				}
+				handler := module.Handlers()[strings.TrimSpace(action)]
+				if handler == nil {
+					return nil, fmt.Errorf("native agent control action %q is unavailable", action)
+				}
+				value, actionErr := handler(ctx, params)
+				if actionErr != nil {
+					return nil, fmt.Errorf("%s", actionErr.Error)
+				}
+				return value, nil
+			},
+		},
 		ScheduleTools: service.scheduleModule.Tools(), Account: serviceAgentAccountPort{service: service}, Turns: service.store,
 		OwnerID: service.OwnerMXID, ModelProfiles: agentModelProfiles,
 		VoiceEnabled: true,

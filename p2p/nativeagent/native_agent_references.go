@@ -1,10 +1,13 @@
 package nativeagent
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"strings"
+	"time"
 
 	"github.com/cloudwego/eino/schema"
+	"github.com/google/uuid"
 )
 
 const nativeAgentReferencePreviewRunes = 240
@@ -13,6 +16,7 @@ func nativeAgentReferences(produced []*schema.Message) []map[string]any {
 	references := make([]map[string]any, 0)
 	seenRooms := map[string]struct{}{}
 	seenPosts := map[string]struct{}{}
+	seenConfirmations := map[string]struct{}{}
 
 	addRoom := func(roomID, roomType, title, preview string) {
 		roomID = strings.TrimSpace(roomID)
@@ -67,6 +71,82 @@ func nativeAgentReferences(produced []*schema.Message) []map[string]any {
 		references = append(references, reference)
 	}
 
+	addPendingConfirmation := func(result json.RawMessage, action string) {
+		var envelope struct {
+			Operation struct {
+				OperationID    string `json:"operation_id"`
+				WorkloadID     string `json:"workload_id"`
+				PlanID         string `json:"plan_id"`
+				TaskID         string `json:"task_id"`
+				ConfirmationID string `json:"confirmation_id"`
+				Revision       int64  `json:"revision"`
+				PlanRevision   int64  `json:"plan_revision"`
+				PlanDigest     string `json:"plan_digest"`
+				TargetKind     string `json:"target_kind"`
+				Summary        string `json:"summary"`
+				Kind           string `json:"kind"`
+			} `json:"operation"`
+			Confirmation struct {
+				ConfirmationID string `json:"confirmation_id"`
+				TaskID         string `json:"task_id"`
+				State          string `json:"state"`
+				Revision       int64  `json:"revision"`
+				ExpiresAt      string `json:"expires_at"`
+				Binding        struct {
+					OperationDomain string `json:"operation_domain"`
+					TargetID        string `json:"target_id"`
+					TargetRevision  int64  `json:"target_revision"`
+					ContentDigest   string `json:"content_digest"`
+				} `json:"binding"`
+			} `json:"confirmation"`
+		}
+		if json.Unmarshal(result, &envelope) != nil {
+			return
+		}
+		op := envelope.Operation
+		confirmation := envelope.Confirmation
+		action = strings.ToLower(strings.TrimSpace(action))
+		expiresAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(confirmation.ExpiresAt))
+		if (action != "apply" && action != "destroy") || strings.ToLower(strings.TrimSpace(op.Kind)) != action ||
+			!validReferenceUUID(op.OperationID) || !validReferenceUUID(op.WorkloadID) ||
+			!validReferenceUUID(op.PlanID) || !validReferenceUUID(op.TaskID) ||
+			!validReferenceUUID(op.ConfirmationID) || !validReferenceUUID(confirmation.ConfirmationID) ||
+			op.ConfirmationID != confirmation.ConfirmationID || confirmation.State != "pending" ||
+			op.Revision <= 0 || op.PlanRevision <= 0 || confirmation.Revision <= 0 ||
+			confirmation.TaskID != op.TaskID || confirmation.Binding.OperationDomain != "workload:"+action ||
+			confirmation.Binding.TargetID != op.WorkloadID || confirmation.Binding.TargetRevision != op.PlanRevision ||
+			confirmation.Binding.ContentDigest != op.PlanDigest || !validReferenceDigest(op.PlanDigest) ||
+			strings.TrimSpace(confirmation.ExpiresAt) == "" || err != nil || !expiresAt.After(time.Now()) {
+			return
+		}
+		id := strings.TrimSpace(op.ConfirmationID)
+		if _, exists := seenConfirmations[id]; exists {
+			return
+		}
+		seenConfirmations[id] = struct{}{}
+		reference := map[string]any{
+			"kind":            "pending_confirmation",
+			"confirmation_id": id,
+			"operation_id":    strings.TrimSpace(op.OperationID),
+			"workload_id":     strings.TrimSpace(op.WorkloadID),
+			"task_id":         strings.TrimSpace(op.TaskID),
+			"plan_id":         strings.TrimSpace(op.PlanID),
+			"action":          action,
+			"revision":        confirmation.Revision,
+			"expires_at":      strings.TrimSpace(confirmation.ExpiresAt),
+		}
+		if target := strings.TrimSpace(op.TargetKind); target != "" {
+			reference["target_kind"] = target
+		}
+		if summary := strings.TrimSpace(op.Summary); summary != "" {
+			reference["summary"] = referencePreview(summary)
+		}
+		if digest := strings.TrimSpace(op.PlanDigest); digest != "" {
+			reference["plan_digest"] = digest
+		}
+		references = append(references, reference)
+	}
+
 	for _, message := range produced {
 		if message == nil || message.Role != schema.Tool {
 			continue
@@ -79,6 +159,10 @@ func nativeAgentReferences(produced []*schema.Message) []map[string]any {
 		}
 
 		switch strings.TrimSpace(message.ToolName) {
+		case "native_agent_workloads_apply":
+			addPendingConfirmation(envelope.Result, "apply")
+		case "native_agent_workloads_destroy":
+			addPendingConfirmation(envelope.Result, "destroy")
 		case "dirextalk_contacts_list", "dirextalk_contacts_search":
 			var result struct {
 				Contacts []struct {
@@ -144,6 +228,21 @@ func nativeAgentReferences(produced []*schema.Message) []map[string]any {
 		}
 	}
 	return references
+}
+
+func validReferenceUUID(value string) bool {
+	value = strings.TrimSpace(value)
+	id, err := uuid.Parse(value)
+	return err == nil && id != uuid.Nil && id.String() == value
+}
+
+func validReferenceDigest(value string) bool {
+	value = strings.TrimSpace(value)
+	if len(value) != 64 || strings.ToLower(value) != value {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
 }
 
 func normalizedReferenceRoomType(value string) string {

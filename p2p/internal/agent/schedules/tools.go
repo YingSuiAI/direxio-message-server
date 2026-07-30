@@ -22,9 +22,8 @@ var gatedScheduleActions = map[string]bool{
 	"agent.schedules.run_now": true, "agent.schedules.disable": true,
 }
 
-// Tools exposes the bounded schedule surface to interactive Native Agent
-// turns. Mutating actions are represented as proposals and require a later
-// owner-authored confirmation turn.
+// Tools exposes only the read-only schedule surface to interactive Native
+// Agent turns. Schedule mutations remain client-owned ProductCore actions.
 func (m *Module) Tools() []nativeagent.Tool {
 	if m == nil {
 		return nil
@@ -39,21 +38,11 @@ func (m *Module) Tools() []nativeagent.Tool {
 	tool := func(name, desc, action string, schema map[string]any, write bool) nativeagent.Tool {
 		return nativeagent.Tool{Name: name, Description: desc, Parameters: schema, Write: write, Handler: func(ctx context.Context, p map[string]any) (any, error) { return m.invokeChatTool(ctx, action, p) }}
 	}
-	triggerSchema := map[string]any{"type": "object", "properties": map[string]any{"kind": map[string]any{"type": "string"}, "value": map[string]any{"type": "string"}, "timezone": map[string]any{"type": "string"}}}
-	createSchema := obj("name", "prompt", "model_profile_id", "skip_if_running")
-	createSchema["properties"].(map[string]any)["trigger"] = triggerSchema
 	return []nativeagent.Tool{
 		tool("native_agent_schedules_list", "List embedded schedules.", "agent.schedules.list", obj("limit", "cursor"), false),
 		tool("native_agent_schedules_get", "Get an embedded schedule.", "agent.schedules.get", obj("schedule_id"), false),
 		tool("native_agent_schedule_runs_list", "List runs for an embedded schedule.", "agent.schedule_runs.list", obj("schedule_id", "limit", "cursor"), false),
 		tool("native_agent_schedule_runs_get", "Get an embedded schedule run.", "agent.schedule_runs.get", obj("schedule_id", "run_id"), false),
-		tool("native_agent_schedules_disable", "Disable an embedded schedule immediately.", "agent.schedules.disable", obj("schedule_id", "expected_revision", "idempotency_key"), true),
-		tool("native_agent_schedules_create", "Propose creating an embedded schedule; wait for owner confirmation.", "agent.schedules.create", createSchema, true),
-		tool("native_agent_schedules_update", "Propose updating an embedded schedule; wait for owner confirmation.", "agent.schedules.update", obj("schedule_id", "name", "prompt", "model_profile_id", "trigger", "skip_if_running", "expected_revision"), true),
-		tool("native_agent_schedules_enable", "Propose enabling an embedded schedule; wait for owner confirmation.", "agent.schedules.enable", obj("schedule_id", "expected_revision"), true),
-		tool("native_agent_schedules_delete", "Propose deleting an embedded schedule; wait for owner confirmation.", "agent.schedules.delete", obj("schedule_id", "expected_revision"), true),
-		tool("native_agent_schedules_run_now", "Propose running an embedded schedule now; wait for owner confirmation.", "agent.schedules.run_now", obj("schedule_id"), true),
-		tool("native_agent_schedules_confirm", "Execute a pending schedule proposal only after the owner sends the exact approval phrase in a new turn.", "agent.schedules.confirm", obj("confirmation_id"), true),
 	}
 }
 

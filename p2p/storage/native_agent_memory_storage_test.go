@@ -148,6 +148,32 @@ func TestDatabaseAgentConversationCASAndPagination(t *testing.T) {
 	}
 }
 
+func TestDatabaseAgentConversationPendingConfirmationReferencesRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	store := newConversationTestStore(t, ctx)
+	owner, conversation := "owner", "pending-reference"
+	if _, _, err := store.CreateConversation(ctx, owner, conversation, "pending", "pending-create", agentmemory.KnowledgeDigest(conversation, "create", nil)); err != nil {
+		t.Fatal(err)
+	}
+	reference := map[string]any{
+		"kind": "pending_confirmation", "confirmation_id": "55555555-5555-4555-8555-555555555555",
+		"operation_id": "11111111-1111-4111-8111-111111111111", "workload_id": "22222222-2222-4222-8222-222222222222",
+		"task_id": "44444444-4444-4444-8444-444444444444", "plan_id": "33333333-3333-4333-8333-333333333333",
+		"action": "apply", "revision": int64(7), "plan_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"expires_at": "2030-01-01T00:00:00Z",
+	}
+	if err := store.AppendConversationMessages(ctx, owner, conversation, "turn-1", []agentmemory.StoredMessage{{MessageID: "message-1", TurnID: "turn-1", Role: "assistant", Content: "approval required", References: []map[string]any{reference}}}); err != nil {
+		t.Fatal(err)
+	}
+	_, messages, _, err := store.GetConversation(ctx, owner, conversation, 20, "")
+	if err != nil || len(messages) != 1 {
+		t.Fatalf("messages=%#v err=%v", messages, err)
+	}
+	if got := messages[0].References; len(got) != 1 || got[0]["kind"] != reference["kind"] || got[0]["confirmation_id"] != reference["confirmation_id"] || got[0]["revision"] != float64(7) {
+		t.Fatalf("pending reference round trip = %#v", got)
+	}
+}
+
 func TestDatabaseAgentSummaryAndKnowledgeAtomicity(t *testing.T) {
 	ctx := context.Background()
 	store := newConversationTestStore(t, ctx)
