@@ -49,8 +49,10 @@ func (a embeddedScheduleMaterializer) MaterializeOccurrence(ctx context.Context,
 // ledger page-options type lives beside the projection helpers.
 type embeddedDeploymentSource interface {
 	ListDeployments(context.Context, string, agentcoreledger.DeploymentListOptions) ([]map[string]any, string, error)
-	GetDeployment(context.Context, string, string) (map[string]any, bool, error)
-	ListDeploymentEvents(context.Context, string, string, int64, int) ([]map[string]any, int64, error)
+	GetDeploymentByID(context.Context, string, string) (map[string]any, bool, error)
+	GetDeploymentByWorkloadID(context.Context, string, string) (map[string]any, bool, error)
+	ListDeploymentEventsByID(context.Context, string, string, int64, int) ([]map[string]any, int64, error)
+	ListDeploymentEventsByWorkloadID(context.Context, string, string, int64, int) ([]map[string]any, int64, error)
 }
 
 type embeddedDeploymentAdapter struct{ source embeddedDeploymentSource }
@@ -64,12 +66,20 @@ func (a embeddedDeploymentAdapter) ListDeployments(ctx context.Context, owner st
 	})
 }
 
-func (a embeddedDeploymentAdapter) GetDeployment(ctx context.Context, owner, workloadID string) (map[string]any, bool, error) {
-	return a.source.GetDeployment(ctx, owner, workloadID)
+func (a embeddedDeploymentAdapter) GetDeploymentByID(ctx context.Context, owner, deploymentID string) (map[string]any, bool, error) {
+	return a.source.GetDeploymentByID(ctx, owner, deploymentID)
 }
 
-func (a embeddedDeploymentAdapter) ListDeploymentEvents(ctx context.Context, owner, workloadID string, after int64, limit int) ([]map[string]any, int64, error) {
-	return a.source.ListDeploymentEvents(ctx, owner, workloadID, after, limit)
+func (a embeddedDeploymentAdapter) GetDeploymentByWorkloadID(ctx context.Context, owner, workloadID string) (map[string]any, bool, error) {
+	return a.source.GetDeploymentByWorkloadID(ctx, owner, workloadID)
+}
+
+func (a embeddedDeploymentAdapter) ListDeploymentEventsByID(ctx context.Context, owner, deploymentID string, after int64, limit int) ([]map[string]any, int64, error) {
+	return a.source.ListDeploymentEventsByID(ctx, owner, deploymentID, after, limit)
+}
+
+func (a embeddedDeploymentAdapter) ListDeploymentEventsByWorkloadID(ctx context.Context, owner, workloadID string, after int64, limit int) ([]map[string]any, int64, error) {
+	return a.source.ListDeploymentEventsByWorkloadID(ctx, owner, workloadID, after, limit)
 }
 
 type embeddedTaskRetryAdapter struct{ store *p2pstorage.DatabaseTaskStore }

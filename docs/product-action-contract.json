@@ -8741,7 +8741,23 @@
             "type": "array",
             "required": true,
             "items": {
-              "type": "object"
+              "type": "object",
+              "properties": {
+                "deployment_id": {
+                  "type": "string",
+                  "required": true,
+                  "presence": {
+                    "present": "canonical_uuid"
+                  }
+                },
+                "workload_id": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "when_deployment_has_no_workload_linkage",
+                    "present": "canonical_uuid"
+                  }
+                }
+              }
             }
           },
           "next_page_token": {
@@ -8756,9 +8772,21 @@
       "transport": "http_and_ws_request",
       "schema": {
         "request": {
+          "deployment_id": {
+            "type": "string",
+            "presence": {
+              "omitted": "allowed_when_workload_id_present",
+              "present": "canonical_uuid",
+              "empty": "rejected"
+            }
+          },
           "workload_id": {
             "type": "string",
-            "required": true
+            "presence": {
+              "omitted": "allowed_when_deployment_id_present",
+              "present": "canonical_uuid",
+              "empty": "rejected"
+            }
           }
         },
         "response": {
@@ -8770,7 +8798,23 @@
           },
           "deployment": {
             "type": "object",
-            "required": true
+            "required": true,
+            "properties": {
+              "deployment_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "workload_id": {
+                "type": "string",
+                "presence": {
+                  "omitted": "when_deployment_has_no_workload_linkage",
+                  "present": "canonical_uuid"
+                }
+              }
+            }
           }
         }
       }
@@ -8784,12 +8828,24 @@
           "after_sequence": {
             "type": "integer"
           },
+          "deployment_id": {
+            "type": "string",
+            "presence": {
+              "omitted": "allowed_when_workload_id_present",
+              "present": "canonical_uuid",
+              "empty": "rejected"
+            }
+          },
           "page_size": {
             "type": "integer"
           },
           "workload_id": {
             "type": "string",
-            "required": true
+            "presence": {
+              "omitted": "allowed_when_deployment_id_present",
+              "present": "canonical_uuid",
+              "empty": "rejected"
+            }
           }
         },
         "response": {
@@ -8801,6 +8857,13 @@
               "properties": {
                 "actual": {
                   "type": "object"
+                },
+                "deployment_id": {
+                  "type": "string",
+                  "required": true,
+                  "presence": {
+                    "present": "canonical_uuid"
+                  }
                 },
                 "event_id": {
                   "type": "string",
@@ -8832,7 +8895,10 @@
                 },
                 "workload_id": {
                   "type": "string",
-                  "required": true
+                  "presence": {
+                    "omitted": "omitted_when_deployment_has_no_workload_linkage",
+                    "present": "canonical_uuid"
+                  }
                 }
               }
             }

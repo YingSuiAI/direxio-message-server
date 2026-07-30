@@ -12,6 +12,7 @@ type deploymentContractLedger struct {
 
 func (l *deploymentContractLedger) ListDeployments(context.Context, string, DeploymentListOptions) ([]map[string]any, string, error) {
 	return []map[string]any{{
+		"deployment_id":     "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
 		"workload_id":       "11111111-1111-4111-8111-111111111111",
 		"target_kind":       "aws-ecs",
 		"target":            map[string]any{},
@@ -22,23 +23,38 @@ func (l *deploymentContractLedger) ListDeployments(context.Context, string, Depl
 	}}, "", nil
 }
 
-func (l *deploymentContractLedger) GetDeployment(context.Context, string, string) (map[string]any, bool, error) {
+func (l *deploymentContractLedger) GetDeploymentByID(_ context.Context, _, id string) (map[string]any, bool, error) {
+	if id != "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" {
+		return nil, false, nil
+	}
 	items, _, err := l.ListDeployments(context.Background(), "", DeploymentListOptions{})
 	return items[0], true, err
 }
 
-func (l *deploymentContractLedger) ListDeploymentEvents(_ context.Context, _, _ string, _ int64, pageSize int) ([]map[string]any, int64, error) {
+func (l *deploymentContractLedger) GetDeploymentByWorkloadID(_ context.Context, _, id string) (map[string]any, bool, error) {
+	if id != "11111111-1111-4111-8111-111111111111" {
+		return nil, false, nil
+	}
+	return l.GetDeploymentByID(context.Background(), "", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+}
+
+func (l *deploymentContractLedger) ListDeploymentEventsByID(_ context.Context, _, _ string, _ int64, pageSize int) ([]map[string]any, int64, error) {
 	l.eventPageSize = pageSize
 	return []map[string]any{{
-		"event_id":     "33333333-3333-4333-8333-333333333333",
-		"workload_id":  "11111111-1111-4111-8111-111111111111",
-		"operation_id": "22222222-2222-4222-8222-222222222222",
-		"sequence":     int64(7),
-		"type":         "apply.running",
-		"status":       "running",
-		"message":      "running",
-		"occurred_at":  time.Now().UTC().Format(time.RFC3339Nano),
+		"event_id":      "33333333-3333-4333-8333-333333333333",
+		"deployment_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+		"workload_id":   "11111111-1111-4111-8111-111111111111",
+		"operation_id":  "22222222-2222-4222-8222-222222222222",
+		"sequence":      int64(7),
+		"type":          "apply.running",
+		"status":        "running",
+		"message":       "running",
+		"occurred_at":   time.Now().UTC().Format(time.RFC3339Nano),
 	}}, 7, nil
+}
+
+func (l *deploymentContractLedger) ListDeploymentEventsByWorkloadID(ctx context.Context, owner, workload string, after int64, pageSize int) ([]map[string]any, int64, error) {
+	return l.ListDeploymentEventsByID(ctx, owner, workload, after, pageSize)
 }
 
 func deploymentContractModule(ledger *deploymentContractLedger) *Module {
@@ -110,5 +126,20 @@ func TestDeploymentDetailsAndEventsMatchGeneratedContract(t *testing.T) {
 	}
 	if ledger.eventPageSize != 25 {
 		t.Fatalf("page_size was not forwarded: %d", ledger.eventPageSize)
+	}
+	canonical, actionErr := module.Handlers()["agent.core.deployments.get"](
+		context.Background(), map[string]any{"deployment_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"},
+	)
+	if actionErr != nil {
+		t.Fatalf("canonical details error: %#v", actionErr)
+	}
+	if got := canonical.(map[string]any)["deployment"].(map[string]any)["deployment_id"]; got != "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" {
+		t.Fatalf("canonical deployment_id = %#v", got)
+	}
+	if _, actionErr := module.Handlers()["agent.core.deployments.get"](context.Background(), map[string]any{
+		"deployment_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+		"workload_id":   "11111111-1111-4111-8111-111111111111",
+	}); actionErr == nil || actionErr.Status != 400 {
+		t.Fatalf("mismatched identifiers error = %#v, want 400", actionErr)
 	}
 }

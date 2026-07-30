@@ -54,8 +54,10 @@ type ScheduleTriggerPort interface {
 // the deployment-ledger contract without importing the retired gRPC adapter.
 type DeploymentLedger interface {
 	ListDeployments(context.Context, string, DeploymentListOptions) ([]map[string]any, string, error)
-	GetDeployment(context.Context, string, string) (map[string]any, bool, error)
-	ListDeploymentEvents(context.Context, string, string, int64, int) ([]map[string]any, int64, error)
+	GetDeploymentByID(context.Context, string, string) (map[string]any, bool, error)
+	GetDeploymentByWorkloadID(context.Context, string, string) (map[string]any, bool, error)
+	ListDeploymentEventsByID(context.Context, string, string, int64, int) ([]map[string]any, int64, error)
+	ListDeploymentEventsByWorkloadID(context.Context, string, string, int64, int) ([]map[string]any, int64, error)
 }
 
 type DeploymentListOptions struct {

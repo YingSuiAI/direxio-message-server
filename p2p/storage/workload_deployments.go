@@ -98,12 +98,11 @@ func (s *WorkloadDeploymentSource) ListDeployments(ctx context.Context, owner st
 	return out, next, nil
 }
 
-func (s *WorkloadDeploymentSource) GetDeployment(ctx context.Context, owner, workloadID string) (map[string]any, bool, error) {
-	if s == nil || s.store == nil || strings.TrimSpace(owner) == "" || strings.TrimSpace(workloadID) == "" {
+func (s *WorkloadDeploymentSource) GetDeploymentByID(ctx context.Context, owner, deploymentID string) (map[string]any, bool, error) {
+	if s == nil || s.store == nil || strings.TrimSpace(owner) == "" || strings.TrimSpace(deploymentID) == "" {
 		return nil, false, nil
 	}
-	lookup := `(d.deployment_id::text=$2 OR d.workload_id::text=$2)`
-	row := s.store.db.QueryRowContext(ctx, unifiedDeploymentSelect+` WHERE d.owner_id=$1 AND `+lookup, strings.TrimSpace(owner), strings.TrimSpace(workloadID))
+	row := s.store.db.QueryRowContext(ctx, unifiedDeploymentSelect+` WHERE d.owner_id=$1 AND d.deployment_id::text=$2`, strings.TrimSpace(owner), strings.TrimSpace(deploymentID))
 	object, _, _, err := scanUnifiedDeployment(row)
 	if err == sql.ErrNoRows {
 		return nil, false, nil
@@ -111,8 +110,28 @@ func (s *WorkloadDeploymentSource) GetDeployment(ctx context.Context, owner, wor
 	return object, err == nil, err
 }
 
-func (s *WorkloadDeploymentSource) ListDeploymentEvents(ctx context.Context, owner, workloadID string, after int64, limit int) ([]map[string]any, int64, error) {
-	if s == nil || s.store == nil || strings.TrimSpace(owner) == "" || strings.TrimSpace(workloadID) == "" || after < 0 {
+func (s *WorkloadDeploymentSource) GetDeploymentByWorkloadID(ctx context.Context, owner, workloadID string) (map[string]any, bool, error) {
+	if s == nil || s.store == nil || strings.TrimSpace(owner) == "" || strings.TrimSpace(workloadID) == "" {
+		return nil, false, nil
+	}
+	row := s.store.db.QueryRowContext(ctx, unifiedDeploymentSelect+` WHERE d.owner_id=$1 AND d.workload_id::text=$2`, strings.TrimSpace(owner), strings.TrimSpace(workloadID))
+	object, _, _, err := scanUnifiedDeployment(row)
+	if err == sql.ErrNoRows {
+		return nil, false, nil
+	}
+	return object, err == nil, err
+}
+
+func (s *WorkloadDeploymentSource) ListDeploymentEventsByID(ctx context.Context, owner, deploymentID string, after int64, limit int) ([]map[string]any, int64, error) {
+	return s.listDeploymentEvents(ctx, owner, "d.deployment_id::text=$2", deploymentID, after, limit)
+}
+
+func (s *WorkloadDeploymentSource) ListDeploymentEventsByWorkloadID(ctx context.Context, owner, workloadID string, after int64, limit int) ([]map[string]any, int64, error) {
+	return s.listDeploymentEvents(ctx, owner, "d.workload_id::text=$2", workloadID, after, limit)
+}
+
+func (s *WorkloadDeploymentSource) listDeploymentEvents(ctx context.Context, owner, lookup, identifier string, after int64, limit int) ([]map[string]any, int64, error) {
+	if s == nil || s.store == nil || strings.TrimSpace(owner) == "" || strings.TrimSpace(identifier) == "" || after < 0 {
 		return nil, after, fmt.Errorf("invalid workload deployment event query")
 	}
 	if limit <= 0 {
@@ -121,11 +140,10 @@ func (s *WorkloadDeploymentSource) ListDeploymentEvents(ctx context.Context, own
 	if limit > 256 {
 		limit = 256
 	}
-	lookup := `(d.deployment_id::text=$2 OR d.workload_id::text=$2)`
 	rows, err := s.store.db.QueryContext(ctx, `SELECT e.event_id::text,e.sequence,e.source_kind,e.source_id::text,e.source_sequence,e.event_json,e.created_at,d.deployment_id::text,COALESCE(d.workload_id::text,''),d.state
 		FROM core_deployment_events e JOIN core_deployments d ON d.owner_id=e.owner_id AND d.deployment_id=e.deployment_id
 		WHERE d.owner_id=$1 AND `+lookup+` AND e.sequence>$3
-		ORDER BY e.sequence LIMIT $4`, strings.TrimSpace(owner), strings.TrimSpace(workloadID), after, limit+1)
+		ORDER BY e.sequence LIMIT $4`, strings.TrimSpace(owner), strings.TrimSpace(identifier), after, limit+1)
 	if err != nil {
 		return nil, after, err
 	}
@@ -179,6 +197,16 @@ func (s *WorkloadDeploymentSource) ListDeploymentEvents(ctx context.Context, own
 		last = int64FromAny(out[len(out)-1]["sequence"])
 	}
 	return out, last, nil
+}
+
+// Legacy aliases retain the pre-v107 storage API for non-agent callers. New
+// callers must choose an exact deployment or workload lookup explicitly.
+func (s *WorkloadDeploymentSource) GetDeployment(ctx context.Context, owner, workloadID string) (map[string]any, bool, error) {
+	return s.GetDeploymentByWorkloadID(ctx, owner, workloadID)
+}
+
+func (s *WorkloadDeploymentSource) ListDeploymentEvents(ctx context.Context, owner, workloadID string, after int64, limit int) ([]map[string]any, int64, error) {
+	return s.ListDeploymentEventsByWorkloadID(ctx, owner, workloadID, after, limit)
 }
 
 // workloadDeploymentEventType translates internal workload lifecycle labels
@@ -388,6 +416,8 @@ var _ embeddedDeploymentSourceCompatibility = (*WorkloadDeploymentSource)(nil)
 // the service adapter while asserting the exact dashboard read contract.
 type embeddedDeploymentSourceCompatibility interface {
 	ListDeployments(context.Context, string, agentcore.DeploymentListOptions) ([]map[string]any, string, error)
-	GetDeployment(context.Context, string, string) (map[string]any, bool, error)
-	ListDeploymentEvents(context.Context, string, string, int64, int) ([]map[string]any, int64, error)
+	GetDeploymentByID(context.Context, string, string) (map[string]any, bool, error)
+	GetDeploymentByWorkloadID(context.Context, string, string) (map[string]any, bool, error)
+	ListDeploymentEventsByID(context.Context, string, string, int64, int) ([]map[string]any, int64, error)
+	ListDeploymentEventsByWorkloadID(context.Context, string, string, int64, int) ([]map[string]any, int64, error)
 }

@@ -349,16 +349,31 @@ func coreDeploymentsListSchema() *ActionSchema {
 	req := corePageFields()
 	req["status"] = ActionFieldSchema{Type: "string"}
 	req["target_kind"] = ActionFieldSchema{Type: "string"}
-	return coreActionSchema(req, map[string]ActionFieldSchema{"deployments": {Type: "array", Required: true, Items: &ActionFieldSchema{Type: "object"}}, "next_page_token": {Type: "string"}})
+	return coreActionSchema(req, map[string]ActionFieldSchema{"deployments": {Type: "array", Required: true, Items: &ActionFieldSchema{Type: "object", Properties: deploymentResponseFields()}}, "next_page_token": {Type: "string"}})
+}
+
+func deploymentResponseFields() map[string]ActionFieldSchema {
+	return map[string]ActionFieldSchema{
+		"deployment_id": {Type: "string", Required: true, Presence: &ActionPresenceSchema{Present: "canonical_uuid"}},
+		"workload_id":   {Type: "string", Presence: &ActionPresenceSchema{Omitted: "when_deployment_has_no_workload_linkage", Present: "canonical_uuid"}},
+	}
 }
 func coreDeploymentsGetSchema() *ActionSchema {
-	return coreActionSchema(coreRequired("workload_id"), map[string]ActionFieldSchema{"deployment": {Type: "object", Required: true}, "current_operation": {Type: "object"}, "actual": {Type: "object"}})
+	deploymentID := awsCanonicalUUIDField(false)
+	deploymentID.Presence.Omitted = "allowed_when_workload_id_present"
+	workloadID := awsCanonicalUUIDField(false)
+	workloadID.Presence.Omitted = "allowed_when_deployment_id_present"
+	return coreActionSchema(map[string]ActionFieldSchema{"deployment_id": deploymentID, "workload_id": workloadID}, map[string]ActionFieldSchema{"deployment": {Type: "object", Required: true, Properties: deploymentResponseFields()}, "current_operation": {Type: "object"}, "actual": {Type: "object"}})
 }
 func coreDeploymentsEventsSchema() *ActionSchema {
-	req := coreRequired("workload_id")
+	deploymentID := awsCanonicalUUIDField(false)
+	deploymentID.Presence.Omitted = "allowed_when_workload_id_present"
+	workloadID := awsCanonicalUUIDField(false)
+	workloadID.Presence.Omitted = "allowed_when_deployment_id_present"
+	req := map[string]ActionFieldSchema{"deployment_id": deploymentID, "workload_id": workloadID}
 	req["after_sequence"] = ActionFieldSchema{Type: "integer"}
 	req["page_size"] = ActionFieldSchema{Type: "integer"}
-	event := map[string]ActionFieldSchema{"event_id": {Type: "string", Required: true}, "workload_id": {Type: "string", Required: true}, "operation_id": {Type: "string", Required: true}, "sequence": {Type: "integer", Required: true}, "type": {Type: "string", Required: true}, "status": {Type: "string", Required: true}, "message": {Type: "string", Required: true}, "occurred_at": {Type: "string", Required: true}, "actual": {Type: "object"}}
+	event := map[string]ActionFieldSchema{"event_id": {Type: "string", Required: true}, "deployment_id": {Type: "string", Required: true, Presence: &ActionPresenceSchema{Present: "canonical_uuid"}}, "workload_id": {Type: "string", Presence: &ActionPresenceSchema{Omitted: "omitted_when_deployment_has_no_workload_linkage", Present: "canonical_uuid"}}, "operation_id": {Type: "string", Required: true}, "sequence": {Type: "integer", Required: true}, "type": {Type: "string", Required: true}, "status": {Type: "string", Required: true}, "message": {Type: "string", Required: true}, "occurred_at": {Type: "string", Required: true}, "actual": {Type: "object"}}
 	return coreActionSchema(req, map[string]ActionFieldSchema{"events": {Type: "array", Required: true, Items: &ActionFieldSchema{Type: "object", Properties: event}}, "next_after_sequence": {Type: "integer", Required: true}})
 }
 

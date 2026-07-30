@@ -38,13 +38,29 @@ func (m *Module) deploymentHandler(action string) actionbase.Handler {
 			}
 			return map[string]any{"deployments": items, "next_page_token": next}, nil
 		case "get":
-			id, e := requiredString(p, "workload_id")
+			deploymentID, workloadID, e := deploymentLookupIDs(p)
 			if e != nil {
 				return nil, e
 			}
-			item, ok, err := m.cfg.Deployments.GetDeployment(ctx, o, id)
+			var item map[string]any
+			var ok bool
+			var err error
+			if deploymentID != "" {
+				item, ok, err = m.cfg.Deployments.GetDeploymentByID(ctx, o, deploymentID)
+			} else {
+				item, ok, err = m.cfg.Deployments.GetDeploymentByWorkloadID(ctx, o, workloadID)
+			}
 			if err != nil {
 				return nil, actionbase.InternalError(err)
+			}
+			if workloadID != "" && deploymentID != "" {
+				legacyItem, legacyOK, legacyErr := m.cfg.Deployments.GetDeploymentByWorkloadID(ctx, o, workloadID)
+				if legacyErr != nil {
+					return nil, actionbase.InternalError(legacyErr)
+				}
+				if !legacyOK || !ok || stringValue(legacyItem["deployment_id"]) != deploymentID {
+					return nil, actionbase.BadRequest("deployment_id and workload_id must identify the same deployment")
+				}
 			}
 			if !ok {
 				return nil, actionbase.CodedError(http.StatusNotFound, "deployment_not_found", "deployment was not found")
@@ -64,7 +80,7 @@ func (m *Module) deploymentHandler(action string) actionbase.Handler {
 			}
 			return result, nil
 		case "events":
-			id, e := requiredString(p, "workload_id")
+			deploymentID, workloadID, e := deploymentLookupIDs(p)
 			if e != nil {
 				return nil, e
 			}
@@ -82,7 +98,27 @@ func (m *Module) deploymentHandler(action string) actionbase.Handler {
 			if limit > 256 {
 				return nil, actionbase.BadRequest("limit is too large")
 			}
-			items, next, err := m.cfg.Deployments.ListDeploymentEvents(ctx, o, id, after, int(limit))
+			if deploymentID != "" && workloadID != "" {
+				canonical, canonicalOK, lookupErr := m.cfg.Deployments.GetDeploymentByID(ctx, o, deploymentID)
+				if lookupErr != nil {
+					return nil, actionbase.InternalError(lookupErr)
+				}
+				legacy, legacyOK, lookupErr := m.cfg.Deployments.GetDeploymentByWorkloadID(ctx, o, workloadID)
+				if lookupErr != nil {
+					return nil, actionbase.InternalError(lookupErr)
+				}
+				if !canonicalOK || !legacyOK || stringValue(legacy["deployment_id"]) != stringValue(canonical["deployment_id"]) || stringValue(canonical["deployment_id"]) != deploymentID {
+					return nil, actionbase.BadRequest("deployment_id and workload_id must identify the same deployment")
+				}
+			}
+			var items []map[string]any
+			var next int64
+			var err error
+			if deploymentID != "" {
+				items, next, err = m.cfg.Deployments.ListDeploymentEventsByID(ctx, o, deploymentID, after, int(limit))
+			} else {
+				items, next, err = m.cfg.Deployments.ListDeploymentEventsByWorkloadID(ctx, o, workloadID, after, int(limit))
+			}
 			if err != nil {
 				return nil, actionbase.InternalError(err)
 			}
@@ -91,6 +127,25 @@ func (m *Module) deploymentHandler(action string) actionbase.Handler {
 			return unavailable(ctx, p)
 		}
 	}
+}
+
+// deploymentLookupIDs accepts the canonical deployment identity and the
+// pre-v107 workload linkage as an additive compatibility surface. Both are
+// UUIDs when present; the caller verifies that two supplied IDs resolve to one
+// owner-scoped row before returning data.
+func deploymentLookupIDs(p map[string]any) (deploymentID, workloadID string, e *actionbase.Error) {
+	deploymentID, e = optionalUUID(p, "deployment_id")
+	if e != nil {
+		return "", "", e
+	}
+	workloadID, e = optionalUUID(p, "workload_id")
+	if e != nil {
+		return "", "", e
+	}
+	if deploymentID == "" && workloadID == "" {
+		return "", "", actionbase.BadRequest("deployment_id or workload_id is required")
+	}
+	return deploymentID, workloadID, nil
 }
 
 func (m *Module) dashboardGet(ctx context.Context, p map[string]any) (any, *actionbase.Error) {
