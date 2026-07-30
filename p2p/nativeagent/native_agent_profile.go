@@ -42,10 +42,31 @@ func (r *Runtime) resolveModelProfile(params map[string]any) nativeModelProfile 
 }
 
 func (r *Runtime) resolveModelProfileForRequest(ctx context.Context, params map[string]any) (nativeModelProfile, error) {
-	// During the rolling upgrade window old Flutter sends the client-local
-	// model_profile_id together with the complete inline profile and key. The
-	// inline shape remains authoritative until that client path is retired.
-	if _, present := params["model_profile"]; present {
+	_, inline := params["model_profile"]
+	serverSelected := false
+	serverIDPresent := trimString(params["model_profile_id"]) != "" || trimString(params["client_model_profile_id"]) != ""
+	_, revisionPresent := params["model_profile_revision"]
+	_, credentialPresent := params["credential_version"]
+	for _, key := range []string{"model_profile_id", "client_model_profile_id", "model_profile_revision", "credential_version"} {
+		if _, present := params[key]; present {
+			serverSelected = true
+			break
+		}
+	}
+	if inline && serverSelected {
+		return nativeModelProfile{}, errors.New("inline model_profile cannot be combined with a server model profile selection")
+	}
+	if serverSelected && !serverIDPresent {
+		return nativeModelProfile{}, errors.New("server model profile ID is required with a profile pin")
+	}
+	if revisionPresent != credentialPresent {
+		return nativeModelProfile{}, errors.New("model profile revision and credential version must be provided together")
+	}
+	requestedRevision, requestedCredential := int64Param(params["model_profile_revision"]), int64Param(params["credential_version"])
+	if revisionPresent && (requestedRevision <= 0 || requestedCredential <= 0) {
+		return nativeModelProfile{}, errors.New("model profile revision and credential version must be positive")
+	}
+	if inline {
 		return r.resolveModelProfile(params), nil
 	}
 	serverID := trimString(params["model_profile_id"])
@@ -75,9 +96,27 @@ func (r *Runtime) resolveModelProfileForRequest(ctx context.Context, params map[
 	if r == nil || r.modelProfiles == nil {
 		return nativeModelProfile{}, errors.New("server model profiles are unavailable")
 	}
-	profile, err := r.modelProfiles.ResolveModelProfile(ctx, serverID)
+	var profile ServerModelProfile
+	var err error
+	if revisionPresent {
+		resolver, ok := r.modelProfiles.(interface {
+			ResolveModelProfilePinned(context.Context, string, int64, int64) (ServerModelProfile, error)
+		})
+		if !ok {
+			return nativeModelProfile{}, errors.New("pinned server model profiles are unavailable")
+		}
+		profile, err = resolver.ResolveModelProfilePinned(ctx, serverID, requestedRevision, requestedCredential)
+	} else {
+		profile, err = r.modelProfiles.ResolveModelProfile(ctx, serverID)
+	}
 	if err != nil {
+		if revisionPresent {
+			return nativeModelProfile{}, errors.New("pinned server model profile unavailable")
+		}
 		return nativeModelProfile{}, err
+	}
+	if revisionPresent && (profile.Revision != requestedRevision || profile.CredentialVersion != requestedCredential) {
+		return nativeModelProfile{}, errors.New("pinned server model profile unavailable")
 	}
 	return nativeModelProfile{
 		Provider:        strings.ToLower(strings.TrimSpace(profile.Provider)),
