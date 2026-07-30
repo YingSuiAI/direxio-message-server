@@ -203,18 +203,49 @@ func (e *embeddedTaskExecutor) executeAWSChange(ctx context.Context, queued agen
 	}
 	_, executeErr := e.aws.ExecuteChange(ctx, change.ConfirmationID)
 	latest, latestErr := e.aws.GetChange(ctx, change.ID)
-	if latestErr == nil {
-		if latest.Status == coreaws.ChangeSucceeded || latest.Status == coreaws.ChangeFailed || latest.Status == coreaws.ChangeCanceled || latest.Stage == coreaws.StageReconciling {
+	if latestErr != nil {
+		// The durable AWS state is unknown. Never let the generic task worker
+		// release a possibly consumed reservation independently.
+		return agenttask.Result{}, agentruntime.ErrTaskDeferred
+	}
+	if latest.Status == coreaws.ChangeSucceeded || latest.Status == coreaws.ChangeFailed || latest.Status == coreaws.ChangeCanceled || latest.Stage == coreaws.StageReconciling {
+		return agenttask.Result{}, agentruntime.ErrTaskFinalized
+	}
+	latestFence, fenceErr := e.aws.ExecutionFence(ctx, latest.ConfirmationID)
+	if fenceErr != nil {
+		return agenttask.Result{}, agentruntime.ErrTaskDeferred
+	}
+	if latestFence.Confirmation.State == "consumed" && latestFence.Reservation.Active {
+		if latest.Stage != coreaws.StageChangeSetCreating {
+			// A later stage may already contain provider evidence. Keep all
+			// terminalization inside the AWS coordinator.
 			return agenttask.Result{}, agentruntime.ErrTaskFinalized
 		}
-		if latestFence, fenceErr := e.aws.ExecutionFence(ctx, latest.ConfirmationID); fenceErr == nil &&
-			latestFence.Confirmation.State == "consumed" &&
-			latestFence.Reservation.Active {
-			// Once confirmation consumption is durable, only the AWS
-			// coordinator may terminalize the task. This also covers an
-			// ambiguous database result after a provider response.
+		if executeErr == nil || errors.Is(executeErr, coreaws.ErrResponseUncertain) {
+			return agenttask.Result{}, agentruntime.ErrTaskDeferred
+		}
+		// No provider dispatch evidence exists yet. Terminalize the consumed
+		// change through the AWS coordinator so change, task, confirmation
+		// reservation and provision projection stay atomic.
+		_, completeErr := e.aws.CompleteChange(ctx, coreaws.CompleteChangeCommand{
+			ChangeID:                     latest.ID,
+			ConfirmationID:               latest.ConfirmationID,
+			TaskID:                       latestFence.Task.ID,
+			Attempt:                      latestFence.Task.Attempt,
+			LeaseEpoch:                   latestFence.Task.LeaseEpoch,
+			ExpectedChangeRevision:       latest.Revision,
+			ExpectedTaskRevision:         latestFence.Task.Revision,
+			ExpectedConfirmationRevision: latestFence.Confirmation.Revision,
+			Status:                       coreaws.ChangeFailed,
+			ErrorCode:                    "provider_error",
+			ErrorSummary:                 "AWS provider dispatch failed before mutation",
+		})
+		if completeErr == nil {
 			return agenttask.Result{}, agentruntime.ErrTaskFinalized
 		}
+		// A lease race must leave the task recoverable for a successor; do not
+		// let the generic worker write a split terminal state.
+		return agenttask.Result{}, agentruntime.ErrTaskDeferred
 	}
 	if errors.Is(executeErr, coreaws.ErrResponseUncertain) {
 		// The durable change is reconciling. Let the lease expire so a

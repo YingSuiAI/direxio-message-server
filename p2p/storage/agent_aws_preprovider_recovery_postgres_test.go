@@ -158,6 +158,86 @@ func TestPostgresRetryProvisionRearmsExactPreProviderOrphanAndReplays(t *testing
 	}
 }
 
+func TestPostgresAWSPreProviderFailureCompletesAllFencesAtomically(t *testing.T) {
+	store, repo, fx := newPreProviderPostgresFixture(t)
+	now := time.Now().UTC()
+	reservation, err := json.Marshal(map[string]any{"confirmation_id": fx.confirmationID, "task_id": fx.taskID, "attempt": 1, "lease_epoch": 4, "task_revision": 7, "active": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.DB().ExecContext(fx.ctx, `UPDATE agent_tasks SET status='running',lease_holder='worker',lease_expires_at=$1,failure_code='',failure_summary='' WHERE owner_id=$2 AND task_id=$3`, now.Add(time.Hour), fx.owner, fx.taskID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.DB().ExecContext(fx.ctx, `UPDATE agent_confirmations SET state='consumed',revision=4,reservation_json=$1::jsonb,terminal_reason='' WHERE owner_id=$2 AND confirmation_id=$3`, reservation, fx.owner, fx.confirmationID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.DB().ExecContext(fx.ctx, `UPDATE core_aws_changes SET status='running',stage='change_set_creating',revision=2,provider_request_digest=$1 WHERE owner_id=$2 AND change_id=$3`, agentaws.ProviderRequestDigest(fx.plan, fx.confirmationID), fx.owner, fx.changeID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.DB().ExecContext(fx.ctx, `INSERT INTO agent_task_runtime_concurrency(singleton,running_count,max_concurrent,revision,updated_at) VALUES(true,1,4,1,$1) ON CONFLICT(singleton) DO UPDATE SET running_count=1,max_concurrent=4,updated_at=$1`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.DB().ExecContext(fx.ctx, `INSERT INTO core_aws_event_counters(owner_id,change_id,next_sequence) VALUES($1,$2,2) ON CONFLICT(owner_id,change_id) DO UPDATE SET next_sequence=2`, fx.owner, fx.changeID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.DB().ExecContext(fx.ctx, `INSERT INTO core_aws_events(owner_id,change_id,sequence,event_id,task_id,kind,revision,at) VALUES($1,$2,1,$3,$4,'change_consumed',2,$5)`, fx.owner, fx.changeID, "99999999-9999-4999-8999-999999999999", fx.taskID, now); err != nil {
+		t.Fatal(err)
+	}
+	completion := agentaws.CompleteChangeCommand{
+		ChangeID: fx.changeID, ConfirmationID: fx.confirmationID, TaskID: fx.taskID,
+		Attempt: 1, LeaseEpoch: 4, ExpectedTaskRevision: 7, ExpectedChangeRevision: 2,
+		ExpectedConfirmationRevision: 4, Status: agentaws.ChangeFailed,
+		ErrorCode: "provider_error", ErrorSummary: "AWS provider dispatch failed before mutation",
+		OperationKey: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab",
+	}
+	completed, err := repo.CompleteChange(fx.ctx, completion)
+	if err != nil || completed.Status != agentaws.ChangeFailed || completed.Stage != agentaws.StageFailed {
+		t.Fatalf("CompleteChange err=%v status=%q stage=%q", err, completed.Status, completed.Stage)
+	}
+	var taskStatus, leaseHolder, changeStatus, changeStage, confirmationState string
+	var leaseExpires *time.Time
+	var active bool
+	if err = store.DB().QueryRowContext(fx.ctx, `SELECT t.status,t.lease_holder,t.lease_expires_at,ch.status,ch.stage,c.state,COALESCE((c.reservation_json->>'active')::boolean,false) FROM agent_tasks t JOIN core_aws_changes ch ON ch.owner_id=t.owner_id AND ch.task_id=t.task_id JOIN agent_confirmations c ON c.owner_id=t.owner_id AND c.task_id=t.task_id WHERE t.owner_id=$1 AND t.task_id=$2`, fx.owner, fx.taskID).Scan(&taskStatus, &leaseHolder, &leaseExpires, &changeStatus, &changeStage, &confirmationState, &active); err != nil {
+		t.Fatal(err)
+	}
+	if taskStatus != "failed" || leaseHolder != "" || leaseExpires != nil || changeStatus != "failed" || changeStage != "failed" || confirmationState != "consumed" || active {
+		t.Fatalf("terminal fence state = task %q/%q change %q/%q confirmation %q active=%v", taskStatus, leaseHolder, changeStatus, changeStage, confirmationState, active)
+	}
+	var provisionState, activeChange, createChange string
+	if err = store.DB().QueryRowContext(fx.ctx, `SELECT state,COALESCE(active_change_id::text,''),COALESCE(create_change_id::text,'') FROM core_aws_ec2_provisions WHERE owner_id=$1 AND provision_id=$2`, fx.owner, fx.provisionID).Scan(&provisionState, &activeChange, &createChange); err != nil {
+		t.Fatal(err)
+	}
+	if provisionState != "failed" || activeChange != "" || createChange != fx.changeID {
+		t.Fatalf("provision state = %q active=%q create=%q", provisionState, activeChange, createChange)
+	}
+	var running int
+	if err = store.DB().QueryRowContext(fx.ctx, `SELECT running_count FROM agent_task_runtime_concurrency WHERE singleton=true`).Scan(&running); err != nil || running != 0 {
+		t.Fatalf("runtime running_count=%d err=%v", running, err)
+	}
+	var taskEvents, changeEvents, provisionEvents, replays, providerReplays, providerEvents int
+	_ = store.DB().QueryRowContext(fx.ctx, `SELECT count(*) FROM agent_task_events WHERE owner_id=$1 AND task_id=$2 AND event_type='aws_change_completed'`, fx.owner, fx.taskID).Scan(&taskEvents)
+	_ = store.DB().QueryRowContext(fx.ctx, `SELECT count(*) FROM core_aws_events WHERE owner_id=$1 AND change_id=$2 AND kind='change_completed'`, fx.owner, fx.changeID).Scan(&changeEvents)
+	_ = store.DB().QueryRowContext(fx.ctx, `SELECT count(*) FROM core_aws_ec2_provision_events WHERE owner_id=$1 AND provision_id=$2 AND kind='provision_failed'`, fx.owner, fx.provisionID).Scan(&provisionEvents)
+	_ = store.DB().QueryRowContext(fx.ctx, `SELECT count(*) FROM core_aws_replays WHERE owner_id=$1 AND operation='change-complete' AND idempotency_key=$2`, fx.owner, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab").Scan(&replays)
+	_ = store.DB().QueryRowContext(fx.ctx, `SELECT count(*) FROM core_aws_replays WHERE owner_id=$1 AND operation='provider-mutation'`, fx.owner).Scan(&providerReplays)
+	_ = store.DB().QueryRowContext(fx.ctx, `SELECT count(*) FROM core_aws_events WHERE owner_id=$1 AND change_id=$2 AND kind='provider_mutation_dispatched'`, fx.owner, fx.changeID).Scan(&providerEvents)
+	if taskEvents != 1 || changeEvents != 1 || provisionEvents != 1 || replays != 1 || providerReplays != 0 || providerEvents != 0 {
+		t.Fatalf("completion evidence task=%d change=%d provision=%d replay=%d provider_replays=%d provider_events=%d", taskEvents, changeEvents, provisionEvents, replays, providerReplays, providerEvents)
+	}
+	if replayed, replayErr := repo.CompleteChange(fx.ctx, completion); replayErr != nil || replayed.ID != completed.ID {
+		t.Fatalf("completion replay = %+v err=%v", replayed, replayErr)
+	}
+	var replayEvents int
+	_ = store.DB().QueryRowContext(fx.ctx, `SELECT count(*) FROM core_aws_events WHERE owner_id=$1 AND change_id=$2 AND kind='change_completed'`, fx.owner, fx.changeID).Scan(&replayEvents)
+	if replayEvents != 1 {
+		t.Fatalf("change completion event count after replay=%d", replayEvents)
+	}
+	rearmed, err := repo.RetryProvision(fx.ctx, fx.provisionID, 3, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
+	if err != nil || rearmed.State != "planned" || rearmed.ActiveChangeID != "" || rearmed.Revision != 4 {
+		t.Fatalf("RetryProvision after atomic completion = %+v err=%v", rearmed, err)
+	}
+}
+
 func TestPostgresRetryProvisionPreProviderNegativeGatesAreAtomic(t *testing.T) {
 	cases := []struct {
 		name   string
