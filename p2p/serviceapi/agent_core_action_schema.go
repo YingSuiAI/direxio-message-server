@@ -723,7 +723,7 @@ func geoLibreTaskResponseFields() map[string]ActionFieldSchema {
 	return map[string]ActionFieldSchema{
 		"task_id": {Type: "string", Required: true, Presence: &ActionPresenceSchema{Present: "canonical_uuid"}},
 		"goal":    {Type: "string"}, "conversation_id": {Type: "string"}, "model_profile_id": {Type: "string"},
-		"attachment_refs": {Type: "array", Items: &ActionFieldSchema{Type: "string"}}, "knowledge_refs": {Type: "array", Items: &ActionFieldSchema{Type: "string"}},
+		"attachment_refs": {Type: "array", Required: true, Items: &ActionFieldSchema{Type: "string"}}, "knowledge_refs": {Type: "array", Required: true, Items: &ActionFieldSchema{Type: "string"}},
 		"timeout_seconds": {Type: "integer"}, "status": {Type: "string", Required: true}, "attempt": {Type: "integer", Required: true},
 		"lease_epoch": {Type: "integer", Required: true}, "available_at": {Type: "string"}, "retry_of_task_id": {Type: "string"},
 		"failure_code": {Type: "string"}, "failure_summary": {Type: "string"}, "revision": {Type: "integer", Required: true, Presence: &ActionPresenceSchema{Present: "positive_integer"}},

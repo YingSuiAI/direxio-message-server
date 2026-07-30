@@ -13118,6 +13118,7 @@
             "properties": {
               "attachment_refs": {
                 "type": "array",
+                "required": true,
                 "items": {
                   "type": "string"
                 }
@@ -13157,6 +13158,7 @@
               },
               "knowledge_refs": {
                 "type": "array",
+                "required": true,
                 "items": {
                   "type": "string"
                 }

@@ -207,6 +207,12 @@ func TestEC2ProvisionSchemasPinValidationAndTypedResponses(t *testing.T) {
 	if !geoRequest.Schema.Response["task"].Required || !geoRequest.Schema.Response["operation"].Properties["summary"].Required {
 		t.Fatal("geolibre request response must include full task and operation")
 	}
+	for _, field := range []string{"attachment_refs", "knowledge_refs"} {
+		refs := geoRequest.Schema.Response["task"].Properties[field]
+		if !refs.Required || refs.Type != "array" || refs.Items == nil || refs.Items.Type != "string" {
+			t.Fatalf("geolibre task %s schema = %#v, want required string array", field, refs)
+		}
+	}
 	for _, field := range []string{"expected_workload_revision"} {
 		if !geoRequest.Schema.Response[field].Required || !geoRequest.Schema.Response["operation"].Properties[field].Required {
 			t.Fatalf("geolibre request response.%s must be required", field)
