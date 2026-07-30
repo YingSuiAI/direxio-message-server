@@ -124,6 +124,17 @@ type Binding struct {
 	SecretGrants      []SecretGrant
 }
 
+// IsZero reports whether no binding expectation was supplied. Keep this
+// centralized as the binding evolves so omitted fields cannot bypass an exact
+// comparison at a persistence or confirmation boundary.
+func (b Binding) IsZero() bool {
+	return b.Digest == "" && b.OwnerID == "" && b.OperationDomain == "" && b.TargetID == "" &&
+		b.TargetRevision == 0 && b.TargetKind == "" && b.SourceVersion == "" && b.SourceCommit == "" &&
+		b.ContentDigest == "" && b.ManifestDigest == "" && b.ExecutionDigest == "" && b.PermissionDigest == "" &&
+		b.ParameterDigest == "" && b.NetworkDigest == "" && b.SecretGrantDigest == "" && b.SelectedTool == "" &&
+		len(b.SelectedCommand) == 0 && len(b.NetworkGrants) == 0 && len(b.SecretGrants) == 0
+}
+
 // SecretGrant is a safe descriptor. It can identify an authorized secret but
 // cannot represent the secret value itself.
 type SecretGrant struct {
