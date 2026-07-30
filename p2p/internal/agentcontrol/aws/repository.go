@@ -32,3 +32,14 @@ type Repository interface {
 	GetProvision(context.Context, string) (Provision, error)
 	GetProvisionByChange(context.Context, string) (Provision, error)
 }
+
+// EC2ProvisionRepository is the narrow atomic boundary for typed EC2 plans.
+// Implementations must persist the immutable plan and its planned provision in
+// one transaction and replay an identical idempotency key exactly.
+type EC2ProvisionRepository interface {
+	Repository
+	CreateEC2Provision(context.Context, Plan, Provision, string, string) (Plan, Provision, error)
+	CreateDerivedDeletePlan(context.Context, Plan) (Plan, error)
+	ListProvisions(context.Context, string, string, int, string) (Page[Provision], error)
+	ListProvisionEvents(context.Context, string, string, uint64, int) ([]ProvisionEvent, uint64, error)
+}

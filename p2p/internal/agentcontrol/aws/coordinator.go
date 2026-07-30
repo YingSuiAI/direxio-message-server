@@ -18,6 +18,25 @@ type MemoryChangeCoordinator struct {
 	FailBeforeCommit bool
 }
 
+func (m *MemoryChangeCoordinator) appendEventLocked(e ChangeEvent) {
+	if e.ProvisionID == "" && e.ChangeID != "" {
+		if c, ok := m.repo.changes[e.ChangeID]; ok {
+			e.ProvisionID = c.ProvisionID
+		}
+	}
+	if e.ProvisionID != "" {
+		var next uint64 = 1
+		for _, prior := range m.repo.events {
+			if prior.ProvisionID == e.ProvisionID && prior.Sequence >= next {
+				next = prior.Sequence + 1
+			}
+		}
+		e.Sequence = next
+		e.EventID = newUUID()
+	}
+	m.repo.events = append(m.repo.events, e)
+}
+
 func NewMemoryChangeCoordinator(repo *MemoryRepository, confirmations ConfirmationPort, tasks TaskPort, now func() time.Time) *MemoryChangeCoordinator {
 	if now == nil {
 		now = time.Now
@@ -37,9 +56,10 @@ func (m *MemoryChangeCoordinator) RequestChange(ctx context.Context, in RequestC
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	digest := canonicalDigest(struct {
-		PlanID, ProvisionID string
-		Binding             coreconfirmation.Binding
-	}{in.PlanID, in.ProvisionID, in.Binding})
+		PlanID, ProvisionID       string
+		ExpectedProvisionRevision int64
+		Binding                   coreconfirmation.Binding
+	}{in.PlanID, in.ProvisionID, in.ExpectedProvisionRevision, in.Binding})
 	m.repo.mu.Lock()
 	defer m.repo.mu.Unlock()
 	if v, ok, e := m.repo.replayLocked("change-request", in.IdempotencyKey, digest); ok {
@@ -57,7 +77,7 @@ func (m *MemoryChangeCoordinator) RequestChange(ctx context.Context, in RequestC
 	}
 	if in.ProvisionID != "" {
 		provision, found := m.repo.provisions[in.ProvisionID]
-		if !found || provision.State == "destroyed" || provision.ActiveChangeID != "" || !ProvisionPlanMatches(provision, p) {
+		if !found || (in.ExpectedProvisionRevision > 0 && provision.Revision != in.ExpectedProvisionRevision) || provision.State == "destroyed" || provision.ActiveChangeID != "" || !ProvisionPlanMatches(provision, p) {
 			return ChangeRequestResult{}, ErrRevisionConflict
 		}
 	}
@@ -95,8 +115,15 @@ func (m *MemoryChangeCoordinator) RequestChange(ctx context.Context, in RequestC
 		m.repo.provisions[in.ProvisionID] = provision
 	}
 	out := ChangeRequestResult{Change: c, Task: task, Confirmation: conf}
+	if in.ProvisionID != "" {
+		out.Provision = m.repo.provisions[in.ProvisionID]
+	}
 	m.repo.changes[c.ID], m.repo.tasks[task.ID], m.repo.confirmations[conf.ConfirmationID] = c, task, conf
-	m.repo.events = append(m.repo.events, ChangeEvent{ChangeID: c.ID, TaskID: task.ID, Kind: "change_requested", Revision: c.Revision, At: now})
+	eventRevision := c.Revision
+	if out.Provision.ID != "" {
+		eventRevision = out.Provision.Revision
+	}
+	m.appendEventLocked(ChangeEvent{ChangeID: c.ID, TaskID: task.ID, ProvisionID: in.ProvisionID, Kind: "change_requested", Revision: eventRevision, At: now})
 	m.repo.replays[replayKey("change-request", in.IdempotencyKey)] = memoryReplay{digest: digest, change: &out}
 	return out, nil
 }
@@ -191,7 +218,7 @@ func (m *MemoryChangeCoordinator) ConsumeChange(_ context.Context, cmd ConsumeCh
 			t.Status, t.FailureCode, t.FailureSummary, t.Revision = "failed", "confirmation_unconfirmed", "AWS confirmation is not confirmed", t.Revision+1
 			c.Status, c.Stage, c.ErrorCode, c.ErrorSummary, c.Revision, c.UpdatedAt = ChangeFailed, StageFailed, "confirmation_unconfirmed", "AWS confirmation is not confirmed", c.Revision+1, now
 			m.repo.confirmations[conf.ConfirmationID], m.repo.tasks[t.ID], m.repo.changes[c.ID] = conf, t, c
-			m.repo.events = append(m.repo.events, ChangeEvent{ChangeID: c.ID, TaskID: t.ID, Kind: "change_fenced_failed", Revision: c.Revision, At: now})
+			m.appendEventLocked(ChangeEvent{ChangeID: c.ID, TaskID: t.ID, Kind: "change_fenced_failed", Revision: c.Revision, At: now})
 		}
 		return Reservation{}, ErrRevisionConflict
 	}
@@ -203,7 +230,7 @@ func (m *MemoryChangeCoordinator) ConsumeChange(_ context.Context, cmd ConsumeCh
 		t.Status, t.FailureCode, t.FailureSummary, t.Revision = "failed", "confirmation_stale", "AWS confirmation binding is stale or expired", t.Revision+1
 		c.Status, c.Stage, c.ErrorCode, c.ErrorSummary, c.Revision, c.UpdatedAt = ChangeFailed, StageFailed, "confirmation_stale", "AWS confirmation binding is stale or expired", c.Revision+1, now
 		m.repo.confirmations[conf.ConfirmationID], m.repo.tasks[t.ID], m.repo.changes[c.ID] = conf, t, c
-		m.repo.events = append(m.repo.events, ChangeEvent{ChangeID: c.ID, TaskID: t.ID, Kind: "change_fenced_failed", Revision: c.Revision, At: now})
+		m.appendEventLocked(ChangeEvent{ChangeID: c.ID, TaskID: t.ID, Kind: "change_fenced_failed", Revision: c.Revision, At: now})
 		m.repo.replays[replayKey("change-consume", cmd.IdempotencyKey)] = memoryReplay{digest: digest, err: ErrRevisionConflict}
 		return Reservation{}, ErrRevisionConflict
 	}
@@ -214,7 +241,7 @@ func (m *MemoryChangeCoordinator) ConsumeChange(_ context.Context, cmd ConsumeCh
 	c.Status, c.Stage, c.Revision, c.UpdatedAt = ChangeRunning, StageChangeSetCreating, c.Revision+1, now
 	r := Reservation{ConfirmationID: conf.ConfirmationID, TaskID: t.ID, Attempt: t.Attempt, LeaseEpoch: t.LeaseEpoch, TaskRevision: t.Revision, Active: true}
 	m.repo.confirmations[conf.ConfirmationID], m.repo.changes[c.ID], m.repo.reservations[conf.ConfirmationID] = conf, c, r
-	m.repo.events = append(m.repo.events, ChangeEvent{ChangeID: c.ID, TaskID: t.ID, Kind: "change_consumed", Revision: c.Revision, At: c.UpdatedAt})
+	m.appendEventLocked(ChangeEvent{ChangeID: c.ID, TaskID: t.ID, Kind: "change_consumed", Revision: c.Revision, At: c.UpdatedAt})
 	m.repo.replays[replayKey("change-consume", cmd.IdempotencyKey)] = memoryReplay{digest: digest, change: &ChangeRequestResult{Change: c, Task: t, Confirmation: conf}}
 	return r, nil
 }
@@ -302,9 +329,9 @@ func (m *MemoryChangeCoordinator) CompleteChange(_ context.Context, cmd Complete
 			}
 		}
 		m.repo.provisions[provision.ID] = provision
-		m.repo.events = append(m.repo.events, ChangeEvent{ChangeID: c.ID, TaskID: t.ID, Kind: "provision_" + provision.State, Revision: provision.Revision, At: now})
+		m.appendEventLocked(ChangeEvent{ChangeID: c.ID, TaskID: t.ID, Kind: "provision_" + provision.State, Revision: provision.Revision, At: now})
 	}
-	m.repo.events = append(m.repo.events, ChangeEvent{ChangeID: c.ID, TaskID: t.ID, Kind: "change_completed", Revision: c.Revision, At: now})
+	m.appendEventLocked(ChangeEvent{ChangeID: c.ID, TaskID: t.ID, Kind: "change_completed", Revision: c.Revision, At: now})
 	m.repo.replays[replayKey("change-complete", replayID)] = memoryReplay{digest: digest, change: &ChangeRequestResult{Change: c}}
 	return c, nil
 }
@@ -424,7 +451,7 @@ func (m *MemoryChangeCoordinator) ClaimProviderMutation(ctx context.Context, cmd
 	current.Revision++
 	current.UpdatedAt = m.now().UTC()
 	m.repo.changes[current.ID] = current
-	m.repo.events = append(m.repo.events, ChangeEvent{ChangeID: current.ID, TaskID: f.Task.ID, Kind: "provider_mutation_dispatched", Revision: current.Revision, At: current.UpdatedAt})
+	m.appendEventLocked(ChangeEvent{ChangeID: current.ID, TaskID: f.Task.ID, Kind: "provider_mutation_dispatched", Revision: current.Revision, At: current.UpdatedAt})
 	f.Change = current
 	f.Task = currentTask
 	f.Confirmation = currentConfirmation
@@ -488,7 +515,7 @@ func (m *MemoryChangeCoordinator) CommitProviderMutation(_ context.Context, resu
 		c.UpdatedAt = now
 	}
 	m.repo.changes[c.ID] = c
-	m.repo.events = append(m.repo.events, ChangeEvent{ChangeID: c.ID, TaskID: t.ID, Kind: "provider_mutation_committed", Revision: c.Revision, At: now})
+	m.appendEventLocked(ChangeEvent{ChangeID: c.ID, TaskID: t.ID, Kind: "provider_mutation_committed", Revision: c.Revision, At: now})
 	// Provider failures are completed by Service.ExecuteChange via the common
 	// CompleteChange boundary. Keep the reservation and running task fence
 	// intact until that CAS succeeds.

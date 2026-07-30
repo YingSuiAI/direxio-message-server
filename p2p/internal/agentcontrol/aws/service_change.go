@@ -20,16 +20,28 @@ func (s *Service) ListChanges(ctx context.Context, size int, planID, token strin
 
 type RequestChangeInput struct {
 	PlanID, ProvisionID, IdempotencyKey string
+	ExpectedProvisionRevision           int64
 	Binding                             coreconfirmation.Binding
 }
 type ChangeRequestResult struct {
 	Change       Change
 	Task         Task
 	Confirmation coreconfirmation.Confirmation
+	// Provision is the exact post-request snapshot committed with the change.
+	// It is replayed verbatim for the same idempotency key.
+	Provision Provision
 }
 
 func (s *Service) RequestChange(ctx context.Context, in RequestChangeInput) (ChangeRequestResult, error) {
 	if s == nil || s.coordinator == nil || !validUUID(in.PlanID) || !validUUID(in.IdempotencyKey) || (in.ProvisionID != "" && !validUUID(in.ProvisionID)) {
+		return ChangeRequestResult{}, ErrInvalid
+	}
+	if in.ProvisionID != "" && in.ExpectedProvisionRevision == 0 {
+		if p, err := s.repo.GetProvision(ctx, in.ProvisionID); err == nil {
+			in.ExpectedProvisionRevision = p.Revision
+		}
+	}
+	if in.ProvisionID != "" && in.ExpectedProvisionRevision < 1 {
 		return ChangeRequestResult{}, ErrInvalid
 	}
 	return s.coordinator.RequestChange(ctx, in)

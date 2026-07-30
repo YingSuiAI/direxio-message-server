@@ -46,11 +46,14 @@ type MemoryRepository struct {
 }
 
 type ChangeEvent struct {
-	ChangeID string
-	TaskID   string
-	Kind     string
-	Revision int64
-	At       time.Time
+	ChangeID    string
+	TaskID      string
+	ProvisionID string
+	EventID     string
+	Sequence    uint64
+	Kind        string
+	Revision    int64
+	At          time.Time
 }
 
 type memoryReplay struct {
@@ -85,6 +88,141 @@ func (r *MemoryRepository) CreateProvision(_ context.Context, p Provision) (Prov
 	}
 	r.provisions[p.ID] = p
 	return p, nil
+}
+
+func (r *MemoryRepository) CreateEC2Provision(_ context.Context, plan Plan, p Provision, key, digest string) (Plan, Provision, error) {
+	if r == nil || plan.Validate() != nil || p.Validate() != nil || !validUUID(key) || strings.TrimSpace(digest) == "" {
+		return Plan{}, Provision{}, ErrInvalid
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.replays == nil {
+		r.replays = map[string]memoryReplay{}
+	}
+	if v, ok, e := r.replayLocked("ec2-provision-create", key, digest); ok {
+		if e != nil || v.plan == nil || v.provision == nil {
+			return Plan{}, Provision{}, e
+		}
+		stored, found := r.plans[v.plan.ID]
+		if !found {
+			return Plan{}, Provision{}, ErrConflict
+		}
+		return clonePlan(stored), *v.provision, nil
+	}
+	if _, ok := r.plans[plan.ID]; ok {
+		return Plan{}, Provision{}, ErrConflict
+	}
+	if current, ok := r.credentials[plan.CredentialID]; !ok || current.Revision != plan.CredentialRevision {
+		return Plan{}, Provision{}, ErrRevisionConflict
+	}
+	if _, ok := r.provisions[p.ID]; ok {
+		return Plan{}, Provision{}, ErrConflict
+	}
+	if !ProvisionPlanMatches(p, plan) {
+		return Plan{}, Provision{}, ErrRevisionConflict
+	}
+	r.plans[plan.ID] = clonePlan(plan)
+	r.provisions[p.ID] = p
+	pv, pr := plan.View(), p
+	r.replays[replayKey("ec2-provision-create", key)] = memoryReplay{digest: digest, plan: &pv, provision: &pr}
+	return clonePlan(plan), p, nil
+}
+
+// CreateDerivedDeletePlan persists a delete plan against the historical
+// credential revision captured by the active provision.
+func (r *MemoryRepository) CreateDerivedDeletePlan(_ context.Context, p Plan) (Plan, error) {
+	if r == nil || p.Validate() != nil || p.Operation != OperationDelete {
+		return Plan{}, ErrInvalid
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if existing, ok := r.plans[p.ID]; ok {
+		if planDigest(existing) != planDigest(p) {
+			return Plan{}, ErrConflict
+		}
+		return clonePlan(existing), nil
+	}
+	if _, ok := r.credentialHistory[p.CredentialID][p.CredentialRevision]; !ok {
+		return Plan{}, ErrNotFound
+	}
+	r.plans[p.ID] = clonePlan(p)
+	return clonePlan(p), nil
+}
+
+func (r *MemoryRepository) ListProvisions(_ context.Context, owner, state string, size int, token string) (Page[Provision], error) {
+	if size < 0 || size > 100 {
+		return Page[Provision]{}, ErrInvalid
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	ids := make([]string, 0, len(r.provisions))
+	for id, p := range r.provisions {
+		if strings.TrimSpace(owner) == "" || p.OwnerDigest != OwnerBindingDigest(owner) || (state != "" && p.State != state) {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	start, err := startAfter(ids, token)
+	if err != nil || start > len(ids) {
+		return Page[Provision]{}, ErrInvalid
+	}
+	end := len(ids)
+	if size > 0 && end > start+size {
+		end = start + size
+	}
+	out := make([]Provision, 0, end-start)
+	for _, id := range ids[start:end] {
+		out = append(out, r.provisions[id])
+	}
+	next := ""
+	if end < len(ids) {
+		next = ids[end-1]
+	}
+	return Page[Provision]{Items: out, NextPageToken: next}, nil
+}
+
+func (r *MemoryRepository) ListProvisionEvents(_ context.Context, provisionID, owner string, after uint64, limit int) ([]ProvisionEvent, uint64, error) {
+	if !validUUID(provisionID) || strings.TrimSpace(owner) == "" || limit < 0 || limit > 100 {
+		return nil, 0, ErrInvalid
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	items := make([]ProvisionEvent, 0)
+	for _, e := range r.events {
+		pid := e.ProvisionID
+		if pid == "" && e.ChangeID != "" {
+			if c, ok := r.changes[e.ChangeID]; ok {
+				pid = c.ProvisionID
+			}
+		}
+		if pid != provisionID {
+			continue
+		}
+		if p, ok := r.provisions[pid]; !ok || p.OwnerDigest != OwnerBindingDigest(owner) {
+			continue
+		}
+		seq := e.Sequence
+		if seq == 0 {
+			continue
+		}
+		if seq <= after {
+			continue
+		}
+		eventID := e.EventID
+		if eventID == "" {
+			eventID = uuid.NewSHA1(uuid.Nil, []byte(pid+":"+strconv.FormatUint(seq, 10))).String()
+		}
+		items = append(items, ProvisionEvent{ProvisionID: pid, EventID: eventID, ChangeID: e.ChangeID, TaskID: e.TaskID, Kind: e.Kind, Sequence: seq, Revision: e.Revision, At: e.At})
+	}
+	if limit > 0 && len(items) > limit {
+		items = items[:limit]
+	}
+	var next uint64
+	if len(items) > 0 {
+		next = items[len(items)-1].Sequence
+	}
+	return items, next, nil
 }
 
 func (r *MemoryRepository) RetryProvision(_ context.Context, provisionID string, expectedRevision int64, idempotencyKey string) (Provision, error) {

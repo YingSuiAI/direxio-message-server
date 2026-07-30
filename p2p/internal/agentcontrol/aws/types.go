@@ -260,6 +260,19 @@ type ProvisionReadback struct {
 	ObservedAt                                                   time.Time
 }
 
+// ProvisionEvent is the owner-scoped immutable audit cursor for a typed EC2
+// provision. Sequence is allocated by the database counter, never MAX+1.
+type ProvisionEvent struct {
+	ProvisionID string
+	EventID     string
+	ChangeID    string
+	TaskID      string
+	Kind        string
+	Sequence    uint64
+	Revision    int64
+	At          time.Time
+}
+
 func (p Provision) Validate() error {
 	if !validUUID(p.ID) || !validUUID(p.PlanID) || !validUUID(p.CredentialID) || !validRegion(p.Region) || !validStackName(p.StackName) || p.CredentialRevision < 1 || p.PlanRevision < 1 || p.Revision < 1 || !validSHA256(p.TemplateSHA256) || !validSHA256(p.PlanDigest) || !validOwnerDigest(p.OwnerDigest) || strings.TrimSpace(p.Profile) == "" {
 		return ErrInvalid

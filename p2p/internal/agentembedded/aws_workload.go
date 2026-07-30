@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -151,6 +152,141 @@ func (p awsActionPort) Handle(ctx context.Context, owner, action string, params 
 			return nil, awsError(err)
 		}
 		out = map[string]any{"quote": quoteMap(v)}
+	case "agent.core.aws.ec2_provisions.plan":
+		in, key, ae := ec2ProvisionInput(params, owner)
+		if ae != nil {
+			return nil, ae
+		}
+		v, err := s.CreateEC2Provision(ctx, in, key)
+		if err != nil {
+			return nil, awsError(err)
+		}
+		out = map[string]any{"plan": ec2ProvisionPlanMap(v.Plan, v.Provision), "quote": quoteMap(v.Quote), "provision": provisionMap(v.Provision)}
+	case "agent.core.aws.ec2_provisions.get":
+		id, ae := requiredUUID(params, "provision_id")
+		if ae != nil {
+			return nil, ae
+		}
+		v, err := s.GetProvisionForOwner(ctx, id, owner)
+		if err != nil {
+			return nil, awsError(err)
+		}
+		out = map[string]any{"provision": provisionMap(v)}
+	case "agent.core.aws.ec2_provisions.list":
+		size, token, ae := page(params)
+		if ae != nil {
+			return nil, ae
+		}
+		state, ae := optionalString(params, "state")
+		if ae != nil {
+			return nil, ae
+		}
+		v, err := s.ListProvisions(ctx, owner, state, size, token)
+		if err != nil {
+			return nil, awsError(err)
+		}
+		items := make([]any, 0, len(v.Items))
+		for _, x := range v.Items {
+			if x.OwnerDigest == coreaws.OwnerBindingDigest(owner) {
+				items = append(items, provisionMap(x))
+			}
+		}
+		out = map[string]any{"provisions": items, "next_page_token": v.NextPageToken}
+	case "agent.core.aws.ec2_provisions.events":
+		id, ae := requiredUUID(params, "provision_id")
+		if ae != nil {
+			return nil, ae
+		}
+		if _, err := s.GetProvisionForOwner(ctx, id, owner); err != nil {
+			return nil, awsError(err)
+		}
+		after, ae := optionalUint64(params, "after_sequence")
+		if ae != nil {
+			return nil, ae
+		}
+		limit := 0
+		if _, ok := params["limit"]; ok {
+			n, e := optionalInt64(params, "limit")
+			if e != nil {
+				return nil, e
+			}
+			if n < 0 {
+				return nil, actionbase.BadRequest("limit must be nonnegative")
+			}
+			limit = int(n)
+		}
+		events, next, err := s.ListProvisionEvents(ctx, id, owner, after, limit)
+		if err != nil {
+			return nil, awsError(err)
+		}
+		items := make([]any, 0, len(events))
+		for _, x := range events {
+			items = append(items, provisionEventMap(x))
+		}
+		out = map[string]any{"events": items, "next_after_sequence": next}
+	case "agent.core.aws.ec2_provisions.create.request":
+		if ae := ensureExactFields(params, "provision_id", "expected_revision", "idempotency_key"); ae != nil {
+			return nil, ae
+		}
+		id, ae := requiredUUID(params, "provision_id")
+		if ae != nil {
+			return nil, ae
+		}
+		expected, ae := requiredPositiveInt64(params, "expected_revision")
+		if ae != nil {
+			return nil, ae
+		}
+		key, ae := requiredUUID(params, "idempotency_key")
+		if ae != nil {
+			return nil, ae
+		}
+		v, err := s.RequestEC2Create(ctx, id, expected, key, owner)
+		if err != nil {
+			return nil, awsError(err)
+		}
+		out = changeRequestMap(v)
+	case "agent.core.aws.ec2_provisions.destroy.request":
+		if ae := ensureExactFields(params, "provision_id", "expected_revision", "idempotency_key"); ae != nil {
+			return nil, ae
+		}
+		id, ae := requiredUUID(params, "provision_id")
+		if ae != nil {
+			return nil, ae
+		}
+		expected, ae := requiredPositiveInt64(params, "expected_revision")
+		if ae != nil {
+			return nil, ae
+		}
+		key, ae := requiredUUID(params, "idempotency_key")
+		if ae != nil {
+			return nil, ae
+		}
+		v, err := s.RequestEC2Destroy(ctx, id, expected, key, owner)
+		if err != nil {
+			return nil, awsError(err)
+		}
+		out = changeRequestMap(v)
+	case "agent.core.aws.ec2_provisions.retry":
+		if ae := ensureExactFields(params, "provision_id", "expected_revision", "idempotency_key"); ae != nil {
+			return nil, ae
+		}
+		id, ae := requiredUUID(params, "provision_id")
+		if ae != nil {
+			return nil, ae
+		}
+		expected, ae := requiredPositiveInt64(params, "expected_revision")
+		if ae != nil {
+			return nil, ae
+		}
+		key, ae := requiredUUID(params, "idempotency_key")
+		if ae != nil {
+			return nil, ae
+		}
+		v, err := s.RetryEC2Provision(ctx, id, expected, key, owner)
+		if err != nil {
+			return nil, awsError(err)
+		}
+		out = map[string]any{"provision": provisionMap(v)}
 	case "agent.core.aws.changes.get":
 		id, ae := requiredUUID(params, "change_id")
 		if ae != nil {
@@ -237,7 +373,115 @@ func quoteMap(v coreaws.Quote) map[string]any {
 	return map[string]any{"plan_id": v.PlanID, "operation": string(v.Operation), "region": v.Region, "stack_name": v.StackName, "resource_count": v.ResourceCount, "parameter_count": v.ParameterCount, "tag_count": v.TagCount, "estimated_monthly_usd": v.EstimatedMonthlyUSD, "price_status": v.PriceStatus, "summary": v.Summary, "plan_digest": v.PlanDigest}
 }
 func changeMap(v coreaws.Change) map[string]any {
-	return map[string]any{"change_id": v.ID, "plan_id": v.PlanID, "credential_id": v.CredentialID, "task_id": v.TaskID, "confirmation_id": v.ConfirmationID, "operation": string(v.Operation), "status": string(v.Status), "stage": string(v.Stage), "change_set_id": v.ChangeSetID, "provider_request_digest": v.ProviderRequestDigest, "revision": v.Revision, "error_code": v.ErrorCode, "error_summary": v.ErrorSummary, "created_at": v.CreatedAt.UTC().Format(time.RFC3339Nano), "updated_at": v.UpdatedAt.UTC().Format(time.RFC3339Nano)}
+	out := map[string]any{"change_id": v.ID, "plan_id": v.PlanID, "credential_id": v.CredentialID, "task_id": v.TaskID, "confirmation_id": v.ConfirmationID, "operation": string(v.Operation), "status": string(v.Status), "stage": string(v.Stage), "change_set_id": v.ChangeSetID, "provider_request_digest": v.ProviderRequestDigest, "revision": v.Revision, "error_code": v.ErrorCode, "error_summary": v.ErrorSummary, "created_at": v.CreatedAt.UTC().Format(time.RFC3339Nano), "updated_at": v.UpdatedAt.UTC().Format(time.RFC3339Nano)}
+	if v.ProvisionID != "" { out["provision_id"] = v.ProvisionID }
+	return out
+}
+
+func provisionMap(v coreaws.Provision) map[string]any {
+	out := map[string]any{"provision_id": v.ID, "plan_id": v.PlanID, "credential_id": v.CredentialID, "credential_revision": v.CredentialRevision, "region": v.Region, "stack_name": v.StackName, "profile": v.Profile, "plan_revision": v.PlanRevision, "template_sha256": v.TemplateSHA256, "plan_digest": v.PlanDigest, "state": v.State, "revision": v.Revision, "create_change_id": v.CreateChangeID, "destroy_change_id": v.DestroyChangeID, "active_change_id": v.ActiveChangeID, "reconciliation_required": v.ReconciliationRequired, "error_code": v.ErrorCode, "error_summary": v.ErrorSummary, "created_at": v.CreatedAt.UTC().Format(time.RFC3339Nano), "updated_at": v.UpdatedAt.UTC().Format(time.RFC3339Nano)}
+	if v.CreateChangeID == "" {
+		delete(out, "create_change_id")
+	}
+	if v.DestroyChangeID == "" {
+		delete(out, "destroy_change_id")
+	}
+	if v.ActiveChangeID == "" {
+		delete(out, "active_change_id")
+	}
+	if v.ErrorCode == "" {
+		delete(out, "error_code")
+	}
+	if v.ErrorSummary == "" {
+		delete(out, "error_summary")
+	}
+	if v.Readback.Validate() == nil {
+		out["readback"] = map[string]any{"stack_id": v.Readback.StackID, "instance_id": v.Readback.InstanceID, "public_ip": v.Readback.PublicIP, "security_group_id": v.Readback.SecurityGroupID, "output_digest": v.Readback.OutputDigest, "observed_at": v.Readback.ObservedAt.UTC().Format(time.RFC3339Nano)}
+	} else {
+		out["readback"] = nil
+	}
+	return out
+}
+func ec2ProvisionPlanMap(v coreaws.PlanView, p coreaws.Provision) map[string]any {
+	volume, _ := strconv.ParseInt(v.Parameters["VolumeSize"], 10, 64)
+	return map[string]any{"plan_id": v.ID, "credential_id": v.CredentialID, "credential_revision": v.CredentialRevision, "region": v.Region, "stack_name": v.StackName, "display_name": v.Parameters["DisplayName"], "instance_type": v.Parameters["InstanceType"], "volume_gib": volume, "public_http": v.Parameters["PublicHTTP"] == "true", "acknowledge_public_exposure": true, "operation": string(v.Operation), "template_sha256": v.TemplateSHA256, "plan_digest": p.PlanDigest, "revision": v.Revision, "created_at": v.CreatedAt.UTC().Format(time.RFC3339Nano)}
+}
+func provisionEventMap(v coreaws.ProvisionEvent) map[string]any {
+	return map[string]any{"provision_id": v.ProvisionID, "event_id": v.EventID, "change_id": v.ChangeID, "task_id": v.TaskID, "kind": v.Kind, "sequence": v.Sequence, "revision": v.Revision, "at": v.At.UTC().Format(time.RFC3339Nano)}
+}
+func changeRequestMap(v coreaws.ChangeRequestResult) map[string]any {
+	out := map[string]any{"change": changeMap(v.Change), "task_id": v.Task.ID, "task": map[string]any{"task_id": v.Task.ID, "status": v.Task.Status, "revision": v.Task.Revision, "plan_id": v.Task.PlanID, "confirmation_id": v.Task.ConfirmationID}, "confirmation_id": v.Confirmation.ConfirmationID, "confirmation": confirmationMap(v.Confirmation)}
+	out["task"].(map[string]any)["attempt"] = v.Task.Attempt
+	out["task"].(map[string]any)["lease_epoch"] = v.Task.LeaseEpoch
+	out["task"].(map[string]any)["failure_code"] = v.Task.FailureCode
+	out["task"].(map[string]any)["failure_summary"] = v.Task.FailureSummary
+	if v.Provision.ID != "" {
+		out["provision"] = provisionMap(v.Provision)
+	}
+	return out
+}
+
+func ec2ProvisionInput(p map[string]any, owner string) (coreaws.EC2ProvisionRequest, string, *actionbase.Error) {
+	allowed := map[string]bool{"credential_id": true, "expected_credential_revision": true, "region": true, "stack_name": true, "display_name": true, "instance_type": true, "volume_gib": true, "public_http": true, "acknowledge_public_exposure": true, "idempotency_key": true}
+	for key := range p {
+		if !allowed[key] {
+			return coreaws.EC2ProvisionRequest{}, "", actionbase.BadRequest("unsupported field: " + key)
+		}
+	}
+	key, ae := requiredUUID(p, "idempotency_key")
+	if ae != nil {
+		return coreaws.EC2ProvisionRequest{}, "", ae
+	}
+	credential, ae := requiredUUID(p, "credential_id")
+	if ae != nil {
+		return coreaws.EC2ProvisionRequest{}, "", ae
+	}
+	expected, ae := requiredPositiveInt64(p, "expected_credential_revision")
+	if ae != nil {
+		return coreaws.EC2ProvisionRequest{}, "", ae
+	}
+	region, ae := requiredString(p, "region")
+	if ae != nil {
+		return coreaws.EC2ProvisionRequest{}, "", ae
+	}
+	stack, ae := requiredString(p, "stack_name")
+	if ae != nil {
+		return coreaws.EC2ProvisionRequest{}, "", ae
+	}
+	display, ae := requiredString(p, "display_name")
+	if ae != nil {
+		return coreaws.EC2ProvisionRequest{}, "", ae
+	}
+	instance, ae := requiredString(p, "instance_type")
+	if ae != nil {
+		return coreaws.EC2ProvisionRequest{}, "", ae
+	}
+	volume, ae := requiredPositiveInt64(p, "volume_gib")
+	if ae != nil {
+		return coreaws.EC2ProvisionRequest{}, "", ae
+	}
+	publicHTTP, ok := p["public_http"].(bool)
+	if !ok {
+		return coreaws.EC2ProvisionRequest{}, "", actionbase.BadRequest("public_http must be a boolean")
+	}
+	ack, ok := p["acknowledge_public_exposure"].(bool)
+	if !ok || !ack {
+		return coreaws.EC2ProvisionRequest{}, "", actionbase.BadRequest("acknowledge_public_exposure must be true")
+	}
+	return coreaws.EC2ProvisionRequest{OwnerID: owner, CredentialID: credential, CredentialRevision: expected, Region: region, StackName: stack, DisplayName: display, InstanceType: instance, VolumeGiB: volume, PublicHTTP: publicHTTP, AcknowledgePublicExposure: ack}, key, nil
+}
+
+func ensureExactFields(p map[string]any, fields ...string) *actionbase.Error {
+	allowed := make(map[string]bool, len(fields))
+	for _, key := range fields {
+		allowed[key] = true
+	}
+	for key := range p {
+		if !allowed[key] {
+			return actionbase.BadRequest("unsupported field: " + key)
+		}
+	}
+	return nil
 }
 
 // WorkloadServiceResolver returns owner-bound durable service/handler pairs.
