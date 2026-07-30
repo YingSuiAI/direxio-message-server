@@ -43,13 +43,57 @@ func (f readinessSTS) GetCallerIdentity(context.Context, *sts.GetCallerIdentityI
 }
 
 type readinessEC2 struct {
-	instance  string
-	tags      []ec2types.Tag
-	publicIP  string
-	groups    []string
-	platform  string
-	nextToken string
-	err       error
+	instance               string
+	tags                   []ec2types.Tag
+	publicIP               string
+	groups                 []string
+	publicHTTP             bool
+	publicHTTPPort         int32
+	ingressMode            string
+	securityGroupNextToken string
+	platform               string
+	nextToken              string
+	err                    error
+}
+
+func (f readinessEC2) DescribeSecurityGroups(context.Context, *ec2.DescribeSecurityGroupsInput, ...func(*ec2.Options)) (*ec2.DescribeSecurityGroupsOutput, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	groups := make([]ec2types.SecurityGroup, 0, len(f.groups))
+	for _, id := range f.groups {
+		group := ec2types.SecurityGroup{GroupId: aws.String(id)}
+		if f.publicHTTP {
+			port := f.publicHTTPPort
+			if port == 0 {
+				port = 80
+			}
+			valid := ec2types.IpPermission{IpProtocol: aws.String("tcp"), FromPort: aws.Int32(port), ToPort: aws.Int32(port), IpRanges: []ec2types.IpRange{{CidrIp: aws.String("0.0.0.0/0")}}}
+			switch f.ingressMode {
+			case "extra-port":
+				group.IpPermissions = []ec2types.IpPermission{valid, {IpProtocol: aws.String("tcp"), FromPort: aws.Int32(443), ToPort: aws.Int32(443), IpRanges: []ec2types.IpRange{{CidrIp: aws.String("0.0.0.0/0")}}}}
+			case "ipv6":
+				valid.Ipv6Ranges = []ec2types.Ipv6Range{{CidrIpv6: aws.String("::/0")}}
+				group.IpPermissions = []ec2types.IpPermission{valid}
+			case "source-sg":
+				valid.UserIdGroupPairs = []ec2types.UserIdGroupPair{{GroupId: aws.String("sg-source")}}
+				group.IpPermissions = []ec2types.IpPermission{valid}
+			case "protocol-all":
+				valid.IpProtocol = aws.String("-1")
+				group.IpPermissions = []ec2types.IpPermission{valid}
+			case "duplicate-range":
+				valid.IpRanges = append(valid.IpRanges, ec2types.IpRange{CidrIp: aws.String("0.0.0.0/0")})
+				group.IpPermissions = []ec2types.IpPermission{valid}
+			case "private-extra-range":
+				valid.IpRanges = append(valid.IpRanges, ec2types.IpRange{CidrIp: aws.String("10.0.0.0/8")})
+				group.IpPermissions = []ec2types.IpPermission{valid}
+			default:
+				group.IpPermissions = []ec2types.IpPermission{valid}
+			}
+		}
+		groups = append(groups, group)
+	}
+	return &ec2.DescribeSecurityGroupsOutput{NextToken: aws.String(f.securityGroupNextToken), SecurityGroups: groups}, nil
 }
 
 func (f readinessEC2) DescribeInstances(context.Context, *ec2.DescribeInstancesInput, ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error) {

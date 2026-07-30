@@ -129,9 +129,10 @@ func cleanupProviderFixtureWithEC2(t *testing.T, mutate func(*readinessEC2), sta
 	}
 	recorder := &cleanupSSM{statuses: statuses}
 	ec2Client := readinessEC2{
-		instance: target.InstanceID,
-		publicIP: "192.0.2.10",
-		groups:   []string{"sg-0123456789abcdef0"},
+		instance:   target.InstanceID,
+		publicIP:   "192.0.2.10",
+		groups:     []string{"sg-0123456789abcdef0"},
+		publicHTTP: true,
 		tags: []ec2types.Tag{
 			{Key: aws.String("managed"), Value: aws.String("true")},
 			{Key: aws.String("service"), Value: aws.String("geolibre")},
@@ -190,6 +191,61 @@ func TestProviderRejectsSecurityGroupDriftBeforeCommand(t *testing.T) {
 	}
 	if len(recorder.commands) != 0 {
 		t.Fatalf("SSM command sent after security group drift: %#v", recorder.commands)
+	}
+}
+
+func TestProviderRejectsGeoLibreWithoutPublicHTTPIngressBeforeCommand(t *testing.T) {
+	provider, plan, operation, recorder := cleanupProviderFixtureWithEC2(t, func(ec2 *readinessEC2) {
+		ec2.publicHTTP = false
+	}, ssmtypes.CommandInvocationStatusSuccess)
+	if _, err := provider.Apply(context.Background(), plan, operation); !errors.Is(err, workaws.ErrPrecondition) {
+		t.Fatalf("missing public HTTP ingress error=%v", err)
+	}
+	if len(recorder.commands) != 0 {
+		t.Fatalf("SSM command sent without public HTTP ingress: %#v", recorder.commands)
+	}
+}
+
+func TestProviderRejectsGeoLibreWrongPublicHTTPPortBeforeCommand(t *testing.T) {
+	provider, plan, operation, recorder := cleanupProviderFixtureWithEC2(t, func(ec2 *readinessEC2) {
+		ec2.publicHTTP = true
+		ec2.publicHTTPPort = 8080
+	}, ssmtypes.CommandInvocationStatusSuccess)
+	if _, err := provider.Apply(context.Background(), plan, operation); !errors.Is(err, workaws.ErrPrecondition) {
+		t.Fatalf("wrong public HTTP port error=%v", err)
+	}
+	if len(recorder.commands) != 0 {
+		t.Fatalf("SSM command sent with wrong public HTTP port: %#v", recorder.commands)
+	}
+}
+
+func TestGeoLibreSecurityGroupRequiresExactPublicHTTPIngress(t *testing.T) {
+	_, plan, _, _ := cleanupProviderFixture(t, ssmtypes.CommandInvocationStatusSuccess)
+	cases := []struct {
+		name string
+		mode string
+		ok   bool
+	}{
+		{name: "exact", ok: true},
+		{name: "extra-port", mode: "extra-port"},
+		{name: "ipv6", mode: "ipv6"},
+		{name: "source-security-group", mode: "source-sg"},
+		{name: "all-protocol", mode: "protocol-all"},
+		{name: "duplicate-range", mode: "duplicate-range"},
+		{name: "private-extra-range", mode: "private-extra-range"},
+		{name: "pagination", mode: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			probe := readinessEC2{groups: []string{"sg-0123456789abcdef0"}, publicHTTP: true, ingressMode: tc.mode}
+			if tc.name == "pagination" {
+				probe.securityGroupNextToken = "next"
+			}
+			got := securityGroupAllowsPublicHTTP(context.Background(), probe, plan)
+			if got != tc.ok {
+				t.Fatalf("security group ingress accepted=%v want=%v", got, tc.ok)
+			}
+		})
 	}
 }
 

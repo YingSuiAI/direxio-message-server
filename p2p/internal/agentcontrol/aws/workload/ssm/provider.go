@@ -25,6 +25,7 @@ type STSClient interface {
 }
 type EC2Client interface {
 	DescribeInstances(context.Context, *ec2.DescribeInstancesInput, ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error)
+	DescribeSecurityGroups(context.Context, *ec2.DescribeSecurityGroupsInput, ...func(*ec2.Options)) (*ec2.DescribeSecurityGroupsOutput, error)
 }
 type SSMClient interface {
 	DescribeInstanceInformation(context.Context, *ssm.DescribeInstanceInformationInput, ...func(*ssm.Options)) (*ssm.DescribeInstanceInformationOutput, error)
@@ -264,6 +265,11 @@ func (p *Provider) verify(ctx context.Context, h workaws.CredentialHandle, cl Cl
 	if !matchesBoundSecurityGroups(plan) || !matchesInstanceSecurityGroups(in.SecurityGroups, plan) {
 		return coreworkload.TargetIdentity{}, workaws.ErrPrecondition
 	}
+	if plan.Target.EC2CleanupProfile == coreworkload.EC2CleanupProfileGeoLibreStaticV1 {
+		if plan.Target.Labels["dirextalk:exposure"] != "public-unauthenticated-http" || !securityGroupAllowsPublicHTTP(ctx, cl.EC2, plan) {
+			return coreworkload.TargetIdentity{}, workaws.ErrPrecondition
+		}
+	}
 	si, e := cl.SSM.DescribeInstanceInformation(ctx, &ssm.DescribeInstanceInformationInput{Filters: []ssmtypes.InstanceInformationStringFilter{{Key: aws.String("InstanceIds"), Values: []string{plan.Target.InstanceID}}}})
 	if e != nil || si == nil || aws.ToString(si.NextToken) != "" || len(si.InstanceInformationList) != 1 || aws.ToString(si.InstanceInformationList[0].InstanceId) != plan.Target.InstanceID || si.InstanceInformationList[0].PingStatus != ssmtypes.PingStatusOnline {
 		return coreworkload.TargetIdentity{}, workaws.ErrPrecondition
@@ -271,6 +277,40 @@ func (p *Provider) verify(ctx context.Context, h workaws.CredentialHandle, cl Cl
 	verified := plan.Target.Identity
 	verified.Endpoint = "http://" + publicIP
 	return verified, nil
+}
+
+// securityGroupAllowsPublicHTTP proves the live SG attached to the fixed
+// GeoLibre target still permits the exact public TCP/80 ingress advertised by
+// its immutable plan. A missing, paginated, mismatched, or broader-only rule
+// is rejected before any SSM command is submitted.
+func securityGroupAllowsPublicHTTP(ctx context.Context, client EC2Client, plan coreworkload.Plan) bool {
+	if client == nil || len(plan.Target.NetworkGrantDetails) != 1 {
+		return false
+	}
+	groupID := strings.TrimSpace(plan.Target.NetworkGrantDetails[0].ReferenceID)
+	if groupID == "" || plan.Target.NetworkGrantDetails[0].Kind != "aws_security_group" {
+		return false
+	}
+	out, err := client.DescribeSecurityGroups(ctx, &ec2.DescribeSecurityGroupsInput{GroupIds: []string{groupID}})
+	if err != nil || out == nil || aws.ToString(out.NextToken) != "" || len(out.SecurityGroups) != 1 {
+		return false
+	}
+	group := out.SecurityGroups[0]
+	if strings.TrimSpace(aws.ToString(group.GroupId)) != groupID {
+		return false
+	}
+	// The typed GeoLibre topology owns one and only one ingress rule. Requiring
+	// an exact single permission prevents a seemingly valid port-80 rule from
+	// hiding additional SSH/443/private/IPv6/source-group exposure.
+	if len(group.IpPermissions) != 1 {
+		return false
+	}
+	permission := group.IpPermissions[0]
+	if aws.ToString(permission.IpProtocol) != "tcp" || permission.FromPort == nil || permission.ToPort == nil || aws.ToInt32(permission.FromPort) != 80 || aws.ToInt32(permission.ToPort) != 80 || len(permission.IpRanges) != 1 || len(permission.Ipv6Ranges) != 0 || len(permission.PrefixListIds) != 0 || len(permission.UserIdGroupPairs) != 0 {
+		return false
+	}
+	cidr := permission.IpRanges[0]
+	return strings.TrimSpace(aws.ToString(cidr.CidrIp)) == "0.0.0.0/0" && strings.TrimSpace(aws.ToString(cidr.Description)) == ""
 }
 
 func matchesBoundSecurityGroups(plan coreworkload.Plan) bool {

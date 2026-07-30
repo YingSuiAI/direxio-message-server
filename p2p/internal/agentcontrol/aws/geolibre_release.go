@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"net"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -42,6 +43,7 @@ type GeoLibreReleaseManifest struct {
 type GeoLibreInstallTarget struct {
 	ProvisionID        string
 	ProvisionPlanID    string
+	ProvisionRevision  int64
 	CredentialID       string
 	CredentialRevision int64
 	AccountID          string
@@ -109,18 +111,20 @@ func BuildGeoLibreSSMPlan(target GeoLibreInstallTarget, idempotencyKey string, e
 		EC2SystemdService:  manifest.SystemdService,
 		EC2CleanupProfile:  coreworkload.EC2CleanupProfileGeoLibreStaticV1,
 		RequiredInstanceTags: map[string]string{
-			"owner":             target.OwnerBindingDigest,
-			"managed":           "true",
-			"service":           EC2ServiceProfile,
-			"dirextalk:plan-id": target.ProvisionPlanID,
+			"owner":                   target.OwnerBindingDigest,
+			"dirextalk:owner-binding": target.OwnerBindingDigest,
+			"managed":                 "true",
+			"service":                 EC2ServiceProfile,
+			"dirextalk:plan-id":       target.ProvisionPlanID,
 		},
 		Labels: map[string]string{
-			"dirextalk:provision-id":    target.ProvisionID,
-			"dirextalk:release":         manifest.Version,
-			"dirextalk:manifest-digest": manifestDigest,
-			"dirextalk:command-digest":  coreworkload.GeoLibreStaticV1CommandDigest,
-			"dirextalk:exposure":        "public-unauthenticated-http",
-			"dirextalk:sidecar":         "disabled",
+			"dirextalk:provision-id":       target.ProvisionID,
+			"dirextalk:provision-revision": strconv.FormatInt(target.ProvisionRevision, 10),
+			"dirextalk:release":            manifest.Version,
+			"dirextalk:manifest-digest":    manifestDigest,
+			"dirextalk:command-digest":     coreworkload.GeoLibreStaticV1CommandDigest,
+			"dirextalk:exposure":           "public-unauthenticated-http",
+			"dirextalk:sidecar":            "disabled",
 		},
 		NetworkGrantDetails: []coreworkload.NetworkGrant{{
 			ReferenceID: target.SecurityGroupID,
@@ -152,6 +156,7 @@ func BuildGeoLibreSSMPlan(target GeoLibreInstallTarget, idempotencyKey string, e
 func validGeoLibreInstallTarget(target GeoLibreInstallTarget) bool {
 	if !validUUID(strings.TrimSpace(target.ProvisionID)) ||
 		!validUUID(strings.TrimSpace(target.ProvisionPlanID)) ||
+		target.ProvisionRevision < 1 ||
 		!validUUID(strings.TrimSpace(target.CredentialID)) ||
 		target.CredentialRevision < 1 ||
 		!accountIDValid(target.AccountID) ||
