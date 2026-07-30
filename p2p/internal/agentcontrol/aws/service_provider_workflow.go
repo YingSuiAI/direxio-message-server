@@ -208,6 +208,10 @@ func (s *Service) completeExecution(ctx context.Context, previous, terminal Chan
 	return s.coordinator.CompleteChange(ctx, CompleteChangeCommand{ChangeID: previous.ID, ConfirmationID: previous.ConfirmationID, TaskID: fence.Task.ID, Attempt: fence.Task.Attempt, LeaseEpoch: fence.Task.LeaseEpoch, ExpectedTaskRevision: fence.Task.Revision, ExpectedChangeRevision: previous.Revision, ExpectedConfirmationRevision: fence.Confirmation.Revision, Status: terminal.Status, ErrorCode: terminal.ErrorCode, ErrorSummary: terminal.ErrorSummary, OperationKey: operationKey(previous.ID, previous.ProviderToken, "complete:"+string(terminal.Status), fence.Task.Attempt, fence.Task.LeaseEpoch)})
 }
 
+// reconcileChange derives typed output requirements from the durable plan tag.
+// Generic plans have no marker and retain the historical completion behavior;
+// typed provisions remain uncertain until readback proves every requested
+// allowlisted value.
 func (s *Service) reconcileChange(ctx context.Context, c Change, p Plan) (Change, error) {
 	cred, e := s.repo.GetCredentialRevision(ctx, p.CredentialID, p.CredentialRevision)
 	if e != nil {
@@ -228,11 +232,15 @@ func (s *Service) reconcileChange(ctx context.Context, c Change, p Plan) (Change
 	if e != nil {
 		return c, ErrResponseUncertain
 	}
+	requiredOutputs, validRequirements := requiredStackOutputs(p)
+	if !validRequirements {
+		return c, ErrResponseUncertain
+	}
 	want := map[Operation]string{OperationCreate: "CREATE_COMPLETE", OperationUpdate: "UPDATE_COMPLETE", OperationDelete: "DELETE_COMPLETE"}[c.Operation]
 	if c.Operation == OperationDelete && e == ErrNotFound {
 		want = ""
 	}
-	if (c.Operation == OperationDelete && e == ErrNotFound) || (want != "" && stack.Region == p.Region && stack.StackName == p.StackName && stack.Status == want && stack.TemplateSHA256 != "" && stack.TemplateSHA256 == p.TemplateSHA256 && canonicalDigest(stack.Parameters) == canonicalDigest(p.Parameters) && canonicalDigest(stack.Tags) == canonicalDigest(p.Tags)) {
+	if (c.Operation == OperationDelete && e == ErrNotFound) || (want != "" && stack.Region == p.Region && stack.StackName == p.StackName && stack.Status == want && stack.TemplateSHA256 != "" && stack.TemplateSHA256 == p.TemplateSHA256 && canonicalDigest(stack.Parameters) == canonicalDigest(p.Parameters) && canonicalDigest(stack.Tags) == canonicalDigest(p.Tags) && stack.Outputs.HasAll(requiredOutputs...)) {
 		n := c
 		n.Status = ChangeSucceeded
 		n.Stage = StageSucceeded

@@ -250,6 +250,60 @@ func TestAsyncCreatePollReconciliation(t *testing.T) {
 	}
 }
 
+func TestRequiredStackOutputMissingEvidenceStaysUncertain(t *testing.T) {
+	s, repo, provider, plan := workflowFixture(t)
+	out, err := s.RequestChange(context.Background(), RequestChangeInput{PlanID: plan.ID, IdempotencyKey: uuid.NewString()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	consumeWorkflowChange(t, s, repo, out)
+	fullPlan, err := repo.GetPlan(context.Background(), plan.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider.Stacks[plan.Region+"/"+plan.StackName] = Stack{Region: plan.Region, StackName: plan.StackName, Status: "CREATE_COMPLETE", TemplateSHA256: fullPlan.TemplateSHA256, Parameters: map[string]string{}, Tags: map[string]string{}}
+	c, err := repo.GetChange(context.Background(), out.Change.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fullPlan.Tags = map[string]string{RequiredOutputsTag: string(StackOutputInstanceID)}
+	if _, err = s.reconcileChange(context.Background(), c, fullPlan); err != ErrResponseUncertain {
+		t.Fatalf("missing output err=%v", err)
+	}
+	provider.Stacks[plan.Region+"/"+plan.StackName] = Stack{Region: plan.Region, StackName: plan.StackName, Status: "CREATE_COMPLETE", TemplateSHA256: fullPlan.TemplateSHA256, Parameters: map[string]string{}, Tags: cloneMap(fullPlan.Tags), Outputs: StackOutputs{string(StackOutputInstanceID): "i-0123456789abcdef0"}}
+	if done, err := s.reconcileChange(context.Background(), c, fullPlan); err != nil || done.Status != ChangeSucceeded {
+		t.Fatalf("output readback done=%+v err=%v", done, err)
+	}
+}
+
+func TestPollChangeResponseLossRequiresDurableOutputReadback(t *testing.T) {
+	s, repo, provider, base := workflowFixture(t)
+	plan, err := s.CreatePlan(context.Background(), PlanInput{CredentialID: base.CredentialID, Region: base.Region, StackName: "output-poll", Operation: OperationCreate, Template: []byte(`{"Resources":{}}`), Tags: map[string]string{RequiredOutputsTag: string(StackOutputInstanceID)}, IdempotencyKey: uuid.NewString()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := s.RequestChange(context.Background(), RequestChangeInput{PlanID: plan.ID, IdempotencyKey: uuid.NewString()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	consumeWorkflowChange(t, s, repo, out)
+	provider.ResponseLossExecute = true
+	if _, err = s.ExecuteChange(context.Background(), out.Confirmation.ConfirmationID); err != ErrResponseUncertain {
+		t.Fatalf("execute response loss err=%v", err)
+	}
+	if _, err = s.PollChange(context.Background(), out.Confirmation.ConfirmationID); err != ErrResponseUncertain {
+		t.Fatalf("missing output poll err=%v", err)
+	}
+	provider.ResponseLossExecute = false
+	stack := provider.Stacks[base.Region+"/output-poll"]
+	stack.Outputs = StackOutputs{string(StackOutputInstanceID): "i-0123456789abcdef0"}
+	provider.Stacks[base.Region+"/output-poll"] = stack
+	done, err := s.PollChange(context.Background(), out.Confirmation.ConfirmationID)
+	if err != nil || done.Status != ChangeSucceeded {
+		t.Fatalf("readback poll done=%+v err=%v", done, err)
+	}
+}
+
 func TestAsyncDeletePollReconciliation(t *testing.T) {
 	s, repo, provider, plan := workflowFixture(t)
 	deletePlan, err := s.CreatePlan(context.Background(), PlanInput{CredentialID: plan.CredentialID, Region: plan.Region, StackName: plan.StackName + "-delete", Operation: OperationDelete, Template: []byte(`{"Resources":{}}`), IdempotencyKey: uuid.NewString()})

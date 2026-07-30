@@ -36,11 +36,83 @@ type ChangeSet struct {
 	TemplateSHA256                   string
 	Parameters, Tags                 map[string]string
 }
+
+// StackOutputKey is the deliberately small set of CloudFormation output
+// names that may cross the provider boundary.  Output values are template
+// controlled, so arbitrary output maps must never be exposed to callers.
+type StackOutputKey string
+
+const (
+	StackOutputInstanceID    StackOutputKey = "InstanceId"
+	StackOutputPublicIP      StackOutputKey = "PublicIp"
+	StackOutputSecurityGroup StackOutputKey = "SecurityGroupId"
+	StackOutputStackID       StackOutputKey = "StackId"
+)
+
+// RequiredOutputsTag is a durable, plan-bound marker for typed provisions.
+// Its value is a comma-separated list of allowlisted StackOutputKey names.
+const RequiredOutputsTag = "dirextalk:required-outputs"
+
+// StackOutputs contains only validated values for the allowlisted output
+// keys.  It intentionally remains map-shaped so generic providers can carry
+// the typed keys without changing existing Stack consumers.
+type StackOutputs map[string]string
+
+func (o StackOutputs) Clone() StackOutputs {
+	if len(o) == 0 {
+		return nil
+	}
+	out := make(StackOutputs, len(o))
+	for k, v := range o {
+		out[k] = v
+	}
+	return out
+}
+
+// HasAll reports whether readback contains every requested typed output. An
+// empty requirement is intentionally satisfied for legacy generic plans.
+func (o StackOutputs) HasAll(required ...string) bool {
+	for _, key := range required {
+		if !isAllowedStackOutputKey(key) || strings.TrimSpace(o[key]) == "" {
+			return false
+		}
+	}
+	return true
+}
+
+func isAllowedStackOutputKey(key string) bool {
+	switch StackOutputKey(key) {
+	case StackOutputInstanceID, StackOutputPublicIP, StackOutputSecurityGroup, StackOutputStackID:
+		return true
+	default:
+		return false
+	}
+}
+
+func requiredStackOutputs(p Plan) ([]string, bool) {
+	raw, ok := p.Tags[RequiredOutputsTag]
+	if !ok || strings.TrimSpace(raw) == "" {
+		return nil, true
+	}
+	seen := make(map[string]bool)
+	out := make([]string, 0, 4)
+	for _, part := range strings.Split(raw, ",") {
+		key := strings.TrimSpace(part)
+		if !isAllowedStackOutputKey(key) || seen[key] {
+			return nil, false
+		}
+		seen[key] = true
+		out = append(out, key)
+	}
+	return out, len(out) > 0
+}
+
 type Stack struct {
 	Region, StackName string
 	Status            string
 	TemplateSHA256    string
 	Parameters, Tags  map[string]string
+	Outputs           StackOutputs
 }
 
 // CloudProvider is deliberately closed over the exact CloudFormation calls
@@ -253,6 +325,7 @@ func (f *FakeProvider) DescribeStack(_ context.Context, handle CredentialHandle,
 		f.PollSequence[region+"/"+stack] = seq[1:]
 		f.Stacks[region+"/"+stack] = s
 	}
+	s.Outputs = s.Outputs.Clone()
 	return s, nil
 }
 func (f *FakeProvider) UnconfirmedMutationCalls() int {

@@ -18,6 +18,8 @@ type safetyCloudClient struct {
 	describeStatuses          []cloudformationtypes.ChangeSetStatus
 	describeExecutions        []cloudformationtypes.ExecutionStatus
 	describeCalls             int
+	describeStack             *cloudformation.DescribeStacksOutput
+	templateBody              string
 }
 
 func (c *safetyCloudClient) CreateChangeSet(_ context.Context, in *cloudformation.CreateChangeSetInput, _ ...func(*cloudformation.Options)) (*cloudformation.CreateChangeSetOutput, error) {
@@ -47,10 +49,16 @@ func (c *safetyCloudClient) DeleteStack(_ context.Context, in *cloudformation.De
 	return &cloudformation.DeleteStackOutput{}, nil
 }
 func (c *safetyCloudClient) DescribeStacks(context.Context, *cloudformation.DescribeStacksInput, ...func(*cloudformation.Options)) (*cloudformation.DescribeStacksOutput, error) {
-	return nil, ErrNotFound
+	if c.describeStack == nil {
+		return nil, ErrNotFound
+	}
+	return c.describeStack, nil
 }
 func (c *safetyCloudClient) GetTemplate(context.Context, *cloudformation.GetTemplateInput, ...func(*cloudformation.Options)) (*cloudformation.GetTemplateOutput, error) {
-	return nil, ErrNotFound
+	if c.templateBody == "" {
+		return nil, ErrNotFound
+	}
+	return &cloudformation.GetTemplateOutput{TemplateBody: aws.String(c.templateBody)}, nil
 }
 
 func safetyHandle() CredentialHandle {
@@ -121,5 +129,44 @@ func TestSDKProviderWaitsForChangeSetAvailability(t *testing.T) {
 	}
 	if client.describeCalls != 2 {
 		t.Fatalf("describe calls=%d, want 2", client.describeCalls)
+	}
+}
+
+func TestSDKProviderDescribeStackAllowlistedOutputs(t *testing.T) {
+	client := &safetyCloudClient{
+		describeStack: &cloudformation.DescribeStacksOutput{Stacks: []cloudformationtypes.Stack{{
+			StackName: aws.String("output-stack"), StackStatus: cloudformationtypes.StackStatusCreateComplete,
+			StackId: aws.String("arn:aws:cloudformation:us-east-1:123456789012:stack/output-stack/01234567-89ab-cdef-0123-456789abcdef"),
+			Outputs: []cloudformationtypes.Output{
+				{OutputKey: aws.String("InstanceId"), OutputValue: aws.String(" I-0123456789abcdef0 ")},
+				{OutputKey: aws.String("PublicIp"), OutputValue: aws.String("192.0.2.10")},
+				{OutputKey: aws.String("SecurityGroupId"), OutputValue: aws.String("sg-0123456789abcdef0")},
+				{OutputKey: aws.String("StackId"), OutputValue: aws.String("secret-forged-stack-id")},
+				{OutputKey: aws.String("Secret"), OutputValue: aws.String("do-not-return")},
+				{OutputKey: aws.String("InstanceId"), OutputValue: aws.String("not-an-instance")},
+				{OutputKey: aws.String("PublicIp"), OutputValue: aws.String("not-an-ip")},
+			},
+		}}},
+		templateBody: `{"Resources":{}}`,
+	}
+	p, err := NewSDKProvider(SDKClients{CloudFormation: client})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stack, err := p.DescribeStack(context.Background(), safetyHandle(), "us-east-1", "output-stack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := stack.Outputs[string(StackOutputInstanceID)]; got != "i-0123456789abcdef0" {
+		t.Fatalf("instance output=%q", got)
+	}
+	if got := stack.Outputs[string(StackOutputPublicIP)]; got != "192.0.2.10" {
+		t.Fatalf("ip output=%q", got)
+	}
+	if _, ok := stack.Outputs["Secret"]; ok || len(stack.Outputs) != 4 {
+		t.Fatalf("outputs leaked or invalid values retained: %#v", stack.Outputs)
+	}
+	if got := stack.Outputs[string(StackOutputStackID)]; got != "arn:aws:cloudformation:us-east-1:123456789012:stack/output-stack/01234567-89ab-cdef-0123-456789abcdef" {
+		t.Fatalf("authoritative stack id=%q", got)
 	}
 }

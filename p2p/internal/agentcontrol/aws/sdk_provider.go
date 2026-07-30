@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -370,7 +371,16 @@ func (p *SDKProvider) DescribeStack(ctx context.Context, handle CredentialHandle
 	if aws.ToString(s.StackName) != stack {
 		return Stack{}, ErrConflict
 	}
-	stackOut := Stack{Region: region, StackName: stack, Status: string(s.StackStatus), Parameters: parametersFromSDK(s.Parameters), Tags: tagsFromSDK(s.Tags)}
+	stackID, ok := normalizeAuthoritativeStackID(aws.ToString(s.StackId), region, stack, handle.AccountID)
+	if !ok {
+		return Stack{}, ErrProvider
+	}
+	outputs := stackOutputsFromSDK(s.Outputs)
+	if outputs == nil {
+		outputs = StackOutputs{}
+	}
+	outputs[string(StackOutputStackID)] = stackID
+	stackOut := Stack{Region: region, StackName: stack, Status: string(s.StackStatus), Parameters: parametersFromSDK(s.Parameters), Tags: tagsFromSDK(s.Tags), Outputs: outputs}
 	templateOut, err := client.GetTemplate(callCtx, &cloudformation.GetTemplateInput{StackName: aws.String(stack)})
 	if err != nil {
 		return Stack{}, mapSDKError(err, false)
@@ -384,6 +394,68 @@ func (p *SDKProvider) DescribeStack(ctx context.Context, handle CredentialHandle
 	}
 	stackOut.TemplateSHA256 = digest
 	return stackOut, nil
+}
+
+// stackOutputsFromSDK is a security boundary. CloudFormation output values are
+// arbitrary template data; only the four documented typed values are retained
+// and malformed values are discarded rather than returned to the caller.
+func stackOutputsFromSDK(values []cloudformationtypes.Output) StackOutputs {
+	out := StackOutputs{}
+	for _, value := range values {
+		if value.OutputKey == nil || value.OutputValue == nil {
+			continue
+		}
+		key := aws.ToString(value.OutputKey)
+		normalized, ok := normalizeStackOutput(key, aws.ToString(value.OutputValue))
+		if ok {
+			out[key] = normalized
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func normalizeAuthoritativeStackID(value, region, stack, account string) (string, bool) {
+	parsed, err := arn.Parse(strings.TrimSpace(value))
+	if err != nil || parsed.Service != "cloudformation" || parsed.Region != region || !accountIDValid(parsed.AccountID) || account != "" && parsed.AccountID != account {
+		return "", false
+	}
+	parts := strings.Split(parsed.Resource, "/")
+	if len(parts) != 3 || parts[0] != "stack" || parts[1] != stack || !validUUID(parts[2]) {
+		return "", false
+	}
+	return parsed.String(), true
+}
+
+func normalizeStackOutput(key, value string) (string, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", false
+	}
+	switch StackOutputKey(key) {
+	case StackOutputInstanceID:
+		value = strings.ToLower(value)
+		if !regexp.MustCompile(`^i-[0-9a-f]{8,17}$`).MatchString(value) {
+			return "", false
+		}
+		return value, true
+	case StackOutputPublicIP:
+		ip := net.ParseIP(value)
+		if ip == nil || ip.To4() == nil {
+			return "", false
+		}
+		return ip.To4().String(), true
+	case StackOutputSecurityGroup:
+		value = strings.ToLower(value)
+		if !regexp.MustCompile(`^sg-[0-9a-f]{8,17}$`).MatchString(value) {
+			return "", false
+		}
+		return value, true
+	default:
+		return "", false
+	}
 }
 
 func validateHandleRegion(handle CredentialHandle, region string) error {
