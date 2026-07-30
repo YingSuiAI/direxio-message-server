@@ -1544,6 +1544,30 @@ func (s *DatabaseStore) migrate(ctx context.Context) error {
 		}
 		return nil
 	}})
+	m.AddMigrations(sqlutil.Migration{Version: "p2p: model credential envelope versions v107", Up: func(ctx context.Context, txn *sql.Tx) error {
+		return execMigrationStatements(ctx, txn, []string{
+			`ALTER TABLE p2p_agent_model_profiles ADD COLUMN IF NOT EXISTS api_key_envelope_version BIGINT NOT NULL DEFAULT 0`,
+			`ALTER TABLE p2p_agent_model_profiles ADD COLUMN IF NOT EXISTS api_key_aad_version BIGINT NOT NULL DEFAULT 0`,
+			`ALTER TABLE p2p_agent_model_profile_credentials ADD COLUMN IF NOT EXISTS api_key_envelope_version BIGINT NOT NULL DEFAULT 0`,
+			`ALTER TABLE p2p_agent_model_profile_credentials ADD COLUMN IF NOT EXISTS api_key_aad_version BIGINT NOT NULL DEFAULT 0`,
+			`DO $$ BEGIN
+				IF EXISTS (SELECT 1 FROM p2p_agent_model_profiles WHERE
+					(octet_length(api_key_ciphertext)=0 AND NOT (credential_version=0 AND api_key_key_id='' AND octet_length(api_key_nonce)=0 AND api_key_envelope_version=0 AND api_key_aad_version=0)) OR
+					(octet_length(api_key_ciphertext)>0 AND NOT (((api_key_key_id='' AND api_key_envelope_version=0 AND api_key_aad_version=0) OR (api_key_key_id<>'' AND ((api_key_envelope_version=0 AND api_key_aad_version=0) OR (api_key_envelope_version=1 AND api_key_aad_version=1)))) AND credential_version>0 AND octet_length(api_key_nonce)=12 AND octet_length(api_key_ciphertext)>16))
+				) THEN RAISE EXCEPTION 'invalid pre-v107 model credential envelope'; END IF;
+				IF EXISTS (SELECT 1 FROM p2p_agent_model_profile_credentials WHERE
+					credential_version<=0 OR octet_length(api_key_ciphertext)<=16 OR octet_length(api_key_nonce)<>12 OR
+					NOT ((api_key_key_id='' AND api_key_envelope_version=0 AND api_key_aad_version=0) OR (api_key_key_id<>'' AND ((api_key_envelope_version=0 AND api_key_aad_version=0) OR (api_key_envelope_version=1 AND api_key_aad_version=1))))
+				) THEN RAISE EXCEPTION 'invalid pre-v107 model credential history envelope'; END IF;
+			END $$`,
+			`UPDATE p2p_agent_model_profiles SET api_key_envelope_version=1,api_key_aad_version=1 WHERE octet_length(api_key_ciphertext)>0 AND api_key_key_id<>'' AND api_key_envelope_version=0 AND api_key_aad_version=0`,
+			`UPDATE p2p_agent_model_profile_credentials SET api_key_envelope_version=1,api_key_aad_version=1 WHERE octet_length(api_key_ciphertext)>0 AND api_key_key_id<>'' AND api_key_envelope_version=0 AND api_key_aad_version=0`,
+			`ALTER TABLE p2p_agent_model_profiles DROP CONSTRAINT IF EXISTS p2p_agent_model_profiles_api_key_envelope_check`,
+			`ALTER TABLE p2p_agent_model_profiles ADD CONSTRAINT p2p_agent_model_profiles_api_key_envelope_check CHECK ((credential_version=0 AND octet_length(api_key_ciphertext)=0 AND api_key_key_id='' AND octet_length(api_key_nonce)=0 AND api_key_envelope_version=0 AND api_key_aad_version=0) OR (credential_version>0 AND octet_length(api_key_ciphertext)>16 AND octet_length(api_key_nonce)=12 AND ((api_key_key_id='' AND api_key_envelope_version=0 AND api_key_aad_version=0) OR (api_key_key_id<>'' AND api_key_envelope_version=1 AND api_key_aad_version=1))))`,
+			`ALTER TABLE p2p_agent_model_profile_credentials DROP CONSTRAINT IF EXISTS p2p_agent_model_profile_credentials_api_key_envelope_check`,
+			`ALTER TABLE p2p_agent_model_profile_credentials ADD CONSTRAINT p2p_agent_model_profile_credentials_api_key_envelope_check CHECK (credential_version>0 AND octet_length(api_key_ciphertext)>16 AND octet_length(api_key_nonce)=12 AND ((api_key_key_id='' AND api_key_envelope_version=0 AND api_key_aad_version=0) OR (api_key_key_id<>'' AND api_key_envelope_version=1 AND api_key_aad_version=1)))`,
+		})
+	}})
 	return m.Up(ctx)
 }
 

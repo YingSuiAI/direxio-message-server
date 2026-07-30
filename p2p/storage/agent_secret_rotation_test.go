@@ -2,6 +2,8 @@ package storage
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/sha256"
 	"os"
 	"path/filepath"
@@ -149,6 +151,13 @@ func TestPostgresAgentSecretRotationRewrapsGenericAndModelRows(t *testing.T) {
 	if err := VerifyAgentSecretDatabase(ctx, store.DB(), options); err != nil {
 		t.Fatal(err)
 	}
+	var currentEnvelope, currentAAD, historicalEnvelope, historicalAAD int64
+	if err := store.DB().QueryRowContext(ctx, `SELECT api_key_envelope_version,api_key_aad_version FROM p2p_agent_model_profiles WHERE owner_id='owner' AND profile_id=$1`, synced.Profiles[0].ProfileID).Scan(&currentEnvelope, &currentAAD); err != nil || currentEnvelope != 1 || currentAAD != 1 {
+		t.Fatalf("rotated current model envelope = %d/%d err=%v", currentEnvelope, currentAAD, err)
+	}
+	if err := store.DB().QueryRowContext(ctx, `SELECT api_key_envelope_version,api_key_aad_version FROM p2p_agent_model_profile_credentials WHERE owner_id='owner' AND profile_id=$1 AND credential_version=1`, synced.Profiles[0].ProfileID).Scan(&historicalEnvelope, &historicalAAD); err != nil || historicalEnvelope != 1 || historicalAAD != 1 {
+		t.Fatalf("rotated historical model envelope = %d/%d err=%v", historicalEnvelope, historicalAAD, err)
+	}
 
 	restarted, err := NewDatabaseModelProfileStoreWithKeyring(ctx, store, keyringPath, "")
 	if err != nil {
@@ -171,6 +180,88 @@ func TestPostgresAgentSecretRotationRewrapsGenericAndModelRows(t *testing.T) {
 		t.Fatalf("rotated generic credential err=%v", err)
 	}
 	clear(plaintext)
+}
+
+func TestPostgresAgentSecretRotationMigratesRealLegacyModelCurrentAndHistory(t *testing.T) {
+	ctx := context.Background()
+	connStr, closeDB := test.PrepareDBConnectionString(t, test.DBTypePostgres)
+	defer closeDB()
+	dbOpts := config.DatabaseOptions{ConnectionString: config.DataSource(connStr)}
+	store, err := NewDatabaseStore(ctx, sqlutil.NewConnectionManager(nil, dbOpts), &dbOpts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	keyringPath := filepath.Join(dir, "keyring.json")
+	legacyPath := filepath.Join(dir, "legacy.key")
+	legacyKey := make([]byte, 32)
+	for i := range legacyKey {
+		legacyKey[i] = byte(i + 1)
+	}
+	if err := os.WriteFile(legacyPath, legacyKey, 0600); err != nil {
+		t.Fatal(err)
+	}
+	profiles, err := NewDatabaseModelProfileStoreWithKeyring(ctx, store, keyringPath, legacyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := profiles.SyncModelProfiles(ctx, "owner", "legacy-model", "", []ModelProfileSyncEntry{{ClientProfileID: "legacy", Provider: "openai", Model: "gpt", APIKey: stringPtr("legacy-secret")}})
+	if err != nil || len(result.Profiles) != 1 {
+		t.Fatalf("legacy source profile = %#v err=%v", result, err)
+	}
+	block, err := aes.NewCipher(legacyKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonce := make([]byte, aead.NonceSize())
+	for i := range nonce {
+		nonce[i] = byte(i + 1)
+	}
+	ciphertext := aead.Seal(nil, nonce, []byte("legacy-secret"), []byte(result.Profiles[0].ProfileID+"\x00openai"))
+	for _, table := range []string{"p2p_agent_model_profiles", "p2p_agent_model_profile_credentials"} {
+		if _, err := store.DB().ExecContext(ctx, `ALTER TABLE `+table+` DROP CONSTRAINT `+table+`_api_key_envelope_check`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := store.DB().ExecContext(ctx, `UPDATE p2p_agent_model_profiles SET api_key_key_id='',api_key_envelope_version=0,api_key_aad_version=0,api_key_nonce=$1,api_key_ciphertext=$2 WHERE owner_id='owner' AND profile_id=$3`, nonce, ciphertext, result.Profiles[0].ProfileID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `UPDATE p2p_agent_model_profile_credentials SET api_key_key_id='',api_key_envelope_version=0,api_key_aad_version=0,api_key_nonce=$1,api_key_ciphertext=$2 WHERE owner_id='owner' AND profile_id=$3 AND credential_version=1`, nonce, ciphertext, result.Profiles[0].ProfileID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `DELETE FROM db_migrations WHERE version=$1`, "p2p: model credential envelope versions v107"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatalf("migrate real legacy rows: %v", err)
+	}
+	options := AgentSecretRotationOptions{KeyringFile: keyringPath, LegacyModelProfileKeyFile: legacyPath, LeaseOwner: "legacy-model-rotation"}
+	if err := VerifyAgentSecretDatabase(ctx, store.DB(), options); err != nil {
+		t.Fatalf("verify legacy rows with legacy key: %v", err)
+	}
+	if err := VerifyAgentSecretDatabase(ctx, store.DB(), AgentSecretRotationOptions{KeyringFile: keyringPath, LeaseOwner: "legacy-model-no-key"}); err == nil {
+		t.Fatal("verify accepted legacy rows without legacy key")
+	}
+	if err := RotateAgentSecrets(ctx, store.DB(), options); err != nil {
+		t.Fatalf("rotate legacy model rows: %v", err)
+	}
+	if err := VerifyAgentSecretDatabase(ctx, store.DB(), AgentSecretRotationOptions{KeyringFile: keyringPath, LeaseOwner: "legacy-model-post-rotation"}); err != nil {
+		t.Fatalf("verify re-sealed rows without legacy key: %v", err)
+	}
+	for _, table := range []string{"p2p_agent_model_profiles", "p2p_agent_model_profile_credentials"} {
+		var count int
+		if err := store.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM `+table+` WHERE api_key_key_id='' OR api_key_envelope_version<>1 OR api_key_aad_version<>1`).Scan(&count); err != nil || count != 0 {
+			t.Fatalf("post-rotation legacy rows in %s = %d err=%v", table, count, err)
+		}
+	}
 }
 
 func NewAgentSecretEnveloperForTest(keyring *AgentSecretKeyring, binding AgentSecretBinding, envelope AgentSecretEnvelope) ([]byte, error) {

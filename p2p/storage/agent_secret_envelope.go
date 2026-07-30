@@ -25,6 +25,12 @@ var (
 
 const agentSecretKeyringVersion = 1
 
+const (
+	modelProfileLegacyEnvelopeVersion = 0
+	modelProfileEnvelopeVersion       = 1
+	modelProfileAADVersion            = 1
+)
+
 // AgentSecretBinding identifies one durable secret.  Its digest must be a
 // SHA-256 digest of any additional immutable business binding.
 type AgentSecretBinding struct {
@@ -48,7 +54,7 @@ type AgentSecretEnvelope struct {
 // A blank KeyID identifies an old v1 model-profile ciphertext and is read only.
 type ModelProfileCredentialEnvelope struct {
 	AgentSecretEnvelope
-	CredentialVersion int64
+	CredentialVersion, EnvelopeVersion, AADVersion int64
 }
 
 type agentSecretKeyringFile struct {
@@ -271,7 +277,7 @@ func SealModelProfileCredential(e *AgentSecretEnveloper, ownerID, profileID, pro
 	if err != nil {
 		return ModelProfileCredentialEnvelope{}, err
 	}
-	return ModelProfileCredentialEnvelope{AgentSecretEnvelope: envelope, CredentialVersion: credentialVersion}, nil
+	return ModelProfileCredentialEnvelope{AgentSecretEnvelope: envelope, CredentialVersion: credentialVersion, EnvelopeVersion: modelProfileEnvelopeVersion, AADVersion: modelProfileAADVersion}, nil
 }
 
 // OpenModelProfileCredential reads either a new keyring envelope or, only for
@@ -282,7 +288,7 @@ func OpenModelProfileCredential(e *AgentSecretEnveloper, ownerID, profileID, pro
 		return nil, ErrAgentSecretEnvelopeInvalid
 	}
 	if strings.TrimSpace(row.KeyID) == "" {
-		if legacyOpen == nil {
+		if row.EnvelopeVersion != modelProfileLegacyEnvelopeVersion || row.AADVersion != modelProfileLegacyEnvelopeVersion || legacyOpen == nil {
 			return nil, ErrAgentSecretEnvelopeInvalid
 		}
 		plaintext, err := legacyOpen()
@@ -290,6 +296,9 @@ func OpenModelProfileCredential(e *AgentSecretEnveloper, ownerID, profileID, pro
 			return nil, ErrAgentSecretEnvelopeInvalid
 		}
 		return plaintext, nil
+	}
+	if row.EnvelopeVersion != modelProfileEnvelopeVersion || row.AADVersion != modelProfileAADVersion {
+		return nil, ErrAgentSecretEnvelopeInvalid
 	}
 	return e.Open(modelProfileCredentialBinding(ownerID, profileID, provider, profileRevision, row.CredentialVersion), row.AgentSecretEnvelope)
 }

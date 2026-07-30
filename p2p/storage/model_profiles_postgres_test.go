@@ -49,6 +49,16 @@ func TestPostgresModelProfileSyncReadbackAndRestart(t *testing.T) {
 	if strings.Contains(string(ciphertext), "pg-secret") {
 		t.Fatal("ciphertext contains plaintext API key")
 	}
+	var apiKeyVersion, envelopeVersion, aadVersion int64
+	if err := store.DB().QueryRowContext(ctx, `SELECT api_key_version,api_key_envelope_version,api_key_aad_version FROM p2p_agent_model_profiles WHERE owner_id='owner' AND client_profile_id='client-1'`).Scan(&apiKeyVersion, &envelopeVersion, &aadVersion); err != nil || apiKeyVersion != 2 || envelopeVersion != 1 || aadVersion != 1 {
+		t.Fatalf("current credential/envelope versions = %d/%d/%d err=%v", apiKeyVersion, envelopeVersion, aadVersion, err)
+	}
+	if err := store.DB().QueryRowContext(ctx, `SELECT api_key_envelope_version,api_key_aad_version FROM p2p_agent_model_profile_credentials WHERE owner_id='owner' AND profile_id=$1 AND credential_version=1`, result.Profiles[0].ProfileID).Scan(&envelopeVersion, &aadVersion); err != nil || envelopeVersion != 1 || aadVersion != 1 {
+		t.Fatalf("historical envelope versions = %d/%d err=%v", envelopeVersion, aadVersion, err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `UPDATE p2p_agent_model_profiles SET api_key_envelope_version=2 WHERE owner_id='owner' AND profile_id=$1`, result.Profiles[0].ProfileID); err == nil {
+		t.Fatal("unsupported current envelope version accepted")
+	}
 	profile, err := profiles.ResolveModelProfile(ctx, "owner", result.Profiles[0].ProfileID)
 	if err != nil || profile.APIKey != "pg-secret" || profile.APIKeyHint != "********" {
 		t.Fatalf("readback profile key configured=%v err=%v", profile.APIKeyConfigured, err)
@@ -143,6 +153,86 @@ func TestPostgresModelProfileSyncReadbackAndRestart(t *testing.T) {
 	}
 	if info, err := os.Stat(keyPath); err != nil || info.Mode().Perm() != 0600 {
 		t.Fatalf("key mode/info: %v", err)
+	}
+}
+
+func TestPostgresModelProfileVerifyRejectsCorruptEmptyCurrentEnvelope(t *testing.T) {
+	ctx := context.Background()
+	connStr, closeDB := test.PrepareDBConnectionString(t, test.DBTypePostgres)
+	defer closeDB()
+	dbOpts := config.DatabaseOptions{ConnectionString: config.DataSource(connStr)}
+	keyPath := filepath.Join(t.TempDir(), "model-profile.keyring.json")
+	store, err := NewDatabaseStore(ctx, sqlutil.NewConnectionManager(nil, dbOpts), &dbOpts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	profiles, err := NewDatabaseModelProfileStoreWithKeyring(ctx, store, keyPath, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := profiles.SyncModelProfiles(ctx, "owner", "empty-current", "", []ModelProfileSyncEntry{{ClientProfileID: "empty", Provider: "openai", Model: "gpt"}})
+	if err != nil || len(result.Profiles) != 1 {
+		t.Fatalf("empty profile sync = %#v err=%v", result, err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `ALTER TABLE p2p_agent_model_profiles DROP CONSTRAINT p2p_agent_model_profiles_api_key_envelope_check`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `UPDATE p2p_agent_model_profiles SET credential_version=1 WHERE owner_id='owner' AND profile_id=$1`, result.Profiles[0].ProfileID); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyAgentSecretDatabase(ctx, store.DB(), AgentSecretRotationOptions{KeyringFile: keyPath, LeaseOwner: "verify-empty-current"}); err == nil {
+		t.Fatal("verify accepted corrupt empty current credential")
+	}
+}
+
+func TestPostgresModelCredentialEnvelopeMigrationBackfillsOnlyExactLegacyVersions(t *testing.T) {
+	ctx := context.Background()
+	connStr, closeDB := test.PrepareDBConnectionString(t, test.DBTypePostgres)
+	defer closeDB()
+	dbOpts := config.DatabaseOptions{ConnectionString: config.DataSource(connStr)}
+	store, err := NewDatabaseStore(ctx, sqlutil.NewConnectionManager(nil, dbOpts), &dbOpts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	profiles, err := NewDatabaseModelProfileStoreWithKeyring(ctx, store, filepath.Join(t.TempDir(), "model-profile.keyring.json"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := profiles.SyncModelProfiles(ctx, "owner", "migration-profile", "", []ModelProfileSyncEntry{{ClientProfileID: "migration", Provider: "openai", Model: "gpt", APIKey: stringPtr("migration-secret")}})
+	if err != nil || len(result.Profiles) != 1 {
+		t.Fatalf("model profile sync = %#v err=%v", result, err)
+	}
+	for _, table := range []string{"p2p_agent_model_profiles", "p2p_agent_model_profile_credentials"} {
+		if _, err := store.DB().ExecContext(ctx, `ALTER TABLE `+table+` DROP CONSTRAINT `+table+`_api_key_envelope_check`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.DB().ExecContext(ctx, `UPDATE `+table+` SET api_key_envelope_version=0,api_key_aad_version=0`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := store.DB().ExecContext(ctx, `DELETE FROM db_migrations WHERE version=$1`, "p2p: model credential envelope versions v107"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatalf("exact legacy envelope migration: %v", err)
+	}
+	var envelopeVersion, aadVersion int64
+	if err := store.DB().QueryRowContext(ctx, `SELECT api_key_envelope_version,api_key_aad_version FROM p2p_agent_model_profiles WHERE owner_id='owner' AND profile_id=$1`, result.Profiles[0].ProfileID).Scan(&envelopeVersion, &aadVersion); err != nil || envelopeVersion != 1 || aadVersion != 1 {
+		t.Fatalf("backfilled current envelope = %d/%d err=%v", envelopeVersion, aadVersion, err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `ALTER TABLE p2p_agent_model_profiles DROP CONSTRAINT p2p_agent_model_profiles_api_key_envelope_check`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `UPDATE p2p_agent_model_profiles SET api_key_envelope_version=0,api_key_aad_version=1 WHERE owner_id='owner' AND profile_id=$1`, result.Profiles[0].ProfileID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `DELETE FROM db_migrations WHERE version=$1`, "p2p: model credential envelope versions v107"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Migrate(ctx); err == nil {
+		t.Fatal("migration accepted mixed model envelope versions")
 	}
 }
 

@@ -89,7 +89,7 @@ func TestModelProfileCredentialEnvelopeReadsLegacyButWritesKeyring(t *testing.T)
 		t.Fatal(err)
 	}
 	row, err := SealModelProfileCredential(enveloper, "owner", "profile", "provider", 2, 7, []byte("new credential"))
-	if err != nil || row.KeyID == "" || row.CredentialVersion != 7 {
+	if err != nil || row.KeyID == "" || row.CredentialVersion != 7 || row.EnvelopeVersion != 1 || row.AADVersion != 1 {
 		t.Fatalf("seal row=%#v err=%v", row, err)
 	}
 	got, err := OpenModelProfileCredential(enveloper, "owner", "profile", "provider", 2, row, nil)
@@ -100,6 +100,15 @@ func TestModelProfileCredentialEnvelopeReadsLegacyButWritesKeyring(t *testing.T)
 	got, err = OpenModelProfileCredential(enveloper, "owner", "profile", "provider", 2, ModelProfileCredentialEnvelope{CredentialVersion: 7}, func() ([]byte, error) { legacyCalls++; return []byte("legacy credential"), nil })
 	if err != nil || string(got) != "legacy credential" || legacyCalls != 1 {
 		t.Fatalf("legacy open=%q calls=%d err=%v", got, legacyCalls, err)
+	}
+	row.EnvelopeVersion++
+	if _, err := OpenModelProfileCredential(enveloper, "owner", "profile", "provider", 2, row, nil); err == nil {
+		t.Fatal("unsupported envelope version decrypted")
+	}
+	row.EnvelopeVersion--
+	row.Ciphertext[0] ^= 1
+	if _, err := OpenModelProfileCredential(enveloper, "owner", "profile", "provider", 2, row, nil); err == nil {
+		t.Fatal("tampered ciphertext decrypted")
 	}
 }
 
@@ -132,15 +141,15 @@ func TestModelProfileStoreDecryptsLegacyOnlyWhenKeyIDIsBlank(t *testing.T) {
 	}
 	nonce := make([]byte, aead.NonceSize())
 	legacyCiphertext := aead.Seal(nil, nonce, []byte("old"), []byte("profile\x00provider"))
-	got, err := store.decryptCredential("owner", "profile", "provider", 1, 1, "", 0, nonce, legacyCiphertext)
+	got, err := store.decryptCredential("owner", "profile", "provider", 1, 1, "", 0, 0, 0, nonce, legacyCiphertext)
 	if err != nil || got != "old" {
 		t.Fatalf("legacy decrypt=%q err=%v", got, err)
 	}
-	keyID, boundRevision, nonce, ciphertext, err := store.encryptCredential("owner", "profile", "provider", 2, 2, []byte("new"))
-	if err != nil || keyID == "" || boundRevision != 2 {
+	keyID, boundRevision, envelopeVersion, aadVersion, nonce, ciphertext, err := store.encryptCredential("owner", "profile", "provider", 2, 2, []byte("new"))
+	if err != nil || keyID == "" || boundRevision != 2 || envelopeVersion != 1 || aadVersion != 1 {
 		t.Fatalf("new encrypt id=%q revision=%d err=%v", keyID, boundRevision, err)
 	}
-	got, err = store.decryptCredential("owner", "profile", "provider", 2, 2, keyID, boundRevision, nonce, ciphertext)
+	got, err = store.decryptCredential("owner", "profile", "provider", 2, 2, keyID, boundRevision, envelopeVersion, aadVersion, nonce, ciphertext)
 	if err != nil || got != "new" {
 		t.Fatalf("new decrypt=%q err=%v", got, err)
 	}

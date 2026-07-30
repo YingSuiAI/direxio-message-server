@@ -55,9 +55,9 @@ type genericSecretRotationRow struct {
 }
 
 type modelSecretRotationRow struct {
-	OwnerID, ProfileID, Provider, KeyID string
-	ProfileRevision, CredentialVersion  int64
-	Nonce, Ciphertext                   []byte
+	OwnerID, ProfileID, Provider, KeyID                             string
+	ProfileRevision, CredentialVersion, EnvelopeVersion, AADVersion int64
+	Nonce, Ciphertext                                               []byte
 }
 
 func (o AgentSecretRotationOptions) normalized() (AgentSecretRotationOptions, error) {
@@ -89,9 +89,8 @@ func (o AgentSecretRotationOptions) normalized() (AgentSecretRotationOptions, er
 }
 
 // VerifyAgentSecretDatabase validates all generic and model-profile envelopes.
-// Legacy model rows are accepted only when the configured legacy key can open
-// them. Unknown keys, malformed bindings and authentication failures fail the
-// complete verification.
+// Model rows must satisfy the durable v107 empty-or-keyring invariant; unknown
+// keys, malformed bindings and authentication failures fail verification.
 func VerifyAgentSecretDatabase(ctx context.Context, db *sql.DB, options AgentSecretRotationOptions) error {
 	if db == nil {
 		return ErrAgentSecretRotation
@@ -547,7 +546,7 @@ func rewrapCurrentModelSecretBatch(ctx context.Context, db *sql.DB, options Agen
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT owner_id,profile_id,provider,
 			CASE WHEN api_key_profile_revision>0 THEN api_key_profile_revision ELSE revision END,
-			credential_version,api_key_key_id,api_key_nonce,api_key_ciphertext
+			credential_version,api_key_key_id,api_key_envelope_version,api_key_aad_version,api_key_nonce,api_key_ciphertext
 		FROM p2p_agent_model_profiles
 		WHERE api_key_ciphertext<>''::bytea AND (api_key_key_id='' OR api_key_key_id=ANY($1))
 		ORDER BY owner_id,profile_id
@@ -571,10 +570,10 @@ func rewrapCurrentModelSecretBatch(ctx context.Context, db *sql.DB, options Agen
 			return 0, err
 		}
 		result, err := tx.ExecContext(ctx, `UPDATE p2p_agent_model_profiles
-			SET api_key_version=2,api_key_key_id=$3,api_key_profile_revision=$4,api_key_nonce=$5,api_key_ciphertext=$6
-			WHERE owner_id=$1 AND profile_id=$2 AND api_key_key_id=$7 AND api_key_nonce=$8 AND api_key_ciphertext=$9`,
-			item.OwnerID, item.ProfileID, sealed.KeyID, item.ProfileRevision, sealed.Nonce, sealed.Ciphertext,
-			item.KeyID, item.Nonce, item.Ciphertext)
+			SET api_key_version=2,api_key_key_id=$3,api_key_profile_revision=$4,api_key_envelope_version=$5,api_key_aad_version=$6,api_key_nonce=$7,api_key_ciphertext=$8
+			WHERE owner_id=$1 AND profile_id=$2 AND api_key_key_id=$9 AND api_key_envelope_version=$10 AND api_key_aad_version=$11 AND api_key_nonce=$12 AND api_key_ciphertext=$13`,
+			item.OwnerID, item.ProfileID, sealed.KeyID, item.ProfileRevision, sealed.EnvelopeVersion, sealed.AADVersion, sealed.Nonce, sealed.Ciphertext,
+			item.KeyID, item.EnvelopeVersion, item.AADVersion, item.Nonce, item.Ciphertext)
 		if err != nil {
 			return 0, err
 		}
@@ -613,7 +612,7 @@ func rewrapHistoricalModelSecretBatch(ctx context.Context, db *sql.DB, options A
 				FROM p2p_agent_model_profile_revisions r
 				WHERE r.owner_id=c.owner_id AND r.profile_id=c.profile_id AND r.credential_version=c.credential_version
 			),1),
-			c.credential_version,c.api_key_key_id,c.api_key_nonce,c.api_key_ciphertext
+			c.credential_version,c.api_key_key_id,c.api_key_envelope_version,c.api_key_aad_version,c.api_key_nonce,c.api_key_ciphertext
 		FROM p2p_agent_model_profile_credentials c
 		WHERE c.api_key_ciphertext<>''::bytea AND (c.api_key_key_id='' OR c.api_key_key_id=ANY($1))
 		ORDER BY c.owner_id,c.profile_id,c.credential_version
@@ -637,11 +636,11 @@ func rewrapHistoricalModelSecretBatch(ctx context.Context, db *sql.DB, options A
 			return 0, err
 		}
 		result, err := tx.ExecContext(ctx, `UPDATE p2p_agent_model_profile_credentials
-			SET api_key_key_id=$4,profile_revision=$5,api_key_nonce=$6,api_key_ciphertext=$7
+			SET api_key_key_id=$4,profile_revision=$5,api_key_envelope_version=$6,api_key_aad_version=$7,api_key_nonce=$8,api_key_ciphertext=$9
 			WHERE owner_id=$1 AND profile_id=$2 AND credential_version=$3
-				AND api_key_key_id=$8 AND api_key_nonce=$9 AND api_key_ciphertext=$10`,
-			item.OwnerID, item.ProfileID, item.CredentialVersion, sealed.KeyID, item.ProfileRevision, sealed.Nonce, sealed.Ciphertext,
-			item.KeyID, item.Nonce, item.Ciphertext)
+				AND api_key_key_id=$10 AND api_key_envelope_version=$11 AND api_key_aad_version=$12 AND api_key_nonce=$13 AND api_key_ciphertext=$14`,
+			item.OwnerID, item.ProfileID, item.CredentialVersion, sealed.KeyID, item.ProfileRevision, sealed.EnvelopeVersion, sealed.AADVersion, sealed.Nonce, sealed.Ciphertext,
+			item.KeyID, item.EnvelopeVersion, item.AADVersion, item.Nonce, item.Ciphertext)
 		if err != nil {
 			return 0, err
 		}
@@ -671,10 +670,15 @@ func scanModelSecretRotationRows(rows *sql.Rows) ([]modelSecretRotationRow, erro
 	for rows.Next() {
 		var item modelSecretRotationRow
 		if err := rows.Scan(&item.OwnerID, &item.ProfileID, &item.Provider, &item.ProfileRevision,
-			&item.CredentialVersion, &item.KeyID, &item.Nonce, &item.Ciphertext); err != nil {
+			&item.CredentialVersion, &item.KeyID, &item.EnvelopeVersion, &item.AADVersion, &item.Nonce, &item.Ciphertext); err != nil {
 			return nil, err
 		}
 		if item.ProfileRevision < 1 || item.CredentialVersion < 1 {
+			return nil, ErrAgentSecretRotation
+		}
+		if len(item.Nonce) != 12 || len(item.Ciphertext) <= 16 ||
+			(item.KeyID == "" && (item.EnvelopeVersion != modelProfileLegacyEnvelopeVersion || item.AADVersion != modelProfileLegacyEnvelopeVersion)) ||
+			(item.KeyID != "" && (item.EnvelopeVersion != modelProfileEnvelopeVersion || item.AADVersion != modelProfileAADVersion)) {
 			return nil, ErrAgentSecretRotation
 		}
 		items = append(items, item)
@@ -690,7 +694,7 @@ func openModelRotationSecret(enveloper *AgentSecretEnveloper, legacyKey []byte, 
 		return OpenModelProfileCredential(enveloper, item.OwnerID, item.ProfileID, item.Provider, item.ProfileRevision,
 			ModelProfileCredentialEnvelope{
 				AgentSecretEnvelope: AgentSecretEnvelope{KeyID: item.KeyID, Nonce: item.Nonce, Ciphertext: item.Ciphertext},
-				CredentialVersion:   item.CredentialVersion,
+				CredentialVersion:   item.CredentialVersion, EnvelopeVersion: item.EnvelopeVersion, AADVersion: item.AADVersion,
 			}, nil)
 	}
 	return openLegacyModelProfileCredential(legacyKey, item.ProfileID, item.Provider, item.Nonce, item.Ciphertext)
@@ -849,15 +853,34 @@ func verifyAWSCredentialSecretRows(ctx context.Context, db *sql.DB, enveloper *A
 func verifyCurrentModelSecretRows(ctx context.Context, db *sql.DB, enveloper *AgentSecretEnveloper, legacyKey []byte) error {
 	rows, err := db.QueryContext(ctx, `SELECT owner_id,profile_id,provider,
 		CASE WHEN api_key_profile_revision>0 THEN api_key_profile_revision ELSE revision END,
-		credential_version,api_key_key_id,api_key_nonce,api_key_ciphertext
+		credential_version,api_key_key_id,api_key_envelope_version,api_key_aad_version,api_key_nonce,api_key_ciphertext
 		FROM p2p_agent_model_profiles
-		WHERE api_key_ciphertext<>''::bytea
 		ORDER BY owner_id,profile_id`)
 	if err != nil {
 		return err
 	}
-	items, err := scanModelSecretRotationRows(rows)
-	if err != nil {
+	defer rows.Close()
+	items := make([]modelSecretRotationRow, 0)
+	for rows.Next() {
+		var item modelSecretRotationRow
+		if err := rows.Scan(&item.OwnerID, &item.ProfileID, &item.Provider, &item.ProfileRevision,
+			&item.CredentialVersion, &item.KeyID, &item.EnvelopeVersion, &item.AADVersion, &item.Nonce, &item.Ciphertext); err != nil {
+			return err
+		}
+		if item.CredentialVersion == 0 {
+			if item.KeyID != "" || item.EnvelopeVersion != modelProfileLegacyEnvelopeVersion || item.AADVersion != modelProfileLegacyEnvelopeVersion || len(item.Nonce) != 0 || len(item.Ciphertext) != 0 {
+				return ErrAgentSecretRotation
+			}
+			continue
+		}
+		if item.CredentialVersion < 0 || item.ProfileRevision < 1 || len(item.Nonce) != 12 || len(item.Ciphertext) <= 16 ||
+			(item.KeyID == "" && (item.EnvelopeVersion != modelProfileLegacyEnvelopeVersion || item.AADVersion != modelProfileLegacyEnvelopeVersion)) ||
+			(item.KeyID != "" && (item.EnvelopeVersion != modelProfileEnvelopeVersion || item.AADVersion != modelProfileAADVersion)) {
+			return ErrAgentSecretRotation
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
 		return err
 	}
 	for _, item := range items {
@@ -877,7 +900,7 @@ func verifyHistoricalModelSecretRows(ctx context.Context, db *sql.DB, enveloper 
 			FROM p2p_agent_model_profile_revisions r
 			WHERE r.owner_id=c.owner_id AND r.profile_id=c.profile_id AND r.credential_version=c.credential_version
 		),1),
-		c.credential_version,c.api_key_key_id,c.api_key_nonce,c.api_key_ciphertext
+		c.credential_version,c.api_key_key_id,c.api_key_envelope_version,c.api_key_aad_version,c.api_key_nonce,c.api_key_ciphertext
 		FROM p2p_agent_model_profile_credentials c
 		ORDER BY c.owner_id,c.profile_id,c.credential_version`)
 	if err != nil {
