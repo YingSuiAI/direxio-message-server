@@ -148,10 +148,12 @@ agent-secretctl verify
 agent-secretctl rotate
 ```
 
-Keys are read from the keyring file, never CLI arguments or PostgreSQL.
-Rotation requires the persistent service to be stopped, is resumable, uses
-row locks/CAS, and verifies the full database before an old decrypt-only key
-may be removed.
+Keys are read directly by Message Server and `agent-secretctl` from the
+keyring file, never from updater, CLI arguments or PostgreSQL. The keyring file
+lives on the persistent Agent data volume, so ordinary encrypted profile
+reads/writes do not depend on an updater process. Rotation requires the
+persistent service to be stopped, is resumable, uses row locks/CAS, and
+verifies the full database before an old decrypt-only key may be removed.
 
 ## 6. AWS and workloads
 

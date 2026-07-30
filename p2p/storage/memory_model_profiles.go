@@ -117,7 +117,7 @@ func (s *MemoryStore) SyncModelProfilesWithDefaults(_ context.Context, ownerID, 
 			return ModelProfileSyncResult{}, err
 		}
 		if profile.Revision > 0 {
-			if err := validateModelProfileCredentialTransition(profile.ModelKind, entry.ModelKind, entry.APIKey, entry.ProviderSecrets); err != nil {
+			if err := validateModelProfileCredentialTransition(profile.Provider, profile.ModelKind, entry.Provider, entry.ModelKind, entry.APIKey, entry.ProviderSecrets); err != nil {
 				return ModelProfileSyncResult{}, err
 			}
 		}
@@ -125,12 +125,15 @@ func (s *MemoryStore) SyncModelProfilesWithDefaults(_ context.Context, ownerID, 
 			return ModelProfileSyncResult{}, ErrModelProfileRevision
 		}
 		provider := strings.ToLower(strings.TrimSpace(entry.Provider))
-		if entry.ModelKind == ModelKindSpeech && (profile.Revision == 0 || len(entry.ProviderSecrets) > 0) {
+		if provider == "volc_voice" && entry.ModelKind == ModelKindSpeech && (profile.Revision == 0 || len(entry.ProviderSecrets) > 0) {
 			for _, key := range []string{"rtc_app_key", "access_key_id", "secret_access_key"} {
 				if strings.TrimSpace(entry.ProviderSecrets[key]) == "" {
 					return ModelProfileSyncResult{}, ErrModelProfileInvalid
 				}
 			}
+		}
+		if profile.Revision == 0 && entry.ModelKind == ModelKindSpeech && provider != "volc_voice" && entry.APIKey == nil {
+			return ModelProfileSyncResult{}, ErrModelProfileInvalid
 		}
 		credentialRotated := entry.APIKey != nil || len(entry.ProviderSecrets) > 0 || (profile.Provider != "" && profile.Provider != provider && profile.APIKeyConfigured)
 		if entry.APIKey != nil {
@@ -151,7 +154,7 @@ func (s *MemoryStore) SyncModelProfilesWithDefaults(_ context.Context, ownerID, 
 		profile.ModelKind = entry.ModelKind
 		profile.InputModalities = append([]string(nil), entry.InputModalities...)
 		profile.ProviderConfig = cloneAnyMap(entry.ProviderConfig)
-		if entry.ModelKind == ModelKindSpeech && len(entry.ProviderSecrets) > 0 {
+		if provider == "volc_voice" && entry.ModelKind == ModelKindSpeech && len(entry.ProviderSecrets) > 0 {
 			encoded, encodeErr := json.Marshal(entry.ProviderSecrets)
 			if encodeErr != nil {
 				return ModelProfileSyncResult{}, ErrModelProfileInvalid
@@ -162,7 +165,7 @@ func (s *MemoryStore) SyncModelProfilesWithDefaults(_ context.Context, ownerID, 
 				credentials[profile.ProfileID][profile.CredentialVersion] = memoryModelProfileCredential{Provider: provider, APIKey: profile.APIKey}
 			}
 		}
-		if entry.ModelKind == ModelKindSpeech {
+		if provider == "volc_voice" && entry.ModelKind == ModelKindSpeech {
 			var secrets map[string]string
 			if json.Unmarshal([]byte(profile.APIKey), &secrets) == nil {
 				profile.ProviderSecretStatus = map[string]bool{}

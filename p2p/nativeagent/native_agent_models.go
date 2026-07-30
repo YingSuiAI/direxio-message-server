@@ -11,6 +11,7 @@ import (
 )
 
 func (r *Runtime) modelsList(ctx context.Context, params map[string]any) (map[string]any, error) {
+	resolvedProfileKind := ""
 	if trimString(params["model_profile_id"]) != "" || trimString(params["client_model_profile_id"]) != "" {
 		if _, present := params["api_key"]; present {
 			return nil, fmt.Errorf("api_key must not be provided with a model profile ID")
@@ -22,6 +23,10 @@ func (r *Runtime) modelsList(ctx context.Context, params map[string]any) (map[st
 		profile, err := r.resolveModelProfileForRequest(ctx, profileParams)
 		if err != nil {
 			return nil, err
+		}
+		resolvedProfileKind = normalizeModelListKind(profile.ModelKind)
+		if resolvedProfileKind == "" {
+			resolvedProfileKind = "conversation"
 		}
 		requestProvider := strings.ToLower(trimString(params["provider"]))
 		if requestProvider != "" && requestProvider != profile.Provider {
@@ -55,6 +60,9 @@ func (r *Runtime) modelsList(ctx context.Context, params map[string]any) (map[st
 	if modelKind == "" {
 		return nil, fmt.Errorf("model list kind %q is not supported", trimString(params["model_kind"]))
 	}
+	if resolvedProfileKind != "" && modelKind != resolvedProfileKind {
+		return nil, fmt.Errorf("model list kind %q does not match model profile kind %q", modelKind, resolvedProfileKind)
+	}
 	result := map[string]any{
 		"models":    []map[string]any{},
 		"providers": modelProviderDefaults(),
@@ -76,7 +84,7 @@ func (r *Runtime) modelsList(ctx context.Context, params map[string]any) (map[st
 	if apiKey == "" {
 		return nil, fmt.Errorf("api_key is required to fetch %s models", provider)
 	}
-	if modelKind == "speech" || (modelKind == "embedding" && provider != "openrouter") {
+	if (modelKind == "speech" && provider != "openrouter") || (modelKind == "embedding" && provider != "openrouter") {
 		return nil, fmt.Errorf("model list kind %q is not supported for provider %q", modelKind, provider)
 	}
 	var (
@@ -95,9 +103,9 @@ func (r *Runtime) modelsList(ctx context.Context, params map[string]any) (map[st
 			}
 			models, err = r.fetchOpenRouterEmbeddingModels(ctx, baseURL, apiKey)
 		} else if modelKind == "speech" {
-			return nil, fmt.Errorf("model list kind %q is not supported for provider %q", modelKind, provider)
+			models, err = r.fetchOpenAICompatibleModels(ctx, provider, modelKind, baseURL, apiKey)
 		} else {
-			models, err = r.fetchOpenAICompatibleModels(ctx, provider, baseURL, apiKey)
+			models, err = r.fetchOpenAICompatibleModels(ctx, provider, modelKind, baseURL, apiKey)
 		}
 	default:
 		return nil, fmt.Errorf("model list is not supported for provider %q", provider)
@@ -237,8 +245,8 @@ func (r *Runtime) fetchGeminiModels(ctx context.Context, baseURL, apiKey string)
 	return models, nil
 }
 
-func (r *Runtime) fetchOpenAICompatibleModels(ctx context.Context, provider, baseURL, apiKey string) ([]map[string]any, error) {
-	modelsURL, err := openAICompatibleModelsURL(provider, baseURL)
+func (r *Runtime) fetchOpenAICompatibleModels(ctx context.Context, provider, kind, baseURL, apiKey string) ([]map[string]any, error) {
+	modelsURL, err := openAICompatibleModelsURLForKind(provider, kind, baseURL)
 	if err != nil {
 		return nil, fmt.Errorf("parse %s model URL: %w", provider, err)
 	}
@@ -270,7 +278,7 @@ func (r *Runtime) fetchOpenAICompatibleModels(ctx context.Context, provider, bas
 	if len(rawModels) == 0 {
 		rawModels = payload.Models
 	}
-	rawModels = filterModelListForKind(provider, "conversation", rawModels)
+	rawModels = filterModelListForKind(provider, kind, rawModels)
 	models := normalizeModelList(provider, rawModels)
 	if len(models) == 0 {
 		return nil, fmt.Errorf("fetch %s models returned no models", provider)
@@ -279,6 +287,10 @@ func (r *Runtime) fetchOpenAICompatibleModels(ctx context.Context, provider, bas
 }
 
 func openAICompatibleModelsURL(provider, baseURL string) (string, error) {
+	return openAICompatibleModelsURLForKind(provider, "conversation", baseURL)
+}
+
+func openAICompatibleModelsURLForKind(provider, kind, baseURL string) (string, error) {
 	base := strings.TrimRight(openAICompatibleModelsBaseURL(provider, baseURL), "/")
 	if base == "" {
 		return "", nil
@@ -290,7 +302,11 @@ func openAICompatibleModelsURL(provider, baseURL string) (string, error) {
 	query := endpoint.Query()
 	switch {
 	case provider == "openrouter":
-		query.Set("output_modalities", "text")
+		if kind == "speech" {
+			query.Set("output_modalities", "audio")
+		} else {
+			query.Set("output_modalities", "text")
+		}
 	case isSiliconFlowBaseURL(base):
 		query.Set("type", "text")
 		query.Set("sub_type", "chat")
@@ -347,6 +363,11 @@ func filterModelListForKind(provider, kind string, rawModels []map[string]any) [
 			// The dedicated OpenRouter embedding endpoint is authoritative. If it
 			// still reports output modalities, retain only embedding models.
 			if modalities, present := modelOutputModalities(raw); present && !containsString(modalities, "embedding") && !containsString(modalities, "embeddings") {
+				continue
+			}
+		} else if kind == "speech" {
+			modalities, present := modelOutputModalities(raw)
+			if !present || (!containsString(modalities, "audio") && !containsString(modalities, "speech")) {
 				continue
 			}
 		} else if modelIsNonConversation(raw) {

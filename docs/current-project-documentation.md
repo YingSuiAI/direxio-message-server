@@ -72,11 +72,12 @@ Native Agent model-profile contract: the server persists encrypted owner profile
 Current model-profile contract: the server persists encrypted owner model profiles and default roles. Native Agent chat, stream, and compression omit model fields and resolve the owner default conversation profile; inline profile/key input is legacy compatibility only. `agent.models.list` remains an explicit request-scoped lookup and does not persist profiles.
 
 Profile read projections may include a display-only `api_key_hint` mask for
-configured non-speech credentials (for example `sk-********0420`). It is
-derived for display, never accepted as credential input or usable as a key, and
-never stored in the profile table (a redacted idempotency response cache may
-retain the mask for replay); speech profiles expose only
-`provider_secret_status`.
+configured API-key credentials (for example `sk-********0420`), including
+OpenRouter speech profiles. It is derived for display, never accepted as
+credential input or usable as a key, and never stored in the profile table (a
+redacted idempotency response cache may retain the mask for replay).
+`volc_voice` speech profiles instead expose only `provider_secret_status` and
+never expose a hint for their RTC credential bundle.
 
 For `agent.models.list`, `model_profile_id` or `client_model_profile_id` selects
 the encrypted server profile for its API key. `provider` may be omitted or
@@ -85,10 +86,12 @@ must match the stored provider case-insensitively; a non-empty request
 effective port match the stored profile URL; malformed, userinfo, and
 cross-origin overrides are rejected before any request. Request API keys are
 rejected in this mode, and the selected profile is never mutated or persisted
-by the read. `model_kind` defaults to `conversation`; V1 `embedding` lists are
-OpenRouter-only and use its dedicated `/embeddings/models` endpoint, while
-conversation lists use provider text/chat filters where available and exclude
-explicitly non-text models.
+by the read. `model_kind` defaults to `conversation` and must match a selected
+profile's stored kind. V1 `embedding` lists are OpenRouter-only and use its
+dedicated `/embeddings/models` endpoint. OpenRouter `speech` lists request
+`output_modalities=audio` and retain only models with explicit audio or speech
+output metadata. Conversation lists use provider text/chat filters where
+available and exclude explicitly non-text models.
 
 模型列表的 `input_modalities` 只取上游模型响应中明确声明的
 `input_modalities` 或 `architecture.input_modalities`，服务端只规范化已知的
