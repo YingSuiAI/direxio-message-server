@@ -62,4 +62,8 @@ func TestMemoryProvisionEventsAllocateStableSequenceAndCursor(t *testing.T) {
 	if err != nil || len(second) != 1 || second[0].Sequence != 2 || second[0].EventID == first[0].EventID || next != 2 {
 		t.Fatalf("second page = %#v next=%d err=%v", second, next, err)
 	}
+	empty, next, err := repo.ListProvisionEvents(context.Background(), provisionID, "@alice:example", 9, 1)
+	if err != nil || len(empty) != 0 || next != 9 {
+		t.Fatalf("empty incremental page = %#v next=%d err=%v", empty, next, err)
+	}
 }

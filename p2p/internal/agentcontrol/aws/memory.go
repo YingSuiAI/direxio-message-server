@@ -413,7 +413,7 @@ func (r *MemoryRepository) ListProvisionEvents(_ context.Context, provisionID, o
 	if limit > 0 && len(items) > limit {
 		items = items[:limit]
 	}
-	var next uint64
+	next := after
 	if len(items) > 0 {
 		next = items[len(items)-1].Sequence
 	}

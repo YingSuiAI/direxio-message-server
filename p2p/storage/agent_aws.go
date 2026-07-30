@@ -240,7 +240,7 @@ func (r *PostgresAWSRepository) ListProvisionEvents(ctx context.Context, id, own
 	if err := rows.Err(); err != nil {
 		return nil, 0, err
 	}
-	var next uint64
+	next := after
 	if limit > 0 && len(out) > limit {
 		out = out[:limit]
 	}

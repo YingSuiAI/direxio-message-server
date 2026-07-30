@@ -14,6 +14,40 @@ import (
 	"github.com/YingSuiAI/dirextalk-message-server/test"
 )
 
+func TestPostgresListProvisionEventsCursorNeverRewinds(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo, err := NewAgentAWSRepository(NewUnmigratedDatabaseStore(db, sqlutil.NewDummyWriter()), testAWSOwnerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	query := "SELECT provision_id::text,event_id::text,COALESCE(change_id::text,''),'' ,kind,sequence,revision,at FROM core_aws_ec2_provision_events WHERE owner_id=$1 AND provision_id=$2 AND sequence>$3 ORDER BY sequence LIMIT $4"
+	columns := []string{"provision_id", "event_id", "change_id", "task_id", "kind", "sequence", "revision", "at"}
+	now := time.Unix(10, 0).UTC()
+	mock.ExpectQuery(regexp.QuoteMeta(query)).WithArgs(testAWSOwnerID, testAWSProvisionID, uint64(9), 2).
+		WillReturnRows(sqlmock.NewRows(columns))
+	empty, next, err := repo.ListProvisionEvents(t.Context(), testAWSProvisionID, testAWSOwnerID, 9, 1)
+	if err != nil || len(empty) != 0 || next != 9 {
+		t.Fatalf("empty incremental page = %#v next=%d err=%v", empty, next, err)
+	}
+
+	mock.ExpectQuery(regexp.QuoteMeta(query)).WithArgs(testAWSOwnerID, testAWSProvisionID, uint64(0), 2).
+		WillReturnRows(sqlmock.NewRows(columns).
+			AddRow(testAWSProvisionID, "11111111-1111-4111-8111-111111111111", "", "", "first", int64(3), int64(2), now).
+			AddRow(testAWSProvisionID, "22222222-2222-4222-8222-222222222222", "", "", "second", int64(4), int64(3), now))
+	events, next, err := repo.ListProvisionEvents(t.Context(), testAWSProvisionID, testAWSOwnerID, 0, 1)
+	if err != nil || len(events) != 1 || events[0].Sequence != 3 || next != 3 {
+		t.Fatalf("nonempty page = %#v next=%d err=%v", events, next, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestPostgresListProvisionsFirstPageUsesCanonicalNilUUID(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
