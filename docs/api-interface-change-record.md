@@ -131,8 +131,14 @@ Agent Matrix conversations remain a separate transport.
 
 Added owner-only `agent.model_profiles.sync`, `.list`, `.get`, and `.delete`
 actions. Profiles are persisted in PostgreSQL with an independently managed
-AES-GCM key under the updater-backed Message Server data root (or the protected
-`P2P_AGENT_MODEL_PROFILE_KEY_FILE` override). API keys are write-only and are
+AES-GCM keyring in the mounted Message Server Agent data volume. The same
+Message Server image runs `message-server-init` before the serving container:
+it creates/verifies the protected keyring at
+`P2P_AGENT_SECRET_KEYRING_FILE` (normally
+`/var/dirextalk-message-server/agent/secret-keyring.json`). The keyring volume
+and PostgreSQL must be restored or reset atomically; losing only the keyring
+while retaining encrypted rows fails closed. No updater, external Agent, or
+second persistent service participates in this initialization. API keys are write-only and are
 never returned; reads expose `api_key_configured`, credential version, and an
 optional read-only `api_key_hint` mask (for example `sk-********0420`) for
 non-speech profiles. The hint is never accepted as a credential or stored in
@@ -145,6 +151,17 @@ the request-scoped provider/base URL rules documented below. The previous
 inline `model_profile` plus request key remains accepted during the rolling
 upgrade window. `agent.backends.get.embedded.capabilities` advertises
 `model_profiles.server` only when the encrypted store is ready.
+
+For a local, non-publishing Agent-v1 image, run
+`bash scripts/release/build-agent-v1.sh` from a clean checkout. It always uses
+`--no-cache --pull`, tags `dirextalk/message-server:agent-v1`, and verifies its
+version, full commit label, build-time label, variant label, and both server
+executables. The normal Compose default remains `dirextalk/message-server:latest`;
+set `MESSAGE_SERVER_IMAGE=dirextalk/message-server:agent-v1` to select the
+verified local tag for both `message-server-init` and `message-server`. For a
+published deployment, set that variable to the corresponding immutable image
+digest (`dirextalk/message-server@sha256:...`) after independently verifying
+the same labels.
 
 Profile edits are retained as immutable snapshots, logical deletion preserves
 historical profile and credential resolution, and concurrent identical sync

@@ -1,7 +1,9 @@
 name: dirextalk-p2p
 
 x-message-server-local: &message-server-local
-  image: dirextalk/message-server:latest
+  # Keep the stable default, but allow a commit-verified variant or immutable
+  # registry digest to be selected for both the init and serving containers.
+  image: ${MESSAGE_SERVER_IMAGE:-dirextalk/message-server:latest}
   build:
     context: .
     dockerfile: Dockerfile
