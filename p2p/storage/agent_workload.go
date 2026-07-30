@@ -392,7 +392,12 @@ func (s *PostgresWorkloadStore) RequestOperation(c context.Context, in workload.
 	}
 	preO := workload.Operation{ID: opID, WorkloadID: wid, ExpectedWorkloadRevision: expectedWorkloadRevision, PlanID: p.ID, Kind: in.Kind, PlanRevision: p.Revision, PlanDigest: p.Digest, TargetKind: p.TargetKind, TaskID: taskID, ConfirmationID: confID, Status: workload.OperationWaitingUser, Revision: 1, CreatedAt: now, UpdatedAt: now, DispatchState: "prepared"}
 	preT := coretask.Task{OwnerID: s.ownerID, ID: taskID, Spec: spec, Status: coretask.StatusWaitingUser, Attempt: 1, Revision: 1, CreatedAt: now, UpdatedAt: now, AvailableAt: now}
-	preC := coreconfirmation.Confirmation{ConfirmationID: confID, OwnerID: s.ownerID, TaskID: taskID, State: coreconfirmation.StatePending, Revision: 1, CreatedAt: now, UpdatedAt: now, ExpiresAt: in.ExpiresAt}
+	// Persist the exact canonical binding in the in-transaction replay
+	// response.  A crash after commit must be replay-safe without relying on
+	// the best-effort post-commit refresh below; otherwise a retry could return
+	// an empty confirmation binding while the durable confirmation row is
+	// correctly pinned.
+	preC := coreconfirmation.Confirmation{ConfirmationID: confID, OwnerID: s.ownerID, TaskID: taskID, State: coreconfirmation.StatePending, Revision: 1, CreatedAt: now, UpdatedAt: now, ExpiresAt: in.ExpiresAt, Binding: binding}
 	preOut, _ := json.Marshal(workload.RequestResult{Operation: preO, Task: preT, Confirmation: preC})
 	if _, err = tx.ExecContext(c, `INSERT INTO core_workload_idempotency(owner_id,operation,idempotency_key,request_hash,operation_id,response_json) VALUES($1,$2,$3,$4,$5,$6)`, s.ownerID, string(in.Kind), in.IdempotencyKey, hash, opID, preOut); err != nil {
 		return workload.RequestResult{}, mapWorkloadError(err)

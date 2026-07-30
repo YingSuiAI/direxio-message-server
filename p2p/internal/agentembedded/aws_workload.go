@@ -1021,6 +1021,7 @@ func workloadOperationProjection(ctx context.Context, service *coreworkload.Serv
 	return workloadOperationMap(operation, plan, actual), nil
 }
 func workloadOperationMap(v coreworkload.Operation, plan coreworkload.Plan, actual *coreworkload.ActualSnapshot) map[string]any {
+	binding := coreworkload.BindingForOperation(plan, v.WorkloadID, v.Kind)
 	return map[string]any{
 		"operation_id": v.ID, "workload_id": v.WorkloadID, "plan_id": v.PlanID,
 		"expected_workload_revision": v.ExpectedWorkloadRevision,
@@ -1033,6 +1034,17 @@ func workloadOperationMap(v coreworkload.Operation, plan coreworkload.Plan, actu
 		"created_at":   v.CreatedAt.UTC().Format(time.RFC3339Nano),
 		"updated_at":   v.UpdatedAt.UTC().Format(time.RFC3339Nano),
 		"desired_plan": workloadDesiredPlanMap(plan),
+		// Keep the immutable confirmation binding projection alongside the
+		// operation.  Request and get/reconcile responses all flow through this
+		// function, so clients always validate against the exact server-derived
+		// snapshot rather than recomputing digests from mutable input.
+		"target_id":           binding.TargetID,
+		"target_revision":     binding.TargetRevision,
+		"content_digest":      string(binding.ContentDigest),
+		"parameter_digest":    string(binding.ParameterDigest),
+		"network_digest":      string(binding.NetworkDigest),
+		"secret_grant_digest": string(binding.SecretGrantDigest),
+		"network_grants":      append([]string(nil), binding.NetworkGrants...),
 		// Keep the immutable, non-secret grant descriptors available to the
 		// Native Agent confirmation-card extractor. Redaction removes the
 		// richer desired_plan object, but these IDs/revisions/digests contain no

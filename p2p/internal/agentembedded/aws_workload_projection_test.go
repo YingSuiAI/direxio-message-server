@@ -37,6 +37,7 @@ func TestEmbeddedWorkloadProjectionPreservesWireContractAndSecretRevision(t *tes
 				"DirextalkManaged": "true",
 			},
 		},
+		NetworkGrants: []string{"security-group:sg-0123456789abcdef0"},
 		SecretGrantRefs: []coreworkload.SecretGrantRef{{
 			ReferenceID: credentialID, Purpose: coreconfirmation.SecretPurposeAWSCredential,
 			Revision: 7, BindingDigest: coreconfirmation.Digest(digest),
@@ -81,6 +82,38 @@ func TestEmbeddedWorkloadProjectionPreservesWireContractAndSecretRevision(t *tes
 		t.Fatalf("operation projection lost readbacks: %#v", operationProjection)
 	}
 
+	// Apply and destroy must expose the exact immutable binding used by the
+	// confirmation created for the same plan/operation. This projection is
+	// deliberately digest/reference-only; no credential material is allowed.
+	for _, kind := range []coreworkload.OperationKind{coreworkload.OperationApply, coreworkload.OperationDestroy} {
+		operation.Kind = kind
+		projected := workloadOperationMap(operation, plan, &actual)
+		binding := coreworkload.BindingForOperation(plan, operation.WorkloadID, kind)
+		for key, want := range map[string]any{
+			"target_id":           binding.TargetID,
+			"target_revision":     binding.TargetRevision,
+			"content_digest":      string(binding.ContentDigest),
+			"parameter_digest":    string(binding.ParameterDigest),
+			"network_digest":      string(binding.NetworkDigest),
+			"secret_grant_digest": string(binding.SecretGrantDigest),
+			"network_grants":      binding.NetworkGrants,
+		} {
+			if got := projected[key]; !equalProjectionValue(got, want) {
+				t.Fatalf("%s binding %s = %#v, want %#v", kind, key, got, want)
+			}
+		}
+		encoded, err := json.Marshal(projected)
+		if err != nil {
+			t.Fatal(err)
+		}
+		serialized := string(encoded)
+		for _, forbidden := range []string{"secret_access_key", "access_key_id", "session_token", "super-secret-value"} {
+			if strings.Contains(serialized, forbidden) {
+				t.Fatalf("%s projection leaked %q: %s", kind, forbidden, serialized)
+			}
+		}
+	}
+
 	confirmationProjection := confirmationMap(coreconfirmation.Confirmation{
 		ConfirmationID: operation.ConfirmationID, TaskID: operation.TaskID,
 		State: coreconfirmation.StatePending, Revision: 1,
@@ -95,6 +128,12 @@ func TestEmbeddedWorkloadProjectionPreservesWireContractAndSecretRevision(t *tes
 	if confirmationGrant["secret_revision"] != int64(7) {
 		t.Fatalf("confirmation grant = %#v", confirmationGrant)
 	}
+}
+
+func equalProjectionValue(got, want any) bool {
+	gotJSON, gotErr := json.Marshal(got)
+	wantJSON, wantErr := json.Marshal(want)
+	return gotErr == nil && wantErr == nil && string(gotJSON) == string(wantJSON)
 }
 
 func TestEmbeddedWorkloadEventProjectsSparseReadback(t *testing.T) {

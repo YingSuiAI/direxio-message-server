@@ -294,10 +294,20 @@ func workloadOperationFields() map[string]ActionFieldSchema {
 		"created_at":                 {Type: "string", Required: true},
 		"updated_at":                 {Type: "string", Required: true},
 		"desired_plan":               {Type: "object", Required: true, Properties: workloadDesiredPlanFields()},
-		"secret_grant_refs":          {Type: "array", Required: true, Items: workloadSecretGrantSchema(true)},
-		"actual":                     {Type: "object", Properties: workloadActualFields()},
-		"dispatch_epoch":             {Type: "integer", Required: true},
-		"dispatch_lease_until":       {Type: "string", Required: true},
+		// These fields are the server-derived immutable confirmation binding
+		// projected on every workload operation response. They contain only
+		// target identity, revisions, digests and non-secret network references.
+		"target_id":            {Type: "string", Required: true},
+		"target_revision":      {Type: "integer", Required: true},
+		"content_digest":       {Type: "string", Required: true},
+		"parameter_digest":     {Type: "string", Required: true},
+		"network_digest":       {Type: "string", Required: true},
+		"secret_grant_digest":  {Type: "string", Required: true},
+		"network_grants":       {Type: "array", Required: true, Items: &ActionFieldSchema{Type: "string"}},
+		"secret_grant_refs":    {Type: "array", Required: true, Items: workloadSecretGrantSchema(true)},
+		"actual":               {Type: "object", Properties: workloadActualFields()},
+		"dispatch_epoch":       {Type: "integer", Required: true},
+		"dispatch_lease_until": {Type: "string", Required: true},
 	}
 }
 

@@ -6178,6 +6178,10 @@
                 "type": "string",
                 "required": true
               },
+              "content_digest": {
+                "type": "string",
+                "required": true
+              },
               "created_at": {
                 "type": "string",
                 "required": true
@@ -6445,7 +6449,22 @@
                 "type": "string",
                 "required": true
               },
+              "network_digest": {
+                "type": "string",
+                "required": true
+              },
+              "network_grants": {
+                "type": "array",
+                "required": true,
+                "items": {
+                  "type": "string"
+                }
+              },
               "operation_id": {
+                "type": "string",
+                "required": true
+              },
+              "parameter_digest": {
                 "type": "string",
                 "required": true
               },
@@ -6463,6 +6482,10 @@
               },
               "revision": {
                 "type": "integer",
+                "required": true
+              },
+              "secret_grant_digest": {
+                "type": "string",
                 "required": true
               },
               "secret_grant_refs": {
@@ -6497,8 +6520,16 @@
                 "type": "string",
                 "required": true
               },
+              "target_id": {
+                "type": "string",
+                "required": true
+              },
               "target_kind": {
                 "type": "string",
+                "required": true
+              },
+              "target_revision": {
+                "type": "integer",
                 "required": true
               },
               "task_id": {
@@ -6885,6 +6916,10 @@
                 "type": "string",
                 "required": true
               },
+              "content_digest": {
+                "type": "string",
+                "required": true
+              },
               "created_at": {
                 "type": "string",
                 "required": true
@@ -7152,7 +7187,22 @@
                 "type": "string",
                 "required": true
               },
+              "network_digest": {
+                "type": "string",
+                "required": true
+              },
+              "network_grants": {
+                "type": "array",
+                "required": true,
+                "items": {
+                  "type": "string"
+                }
+              },
               "operation_id": {
+                "type": "string",
+                "required": true
+              },
+              "parameter_digest": {
                 "type": "string",
                 "required": true
               },
@@ -7170,6 +7220,10 @@
               },
               "revision": {
                 "type": "integer",
+                "required": true
+              },
+              "secret_grant_digest": {
+                "type": "string",
                 "required": true
               },
               "secret_grant_refs": {
@@ -7204,8 +7258,16 @@
                 "type": "string",
                 "required": true
               },
+              "target_id": {
+                "type": "string",
+                "required": true
+              },
               "target_kind": {
                 "type": "string",
+                "required": true
+              },
+              "target_revision": {
+                "type": "integer",
                 "required": true
               },
               "task_id": {
@@ -7414,6 +7476,10 @@
                 "type": "string",
                 "required": true
               },
+              "content_digest": {
+                "type": "string",
+                "required": true
+              },
               "created_at": {
                 "type": "string",
                 "required": true
@@ -7681,7 +7747,22 @@
                 "type": "string",
                 "required": true
               },
+              "network_digest": {
+                "type": "string",
+                "required": true
+              },
+              "network_grants": {
+                "type": "array",
+                "required": true,
+                "items": {
+                  "type": "string"
+                }
+              },
               "operation_id": {
+                "type": "string",
+                "required": true
+              },
+              "parameter_digest": {
                 "type": "string",
                 "required": true
               },
@@ -7699,6 +7780,10 @@
               },
               "revision": {
                 "type": "integer",
+                "required": true
+              },
+              "secret_grant_digest": {
+                "type": "string",
                 "required": true
               },
               "secret_grant_refs": {
@@ -7733,8 +7818,16 @@
                 "type": "string",
                 "required": true
               },
+              "target_id": {
+                "type": "string",
+                "required": true
+              },
               "target_kind": {
                 "type": "string",
+                "required": true
+              },
+              "target_revision": {
+                "type": "integer",
                 "required": true
               },
               "task_id": {
@@ -8147,6 +8240,10 @@
                 "type": "string",
                 "required": true
               },
+              "content_digest": {
+                "type": "string",
+                "required": true
+              },
               "created_at": {
                 "type": "string",
                 "required": true
@@ -8414,7 +8511,22 @@
                 "type": "string",
                 "required": true
               },
+              "network_digest": {
+                "type": "string",
+                "required": true
+              },
+              "network_grants": {
+                "type": "array",
+                "required": true,
+                "items": {
+                  "type": "string"
+                }
+              },
               "operation_id": {
+                "type": "string",
+                "required": true
+              },
+              "parameter_digest": {
                 "type": "string",
                 "required": true
               },
@@ -8432,6 +8544,10 @@
               },
               "revision": {
                 "type": "integer",
+                "required": true
+              },
+              "secret_grant_digest": {
+                "type": "string",
                 "required": true
               },
               "secret_grant_refs": {
@@ -8466,8 +8582,16 @@
                 "type": "string",
                 "required": true
               },
+              "target_id": {
+                "type": "string",
+                "required": true
+              },
               "target_kind": {
                 "type": "string",
+                "required": true
+              },
+              "target_revision": {
+                "type": "integer",
                 "required": true
               },
               "task_id": {
@@ -12412,6 +12536,10 @@
                 "type": "string",
                 "required": true
               },
+              "content_digest": {
+                "type": "string",
+                "required": true
+              },
               "created_at": {
                 "type": "string",
                 "required": true
@@ -12679,7 +12807,22 @@
                 "type": "string",
                 "required": true
               },
+              "network_digest": {
+                "type": "string",
+                "required": true
+              },
+              "network_grants": {
+                "type": "array",
+                "required": true,
+                "items": {
+                  "type": "string"
+                }
+              },
               "operation_id": {
+                "type": "string",
+                "required": true
+              },
+              "parameter_digest": {
                 "type": "string",
                 "required": true
               },
@@ -12697,6 +12840,10 @@
               },
               "revision": {
                 "type": "integer",
+                "required": true
+              },
+              "secret_grant_digest": {
+                "type": "string",
                 "required": true
               },
               "secret_grant_refs": {
@@ -12731,8 +12878,16 @@
                 "type": "string",
                 "required": true
               },
+              "target_id": {
+                "type": "string",
+                "required": true
+              },
               "target_kind": {
                 "type": "string",
+                "required": true
+              },
+              "target_revision": {
+                "type": "integer",
                 "required": true
               },
               "task_id": {
