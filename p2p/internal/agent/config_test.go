@@ -27,7 +27,15 @@ func TestNativeConfigMappingPreservesSharedAndNativeFields(t *testing.T) {
 	}
 
 	current := dirextalkdomain.AgentConfig{
-		DisplayName:   "Existing Agent",
+		DisplayName: "Existing Agent",
+		NativeAgentIdentity: dirextalkdomain.AgentIdentityConfig{
+			DisplayName: "Existing Ying",
+			AvatarURL:   "mxc://existing-ying",
+		},
+		OnlineAgentIdentity: dirextalkdomain.AgentIdentityConfig{
+			DisplayName: "Existing Online",
+			AvatarURL:   "mxc://existing-online",
+		},
 		ContextWindow: 30,
 		Enabled:       true,
 		Native:        map[string]any{"skills": []any{map[string]any{"id": "keep"}}},
@@ -35,10 +43,16 @@ func TestNativeConfigMappingPreservesSharedAndNativeFields(t *testing.T) {
 
 	next := FromNativeMap(current, map[string]any{
 		"display_name": " Updated Agent ",
+		"avatar_url":   " mxc://updated-ying ",
 		"model":        " model-v2 ",
 		"api_key":      "must-not-persist",
 	})
-	if next.DisplayName != "Updated Agent" || next.Model != "model-v2" || next.ContextWindow != 30 || !next.Enabled {
+	if next.DisplayName != "Updated Agent" || next.AvatarURL != "mxc://updated-ying" ||
+		next.NativeAgentIdentity.DisplayName != "Updated Agent" ||
+		next.NativeAgentIdentity.AvatarURL != "mxc://updated-ying" ||
+		next.OnlineAgentIdentity.DisplayName != "Existing Online" ||
+		next.OnlineAgentIdentity.AvatarURL != "mxc://existing-online" ||
+		next.Model != "model-v2" || next.ContextWindow != 30 || !next.Enabled {
 		t.Fatalf("unexpected mapped shared config: %#v", next)
 	}
 	if _, exposed := next.Native["api_key"]; exposed {
@@ -46,6 +60,67 @@ func TestNativeConfigMappingPreservesSharedAndNativeFields(t *testing.T) {
 	}
 	if _, ok := next.Native["skills"]; !ok {
 		t.Fatalf("mapped native config lost existing fields: %#v", next.Native)
+	}
+	nativeMap := ToNativeMap(next)
+	if nativeMap["display_name"] != "Updated Agent" || nativeMap["avatar_url"] != "mxc://updated-ying" {
+		t.Fatalf("native runtime config should expose Ying identity, got %#v", nativeMap)
+	}
+	if _, ok := next.Native["native_agent_identity"]; ok {
+		t.Fatalf("mode identities must not be stored as runtime Native fields: %#v", next.Native)
+	}
+}
+
+func TestApplyConfigUpdateMaintainsModeIdentities(t *testing.T) {
+	current := NormalizeConfig(dirextalkdomain.AgentConfig{
+		DisplayName: "Legacy",
+		AvatarURL:   "mxc://legacy",
+	})
+
+	nativeOnly := ApplyConfigUpdate(current, map[string]any{
+		"native_agent_identity": map[string]any{
+			"display_name": "Ying Prime",
+		},
+	})
+	if nativeOnly.DisplayName != "Ying Prime" ||
+		nativeOnly.NativeAgentIdentity.DisplayName != "Ying Prime" ||
+		nativeOnly.NativeAgentIdentity.AvatarURL != "mxc://legacy" ||
+		nativeOnly.OnlineAgentIdentity.DisplayName != "Legacy" ||
+		nativeOnly.OnlineAgentIdentity.AvatarURL != "mxc://legacy" {
+		t.Fatalf("native identity update leaked or dropped fields: %#v", nativeOnly)
+	}
+
+	onlineAvatarOnly := ApplyConfigUpdate(nativeOnly, map[string]any{
+		"online_agent_identity": map[string]any{
+			"avatar_url": " mxc://online ",
+		},
+	})
+	if onlineAvatarOnly.OnlineAgentIdentity.DisplayName != "Legacy" ||
+		onlineAvatarOnly.OnlineAgentIdentity.AvatarURL != "mxc://online" ||
+		onlineAvatarOnly.NativeAgentIdentity.DisplayName != "Ying Prime" ||
+		onlineAvatarOnly.NativeAgentIdentity.AvatarURL != "mxc://legacy" {
+		t.Fatalf("online avatar update should preserve names and Ying identity: %#v", onlineAvatarOnly)
+	}
+
+	legacyTopLevel := ApplyConfigUpdate(onlineAvatarOnly, map[string]any{
+		"display_name": "Shared Agent",
+		"avatar_url":   "mxc://shared",
+	})
+	if legacyTopLevel.NativeAgentIdentity.DisplayName != "Shared Agent" ||
+		legacyTopLevel.NativeAgentIdentity.AvatarURL != "mxc://shared" ||
+		legacyTopLevel.OnlineAgentIdentity.DisplayName != "Shared Agent" ||
+		legacyTopLevel.OnlineAgentIdentity.AvatarURL != "mxc://shared" {
+		t.Fatalf("legacy top-level update should sync both identities: %#v", legacyTopLevel)
+	}
+
+	nestedWins := ApplyConfigUpdate(legacyTopLevel, map[string]any{
+		"display_name": "Legacy Request",
+		"native_agent_identity": map[string]any{
+			"display_name": "Nested Ying",
+		},
+	})
+	if nestedWins.NativeAgentIdentity.DisplayName != "Nested Ying" ||
+		nestedWins.OnlineAgentIdentity.DisplayName != "Legacy Request" {
+		t.Fatalf("nested identity should win while top-level fills the other mode: %#v", nestedWins)
 	}
 }
 

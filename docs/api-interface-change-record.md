@@ -16,6 +16,12 @@ Non-members may call `channels.public.posts.list`, but they may not create comme
 
 `channels.update` remains the channel-detail update action for `name`, `description`, and `avatar_url` (plus its existing policy fields), and `groups.update` remains the group-detail update action for `name`/`group_name`, `avatar_url`, and `topic`. Missing or empty string detail fields do not modify the existing value; these actions do not use an empty string as a clear operation. Both actions require the current identity to hold the persisted `owner` role before changing durable or Matrix room state; ordinary members receive `403`.
 
+## 2026-07-30 Agent Mode-Specific Identities
+
+`agent.config.get` and `agent.config.update` now support mode-specific Agent identity objects. `native_agent_identity` owns Ying / Native Agent `display_name` and `avatar_url`; `online_agent_identity` owns Your Agent / Matrix bridge `display_name` and `avatar_url`. The existing top-level `display_name` and `avatar_url` remain for legacy clients and mirror the effective Native Agent identity in responses.
+
+A legacy update that sends only top-level identity fields synchronizes both mode identities. When nested identities are sent, updates merge per mode so one mode can change without clearing or overwriting the other; nested values take precedence for their mode. `agent.matrix_session.create` uses `online_agent_identity` when creating or ensuring the Matrix Agent session.
+
 ## 2026-07-23 Native Agent Anthropic, Gemini, And xAI Model Lists
 
 `agent.models.list` now fetches Anthropic's real `GET /v1/models` endpoint with the request-scoped `x-api-key` and `anthropic-version` headers. `gemini` and `xai` are now supported Native Agent providers. Gemini exposes `https://generativelanguage.googleapis.com/v1beta` as its client-visible provider base and uses its native `/models`, `generateContent`, and `streamGenerateContent` routes with `x-goog-api-key`; custom Gemini-native gateways use the same contract and a root URL is normalized to `/v1beta`. xAI uses `https://api.x.ai/v1`. Provider API keys remain request-scoped on the server and are never returned.
