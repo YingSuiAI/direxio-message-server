@@ -61,7 +61,14 @@ func (s *Service) executeChangeStrict(ctx context.Context, confirmationID string
 	}
 	if c.Stage == StageReconciling {
 		if c.ChangeSetID == "" && c.Operation != OperationDelete {
-			cs, de := s.provider.DescribeChangeSet(ctx, cred.handle(), p.Region, p.StackName, c.ProviderToken)
+			changeSetName := providerChangeSetName(c.ProviderToken)
+			cs, de := s.provider.DescribeChangeSet(ctx, cred.handle(), p.Region, p.StackName, changeSetName)
+			if de == ErrNotFound && validChangeSetName(c.ProviderToken) {
+				// Pre-upgrade changes used the raw UUID as their ChangeSetName.
+				// Recover those records read-only when the canonical name is absent;
+				// digit-leading UUIDs never become invalid legacy lookups.
+				cs, de = s.provider.DescribeChangeSet(ctx, cred.handle(), p.Region, p.StackName, c.ProviderToken)
+			}
 			if de == nil {
 				if cs.Region != p.Region || cs.StackName != p.StackName || cs.ClientToken != c.ProviderToken || cs.RequestDigest != c.ProviderRequestDigest || cs.RequestDigest != providerRequestDigest(p, c.ProviderToken) {
 					return Change{}, ErrConflict
@@ -163,7 +170,7 @@ func (s *Service) executeChangeStrict(ctx context.Context, confirmationID string
 		return s.reconcileChange(ctx, c, p)
 	}
 	if c.Stage == StageChangeSetCreating {
-		req := ChangeSetRequest{Region: p.Region, StackName: p.StackName, ChangeSetName: c.ProviderToken, ClientToken: c.ProviderToken, Operation: c.Operation, Template: p.Template, Parameters: p.Parameters, Tags: p.Tags, Capabilities: p.Capabilities}
+		req := ChangeSetRequest{Region: p.Region, StackName: p.StackName, ChangeSetName: providerChangeSetName(c.ProviderToken), ClientToken: c.ProviderToken, Operation: c.Operation, Template: p.Template, Parameters: p.Parameters, Tags: p.Tags, Capabilities: p.Capabilities}
 		fence, fe := s.coordinator.ExecutionFence(ctx, c.ConfirmationID)
 		if fe != nil {
 			return Change{}, fe

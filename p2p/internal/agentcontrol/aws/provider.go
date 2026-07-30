@@ -29,6 +29,13 @@ type ChangeSetRequest struct {
 	Parameters, Tags                              map[string]string
 	Capabilities                                  []string
 }
+
+// providerChangeSetName keeps the durable client idempotency token unchanged
+// while giving CloudFormation a name whose first character is alphabetic.
+// The token is a canonical UUID, so this mapping is deterministic and remains
+// within CloudFormation's change-set name limits.
+func providerChangeSetName(token string) string { return "dirextalk-" + token }
+
 type ChangeSet struct {
 	ID, Name, StackName, ClientToken string
 	Region                           string
@@ -179,6 +186,7 @@ type FakeProvider struct {
 	Stacks                                                      map[string]Stack
 	Changes                                                     map[string]ChangeSet
 	Calls                                                       []string
+	DescribeChangeSetNames                                      []string
 	ResponseLoss                                                bool
 	ResponseLossCreate, ResponseLossExecute, ResponseLossDelete bool
 	Async                                                       bool
@@ -208,16 +216,13 @@ func (f *FakeProvider) CreateChangeSet(_ context.Context, handle CredentialHandl
 	if handle.Region != r.Region {
 		return ChangeSet{}, ErrConflict
 	}
+	if !validChangeSetName(r.ChangeSetName) {
+		return ChangeSet{}, ErrInvalid
+	}
 	if e := f.maybeFail("create_change_set"); e != nil {
 		return ChangeSet{}, e
 	}
-	digest := canonicalDigest(struct {
-		Region, Stack, Name string
-		Operation           Operation
-		Template            []byte
-		Parameters, Tags    map[string]string
-		Capabilities        []string
-	}{r.Region, r.StackName, r.ChangeSetName, r.Operation, r.Template, r.Parameters, r.Tags, r.Capabilities})
+	digest := providerRequestDigest(Plan{Region: r.Region, StackName: r.StackName, Operation: r.Operation, Template: r.Template, Parameters: r.Parameters, Tags: r.Tags, Capabilities: r.Capabilities}, r.ClientToken)
 	for _, v := range f.Changes {
 		if v.ClientToken == r.ClientToken {
 			if v.Region != r.Region || v.StackName != r.StackName || v.RequestDigest != digest {
@@ -239,6 +244,7 @@ func (f *FakeProvider) DescribeChangeSet(_ context.Context, handle CredentialHan
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.Calls = append(f.Calls, "describe_change_set")
+	f.DescribeChangeSetNames = append(f.DescribeChangeSetNames, name)
 	if handle.Region != region {
 		return ChangeSet{}, ErrConflict
 	}

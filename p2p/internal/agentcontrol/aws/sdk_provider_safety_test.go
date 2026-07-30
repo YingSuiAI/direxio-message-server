@@ -13,6 +13,9 @@ import (
 
 type safetyCloudClient struct {
 	createDescription         string
+	createName, createToken   string
+	createCalls               int
+	describeNames             []string
 	executeToken, deleteToken string
 	executeErr                error
 	describeStatuses          []cloudformationtypes.ChangeSetStatus
@@ -23,11 +26,14 @@ type safetyCloudClient struct {
 }
 
 func (c *safetyCloudClient) CreateChangeSet(_ context.Context, in *cloudformation.CreateChangeSetInput, _ ...func(*cloudformation.Options)) (*cloudformation.CreateChangeSetOutput, error) {
+	c.createCalls++
 	c.createDescription = aws.ToString(in.Description)
+	c.createName, c.createToken = aws.ToString(in.ChangeSetName), aws.ToString(in.ClientToken)
 	return &cloudformation.CreateChangeSetOutput{Id: aws.String("cs-safety")}, nil
 }
-func (c *safetyCloudClient) DescribeChangeSet(_ context.Context, _ *cloudformation.DescribeChangeSetInput, _ ...func(*cloudformation.Options)) (*cloudformation.DescribeChangeSetOutput, error) {
+func (c *safetyCloudClient) DescribeChangeSet(_ context.Context, in *cloudformation.DescribeChangeSetInput, _ ...func(*cloudformation.Options)) (*cloudformation.DescribeChangeSetOutput, error) {
 	c.describeCalls++
+	c.describeNames = append(c.describeNames, aws.ToString(in.ChangeSetName))
 	status := cloudformationtypes.ChangeSetStatusCreateComplete
 	execution := cloudformationtypes.ExecutionStatusAvailable
 	if len(c.describeStatuses) > 0 {
@@ -80,9 +86,12 @@ func TestSDKProviderSafetyTokensAndFreshRecovery(t *testing.T) {
 	if operationKey("change", token, string(ProviderMutationCreate), 1, 1) != operationKey("change", token, string(ProviderMutationCreate), 2, 99) {
 		t.Fatal("provider action identity changed across lease reclaim")
 	}
-	req := ChangeSetRequest{Region: "us-east-1", StackName: "safety-stack", ChangeSetName: token, ClientToken: token, Operation: OperationCreate, Template: template, Parameters: map[string]string{}, Tags: map[string]string{}}
+	req := ChangeSetRequest{Region: "us-east-1", StackName: "safety-stack", ChangeSetName: providerChangeSetName(token), ClientToken: token, Operation: OperationCreate, Template: template, Parameters: map[string]string{}, Tags: map[string]string{}}
 	if _, err = p.CreateChangeSet(context.Background(), safetyHandle(), req); err != nil {
 		t.Fatal(err)
+	}
+	if !strings.HasPrefix(token, "1") || !strings.HasPrefix(client.createName, "dirextalk-") || client.createName != providerChangeSetName(token) || client.createToken != token || client.createName == client.createToken {
+		t.Fatalf("create input name/token=%q/%q", client.createName, client.createToken)
 	}
 	if client.createDescription == "" || len(client.createDescription) > 1024 || strings.Contains(client.createDescription, "secret") || strings.Contains(client.createDescription, "AKIA") {
 		t.Fatalf("unsafe description %q", client.createDescription)
@@ -92,9 +101,12 @@ func TestSDKProviderSafetyTokensAndFreshRecovery(t *testing.T) {
 	}
 	// A new provider has no known map and must reconstruct the durable binding from AWS data.
 	fresh, _ := NewSDKProvider(SDKClients{CloudFormation: client})
-	got, err := fresh.DescribeChangeSet(context.Background(), safetyHandle(), "us-east-1", "safety-stack", token)
+	got, err := fresh.DescribeChangeSet(context.Background(), safetyHandle(), "us-east-1", "safety-stack", providerChangeSetName(token))
 	if err != nil || got.ClientToken != token || got.RequestDigest != ProviderRequestDigest(Plan{Region: req.Region, StackName: req.StackName, Operation: req.Operation, Template: template, Parameters: req.Parameters, Tags: req.Tags}, token) || digest == "" {
 		t.Fatalf("fresh recovery=%+v err=%v", got, err)
+	}
+	if len(client.describeNames) == 0 || client.describeNames[len(client.describeNames)-1] != providerChangeSetName(token) {
+		t.Fatalf("recovery describe names=%v", client.describeNames)
 	}
 	if err = p.ExecuteChangeSet(context.Background(), safetyHandle(), "us-east-1", "safety-stack", "cs-safety", token); err != nil || client.executeToken != token {
 		t.Fatalf("execute token=%q err=%v", client.executeToken, err)
@@ -115,6 +127,22 @@ func TestSDKProviderSafetyTokensAndFreshRecovery(t *testing.T) {
 	}
 }
 
+func TestSDKProviderRejectsDigitLeadingChangeSetNameLocally(t *testing.T) {
+	client := &safetyCloudClient{}
+	p, err := NewSDKProvider(SDKClients{CloudFormation: client})
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := "11111111-1111-4111-8111-111111111114"
+	_, err = p.CreateChangeSet(context.Background(), safetyHandle(), ChangeSetRequest{
+		Region: "us-east-1", StackName: "safety-stack", ChangeSetName: token, ClientToken: token,
+		Operation: OperationCreate, Template: []byte(`{"Resources":{}}`),
+	})
+	if err != ErrInvalid || client.createCalls != 0 {
+		t.Fatalf("digit-leading name err=%v create calls=%d", err, client.createCalls)
+	}
+}
+
 func TestSDKProviderWaitsForChangeSetAvailability(t *testing.T) {
 	client := &safetyCloudClient{
 		describeStatuses:   []cloudformationtypes.ChangeSetStatus{cloudformationtypes.ChangeSetStatusCreateInProgress, cloudformationtypes.ChangeSetStatusCreateComplete},
@@ -129,7 +157,7 @@ func TestSDKProviderWaitsForChangeSetAvailability(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = p.CreateChangeSet(context.Background(), safetyHandle(), ChangeSetRequest{
-		Region: "us-east-1", StackName: "pending-stack", ChangeSetName: "11111111-1111-4111-8111-111111111113", ClientToken: "11111111-1111-4111-8111-111111111113", Operation: OperationCreate, Template: template,
+		Region: "us-east-1", StackName: "pending-stack", ChangeSetName: providerChangeSetName("11111111-1111-4111-8111-111111111113"), ClientToken: "11111111-1111-4111-8111-111111111113", Operation: OperationCreate, Template: template,
 	})
 	if err != nil {
 		t.Fatalf("waited change set returned err=%v", err)

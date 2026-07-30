@@ -152,11 +152,24 @@ func TestCreateResponseLossReconciling(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	const legacyToken = "a1111111-1111-4111-8111-111111111111"
+	r.mu.Lock()
+	legacyChange := r.changes[out.Change.ID]
+	legacyChange.ProviderToken = legacyToken
+	legacyChange.ProviderRequestDigest = providerRequestDigest(r.plans[legacyChange.PlanID], legacyToken)
+	r.changes[legacyChange.ID] = legacyChange
+	r.mu.Unlock()
 	f.ResponseLossCreate = true
 	if _, err = s.ExecuteChange(context.Background(), out.Confirmation.ConfirmationID); err != ErrResponseUncertain {
 		t.Fatalf("first execute=%v", err)
 	}
 	f.ResponseLossCreate = false
+	for id, cs := range f.Changes {
+		if cs.ClientToken == legacyToken {
+			cs.Name = legacyToken
+			f.Changes[id] = cs
+		}
+	}
 	completed, err := s.ExecuteChange(context.Background(), out.Confirmation.ConfirmationID)
 	if err != nil {
 		t.Fatal(err)
@@ -164,7 +177,53 @@ func TestCreateResponseLossReconciling(t *testing.T) {
 	if completed.Status != ChangeSucceeded {
 		t.Fatalf("recovered=%#v", completed)
 	}
+	if len(f.DescribeChangeSetNames) < 2 || f.DescribeChangeSetNames[0] != providerChangeSetName(completed.ProviderToken) || f.DescribeChangeSetNames[1] != completed.ProviderToken {
+		t.Fatalf("recovery describe names=%v token=%q", f.DescribeChangeSetNames, completed.ProviderToken)
+	}
+	for _, cs := range f.Changes {
+		if cs.ClientToken == completed.ProviderToken {
+			if cs.Name != completed.ProviderToken {
+				t.Fatalf("change-set name=%q token=%q", cs.Name, cs.ClientToken)
+			}
+			return
+		}
+	}
+	t.Fatalf("recovered change set for token %q not found", completed.ProviderToken)
 }
+
+func TestCreateResponseLossDigitTokenSkipsInvalidLegacyLookup(t *testing.T) {
+	s, r, f, p := workflowFixture(t)
+	out, err := s.RequestChange(context.Background(), RequestChangeInput{PlanID: p.ID, IdempotencyKey: uuid.NewString()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	consumed := consumeWorkflowChange(t, s, r, out)
+	const digitToken = "11111111-1111-4111-8111-111111111111"
+	r.mu.Lock()
+	change := r.changes[consumed.Change.ID]
+	change.ProviderToken = digitToken
+	change.ProviderRequestDigest = providerRequestDigest(r.plans[change.PlanID], digitToken)
+	r.changes[change.ID] = change
+	r.mu.Unlock()
+	f.ResponseLossCreate = true
+	if _, err = s.ExecuteChange(context.Background(), consumed.Confirmation.ConfirmationID); err != ErrResponseUncertain {
+		t.Fatalf("first execute=%v", err)
+	}
+	f.ResponseLossCreate = false
+	for id, cs := range f.Changes {
+		if cs.ClientToken == digitToken {
+			cs.Name = "other-change-set"
+			f.Changes[id] = cs
+		}
+	}
+	if _, err = s.ExecuteChange(context.Background(), consumed.Confirmation.ConfirmationID); err != ErrResponseUncertain {
+		t.Fatalf("missing canonical change set err=%v", err)
+	}
+	if len(f.DescribeChangeSetNames) != 1 || f.DescribeChangeSetNames[0] != providerChangeSetName(digitToken) {
+		t.Fatalf("digit-token recovery describe names=%v", f.DescribeChangeSetNames)
+	}
+}
+
 func TestExecuteResponseLossReconciling(t *testing.T) {
 	_, _, f, p := workflowFixture(t)
 	f.ResponseLossExecute = true

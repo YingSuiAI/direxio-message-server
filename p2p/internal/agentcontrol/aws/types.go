@@ -416,9 +416,11 @@ func cloneMap(m map[string]string) map[string]string {
 }
 
 var stackNameRE = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9-]{0,127}$`)
+var changeSetNameRE = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9-]{0,127}$`)
 var ec2ResolvedAMIRe = regexp.MustCompile(`^ami-[0-9a-f]{8,17}$`)
 
-func validStackName(s string) bool { return stackNameRE.MatchString(s) }
+func validStackName(s string) bool     { return stackNameRE.MatchString(s) }
+func validChangeSetName(s string) bool { return changeSetNameRE.MatchString(s) }
 func validRegion(s string) bool {
 	return regexp.MustCompile(`^[a-z]{2}(?:-gov)?-[a-z]+-\d$`).MatchString(strings.TrimSpace(s))
 }

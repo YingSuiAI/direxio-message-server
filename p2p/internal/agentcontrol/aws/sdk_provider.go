@@ -178,7 +178,7 @@ func (p *SDKProvider) CreateChangeSet(ctx context.Context, handle CredentialHand
 	if err := validateHandleRegion(handle, req.Region); err != nil {
 		return ChangeSet{}, err
 	}
-	if (req.Operation != OperationCreate && req.Operation != OperationUpdate) || !validStackName(req.StackName) || strings.TrimSpace(req.ChangeSetName) == "" || strings.TrimSpace(req.ClientToken) == "" || len(req.Template) == 0 {
+	if (req.Operation != OperationCreate && req.Operation != OperationUpdate) || !validStackName(req.StackName) || !validChangeSetName(req.ChangeSetName) || strings.TrimSpace(req.ClientToken) == "" || len(req.Template) == 0 {
 		return ChangeSet{}, ErrInvalid
 	}
 	client, err := p.factory.NewCloudFormation(handle)
@@ -205,13 +205,7 @@ func (p *SDKProvider) CreateChangeSet(ctx context.Context, handle CredentialHand
 		id = req.ChangeSetName
 	}
 	_, templateSHA, _ := normalizeTemplate(req.Template)
-	cs := ChangeSet{ID: id, Name: req.ChangeSetName, StackName: req.StackName, ClientToken: req.ClientToken, Region: req.Region, RequestDigest: canonicalDigest(struct {
-		Region, Stack, Name string
-		Operation           Operation
-		Template            []byte
-		Parameters, Tags    map[string]string
-		Capabilities        []string
-	}{req.Region, req.StackName, req.ChangeSetName, req.Operation, req.Template, req.Parameters, req.Tags, req.Capabilities}), Operation: req.Operation, TemplateSHA256: templateSHA, Parameters: cloneMap(req.Parameters), Tags: cloneMap(req.Tags)}
+	cs := ChangeSet{ID: id, Name: req.ChangeSetName, StackName: req.StackName, ClientToken: req.ClientToken, Region: req.Region, RequestDigest: digest, Operation: req.Operation, TemplateSHA256: templateSHA, Parameters: cloneMap(req.Parameters), Tags: cloneMap(req.Tags)}
 	p.mu.Lock()
 	p.known[changeSetKey(req.Region, req.StackName, req.ChangeSetName)] = cs
 	p.known[changeSetKey(req.Region, req.StackName, id)] = cs
