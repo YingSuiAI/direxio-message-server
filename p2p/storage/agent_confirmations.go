@@ -674,7 +674,7 @@ func expireConfirmationAndTaskTx(ctx context.Context, tx *sql.Tx, stored confirm
 // transaction. Non-workload confirmations simply have no matching row.
 func terminalizeWorkloadOperationTx(ctx context.Context, tx *sql.Tx, stored confirmation.Confirmation, status, code, summary string, at time.Time) error {
 	owner, taskID, confirmationID, targetID := stored.OwnerID, stored.TaskID, stored.ID, stored.Binding.TargetID
-	rows, err := tx.QueryContext(ctx, `SELECT operation_id::text,workload_id::text,confirmation_id::text,plan_revision,operation,status,dispatch_state,revision
+	rows, err := tx.QueryContext(ctx, `SELECT operation_id::text,workload_id::text,confirmation_id::text,plan_revision,operation,status,dispatch_state,revision,expected_workload_revision
 		FROM core_workload_operations WHERE owner_id=$1 AND task_id=$2 FOR UPDATE`, owner, taskID)
 	if err != nil {
 		return err
@@ -687,8 +687,8 @@ func terminalizeWorkloadOperationTx(ctx context.Context, tx *sql.Tx, stored conf
 		return confirmation.ErrNotFound
 	}
 	var operationID, workloadID, operationConfirmationID, operationKind, operationStatus, dispatchState string
-	var planRevision, revision int64
-	if err = rows.Scan(&operationID, &workloadID, &operationConfirmationID, &planRevision, &operationKind, &operationStatus, &dispatchState, &revision); err != nil {
+	var planRevision, revision, expectedWorkloadRevision int64
+	if err = rows.Scan(&operationID, &workloadID, &operationConfirmationID, &planRevision, &operationKind, &operationStatus, &dispatchState, &revision, &expectedWorkloadRevision); err != nil {
 		return err
 	}
 	if rows.Next() {
@@ -715,6 +715,22 @@ func terminalizeWorkloadOperationTx(ctx context.Context, tx *sql.Tx, stored conf
 	}
 	if count, _ := result.RowsAffected(); count != 1 {
 		return confirmation.ErrRevisionConflict
+	}
+	if operationKind == "apply" && (status == "expired" || status == "rejected" || status == "canceled") {
+		result, err = tx.ExecContext(ctx, `UPDATE core_workloads SET state='failed',revision=revision+1,updated_at=$1 WHERE owner_id=$2 AND workload_id=$3 AND state='pending' AND revision=$4 AND (actual_snapshot_json IS NULL OR actual_snapshot_json='{}'::jsonb OR actual_snapshot_json='null'::jsonb)`, at.UTC(), owner, workloadID, expectedWorkloadRevision)
+		if err != nil {
+			return err
+		}
+		if count, _ := result.RowsAffected(); count != 1 {
+			var currentState string
+			var currentRevision int64
+			if err = tx.QueryRowContext(ctx, `SELECT state,revision FROM core_workloads WHERE owner_id=$1 AND workload_id=$2 FOR UPDATE`, owner, workloadID).Scan(&currentState, &currentRevision); err != nil {
+				return err
+			}
+			if currentRevision != expectedWorkloadRevision || (currentState != "destroyed" && currentState != "ready" && currentState != "failed") {
+				return confirmation.ErrConflict
+			}
+		}
 	}
 	var sequence uint64
 	if err = tx.QueryRowContext(ctx, `INSERT INTO core_workload_event_counters(owner_id,operation_id,next_sequence)

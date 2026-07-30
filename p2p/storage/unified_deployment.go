@@ -129,8 +129,105 @@ func linkWorkloadDeploymentTx(ctx context.Context, tx *sql.Tx, ownerID, workload
 	if err != nil {
 		return "", workload.ErrInvalid
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE core_deployments SET workload_id=$1,state='pending',target_kind=$2,revision=revision+1,object_json=jsonb_set(jsonb_set(object_json,'{workload_id}',to_jsonb($1::text),true),'{target_kind}',to_jsonb($2::text),true),updated_at=NOW()
-		WHERE owner_id=$3 AND deployment_id=$4 AND provision_id=$5 AND (workload_id IS NULL OR workload_id=$1)`, workloadID, string(p.TargetKind), ownerID, deploymentID, provisionID)
+	var oldWorkloadID, deploymentState, deploymentActual string
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(workload_id::text,''),state,COALESCE(actual_json,'{}'::jsonb)::text
+		FROM core_deployments WHERE owner_id=$1 AND deployment_id=$2 AND provision_id=$3`, ownerID, deploymentID, provisionID).
+		Scan(&oldWorkloadID, &deploymentState, &deploymentActual); err != nil {
+		return "", err
+	}
+	if oldWorkloadID == "" || oldWorkloadID == workloadID {
+		result, err := tx.ExecContext(ctx, `UPDATE core_deployments SET workload_id=$1,state='pending',target_kind=$2,revision=revision+1,object_json=jsonb_set(jsonb_set(object_json,'{workload_id}',to_jsonb($1::uuid::text),true),'{target_kind}',to_jsonb($2::text),true),updated_at=NOW()
+			WHERE owner_id=$3 AND deployment_id=$4 AND provision_id=$5 AND (workload_id IS NULL OR workload_id=$1)`, workloadID, string(p.TargetKind), ownerID, deploymentID, provisionID)
+		if err != nil {
+			return "", err
+		}
+		if n, _ := result.RowsAffected(); n != 1 {
+			return "", workload.ErrConflict
+		}
+		return deploymentID, nil
+	}
+	if (deploymentState != "expired" && deploymentState != "rejected" && deploymentState != "canceled") || (deploymentActual != "{}" && deploymentActual != "null") {
+		return "", workload.ErrConflict
+	}
+
+	// Match the confirmation terminalizer's operation -> workload ->
+	// deployment lock order. Requiring exactly one pre-dispatch operation is
+	// intentionally conservative: a workload with any older operation cannot
+	// prove that no provider side effect occurred and must reconcile instead.
+	operationRows, err := tx.QueryContext(ctx, `SELECT operation_id::text,plan_id::text,plan_digest,target_kind,operation,status,dispatch_state,dispatch_epoch,expected_workload_revision
+		FROM core_workload_operations WHERE owner_id=$1 AND workload_id=$2 ORDER BY operation_id FOR UPDATE`, ownerID, oldWorkloadID)
+	if err != nil {
+		return "", err
+	}
+	defer operationRows.Close()
+	var operationID, operationPlanID, operationPlanDigest, operationTargetKind, operationKind, operationStatus, dispatchState string
+	var expectedWorkloadRevision, dispatchEpoch int64
+	operationCount := 0
+	for operationRows.Next() {
+		operationCount++
+		if operationCount > 1 {
+			return "", workload.ErrConflict
+		}
+		if err = operationRows.Scan(&operationID, &operationPlanID, &operationPlanDigest, &operationTargetKind, &operationKind, &operationStatus, &dispatchState, &dispatchEpoch, &expectedWorkloadRevision); err != nil {
+			return "", err
+		}
+	}
+	if err = operationRows.Err(); err != nil {
+		return "", err
+	}
+	if err = operationRows.Close(); err != nil {
+		return "", err
+	}
+	if operationCount != 1 || operationID == "" || operationTargetKind != string(p.TargetKind) || operationKind != string(workload.OperationApply) ||
+		dispatchEpoch != 0 || dispatchState != "terminal" ||
+		(operationStatus != "expired" && operationStatus != "rejected" && operationStatus != "canceled") {
+		return "", workload.ErrConflict
+	}
+
+	var oldState, oldPlanID, oldPlanDigest, oldTargetKind, actualRaw string
+	var oldRevision int64
+	if err = tx.QueryRowContext(ctx, `SELECT state,plan_id::text,plan_digest,target_kind,COALESCE(actual_snapshot_json,'{}'::jsonb)::text,revision
+		FROM core_workloads WHERE owner_id=$1 AND workload_id=$2 FOR UPDATE`, ownerID, oldWorkloadID).
+		Scan(&oldState, &oldPlanID, &oldPlanDigest, &oldTargetKind, &actualRaw, &oldRevision); err != nil {
+		return "", err
+	}
+	var operationCountAfterWorkloadLock int64
+	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM core_workload_operations WHERE owner_id=$1 AND workload_id=$2`, ownerID, oldWorkloadID).
+		Scan(&operationCountAfterWorkloadLock); err != nil {
+		return "", err
+	}
+	if operationCountAfterWorkloadLock != 1 ||
+		(oldState != "failed" && oldState != "pending") ||
+		oldPlanID != operationPlanID || oldPlanDigest != operationPlanDigest || oldTargetKind != operationTargetKind ||
+		(oldState == "failed" && oldRevision != expectedWorkloadRevision+1) ||
+		(oldState == "pending" && oldRevision != expectedWorkloadRevision) ||
+		(actualRaw != "{}" && actualRaw != "null") {
+		return "", workload.ErrConflict
+	}
+
+	var lockedWorkloadID, lockedDeploymentState, lockedDeploymentActual string
+	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(workload_id::text,''),state,COALESCE(actual_json,'{}'::jsonb)::text
+		FROM core_deployments WHERE owner_id=$1 AND deployment_id=$2 AND provision_id=$3 FOR UPDATE`, ownerID, deploymentID, provisionID).
+		Scan(&lockedWorkloadID, &lockedDeploymentState, &lockedDeploymentActual); err != nil {
+		return "", err
+	}
+	if lockedWorkloadID != oldWorkloadID || lockedDeploymentState != deploymentState || lockedDeploymentActual != deploymentActual {
+		return "", workload.ErrConflict
+	}
+	if oldState == "pending" {
+		result, err := tx.ExecContext(ctx, `UPDATE core_workloads SET state='failed',revision=revision+1,updated_at=NOW()
+			WHERE owner_id=$1 AND workload_id=$2 AND state='pending' AND revision=$3
+			  AND (actual_snapshot_json IS NULL OR actual_snapshot_json='{}'::jsonb OR actual_snapshot_json='null'::jsonb)`, ownerID, oldWorkloadID, expectedWorkloadRevision)
+		if err != nil {
+			return "", err
+		}
+		if n, _ := result.RowsAffected(); n != 1 {
+			return "", workload.ErrConflict
+		}
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE core_deployments SET workload_id=$1,state='pending',target_kind=$2,revision=revision+1,object_json=jsonb_set(jsonb_set(object_json,'{workload_id}',to_jsonb($1::uuid::text),true),'{target_kind}',to_jsonb($2::text),true),updated_at=NOW()
+		WHERE owner_id=$3 AND deployment_id=$4 AND provision_id=$5 AND workload_id=$6
+		  AND state=$7 AND COALESCE(actual_json,'{}'::jsonb)::text=$8`, workloadID, string(p.TargetKind), ownerID, deploymentID, provisionID, oldWorkloadID, deploymentState, deploymentActual)
 	if err != nil {
 		return "", err
 	}

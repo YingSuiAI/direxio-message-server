@@ -391,8 +391,9 @@ func TestDatabaseConfirmationRejectTerminalizesLinkedWorkloadOperation(t *testin
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE agent_confirmations SET state='rejected'")).WithArgs(command.Reason, at, testConfirmationID, testConfirmationOwner, int64(1)).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE agent_tasks SET status='canceled'")).WithArgs(command.Reason, at, testConfirmationTaskID, testConfirmationOwner).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE agent_confirmations SET state=CASE WHEN state IN ('pending','confirmed') THEN 'expired' ELSE state END")).WithArgs(testConfirmationTaskID, confirmation.ReasonUserRejected, at).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT operation_id::text,workload_id::text,confirmation_id::text,plan_revision,operation,status,dispatch_state,revision")).WithArgs(testConfirmationOwner, testConfirmationTaskID).WillReturnRows(sqlmock.NewRows([]string{"operation_id", "workload_id", "confirmation_id", "plan_revision", "operation", "status", "dispatch_state", "revision"}).AddRow(operationID, workloadID, testConfirmationID, 3, "apply", "waiting_user", "prepared", 1))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT operation_id::text,workload_id::text,confirmation_id::text,plan_revision,operation,status,dispatch_state,revision,expected_workload_revision")).WithArgs(testConfirmationOwner, testConfirmationTaskID).WillReturnRows(sqlmock.NewRows([]string{"operation_id", "workload_id", "confirmation_id", "plan_revision", "operation", "status", "dispatch_state", "revision", "expected_workload_revision"}).AddRow(operationID, workloadID, testConfirmationID, 3, "apply", "waiting_user", "prepared", 1, 1))
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE core_workload_operations SET status=$1,dispatch_state='terminal'")).WithArgs("rejected", "user_rejected", command.Reason, at, testConfirmationOwner, operationID, testConfirmationTaskID, int64(1)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE core_workloads SET state='failed',revision=revision+1,updated_at=$1")).WithArgs(at, testConfirmationOwner, workloadID, int64(1)).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(regexp.QuoteMeta("INSERT INTO core_workload_event_counters(owner_id,operation_id,next_sequence)")).WithArgs(testConfirmationOwner, operationID).WillReturnRows(sqlmock.NewRows([]string{"sequence"}).AddRow(int64(2)))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT workload_id::text FROM core_workload_operations")).WithArgs(testConfirmationOwner, operationID).WillReturnRows(sqlmock.NewRows([]string{"workload_id"}).AddRow(workloadID))
 	mock.ExpectQuery(regexp.QuoteMeta("INSERT INTO p2p_agent_deployment_event_cursors(owner_id,workload_id,last_sequence,updated_at)")).WithArgs(testConfirmationOwner, workloadID, at).WillReturnRows(sqlmock.NewRows([]string{"last_sequence"}).AddRow(int64(4)))
@@ -667,7 +668,7 @@ func TestDatabaseConfirmationExpireAtTerminalizesLinkedWorkloadOperation(t *test
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE agent_confirmations SET state='expired'")).WithArgs(confirmation.ReasonExpired, at, testConfirmationID, testConfirmationOwner, int64(1)).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE agent_tasks SET status='failed'")).WithArgs(confirmation.ReasonExpired, at, testConfirmationTaskID, testConfirmationOwner, "waiting_user").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE agent_confirmations SET state=CASE WHEN state IN ('pending','confirmed') THEN 'expired' ELSE state END")).WithArgs(testConfirmationTaskID, confirmation.ReasonExpired, at).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT operation_id::text,workload_id::text,confirmation_id::text,plan_revision,operation,status,dispatch_state,revision")).WithArgs(testConfirmationOwner, testConfirmationTaskID).WillReturnRows(sqlmock.NewRows([]string{"operation_id", "workload_id", "confirmation_id", "plan_revision", "operation", "status", "dispatch_state", "revision"}).AddRow(operationID, workloadID, testConfirmationID, 3, "destroy", "waiting_user", "prepared", 1))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT operation_id::text,workload_id::text,confirmation_id::text,plan_revision,operation,status,dispatch_state,revision,expected_workload_revision")).WithArgs(testConfirmationOwner, testConfirmationTaskID).WillReturnRows(sqlmock.NewRows([]string{"operation_id", "workload_id", "confirmation_id", "plan_revision", "operation", "status", "dispatch_state", "revision", "expected_workload_revision"}).AddRow(operationID, workloadID, testConfirmationID, 3, "destroy", "waiting_user", "prepared", 1, 1))
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE core_workload_operations SET status=$1,dispatch_state='terminal'")).WithArgs("expired", confirmation.ReasonExpired, confirmation.ReasonExpired, at, testConfirmationOwner, operationID, testConfirmationTaskID, int64(1)).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(regexp.QuoteMeta("INSERT INTO core_workload_event_counters(owner_id,operation_id,next_sequence)")).WithArgs(testConfirmationOwner, operationID).WillReturnRows(sqlmock.NewRows([]string{"sequence"}).AddRow(int64(2)))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT workload_id::text FROM core_workload_operations")).WithArgs(testConfirmationOwner, operationID).WillReturnRows(sqlmock.NewRows([]string{"workload_id"}).AddRow(workloadID))
@@ -689,18 +690,18 @@ func TestTerminalizeWorkloadOperationFailsClosedOnIdentityAndCardinality(t *test
 	stored := confirmation.Confirmation{ID: testConfirmationID, ConfirmationID: testConfirmationID, OwnerID: testConfirmationOwner, TaskID: testConfirmationTaskID, Binding: binding}
 	operationID := "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 	workloadID := binding.TargetID
-	columns := []string{"operation_id", "workload_id", "confirmation_id", "plan_revision", "operation", "status", "dispatch_state", "revision"}
+	columns := []string{"operation_id", "workload_id", "confirmation_id", "plan_revision", "operation", "status", "dispatch_state", "revision", "expected_workload_revision"}
 	cases := []struct {
 		name string
 		rows *sqlmock.Rows
 		want error
 	}{
 		{name: "missing", rows: sqlmock.NewRows(columns), want: confirmation.ErrNotFound},
-		{name: "wrong confirmation", rows: sqlmock.NewRows(columns).AddRow(operationID, workloadID, testConfirmationTarget, 3, "apply", "waiting_user", "prepared", 1), want: confirmation.ErrConflict},
-		{name: "wrong target", rows: sqlmock.NewRows(columns).AddRow(operationID, "99999999-9999-4999-8999-999999999999", testConfirmationID, 3, "apply", "waiting_user", "prepared", 1), want: confirmation.ErrConflict},
-		{name: "wrong revision", rows: sqlmock.NewRows(columns).AddRow(operationID, workloadID, testConfirmationID, 4, "apply", "waiting_user", "prepared", 1), want: confirmation.ErrConflict},
-		{name: "wrong kind", rows: sqlmock.NewRows(columns).AddRow(operationID, workloadID, testConfirmationID, 3, "destroy", "waiting_user", "prepared", 1), want: confirmation.ErrConflict},
-		{name: "ambiguous", rows: sqlmock.NewRows(columns).AddRow(operationID, workloadID, testConfirmationID, 3, "apply", "waiting_user", "prepared", 1).AddRow("cccccccc-cccc-4ccc-8ccc-cccccccccccc", workloadID, testConfirmationID, 3, "apply", "waiting_user", "prepared", 1), want: confirmation.ErrConflict},
+		{name: "wrong confirmation", rows: sqlmock.NewRows(columns).AddRow(operationID, workloadID, testConfirmationTarget, 3, "apply", "waiting_user", "prepared", 1, 1), want: confirmation.ErrConflict},
+		{name: "wrong target", rows: sqlmock.NewRows(columns).AddRow(operationID, "99999999-9999-4999-8999-999999999999", testConfirmationID, 3, "apply", "waiting_user", "prepared", 1, 1), want: confirmation.ErrConflict},
+		{name: "wrong revision", rows: sqlmock.NewRows(columns).AddRow(operationID, workloadID, testConfirmationID, 4, "apply", "waiting_user", "prepared", 1, 1), want: confirmation.ErrConflict},
+		{name: "wrong kind", rows: sqlmock.NewRows(columns).AddRow(operationID, workloadID, testConfirmationID, 3, "destroy", "waiting_user", "prepared", 1, 1), want: confirmation.ErrConflict},
+		{name: "ambiguous", rows: sqlmock.NewRows(columns).AddRow(operationID, workloadID, testConfirmationID, 3, "apply", "waiting_user", "prepared", 1, 1).AddRow("cccccccc-cccc-4ccc-8ccc-cccccccccccc", workloadID, testConfirmationID, 3, "apply", "waiting_user", "prepared", 1, 1), want: confirmation.ErrConflict},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -727,6 +728,69 @@ func TestTerminalizeWorkloadOperationFailsClosedOnIdentityAndCardinality(t *test
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func TestTerminalizeWorkloadOperationPreservesExistingReadyWorkload(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	binding := testWorkloadBinding(t, workload.OperationApply, workload.TargetAWSEC2SSM)
+	stored := confirmation.Confirmation{
+		ID:             testConfirmationID,
+		ConfirmationID: testConfirmationID,
+		OwnerID:        testConfirmationOwner,
+		TaskID:         testConfirmationTaskID,
+		Binding:        binding,
+	}
+	const operationID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+	const expectedWorkloadRevision = int64(5)
+	at := time.Date(2026, 7, 29, 12, 5, 0, 0, time.UTC)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT operation_id::text,workload_id::text,confirmation_id::text,plan_revision,operation,status,dispatch_state,revision,expected_workload_revision")).
+		WithArgs(testConfirmationOwner, testConfirmationTaskID).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"operation_id", "workload_id", "confirmation_id", "plan_revision",
+			"operation", "status", "dispatch_state", "revision", "expected_workload_revision",
+		}).AddRow(operationID, binding.TargetID, testConfirmationID, 3, "apply", "waiting_user", "prepared", 1, expectedWorkloadRevision))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE core_workload_operations SET status=$1,dispatch_state='terminal'")).
+		WithArgs("rejected", "user_rejected", "not approved", at, testConfirmationOwner, operationID, testConfirmationTaskID, int64(1)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE core_workloads SET state='failed',revision=revision+1,updated_at=$1")).
+		WithArgs(at, testConfirmationOwner, binding.TargetID, expectedWorkloadRevision).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT state,revision FROM core_workloads")).
+		WithArgs(testConfirmationOwner, binding.TargetID).
+		WillReturnRows(sqlmock.NewRows([]string{"state", "revision"}).AddRow("ready", expectedWorkloadRevision))
+	mock.ExpectQuery(regexp.QuoteMeta("INSERT INTO core_workload_event_counters(owner_id,operation_id,next_sequence)")).
+		WithArgs(testConfirmationOwner, operationID).
+		WillReturnRows(sqlmock.NewRows([]string{"sequence"}).AddRow(int64(2)))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT workload_id::text FROM core_workload_operations")).
+		WithArgs(testConfirmationOwner, operationID).
+		WillReturnRows(sqlmock.NewRows([]string{"workload_id"}).AddRow(binding.TargetID))
+	mock.ExpectQuery(regexp.QuoteMeta("INSERT INTO p2p_agent_deployment_event_cursors(owner_id,workload_id,last_sequence,updated_at)")).
+		WithArgs(testConfirmationOwner, binding.TargetID, at).
+		WillReturnRows(sqlmock.NewRows([]string{"last_sequence"}).AddRow(int64(4)))
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO core_workload_events(owner_id,workload_id,operation_id,sequence,public_sequence,kind,status,message,readback_json,at)")).
+		WithArgs(testConfirmationOwner, binding.TargetID, operationID, uint64(2), int64(4), "terminal", "rejected", "not approved", sqlmock.AnyArg(), at).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectRollback()
+
+	tx, err := db.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = terminalizeWorkloadOperationTx(t.Context(), tx, stored, "rejected", "user_rejected", "not approved", at); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if err = mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 

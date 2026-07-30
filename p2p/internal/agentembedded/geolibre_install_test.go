@@ -2,6 +2,7 @@ package agentembedded
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -72,6 +73,21 @@ func TestGeoLibrePersistedPlanFailsClosedOnOwnerRevisionAndTamper(t *testing.T) 
 	plan.Target.Labels["dirextalk:manifest-digest"] = strings.Repeat("c", 64)
 	if err := validateGeoLibrePersistedPlan(plan, provision, credential, geoTestOwner, ec2Plan); err == nil {
 		t.Fatal("tampered release accepted")
+	}
+}
+
+func TestGeoLibrePersistedPlanJSONRoundTrip(t *testing.T) {
+	plan, provision, credential := geoPlanFixture(t)
+	raw, err := json.Marshal(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var roundTrip coreworkload.Plan
+	if err := json.Unmarshal(raw, &roundTrip); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateGeoLibrePersistedPlan(roundTrip, provision, credential, geoTestOwner, geoEC2PlanView(provision, "true")); err != nil {
+		t.Fatalf("JSON round-trip rejected persisted plan: %v", err)
 	}
 }
 
