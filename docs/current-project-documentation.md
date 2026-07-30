@@ -226,7 +226,7 @@ Blocks：
 Groups：
 
 - group create 写 Matrix room type 与 `io.dirextalk.room.profile`。
-- `groups.update` 负责修改群名称、头像和 `topic`；更新前校验当前身份是该群的 `owner`，普通成员返回 `403`。
+- `groups.update` 负责修改群名称、头像和 `topic`；字符串字段缺失或传空字符串时保留原值。更新前校验当前身份是该群的 `owner`，普通成员返回 `403`。
 - invite/join/leave/remove/mute/unmute/dissolve 通过 `p2p.Transport` 与 native state 进入 Matrix。
 - member list 来自 P2P projection，但最终事实是 Matrix membership。
 - 群聊和频道只有 `owner` 与 `member` 两种产品角色。
@@ -235,7 +235,7 @@ Channels：
 
 - channel create/update 写 Matrix room type 与 `io.dirextalk.room.profile`。
 - public search/get 是只读发现，不创建占位记录。
-- `channels.update` 负责修改频道名称、简介和头像；更新前校验当前身份是该频道的 `owner`，普通成员返回 `403`。
+- `channels.update` 负责修改频道名称、简介和头像；字符串字段缺失或传空字符串时保留原值。更新前校验当前身份是该频道的 `owner`，普通成员返回 `403`。
 - invite grant 用于私有或分享卡片加入。
 - public join request 使用上面的申请审批自动 join 生命周期。
 - channel member、mute、read marker、dissolve 都保持 Matrix-first。

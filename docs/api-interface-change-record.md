@@ -14,7 +14,7 @@ Each returned post exposes `comment_count`, `like_count`, `reaction_count` (the 
 
 Non-members may call `channels.public.posts.list`, but they may not create comments, like/favorite posts, or react to comments. Those mutations now require the current owner identity to have a joined channel-member projection before any Matrix send or ProductCore projection write; Matrix ProductPolicy remains the final membership and mute-policy authority. Missing reaction targets now return `404` rather than creating orphan reaction projections.
 
-`channels.update` remains the channel-detail update action for `name`, `description`, and `avatar_url` (plus its existing policy fields), and `groups.update` remains the group-detail update action for `name`/`group_name`, `avatar_url`, and `topic`. Both actions now require the current identity to hold the persisted `owner` role before changing durable or Matrix room state; ordinary members receive `403`.
+`channels.update` remains the channel-detail update action for `name`, `description`, and `avatar_url` (plus its existing policy fields), and `groups.update` remains the group-detail update action for `name`/`group_name`, `avatar_url`, and `topic`. Missing or empty string detail fields do not modify the existing value; these actions do not use an empty string as a clear operation. Both actions require the current identity to hold the persisted `owner` role before changing durable or Matrix room state; ordinary members receive `403`.
 
 ## 2026-07-23 Native Agent Anthropic, Gemini, And xAI Model Lists
 

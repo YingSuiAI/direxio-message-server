@@ -537,12 +537,23 @@ func TestProductUpdatesPreserveExistingFieldsAndPublicGetDoesNotCreate(t *testin
 	if updatedGroup.Name != "Original Group" || updatedGroup.Topic != "original topic" || updatedGroup.InvitePolicy != "member" || updatedGroup.AvatarURL != "mxc://new-group-avatar" {
 		t.Fatalf("expected partial group update to preserve existing fields, got %#v", updatedGroup)
 	}
+	updatedGroup = mustHandle[groupRecord](t, service, "groups.update", map[string]any{
+		"room_id":    group.RoomID,
+		"name":       "",
+		"group_name": "",
+		"topic":      "",
+		"avatar_url": "",
+	})
+	if updatedGroup.Name != "Original Group" || updatedGroup.Topic != "original topic" || updatedGroup.AvatarURL != "mxc://new-group-avatar" {
+		t.Fatalf("expected empty group fields not to modify existing values, got %#v", updatedGroup)
+	}
 
 	ch := mustHandle[channel](t, service, "channels.create", map[string]any{
 		"channel_id":       "news",
 		"room_id":          "!news:example.com",
 		"name":             "News",
 		"description":      "original description",
+		"avatar_url":       "mxc://old-channel-avatar",
 		"visibility":       "private",
 		"join_policy":      "approval",
 		"channel_type":     "post",
@@ -554,6 +565,15 @@ func TestProductUpdatesPreserveExistingFieldsAndPublicGetDoesNotCreate(t *testin
 	})
 	if updatedChannel.Name != "News" || updatedChannel.Visibility != "private" || updatedChannel.JoinPolicy != "approval" || updatedChannel.ChannelType != "post" || updatedChannel.Description != "new description" {
 		t.Fatalf("expected partial channel update to preserve existing fields, got %#v", updatedChannel)
+	}
+	updatedChannel = mustHandle[channel](t, service, "channels.update", map[string]any{
+		"channel_id":  ch.ChannelID,
+		"name":        "",
+		"description": "",
+		"avatar_url":  "",
+	})
+	if updatedChannel.Name != "News" || updatedChannel.Description != "new description" || updatedChannel.AvatarURL != "mxc://old-channel-avatar" {
+		t.Fatalf("expected empty channel fields not to modify existing values, got %#v", updatedChannel)
 	}
 
 	if _, apiErr := service.Handle(context.Background(), "channels.public.get", map[string]any{"room_id": ch.RoomID}); apiErr == nil || apiErr.Status != 404 {

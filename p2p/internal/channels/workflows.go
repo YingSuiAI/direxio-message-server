@@ -87,11 +87,11 @@ func (m *Module) Update(ctx context.Context, raw map[string]any) (any, *actionba
 	if name := params.String("name"); name != "" {
 		channel.Name = name
 	}
-	if _, exists := raw["description"]; exists {
-		channel.Description = params.String("description")
+	if description := params.String("description"); description != "" {
+		channel.Description = description
 	}
-	if _, exists := raw["avatar_url"]; exists {
-		channel.AvatarURL = params.String("avatar_url")
+	if avatarURL := params.String("avatar_url"); avatarURL != "" {
+		channel.AvatarURL = avatarURL
 	}
 	if visibility := params.String("visibility"); visibility != "" {
 		channel.Visibility = visibility
