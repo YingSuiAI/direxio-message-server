@@ -71,6 +71,15 @@ Native Agent model-profile contract: the server persists encrypted owner profile
 
 Current model-profile contract: the server persists encrypted owner model profiles and default roles. Native Agent chat, stream, and compression omit model fields and resolve the owner default conversation profile; inline profile/key input is legacy compatibility only. `agent.models.list` remains an explicit request-scoped lookup and does not persist profiles.
 
+历史模型凭据不会在 Compose 或服务启动时自动升级。迁移前必须停止服务，并将
+PostgreSQL、`P2P_AGENT_SECRET_KEYRING_FILE` 指向的 keyring 以及旧模型 master-key
+文件作为同一可恢复备份集；先执行 `agent-secretctl init`，再通过环境变量
+`P2P_AGENT_SECRET_KEYRING_FILE`、`P2P_AGENT_SECRET_DATABASE_DSN` 和
+`P2P_AGENT_MODEL_PROFILE_KEY_FILE` 执行离线 `agent-secretctl upgrade`。升级使用行锁/CAS，
+直接把共享 nonce/ciphertext 列重封装为 v1 envelope，不清空这些列，也不写入明文。
+完成后清除旧 key 环境变量执行 `agent-secretctl verify`；回滚必须原子恢复数据库、keyring
+和旧 key，不能只回滚镜像。v110 破坏性清理要等全量节点收敛且回滚窗口结束后再安排。
+
 Profile read projections may include a display-only `api_key_hint` mask for
 configured non-speech credentials (for example `sk-********0420`). It is
 derived for display, never accepted as credential input or usable as a key, and

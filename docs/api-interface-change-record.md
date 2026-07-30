@@ -1,6 +1,42 @@
 # API Interface Change Record
 
-Last updated: 2026-07-30
+Last updated: 2026-07-31
+
+## 2026-07-31 Offline legacy model-secret upgrade
+
+`agent-secretctl upgrade` is the explicit one-shot migration for legacy
+model-profile credential rows. It is not part of `message-server-init`,
+Compose, or server startup. Operators must stop the persistent service before
+the run and create one restorable backup set containing the PostgreSQL
+database, the v1 keyring file, and the legacy model-profile raw-key file.
+`agent-secretctl init` creates or validates the v1 keyring; `upgrade` then uses
+only environment-provided paths and the database DSN:
+
+```text
+P2P_AGENT_SECRET_KEYRING_FILE
+P2P_AGENT_SECRET_DATABASE_DSN
+P2P_AGENT_MODEL_PROFILE_KEY_FILE
+```
+
+Key material and database credentials are never accepted as command-line
+arguments. The upgrade takes the maintenance fence, processes current and
+historical rows with row locks/CAS, and overwrites their shared nonce and
+ciphertext columns with the v1 envelope and metadata. It does not clear those
+columns or store plaintext. Afterward, run `agent-secretctl verify` with the
+legacy-key environment unset; verification must succeed using only the
+keyring. An interrupted or failed run is resumable, while rollback must restore
+the PostgreSQL, keyring, and legacy-key backups atomically rather than rolling
+back only the image. Destructive v110 cleanup remains deferred until the fleet
+has converged and the rollback window has closed.
+
+The same image exposes the offline commands:
+
+```text
+agent-secretctl init|upgrade|verify|rotate
+```
+
+`rotate` remains the separate stopped-service active-key rotation workflow and
+is not a substitute for the legacy model-secret upgrade.
 
 ## 2026-07-30 Native Agent selected model pins
 
@@ -41,7 +77,8 @@ empty-to-pinned CAS before execution.
 Agent secrets use the versioned AES-256-GCM keyring selected by
 `P2P_AGENT_SECRET_KEYRING_FILE`; keyring failure removes secret-dependent Agent
 capabilities without disabling ordinary Matrix/ProductCore routes. The same
-image exposes one-shot `agent-secretctl init|verify|rotate`.
+image exposes one-shot `agent-secretctl init|upgrade|verify|rotate`; legacy
+model rows are not upgraded automatically at startup.
 
 ## 2026-07-28 Agent Core deployment ledger and dashboard
 

@@ -136,14 +136,29 @@ are omitted, while ordinary Matrix and ProductCore service remains available.
 
 Model, AWS and extension credentials are immutable secret revisions. Tasks,
 confirmations and workload records retain references and digests only.
-Existing model credentials are upgraded by dual-read/single-write: decrypt the
-legacy envelope, write the new keyring envelope, verify current and historical
-rows, then clear legacy columns.
+Existing legacy model credentials are upgraded only by an explicit offline
+`agent-secretctl upgrade` run. Before the migration, stop the persistent
+service and make one restorable backup set containing PostgreSQL, the keyring,
+and the legacy model-profile raw-key file. Initialize or validate the v1
+keyring with `agent-secretctl init`, then run `upgrade` with
+`P2P_AGENT_SECRET_KEYRING_FILE`, `P2P_AGENT_SECRET_DATABASE_DSN`, and
+`P2P_AGENT_MODEL_PROFILE_KEY_FILE` supplied through the environment; key
+material and database credentials are never command-line arguments. The
+upgrade uses row locks and CAS and overwrites the shared model-profile nonce
+and ciphertext columns with the v1 envelope and metadata; it does not clear
+those columns. It is never run automatically by Compose or server startup.
+Run `agent-secretctl verify` again with the legacy-key environment unset so
+verification succeeds using only the keyring. If migration or verification
+fails, rollback is an atomic restore of the PostgreSQL, keyring, and legacy-key
+backup set, not an image-only rollback. Destructive v110 cleanup of legacy
+compatibility material is deferred until fleet convergence and the rollback
+window has closed.
 
 The same image provides:
 
 ```text
 agent-secretctl init
+agent-secretctl upgrade
 agent-secretctl verify
 agent-secretctl rotate
 ```
