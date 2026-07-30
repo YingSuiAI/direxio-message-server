@@ -288,7 +288,7 @@ func (s *DatabaseTaskStore) Claim(ctx context.Context, c task.ClaimCommand) (tas
 	if _, e = tx.ExecContext(ctx, `UPDATE agent_tasks SET progress_sequence=progress_sequence+1 WHERE task_id=$1`, id); e != nil {
 		return task.Task{}, task.Lease{}, e
 	}
-	if _, e = tx.ExecContext(ctx, `INSERT INTO agent_task_events(owner_id,task_id,sequence,event_type,status,payload_json,occurred_at) SELECT owner_id,task_id,progress_sequence,'claimed','running',jsonb_build_object('holder',$2,'lease_epoch',$3),$4 FROM agent_tasks WHERE task_id=$1`, id, c.Holder, c.LeaseEpoch, c.At.UTC()); e != nil {
+	if _, e = tx.ExecContext(ctx, `INSERT INTO agent_task_events(owner_id,task_id,sequence,event_type,status,payload_json,occurred_at) SELECT owner_id,task_id,progress_sequence,'claimed','running',jsonb_build_object('holder',$2::text,'lease_epoch',$3::bigint),$4 FROM agent_tasks WHERE task_id=$1`, id, c.Holder, c.LeaseEpoch, c.At.UTC()); e != nil {
 		return task.Task{}, task.Lease{}, e
 	}
 	if e = tx.Commit(); e != nil {
@@ -355,7 +355,7 @@ func (s *DatabaseTaskStore) Reclaim(ctx context.Context, c task.ReclaimCommand) 
 	if _, e = tx.ExecContext(ctx, `UPDATE agent_tasks SET progress_sequence=progress_sequence+1 WHERE task_id=$1`, id); e != nil {
 		return task.Task{}, task.Lease{}, e
 	}
-	if _, e = tx.ExecContext(ctx, `INSERT INTO agent_task_events(owner_id,task_id,sequence,event_type,status,payload_json,occurred_at) SELECT owner_id,task_id,progress_sequence,'reclaimed','running',jsonb_build_object('holder',$2,'lease_epoch',$3),$4 FROM agent_tasks WHERE task_id=$1`, id, c.Holder, c.LeaseEpoch, c.At.UTC()); e != nil {
+	if _, e = tx.ExecContext(ctx, `INSERT INTO agent_task_events(owner_id,task_id,sequence,event_type,status,payload_json,occurred_at) SELECT owner_id,task_id,progress_sequence,'reclaimed','running',jsonb_build_object('holder',$2::text,'lease_epoch',$3::bigint),$4 FROM agent_tasks WHERE task_id=$1`, id, c.Holder, c.LeaseEpoch, c.At.UTC()); e != nil {
 		return task.Task{}, task.Lease{}, e
 	}
 	if e = tx.Commit(); e != nil {
@@ -995,7 +995,7 @@ func (s *DatabaseTaskStore) ClaimNextDue(ctx context.Context, holder string, at 
 	if _, e = tx.ExecContext(ctx, `UPDATE agent_task_runtime_concurrency SET running_count=running_count+1,revision=revision+1,updated_at=$1 WHERE singleton=true`, at.UTC()); e != nil {
 		return task.Task{}, task.Lease{}, e
 	}
-	if _, e = tx.ExecContext(ctx, `INSERT INTO agent_task_events(owner_id,task_id,sequence,event_type,status,payload_json,occurred_at) SELECT owner_id,task_id,progress_sequence,'claimed','running',jsonb_build_object('holder',$2),$3 FROM agent_tasks WHERE task_id=$1`, id, holder, at.UTC()); e != nil {
+	if _, e = tx.ExecContext(ctx, `INSERT INTO agent_task_events(owner_id,task_id,sequence,event_type,status,payload_json,occurred_at) SELECT owner_id,task_id,progress_sequence,'claimed','running',jsonb_build_object('holder',$2::text),$3 FROM agent_tasks WHERE task_id=$1`, id, holder, at.UTC()); e != nil {
 		return task.Task{}, task.Lease{}, e
 	}
 	if e = tx.Commit(); e != nil {
@@ -1044,7 +1044,7 @@ func (s *DatabaseTaskStore) ReclaimExpired(ctx context.Context, holder string, a
 	if _, e = tx.ExecContext(ctx, `UPDATE agent_task_runtime_concurrency SET running_count=GREATEST(0,running_count-1),revision=revision+1,updated_at=$1 WHERE singleton=true`, at.UTC()); e != nil {
 		return e
 	}
-	if _, e = tx.ExecContext(ctx, `INSERT INTO agent_task_events(owner_id,task_id,sequence,event_type,status,payload_json,occurred_at) SELECT owner_id,task_id,progress_sequence,'reclaimed','queued',jsonb_build_object('previous_holder',$2,'next_holder',$3,'previous_lease_epoch',$4),$5 FROM agent_tasks WHERE task_id=$1`, id, previousHolder, holder, epoch, at.UTC()); e != nil {
+	if _, e = tx.ExecContext(ctx, `INSERT INTO agent_task_events(owner_id,task_id,sequence,event_type,status,payload_json,occurred_at) SELECT owner_id,task_id,progress_sequence,'reclaimed','queued',jsonb_build_object('previous_holder',$2::text,'next_holder',$3::text,'previous_lease_epoch',$4::bigint),$5 FROM agent_tasks WHERE task_id=$1`, id, previousHolder, holder, epoch, at.UTC()); e != nil {
 		return e
 	}
 	return tx.Commit()
