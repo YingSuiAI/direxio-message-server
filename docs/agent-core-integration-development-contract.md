@@ -39,6 +39,8 @@ through ProductCore, realtime events, logs or deployment objects.
 The possible embedded capability tokens are:
 
 - `model_profiles.server`
+- `model_roles.server`
+- `memory.server`
 - `task`
 - `schedules.server`
 - `confirmation`
@@ -63,7 +65,11 @@ names but invoke in-process modules directly:
 - dashboard/deployments read the canonical workload operation/event tables.
 
 `client.agent_core_stream` and every Core conversation request are rejected.
-`client.native_agent_stream` and the public `POST /mcp` contract are unchanged.
+`client.native_agent_stream` remains the Native Agent transport. Server-managed
+chat may carry `model_profile_id` and a complete
+`model_profile_revision`/`credential_version` pair; the server pins that
+immutable snapshot before durable execution. The public `POST /mcp` contract
+is unchanged.
 
 ## 3. PostgreSQL runtime
 

@@ -1,6 +1,16 @@
 # API Interface Change Record
 
-Last updated: 2026-07-29
+Last updated: 2026-07-30
+
+## 2026-07-30 Native Agent selected model pins
+
+Server-managed Native Agent chat accepts the selected `model_profile_id`
+together with a complete `model_profile_revision` / `credential_version` pair.
+The durable turn resolves that immutable profile and credential snapshot before
+reservation and stores only the pin and secret-free request digest. Supplying
+only one version field, or conflicting request/context pins, fails before a
+turn is reserved. Omitting the profile still resolves the owner's default
+conversation profile.
 
 ## 2026-07-29 Single-service Embedded Eino ownership
 
