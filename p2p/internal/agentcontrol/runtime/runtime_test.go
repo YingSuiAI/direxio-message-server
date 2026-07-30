@@ -156,6 +156,35 @@ func TestWorkerFailsClosedOnUncertainExecution(t *testing.T) {
 	}
 }
 
+func TestWorkerLeavesDeferredTaskNonterminal(t *testing.T) {
+	store := &fakeTaskStore{fail: make(chan task.FailCommand, 1), complete: make(chan task.CompleteCommand, 1)}
+	w, err := New(Config{Store: store, Executor: fakeExecutor{err: ErrTaskDeferred}, MaxConcurrent: 1, LeaseTTL: time.Second, Holder: "worker"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	deadline := time.Now().Add(time.Second)
+	for !store.Claimed() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	// The executor has returned, but the durable task remains leased/running
+	// for normal expiry-and-reclaim; no generic terminal write is permitted.
+	time.Sleep(25 * time.Millisecond)
+	select {
+	case got := <-store.fail:
+		t.Fatalf("deferred task failed: %+v", got)
+	case got := <-store.complete:
+		t.Fatalf("deferred task completed: %+v", got)
+	default:
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("run error=%v", err)
+	}
+}
+
 func TestWorkerStopStopsClaimsAndJoins(t *testing.T) {
 	store := &fakeTaskStore{fail: make(chan task.FailCommand, 1), complete: make(chan task.CompleteCommand, 1)}
 	w, err := New(Config{Store: store, Executor: fakeExecutor{}, MaxConcurrent: 1, LeaseTTL: time.Second, Holder: "worker"})

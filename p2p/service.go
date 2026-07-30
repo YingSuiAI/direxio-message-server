@@ -120,16 +120,20 @@ type Service struct {
 	agentTaskRuntime          *agentruntime.Worker
 	agentScheduleLoop         *agentruntime.ScheduleLoop
 	agentRuntimeInitErr       error
-	agentSecretGuard          *p2pstorage.AgentSecretRuntimeGuard
-	agentSecretEnveloper      *p2pstorage.AgentSecretEnveloper
-	agentSecretKeyringFile    string
-	agentSecretReady          bool
-	modelProfiles             p2pstorage.ModelProfileStore
-	modelProfileInitErr       error
-	mcpModule                 *mcpmodule.Module
-	mcpCapabilities           *dirextalkmcp.Service
-	releaseController         releasecontrol.Controller
-	legacyAgentGatewayModule  *legacygatewaymodule.Module
+	// deploymentSourceReady is set only when the v106 PostgreSQL deployment
+	// projection is wired into the embedded module. Legacy in-memory and
+	// DatabaseStore ledger methods deliberately never set this flag.
+	deploymentSourceReady    bool
+	agentSecretGuard         *p2pstorage.AgentSecretRuntimeGuard
+	agentSecretEnveloper     *p2pstorage.AgentSecretEnveloper
+	agentSecretKeyringFile   string
+	agentSecretReady         bool
+	modelProfiles            p2pstorage.ModelProfileStore
+	modelProfileInitErr      error
+	mcpModule                *mcpmodule.Module
+	mcpCapabilities          *dirextalkmcp.Service
+	releaseController        releasecontrol.Controller
+	legacyAgentGatewayModule *legacygatewaymodule.Module
 
 	servicePortalState
 	actions              map[string]actionHandler
@@ -912,22 +916,7 @@ func newService(cfg Config, store Store, transport Transport, state portalState,
 		Store: nativeAgentConfigStore{service: service}, MCP: service.mcpCapabilities,
 		Control: agentmodule.ControlInvokerAdapter{
 			Ready: func(action string) bool {
-				capability := ""
-				switch strings.TrimSpace(action) {
-				case "agent.core.aws.credentials.list", "agent.core.aws.credentials.test":
-					capability = "aws.control"
-				case "agent.core.workloads.plan", "agent.core.workloads.list", "agent.core.workloads.get", "agent.core.workloads.quote", "agent.core.workloads.apply", "agent.core.workloads.destroy", "agent.core.workloads.operations.get", "agent.core.workloads.operations.events":
-					capability = "workload.aws_ssm"
-					if service.embeddedAgentCapabilityReady("workload.aws_ecs") {
-						capability = "workload.aws_ecs"
-					}
-				case "agent.core.deployments.list", "agent.core.deployments.get", "agent.core.deployments.events":
-					capability = "deployments.server"
-				default:
-					return false
-				}
-				module := service.agentEmbedded
-				return service.embeddedAgentCapabilityReady(capability) && module != nil && module.Handlers()[strings.TrimSpace(action)] != nil
+				return service.nativeAgentControlActionReady(action)
 			},
 			Call: func(ctx context.Context, action string, params map[string]any) (any, error) {
 				// The embedded module and its late-bound ports are assembled below.
@@ -999,19 +988,16 @@ func newService(cfg Config, store Store, transport Transport, state portalState,
 		embeddedConfig.Confirmations = confirmationStore
 		embeddedConfig.MCP = controls.mcpPort
 		embeddedConfig.AWS = controls.awsPort
+		embeddedConfig.GeoLibre = controls.geolibrePort
 		embeddedConfig.Workloads = controls.workloadPort
-		if deployments := p2pstorage.NewWorkloadDeploymentSource(dbStore); deployments != nil {
+		if deployments := p2pstorage.NewWorkloadDeploymentSource(dbStore); deployments != nil && unifiedDeploymentSchemaReady(context.Background(), dbStore.DB()) {
 			embeddedConfig.Deployments = embeddedDeploymentAdapter{source: deployments}
+			service.deploymentSourceReady = true
 		}
 		if trigger, ok := any(dbStore).(interface {
 			TriggerSchedule(context.Context, string, string, string) (p2pstorage.Schedule, string, string, error)
 		}); ok {
 			embeddedConfig.ScheduleTrigger = trigger
-		}
-	}
-	if embeddedConfig.Deployments == nil {
-		if ledger, ok := store.(embeddedDeploymentSource); ok {
-			embeddedConfig.Deployments = embeddedDeploymentAdapter{source: ledger}
 		}
 	}
 	service.agentEmbedded = agentembeddedmodule.New(embeddedConfig)

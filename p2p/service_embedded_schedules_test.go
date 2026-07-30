@@ -38,6 +38,27 @@ func TestAgentSecretFailureSuppressesSecretDependentCapabilities(t *testing.T) {
 	}
 }
 
+func TestDeploymentsCapabilityRejectsLegacyOrUnboundStores(t *testing.T) {
+	legacy := &Service{
+		store:                 p2pstorage.NewMemoryStore(),
+		deploymentSourceReady: true, // a stale/incorrect marker must not bypass the DB probe
+	}
+	if legacy.embeddedAgentCapabilityReady("deployments.server") {
+		t.Fatal("deployments.server published for the retained in-memory deployment ledger")
+	}
+	unbound := &Service{deploymentSourceReady: false}
+	if unbound.embeddedAgentCapabilityReady("deployments.server") {
+		t.Fatal("deployments.server published without a wired v106 source")
+	}
+	withoutSchema := &Service{
+		store:                 p2pstorage.NewUnmigratedDatabaseStore(nil, nil),
+		deploymentSourceReady: true,
+	}
+	if withoutSchema.embeddedAgentCapabilityReady("deployments.server") {
+		t.Fatal("deployments.server published without a live v106 schema")
+	}
+}
+
 func TestDatabaseServiceMissingAgentKeyringFailsClosedWithoutCreatingIt(t *testing.T) {
 	ctx := context.Background()
 	connStr, closeDB := test.PrepareDBConnectionString(t, test.DBTypePostgres)
@@ -65,6 +86,9 @@ func TestDatabaseServiceMissingAgentKeyringFailsClosedWithoutCreatingIt(t *testi
 	}
 	if service.embeddedAgentCapabilityReady("model_profiles.server") || service.embeddedAgentCapabilityReady("task") {
 		t.Fatal("Agent capability published without a verified keyring")
+	}
+	if !service.embeddedAgentCapabilityReady("deployments.server") {
+		t.Fatal("read-only deployments.server should remain available with a valid schema when Agent secrets are unavailable")
 	}
 	if !service.embeddedAgentCapabilityReady("memory.server") {
 		t.Fatal("in-process PostgreSQL knowledge and memory must remain ready without an Agent keyring")
@@ -130,6 +154,9 @@ func TestDatabaseServiceEmbeddedAWSWorkloadReadiness(t *testing.T) {
 
 	if !service.EmbeddedSchedulesReady() {
 		t.Fatal("embedded scheduler is not ready after startup")
+	}
+	if !service.embeddedAgentCapabilityReady("deployments.server") {
+		t.Fatal("deployments.server is not ready with the migrated v106 PostgreSQL source")
 	}
 	backends, apiErr := service.Handle(ctx, "agent.backends.get", nil)
 	if apiErr != nil {

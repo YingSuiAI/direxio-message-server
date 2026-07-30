@@ -2,6 +2,7 @@ package p2p
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 	"time"
@@ -59,11 +60,32 @@ func (s *Service) embeddedAgentCapabilityReady(capability string) bool {
 			s.agentTaskExecutor != nil &&
 			s.agentTaskExecutor.ready(capability)
 	case "deployments.server":
-		_, ok := s.store.(embeddedDeploymentSource)
-		return ok
+		if !s.deploymentSourceReady {
+			return false
+		}
+		dbStore, ok := s.store.(*p2pstorage.DatabaseStore)
+		return ok && unifiedDeploymentSchemaReady(context.Background(), dbStore.DB())
 	default:
 		return false
 	}
+}
+
+// unifiedDeploymentSchemaReady probes the v106 tables instead of relying on a
+// store method set. Both DatabaseStore and MemoryStore retain legacy ledger
+// methods for compatibility, so a type assertion alone would accidentally
+// publish deployments.server against the retired in-memory/legacy source.
+func unifiedDeploymentSchemaReady(ctx context.Context, db *sql.DB) bool {
+	if db == nil {
+		return false
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	var ready bool
+	err := db.QueryRowContext(probeCtx, `
+		SELECT to_regclass('core_deployments') IS NOT NULL
+		   AND to_regclass('core_deployment_event_counters') IS NOT NULL
+		   AND to_regclass('core_deployment_events') IS NOT NULL`).Scan(&ready)
+	return err == nil && ready
 }
 
 // StartEmbeddedScheduler starts the single generic schedule loop and task

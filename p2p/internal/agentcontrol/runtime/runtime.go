@@ -27,6 +27,10 @@ var (
 	// terminal state in one transaction. The worker must not issue a second
 	// generic completion write.
 	ErrTaskFinalized = errors.New("task finalized by domain coordinator")
+	// ErrTaskDeferred tells the common worker that execution is safely blocked
+	// behind another durable fence. It must leave the task nonterminal so a
+	// later lease reclaim can retry without repeating the guarded mutation.
+	ErrTaskDeferred = errors.New("task execution deferred by durable fence")
 )
 
 // Executor is the only execution dependency of the worker.  It must not
@@ -312,7 +316,7 @@ func (w *Worker) execute(parent context.Context, t task.Task, lease task.Lease) 
 	if stale.Load() {
 		return
 	}
-	if errors.Is(err, ErrTaskFinalized) {
+	if errors.Is(err, ErrTaskFinalized) || errors.Is(err, ErrTaskDeferred) {
 		return
 	}
 	if err == nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
