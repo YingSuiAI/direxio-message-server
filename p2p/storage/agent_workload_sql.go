@@ -26,7 +26,10 @@ func (s *DatabaseStore) AppendWorkloadEventSQL(ctx context.Context, ownerID, ope
 	if err = tx.QueryRowContext(ctx, `INSERT INTO core_workload_event_counters(owner_id,operation_id,next_sequence) VALUES($1,$2,2) ON CONFLICT(owner_id,operation_id) DO UPDATE SET next_sequence=core_workload_event_counters.next_sequence+1 RETURNING next_sequence-1`, ownerID, operationID).Scan(&sequence); err != nil {
 		return 0, err
 	}
-	readback, _ := json.Marshal(event.Readback)
+	readback, err := json.Marshal(event.Readback)
+	if err != nil {
+		return 0, workload.ErrInvalid
+	}
 	if err = insertWorkloadEventTx(ctx, tx, ownerID, operationID, sequence, event.Kind, string(event.Status), event.Message, readback, time.Now().UTC()); err != nil {
 		return 0, err
 	}
@@ -37,6 +40,10 @@ func (s *DatabaseStore) AppendWorkloadEventSQL(ctx context.Context, ownerID, ope
 }
 
 func insertWorkloadEventTx(ctx context.Context, tx *sql.Tx, ownerID, operationID string, sequence uint64, kind, status, message string, readback []byte, at time.Time) error {
+	readbackArg, err := workloadEventReadbackArg(readback)
+	if err != nil {
+		return err
+	}
 	var workloadID string
 	if err := tx.QueryRowContext(ctx, `SELECT workload_id::text FROM core_workload_operations WHERE owner_id=$1 AND operation_id=$2`, ownerID, operationID).Scan(&workloadID); err != nil {
 		return err
@@ -49,7 +56,21 @@ func insertWorkloadEventTx(ctx context.Context, tx *sql.Tx, ownerID, operationID
 		RETURNING last_sequence`, ownerID, workloadID, at.UTC()).Scan(&publicSequence); err != nil {
 		return err
 	}
-	_, err := tx.ExecContext(ctx, `INSERT INTO core_workload_events(owner_id,workload_id,operation_id,sequence,public_sequence,kind,status,message,readback_json,at)
-		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, ownerID, workloadID, operationID, sequence, publicSequence, kind, status, message, readback, at.UTC())
+	_, err = tx.ExecContext(ctx, `INSERT INTO core_workload_events(owner_id,workload_id,operation_id,sequence,public_sequence,kind,status,message,readback_json,at)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, ownerID, workloadID, operationID, sequence, publicSequence, kind, status, message, readbackArg, at.UTC())
 	return err
+}
+
+// workloadEventReadbackArg keeps absent event readbacks as SQL NULL. Passing
+// a typed nil []byte through database/sql makes lib/pq encode an empty value,
+// which PostgreSQL then rejects for the jsonb column. Non-empty values remain
+// byte-for-byte intact after validation so the JSONB contract is unchanged.
+func workloadEventReadbackArg(readback []byte) (any, error) {
+	if len(readback) == 0 {
+		return nil, nil
+	}
+	if !json.Valid(readback) {
+		return nil, workload.ErrInvalid
+	}
+	return readback, nil
 }
