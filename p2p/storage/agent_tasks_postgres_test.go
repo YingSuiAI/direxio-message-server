@@ -47,7 +47,7 @@ func TestPostgresTaskQueueClaimAndReclaimEventPayloads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("claim due task: %v", err)
 	}
-	if claimed.ID != taskID || lease.Holder != "claim-holder" || lease.Epoch != 1 {
+	if claimed.ID != taskID || claimed.Revision != 2 || claimed.ExecutionStartedAt == nil || lease.Holder != "claim-holder" || lease.Epoch != 1 {
 		t.Fatalf("claim = task=%#v lease=%#v", claimed, lease)
 	}
 	var claimHolder string
@@ -56,6 +56,12 @@ func TestPostgresTaskQueueClaimAndReclaimEventPayloads(t *testing.T) {
 	}
 	if claimHolder != "claim-holder" {
 		t.Fatalf("claimed event holder = %q", claimHolder)
+	}
+	if _, err = queue.RenewLease(ctx, task.RenewLeaseCommand{
+		Fence:  task.Fence{TaskID: taskID, Attempt: lease.Attempt, LeaseEpoch: lease.Epoch, ExpectedRevision: claimed.Revision},
+		Holder: "claim-holder", LeaseTTL: time.Minute, At: now.Add(time.Second),
+	}); err != nil {
+		t.Fatalf("renew current claim fence: %v", err)
 	}
 
 	if err = queue.ReclaimExpired(ctx, "reclaim-holder", now.Add(2*time.Minute), time.Minute, 2); err != nil {

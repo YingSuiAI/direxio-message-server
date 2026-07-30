@@ -989,7 +989,7 @@ func (s *DatabaseTaskStore) ClaimNextDue(ctx context.Context, holder string, at 
 		return task.Task{}, task.Lease{}, e
 	}
 	until := at.UTC().Add(ttl)
-	if _, e = tx.ExecContext(ctx, `UPDATE agent_tasks SET status='running',attempt=GREATEST(attempt,1),lease_epoch=lease_epoch+1,lease_holder=$2,lease_expires_at=$3,revision=revision+1,progress_sequence=progress_sequence+1,updated_at=$4 WHERE task_id=$1`, id, holder, until, at.UTC()); e != nil {
+	if _, e = tx.ExecContext(ctx, `UPDATE agent_tasks SET status='running',attempt=GREATEST(attempt,1),lease_epoch=lease_epoch+1,lease_holder=$2,lease_expires_at=$3,execution_started_at=COALESCE(execution_started_at,$4),revision=revision+1,progress_sequence=progress_sequence+1,updated_at=$4 WHERE task_id=$1`, id, holder, until, at.UTC()); e != nil {
 		return task.Task{}, task.Lease{}, e
 	}
 	if _, e = tx.ExecContext(ctx, `UPDATE agent_task_runtime_concurrency SET running_count=running_count+1,revision=revision+1,updated_at=$1 WHERE singleton=true`, at.UTC()); e != nil {
