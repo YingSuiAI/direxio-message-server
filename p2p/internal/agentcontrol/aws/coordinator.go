@@ -233,7 +233,7 @@ func (m *MemoryChangeCoordinator) ConsumeChange(_ context.Context, cmd ConsumeCh
 	now := m.now().UTC()
 	p, pok := m.repo.plans[c.PlanID]
 	cred, cok := m.repo.credentialHistory[p.CredentialID][p.CredentialRevision]
-	if !pok || !cok || !credentialReadyForPlan(cred) || !conf.ExpiresAt.After(now) || !conf.Binding.Equal(bindingForPlan(p, cred)) || (!cmd.Binding.IsZero() && !conf.Binding.Equal(cmd.Binding)) {
+	if !pok || !cok || !credentialReadyForPlan(cred) || !conf.ExpiresAt.After(now) || !conf.Binding.Equal(bindingForPlanOwner(p, cred, conf.OwnerID)) || (!cmd.Binding.IsZero() && !conf.Binding.Equal(cmd.Binding)) {
 		conf.State, conf.Revision, conf.UpdatedAt = coreconfirmation.StateExpired, conf.Revision+1, now
 		t.Status, t.FailureCode, t.FailureSummary, t.Revision = "failed", "confirmation_stale", "AWS confirmation binding is stale or expired", t.Revision+1
 		c.Status, c.Stage, c.ErrorCode, c.ErrorSummary, c.Revision, c.UpdatedAt = ChangeFailed, StageFailed, "confirmation_stale", "AWS confirmation binding is stale or expired", c.Revision+1, now
@@ -396,7 +396,7 @@ func (m *MemoryChangeCoordinator) ClaimProviderMutation(ctx context.Context, cmd
 	m.repo.mu.RLock()
 	p, pok := m.repo.plans[f.Change.PlanID]
 	cred, cok := m.repo.credentialHistory[p.CredentialID][p.CredentialRevision]
-	bindingOK := pok && cok && f.Confirmation.Binding.Equal(bindingForPlan(p, cred))
+	bindingOK := pok && cok && f.Confirmation.Binding.Equal(bindingForPlanOwner(p, cred, f.Confirmation.OwnerID))
 	m.repo.mu.RUnlock()
 	if !bindingOK {
 		return ExecutionFence{}, ErrRevisionConflict

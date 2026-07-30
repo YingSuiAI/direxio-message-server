@@ -173,6 +173,12 @@ func bindingForPlan(p Plan, c Credentials) coreconfirmation.Binding {
 	return coreconfirmation.Binding{OperationDomain: "aws", TargetID: canonicalTargetKey(c.AccountID, p.Region, p.StackName), TargetRevision: p.Revision, SourceVersion: "core-v1", ContentDigest: coreconfirmation.Digest(p.TemplateSHA256), ParameterDigest: coreconfirmation.Digest(param), NetworkDigest: coreconfirmation.Digest(canonicalDigest([]string{})), SecretGrantDigest: coreconfirmation.Digest(secret), SecretGrants: []coreconfirmation.SecretGrant{{ReferenceID: c.ID, Purpose: coreconfirmation.SecretPurposeAWSCredential, Revision: c.Revision, BindingDigest: coreconfirmation.Digest(secret)}}}
 }
 
+func bindingForPlanOwner(p Plan, c Credentials, ownerID string) coreconfirmation.Binding {
+	binding := bindingForPlan(p, c)
+	binding.OwnerID = strings.TrimSpace(ownerID)
+	return binding
+}
+
 // BindingForPlan is the canonical immutable AWS confirmation binding builder.
 func BindingForPlan(p Plan, c Credentials) coreconfirmation.Binding { return bindingForPlan(p, c) }
 

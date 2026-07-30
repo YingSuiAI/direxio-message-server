@@ -56,7 +56,7 @@ func (s *Service) executeChangeStrict(ctx context.Context, confirmationID string
 	if !credentialReadyForPlan(cred) {
 		return Change{}, ErrConflict
 	}
-	if !conf.Binding.Equal(bindingForPlan(p, cred)) {
+	if !conf.Binding.Equal(bindingForPlanOwner(p, cred, conf.OwnerID)) {
 		return Change{}, ErrRevisionConflict
 	}
 	if c.Stage == StageReconciling {

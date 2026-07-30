@@ -73,3 +73,28 @@ func TestAtomicFullWorkflowUsesSingleProviderToken(t *testing.T) {
 		t.Fatal("reservation not released")
 	}
 }
+
+func TestExecuteChangeStrictAcceptsAuthoritativeOwnerBinding(t *testing.T) {
+	s, repo, provider, plan := workflowFixture(t)
+	requested, err := s.RequestChange(context.Background(), RequestChangeInput{PlanID: plan.ID, IdempotencyKey: uuid.NewString()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const ownerID = "@owner:example.test"
+	repo.mu.Lock()
+	confirmation := repo.confirmations[requested.Confirmation.ConfirmationID]
+	confirmation.OwnerID = ownerID
+	confirmation.Binding.OwnerID = ownerID
+	repo.confirmations[confirmation.ConfirmationID] = confirmation
+	repo.mu.Unlock()
+	requested.Confirmation = confirmation
+	consumed := consumeWorkflowChange(t, s, repo, requested)
+
+	completed, err := s.ExecuteChange(context.Background(), consumed.Confirmation.ConfirmationID)
+	if err != nil {
+		t.Fatalf("owner-bound ExecuteChange = %v", err)
+	}
+	if completed.Status != ChangeSucceeded || len(provider.Calls) < 2 {
+		t.Fatalf("owner-bound completion=%#v calls=%v", completed, provider.Calls)
+	}
+}
