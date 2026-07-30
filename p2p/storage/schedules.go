@@ -863,7 +863,7 @@ func (s *DatabaseStore) ListSchedules(ctx context.Context, o string, limit int, 
 		return SchedulePage{}, e
 	}
 	defer rows.Close()
-	p := SchedulePage{}
+	p := SchedulePage{Schedules: []Schedule{}}
 	for rows.Next() {
 		var v Schedule
 		if e = rows.Scan(&v.ScheduleID, &v.OwnerID, &v.Name, &v.Prompt, &v.TriggerKind, &v.TriggerValue, &v.Timezone, &v.SkipIfRunning, &v.Status, &v.CoreState, &v.Revision, &v.ModelProfileID, &v.ModelProfileRevision, &v.CredentialVersion, &v.NextRunAt, &v.LatestRunAt, &v.LeaseOwner, &v.LeaseUntil, &v.LeaseEpoch, &v.TaskTemplate, &v.TriggerJSON, &v.CreatedAt, &v.UpdatedAt); e != nil {
@@ -1133,7 +1133,7 @@ func (s *DatabaseStore) ListScheduleRuns(ctx context.Context, o, id string, limi
 		return ScheduleRunPage{}, e
 	}
 	defer rows.Close()
-	p := ScheduleRunPage{}
+	p := ScheduleRunPage{Runs: []ScheduleRun{}}
 	for rows.Next() {
 		var r ScheduleRun
 		if e = rows.Scan(&r.RunID, &r.ScheduleID, &r.OwnerID, &r.Status, &r.ScheduledFor, &r.StartedAt, &r.FinishedAt, &r.Result, &r.Error, &r.LeaseEpoch); e != nil {
