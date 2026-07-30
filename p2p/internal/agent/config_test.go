@@ -65,6 +65,9 @@ func TestNativeConfigMappingPreservesSharedAndNativeFields(t *testing.T) {
 	if nativeMap["display_name"] != "Updated Agent" || nativeMap["avatar_url"] != "mxc://updated-ying" {
 		t.Fatalf("native runtime config should expose Ying identity, got %#v", nativeMap)
 	}
+	if _, ok := nativeMap["online_agent_identity"]; ok {
+		t.Fatalf("native runtime config must not expose Online Agent identity: %#v", nativeMap)
+	}
 	if _, ok := next.Native["native_agent_identity"]; ok {
 		t.Fatalf("mode identities must not be stored as runtime Native fields: %#v", next.Native)
 	}
@@ -74,6 +77,14 @@ func TestApplyConfigUpdateMaintainsModeIdentities(t *testing.T) {
 	current := NormalizeConfig(dirextalkdomain.AgentConfig{
 		DisplayName: "Legacy",
 		AvatarURL:   "mxc://legacy",
+		NativeAgentIdentity: dirextalkdomain.AgentIdentityConfig{
+			DisplayName: "Legacy",
+			AvatarURL:   "mxc://legacy",
+		},
+		OnlineAgentIdentity: dirextalkdomain.AgentIdentityConfig{
+			DisplayName: "Legacy",
+			AvatarURL:   "mxc://legacy",
+		},
 	})
 
 	nativeOnly := ApplyConfigUpdate(current, map[string]any{
@@ -121,6 +132,38 @@ func TestApplyConfigUpdateMaintainsModeIdentities(t *testing.T) {
 	if nestedWins.NativeAgentIdentity.DisplayName != "Nested Ying" ||
 		nestedWins.OnlineAgentIdentity.DisplayName != "Legacy Request" {
 		t.Fatalf("nested identity should win while top-level fills the other mode: %#v", nestedWins)
+	}
+
+	emptyAvatarIgnored := ApplyConfigUpdate(nestedWins, map[string]any{
+		"avatar_url": "",
+		"online_agent_identity": map[string]any{
+			"avatar_url": "",
+		},
+	})
+	if emptyAvatarIgnored.NativeAgentIdentity.AvatarURL != "mxc://shared" ||
+		emptyAvatarIgnored.OnlineAgentIdentity.AvatarURL != "mxc://shared" {
+		t.Fatalf("empty avatar strings must not clear existing identities: %#v", emptyAvatarIgnored)
+	}
+}
+
+func TestOnlineIdentityUpdateRequested(t *testing.T) {
+	if OnlineIdentityUpdateRequested(map[string]any{
+		"native_agent_identity": map[string]any{"display_name": "Ying"},
+	}) {
+		t.Fatal("native-only identity update must not request Online Agent Matrix sync")
+	}
+	if !OnlineIdentityUpdateRequested(map[string]any{"display_name": "Legacy"}) {
+		t.Fatal("legacy top-level identity update should request Online Agent Matrix sync")
+	}
+	if !OnlineIdentityUpdateRequested(map[string]any{
+		"online_agent_identity": map[string]any{"avatar_url": "mxc://example.com/online"},
+	}) {
+		t.Fatal("online identity avatar update should request Matrix sync")
+	}
+	if OnlineIdentityUpdateRequested(map[string]any{
+		"online_agent_identity": map[string]any{"avatar_url": ""},
+	}) {
+		t.Fatal("empty online identity fields must not request Matrix sync")
 	}
 }
 
@@ -172,6 +215,10 @@ func TestMigrateLegacyPluginConfigFillsMissingFieldsOnce(t *testing.T) {
 	}
 	if state.AgentConfig.DisplayName != "Legacy Agent" || state.AgentConfig.SystemPrompt != "current prompt" {
 		t.Fatalf("legacy merge overwrote current config: %#v", state.AgentConfig)
+	}
+	if state.AgentConfig.NativeAgentIdentity.DisplayName != "Legacy Agent" ||
+		state.AgentConfig.OnlineAgentIdentity.DisplayName != "Legacy Agent" {
+		t.Fatalf("legacy top-level identity should initialize both mode identities: %#v", state.AgentConfig)
 	}
 	if hasNestedKey(ToNativeMap(state.AgentConfig), "api_key") || hasNestedKey(ToNativeMap(state.AgentConfig), "api_key_ref") {
 		t.Fatalf("legacy migration persisted secret references: %#v", state.AgentConfig)

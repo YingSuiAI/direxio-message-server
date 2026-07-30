@@ -46,6 +46,7 @@ type AccountPort interface {
 	CreateMatrixSession(context.Context, map[string]any) (MatrixSession, *actionbase.Error)
 	Config() dirextalkdomain.AgentConfig
 	UpdateConfig(context.Context, func(dirextalkdomain.AgentConfig) dirextalkdomain.AgentConfig) (dirextalkdomain.AgentConfig, *actionbase.Error)
+	SyncOnlineIdentity(context.Context, dirextalkdomain.AgentIdentityConfig) *actionbase.Error
 	PublishOffline(context.Context) *actionbase.Error
 }
 
@@ -96,6 +97,11 @@ func (m *Module) updateConfig(ctx context.Context, params map[string]any) (any, 
 	}
 	if disableAgent {
 		if actionErr := account.PublishOffline(ctx); actionErr != nil {
+			return nil, actionErr
+		}
+	}
+	if OnlineIdentityUpdateRequested(params) {
+		if actionErr := account.SyncOnlineIdentity(ctx, OnlineAgentIdentity(config)); actionErr != nil {
 			return nil, actionErr
 		}
 	}

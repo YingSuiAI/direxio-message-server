@@ -20,7 +20,11 @@ Non-members may call `channels.public.posts.list`, but they may not create comme
 
 `agent.config.get` and `agent.config.update` now support mode-specific Agent identity objects. `native_agent_identity` owns Ying / Native Agent `display_name` and `avatar_url`; `online_agent_identity` owns Your Agent / Matrix bridge `display_name` and `avatar_url`. The existing top-level `display_name` and `avatar_url` remain for legacy clients and mirror the effective Native Agent identity in responses.
 
-A legacy update that sends only top-level identity fields synchronizes both mode identities. When nested identities are sent, updates merge per mode so one mode can change without clearing or overwriting the other; nested values take precedence for their mode. `agent.matrix_session.create` uses `online_agent_identity` when creating or ensuring the Matrix Agent session.
+A legacy update that sends only non-empty top-level identity fields synchronizes both mode identities. When nested identities are sent, updates merge per mode so one mode can change without clearing or overwriting the other; nested values take precedence for their mode. Missing fields and empty strings do not clear an existing name or avatar.
+
+Native Agent runtime config now exposes only Ying's effective identity through the legacy top-level `display_name` and `avatar_url` keys and must not receive or persist `online_agent_identity`.
+
+`agent.matrix_session.create` uses `online_agent_identity` when creating or ensuring the Matrix Agent session. Updating `online_agent_identity` also synchronizes the local `@agent:<server>` Matrix global profile and the Agent room `m.room.member` profile. Updating only `native_agent_identity` does not touch Matrix. If the desired config is saved but Matrix profile/member synchronization fails, `agent.config.update` returns `agent_identity_sync_failed`; `agent.config.get` continues to return the saved desired identity.
 
 ## 2026-07-23 Native Agent Anthropic, Gemini, And xAI Model Lists
 

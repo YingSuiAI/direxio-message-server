@@ -57,6 +57,7 @@ type recordingAccountPort struct {
 	sessionParams map[string]any
 	config        dirextalkdomain.AgentConfig
 	published     bool
+	syncedOnline  []dirextalkdomain.AgentIdentityConfig
 }
 
 func (p *recordingAccountPort) Password() string { return p.password }
@@ -71,6 +72,11 @@ func (p *recordingAccountPort) Config() dirextalkdomain.AgentConfig { return p.c
 func (p *recordingAccountPort) UpdateConfig(_ context.Context, mutate func(dirextalkdomain.AgentConfig) dirextalkdomain.AgentConfig) (dirextalkdomain.AgentConfig, *actionbase.Error) {
 	p.config = mutate(p.config)
 	return p.config, nil
+}
+
+func (p *recordingAccountPort) SyncOnlineIdentity(_ context.Context, identity dirextalkdomain.AgentIdentityConfig) *actionbase.Error {
+	p.syncedOnline = append(p.syncedOnline, identity)
+	return nil
 }
 
 func (p *recordingAccountPort) PublishOffline(context.Context) *actionbase.Error {
@@ -147,6 +153,9 @@ func TestAccountHandlersPreserveSessionAndConfigContracts(t *testing.T) {
 	if _, found := config["api_key"]; found || !account.published {
 		t.Fatalf("config must stay sanitized and disabling must publish offline: %#v published=%v", config, account.published)
 	}
+	if len(account.syncedOnline) != 1 || account.syncedOnline[0].DisplayName != "Ops Agent" {
+		t.Fatalf("legacy top-level identity update should sync online identity, got %#v", account.syncedOnline)
+	}
 	blocked := config["mcp_blocked_room_ids"].([]string)
 	if len(blocked) != 1 || blocked[0] != "!secret:example.com" {
 		t.Fatalf("blocked rooms = %#v", blocked)
@@ -171,5 +180,8 @@ func TestAccountHandlersPreserveSessionAndConfigContracts(t *testing.T) {
 		onlineIdentity["display_name"] != "Ops Agent" ||
 		onlineIdentity["avatar_url"] != "mxc://example.com/online" {
 		t.Fatalf("nested identity updates should merge independently: %#v", config)
+	}
+	if len(account.syncedOnline) != 2 || account.syncedOnline[1].AvatarURL != "mxc://example.com/online" {
+		t.Fatalf("online identity update should sync Matrix identity once, got %#v", account.syncedOnline)
 	}
 }
