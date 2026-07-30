@@ -113,9 +113,17 @@ func TestWorkloadPlanSchemaNestedFields(t *testing.T) {
 	if s.Schema.Request["command_steps"].Items.Type != "string" {
 		t.Fatal("command_steps items missing")
 	}
+	requestBinding := s.Schema.Request["typed_secret_grants"].Items.Properties["binding_digest"]
+	if requestBinding.Required || requestBinding.Presence == nil ||
+		requestBinding.Presence.Omitted != "allowed_only_when_purpose_is_aws_credential; server_pins_the_owner_bound_encrypted_credential_revision" {
+		t.Fatalf("workload request binding-digest presence = %#v", requestBinding)
+	}
 	plan := s.Schema.Response["plan"]
 	if !plan.Required || plan.Properties["typed_target"].Properties["identity"].Properties["kind"].Type != "string" || plan.Properties["typed_resource_limits"].Properties["output_mb"].Type != "integer" || plan.Properties["typed_secret_grants"].Items.Properties["binding_digest"].Type != "string" {
 		t.Fatal("workload plan response schema is incomplete")
+	}
+	if !plan.Properties["typed_secret_grants"].Items.Properties["binding_digest"].Required {
+		t.Fatal("persisted workload secret grants must expose their pinned binding digest")
 	}
 	apply, _ := ActionSpecFor("agent.core.workloads.apply")
 	op := apply.Schema.Response["operation"]

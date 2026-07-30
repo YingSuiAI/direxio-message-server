@@ -40,6 +40,11 @@ func NewService(store Store, now func() time.Time) (*Service, error) {
 func (s *Service) CreatePlan(ctx context.Context, in PlanInput) (Plan, error) {
 	return s.store.CreatePlan(ctx, in)
 }
+
+func (s *Service) PinsAWSCredentialGrants() bool {
+	pinner, ok := s.store.(AWSCredentialGrantPinningStore)
+	return ok && pinner.PinsAWSCredentialGrants()
+}
 func (s *Service) GetPlan(ctx context.Context, id string) (Plan, error) {
 	if !ValidUUID(id) {
 		return Plan{}, ErrInvalid

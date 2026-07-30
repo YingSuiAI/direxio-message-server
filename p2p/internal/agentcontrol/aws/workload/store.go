@@ -72,6 +72,14 @@ type FencedStore interface {
 	RecoverClaimFenced(context.Context, string, string, TaskFence) (Operation, error)
 }
 
+// AWSCredentialGrantPinningStore marks a store that replaces every caller
+// supplied AWS credential binding with the owner-bound encrypted secret
+// revision before the immutable plan digest is persisted. Embedded AWS plans
+// fail closed unless their store provides this guarantee.
+type AWSCredentialGrantPinningStore interface {
+	PinsAWSCredentialGrants() bool
+}
+
 func (s *MemoryStore) CancelOperation(_ context.Context, opID, key string, expected uint64) (Operation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

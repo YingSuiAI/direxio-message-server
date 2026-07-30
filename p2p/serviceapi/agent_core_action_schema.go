@@ -86,7 +86,9 @@ func coreConfirmationListSchema() *ActionSchema {
 	return coreActionSchema(request, map[string]ActionFieldSchema{"confirmations": {Type: "array", Items: &ActionFieldSchema{Type: "object"}}, "next_page_token": {Type: "string"}})
 }
 func coreConfirmationMutationSchema() *ActionSchema {
-	return coreActionSchema(coreMutationFields("confirmation_id"), coreObjectResponse("confirmation"))
+	request := coreMutationFields("confirmation_id")
+	request["expected_revision"] = ActionFieldSchema{Type: "integer", Required: true}
+	return coreActionSchema(request, coreObjectResponse("confirmation"))
 }
 func coreConfirmationExtensionUncertainAcknowledgeSchema() *ActionSchema {
 	return coreActionSchema(map[string]ActionFieldSchema{
@@ -200,14 +202,21 @@ func workloadTargetFields(required bool) map[string]ActionFieldSchema {
 func workloadLimitsFields(required bool) map[string]ActionFieldSchema {
 	return map[string]ActionFieldSchema{"cpu": {Type: "integer", Required: required}, "memory_mb": {Type: "integer", Required: required}, "processes": {Type: "integer", Required: required}, "disk_mb": {Type: "integer", Required: required}, "timeout_seconds": {Type: "integer", Required: required}, "output_mb": {Type: "integer", Required: required}}
 }
-func workloadSecretGrantSchema() *ActionFieldSchema {
-	return &ActionFieldSchema{Type: "object", Properties: map[string]ActionFieldSchema{"reference_id": {Type: "string", Required: true}, "purpose": {Type: "string", Required: true}, "secret_revision": {Type: "integer"}, "binding_digest": {Type: "string", Required: true}}}
+func workloadSecretGrantSchema(bindingDigestRequired bool) *ActionFieldSchema {
+	bindingDigest := ActionFieldSchema{Type: "string", Required: bindingDigestRequired}
+	if !bindingDigestRequired {
+		bindingDigest.Presence = &ActionPresenceSchema{
+			Omitted: "allowed_only_when_purpose_is_aws_credential; server_pins_the_owner_bound_encrypted_credential_revision",
+			Present: "required_for_non_aws_grants; aws_credential_values_are_replaced_by_the_server_pinned_digest",
+		}
+	}
+	return &ActionFieldSchema{Type: "object", Properties: map[string]ActionFieldSchema{"reference_id": {Type: "string", Required: true}, "purpose": {Type: "string", Required: true}, "secret_revision": {Type: "integer"}, "binding_digest": bindingDigest}}
 }
 func workloadPlanResponseFields() map[string]ActionFieldSchema {
-	return map[string]ActionFieldSchema{"plan_id": {Type: "string", Required: true}, "revision": {Type: "integer", Required: true}, "digest": {Type: "string", Required: true}, "summary": {Type: "string", Required: true}, "artifact": {Type: "string", Required: true}, "source": {Type: "string", Required: true}, "command_steps": {Type: "array", Required: true, Items: &ActionFieldSchema{Type: "string"}}, "image_digest": {Type: "string", Required: true}, "image_uri": {Type: "string", Required: true}, "target_kind": {Type: "string", Required: true}, "expires_at": {Type: "string", Required: true}, "created_at": {Type: "string", Required: true}, "typed_target": {Type: "object", Required: true, Properties: workloadTargetFields(true)}, "typed_resource_limits": {Type: "object", Properties: workloadLimitsFields(true)}, "typed_secret_grants": {Type: "array", Required: true, Items: workloadSecretGrantSchema()}}
+	return map[string]ActionFieldSchema{"plan_id": {Type: "string", Required: true}, "revision": {Type: "integer", Required: true}, "digest": {Type: "string", Required: true}, "summary": {Type: "string", Required: true}, "artifact": {Type: "string", Required: true}, "source": {Type: "string", Required: true}, "command_steps": {Type: "array", Required: true, Items: &ActionFieldSchema{Type: "string"}}, "image_digest": {Type: "string", Required: true}, "image_uri": {Type: "string", Required: true}, "target_kind": {Type: "string", Required: true}, "expires_at": {Type: "string", Required: true}, "created_at": {Type: "string", Required: true}, "typed_target": {Type: "object", Required: true, Properties: workloadTargetFields(true)}, "typed_resource_limits": {Type: "object", Properties: workloadLimitsFields(true)}, "typed_secret_grants": {Type: "array", Required: true, Items: workloadSecretGrantSchema(true)}}
 }
 func workloadDesiredPlanFields() map[string]ActionFieldSchema {
-	return map[string]ActionFieldSchema{"plan_id": {Type: "string", Required: true}, "plan_revision": {Type: "integer", Required: true}, "plan_digest": {Type: "string", Required: true}, "target": {Type: "object", Required: true, Properties: workloadTargetFields(true)}, "resource_limits": {Type: "object", Required: true, Properties: workloadLimitsFields(true)}, "secret_grants": {Type: "array", Required: true, Items: workloadSecretGrantSchema()}}
+	return map[string]ActionFieldSchema{"plan_id": {Type: "string", Required: true}, "plan_revision": {Type: "integer", Required: true}, "plan_digest": {Type: "string", Required: true}, "target": {Type: "object", Required: true, Properties: workloadTargetFields(true)}, "resource_limits": {Type: "object", Required: true, Properties: workloadLimitsFields(true)}, "secret_grants": {Type: "array", Required: true, Items: workloadSecretGrantSchema(true)}}
 }
 func workloadActualFields() map[string]ActionFieldSchema {
 	return map[string]ActionFieldSchema{"workload_id": {Type: "string", Required: true}, "revision": {Type: "integer", Required: true}, "state": {Type: "string", Required: true}, "identity": {Type: "object", Required: true, Properties: workloadIdentityFields(true)}, "applied_plan_id": {Type: "string", Required: true}, "applied_plan_digest": {Type: "string", Required: true}, "readback_digest": {Type: "string", Required: true}, "provider_version": {Type: "string", Required: true}, "observed_at": {Type: "string", Required: true}, "updated_at": {Type: "string", Required: true}}
@@ -229,7 +238,7 @@ func coreWorkloadPlanSchema() *ActionSchema {
 	req["image_digest"] = ActionFieldSchema{Type: "string"}
 	req["image_uri"] = ActionFieldSchema{Type: "string"}
 	req["typed_resource_limits"] = ActionFieldSchema{Type: "object", Properties: workloadLimitsFields(false)}
-	req["typed_secret_grants"] = ActionFieldSchema{Type: "array", WriteOnly: true, Items: workloadSecretGrantSchema()}
+	req["typed_secret_grants"] = ActionFieldSchema{Type: "array", WriteOnly: true, Items: workloadSecretGrantSchema(false)}
 	return coreActionSchema(req, map[string]ActionFieldSchema{"plan": {Type: "object", Required: true, Properties: workloadPlanResponseFields()}})
 }
 func coreWorkloadGetSchema() *ActionSchema {

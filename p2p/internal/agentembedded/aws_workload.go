@@ -262,7 +262,7 @@ func (p workloadActionPort) Handle(ctx context.Context, owner, action string, pa
 	}
 	switch action {
 	case "agent.core.workloads.plan":
-		in, ae := workloadPlanInput(params)
+		in, ae := workloadPlanInput(params, s.PinsAWSCredentialGrants())
 		if ae != nil {
 			return nil, ae
 		}
@@ -393,7 +393,7 @@ func (p workloadActionPort) Handle(ctx context.Context, owner, action string, pa
 	}
 }
 
-func workloadPlanInput(p map[string]any) (coreworkload.PlanInput, *actionbase.Error) {
+func workloadPlanInput(p map[string]any, awsCredentialPinningReady bool) (coreworkload.PlanInput, *actionbase.Error) {
 	key, e := requiredUUID(p, "idempotency_key")
 	if e != nil {
 		return coreworkload.PlanInput{}, e
@@ -457,7 +457,8 @@ func workloadPlanInput(p map[string]any) (coreworkload.PlanInput, *actionbase.Er
 			ref, ok := m["reference_id"].(string)
 			purpose, pok := m["purpose"].(string)
 			digest, dok := m["binding_digest"].(string)
-			if !ok || !pok || !dok || strings.TrimSpace(ref) == "" || strings.TrimSpace(purpose) == "" || strings.TrimSpace(digest) == "" {
+			_, digestPresent := m["binding_digest"]
+			if !ok || !pok || strings.TrimSpace(ref) == "" || strings.TrimSpace(purpose) == "" {
 				return in, actionbase.BadRequest("typed_secret_grants entries are invalid")
 			}
 			secretPurpose := coreconfirmation.SecretPurpose(purpose)
@@ -471,6 +472,24 @@ func workloadPlanInput(p map[string]any) (coreworkload.PlanInput, *actionbase.Er
 			if secretPurpose != coreconfirmation.SecretPurposeAWSCredential && revision != 0 {
 				return in, actionbase.BadRequest("typed_secret_grants.secret_revision is only valid for AWS credentials")
 			}
+			if secretPurpose == coreconfirmation.SecretPurposeAWSCredential && !awsCredentialPinningReady {
+				return in, actionbase.CodedError(http.StatusPreconditionFailed, "agent_embedded_unavailable", "AWS credential grant pinning is unavailable")
+			}
+			if digestPresent && !dok {
+				return in, actionbase.BadRequest("typed_secret_grants.binding_digest must be a string")
+			}
+			if !digestPresent {
+				if secretPurpose != coreconfirmation.SecretPurposeAWSCredential {
+					return in, actionbase.BadRequest("typed_secret_grants.binding_digest is required")
+				}
+				// Postgres pins AWS credential grants to the owner-bound encrypted
+				// secret digest after this request reaches the store. Normalize still
+				// requires a syntactically valid digest at the handler seam.
+				digest = strings.Repeat("0", 64)
+			}
+			if strings.TrimSpace(digest) == "" {
+				return in, actionbase.BadRequest("typed_secret_grants.binding_digest is required")
+			}
 			in.SecretGrantRefs = append(in.SecretGrantRefs, coreworkload.SecretGrantRef{ReferenceID: ref, Purpose: secretPurpose, Revision: revision, BindingDigest: coreconfirmation.Digest(digest)})
 		}
 	}
@@ -483,15 +502,141 @@ func decodeTargetSettings(raw map[string]any, kind coreworkload.TargetKind) (cor
 		return coreworkload.TargetSettings{}, actionbase.BadRequest("typed_target.identity is required")
 	}
 	get := func(m map[string]any, key string) string { s, _ := m[key].(string); return s }
-	i := coreworkload.TargetIdentity{Kind: kind, AccountID: get(identityRaw, "aws_account_id"), Region: get(identityRaw, "aws_region"), InstanceID: get(identityRaw, "instance_id"), Cluster: get(identityRaw, "cluster"), Service: get(identityRaw, "service"), TaskDefinitionRevision: get(identityRaw, "task_definition_revision"), Endpoint: get(identityRaw, "endpoint"), CoreRunnerID: get(identityRaw, "core_runner_id"), CoreRunnerService: get(identityRaw, "core_runner_service"), ImageDigest: get(identityRaw, "image_digest")}
-	t := coreworkload.TargetSettings{Identity: i, AccountID: i.AccountID, Region: i.Region, InstanceID: i.InstanceID, Cluster: i.Cluster, Service: i.Service, ECSClusterARN: get(identityRaw, "aws_ecs_cluster_arn"), ECSServiceName: get(identityRaw, "aws_ecs_service_name"), ECSTaskFamily: get(identityRaw, "aws_ecs_task_family"), ECSPlatformVersion: get(identityRaw, "aws_ecs_platform_version"), ECSTargetGroupARN: get(identityRaw, "aws_ecs_target_group_arn"), ECSTaskRoleARN: get(identityRaw, "aws_ecs_task_role_arn"), ECSExecutionRoleARN: get(identityRaw, "aws_ecs_execution_role_arn"), ECSImageURI: get(identityRaw, "aws_ecs_image_uri"), EC2DocumentVersion: get(identityRaw, "aws_ec2_document_version"), EC2SystemdService: get(identityRaw, "aws_ec2_systemd_service")}
-	if labels, ok := raw["labels"].(map[string]any); ok {
-		t.Labels = map[string]string{}
-		for k, v := range labels {
-			if s, ok := v.(string); ok {
-				t.Labels[k] = s
-			}
+	getInt := func(m map[string]any, key string) (int64, *actionbase.Error) { return optionalInt64(m, key) }
+	getBool := func(m map[string]any, key string) (bool, *actionbase.Error) {
+		v, ok := m[key]
+		if !ok || v == nil {
+			return false, nil
 		}
+		value, ok := v.(bool)
+		if !ok {
+			return false, actionbase.BadRequest("typed_target." + key + " must be a boolean")
+		}
+		return value, nil
+	}
+	getStrings := func(m map[string]any, key string) ([]string, *actionbase.Error) {
+		v, ok := m[key]
+		if !ok || v == nil {
+			return nil, nil
+		}
+		switch rawValues := v.(type) {
+		case []string:
+			return append([]string(nil), rawValues...), nil
+		case []any:
+			values := make([]string, len(rawValues))
+			for i, item := range rawValues {
+				value, ok := item.(string)
+				if !ok {
+					return nil, actionbase.BadRequest("typed_target." + key + " must contain strings")
+				}
+				values[i] = value
+			}
+			return values, nil
+		default:
+			return nil, actionbase.BadRequest("typed_target." + key + " must be an array")
+		}
+	}
+	getStringMap := func(m map[string]any, key string) (map[string]string, *actionbase.Error) {
+		v, ok := m[key]
+		if !ok || v == nil {
+			return nil, nil
+		}
+		values := map[string]string{}
+		switch rawValues := v.(type) {
+		case map[string]string:
+			for name, value := range rawValues {
+				values[name] = value
+			}
+		case map[string]any:
+			for name, item := range rawValues {
+				value, ok := item.(string)
+				if !ok {
+					return nil, actionbase.BadRequest("typed_target." + key + " values must be strings")
+				}
+				values[name] = value
+			}
+		default:
+			return nil, actionbase.BadRequest("typed_target." + key + " must be an object")
+		}
+		return values, nil
+	}
+	i := coreworkload.TargetIdentity{Kind: kind, AccountID: get(identityRaw, "aws_account_id"), Region: get(identityRaw, "aws_region"), InstanceID: get(identityRaw, "instance_id"), Cluster: get(identityRaw, "cluster"), Service: get(identityRaw, "service"), TaskDefinitionRevision: get(identityRaw, "task_definition_revision"), Endpoint: get(identityRaw, "endpoint"), CoreRunnerID: get(identityRaw, "core_runner_id"), CoreRunnerService: get(identityRaw, "core_runner_service"), ImageDigest: get(identityRaw, "image_digest")}
+	desiredCount, e := getInt(identityRaw, "desired_count")
+	if e != nil {
+		return coreworkload.TargetSettings{}, e
+	}
+	i.DesiredCount = desiredCount
+	assignPublicIP, e := getBool(identityRaw, "aws_ecs_assign_public_ip")
+	if e != nil {
+		return coreworkload.TargetSettings{}, e
+	}
+	ecsDesiredCount, e := getInt(identityRaw, "aws_ecs_desired_count")
+	if e != nil {
+		return coreworkload.TargetSettings{}, e
+	}
+	targetGroupPort, e := getInt(identityRaw, "aws_ecs_target_group_port")
+	if e != nil {
+		return coreworkload.TargetSettings{}, e
+	}
+	if targetGroupPort < 0 || targetGroupPort > 65535 {
+		return coreworkload.TargetSettings{}, actionbase.BadRequest("typed_target.aws_ecs_target_group_port must be between 0 and 65535")
+	}
+	subnetIDs, e := getStrings(identityRaw, "aws_ecs_subnet_ids")
+	if e != nil {
+		return coreworkload.TargetSettings{}, e
+	}
+	securityGroupIDs, e := getStrings(identityRaw, "aws_ecs_security_group_ids")
+	if e != nil {
+		return coreworkload.TargetSettings{}, e
+	}
+	requiredTags, e := getStringMap(identityRaw, "aws_ec2_required_instance_tags")
+	if e != nil {
+		return coreworkload.TargetSettings{}, e
+	}
+	t := coreworkload.TargetSettings{Identity: i, AccountID: i.AccountID, Region: i.Region, InstanceID: i.InstanceID, Cluster: i.Cluster, Service: i.Service, ECSClusterARN: get(identityRaw, "aws_ecs_cluster_arn"), ECSServiceName: get(identityRaw, "aws_ecs_service_name"), ECSTaskFamily: get(identityRaw, "aws_ecs_task_family"), ECSPlatformVersion: get(identityRaw, "aws_ecs_platform_version"), ECSSubnetIDs: subnetIDs, ECSSecurityGroupIDs: securityGroupIDs, ECSAssignPublicIP: assignPublicIP, ECSTargetGroupARN: get(identityRaw, "aws_ecs_target_group_arn"), ECSTargetGroupPort: uint32(targetGroupPort), ECSTaskRoleARN: get(identityRaw, "aws_ecs_task_role_arn"), ECSExecutionRoleARN: get(identityRaw, "aws_ecs_execution_role_arn"), ECSDesiredCount: ecsDesiredCount, ECSImageURI: get(identityRaw, "aws_ecs_image_uri"), EC2DocumentVersion: get(identityRaw, "aws_ec2_document_version"), EC2SystemdService: get(identityRaw, "aws_ec2_systemd_service"), RequiredInstanceTags: requiredTags}
+	if ports, ok := raw["ports"]; ok {
+		items, ok := ports.([]any)
+		if !ok {
+			return coreworkload.TargetSettings{}, actionbase.BadRequest("typed_target.ports must be an array")
+		}
+		t.PortDetails = make([]coreworkload.Port, 0, len(items))
+		t.Ports = make([]int32, 0, len(items))
+		for _, item := range items {
+			portMap, ok := item.(map[string]any)
+			if !ok {
+				return coreworkload.TargetSettings{}, actionbase.BadRequest("typed_target.ports must contain objects")
+			}
+			port, pe := optionalInt64(portMap, "port")
+			if pe != nil || port < 1 || port > 65535 {
+				return coreworkload.TargetSettings{}, actionbase.BadRequest("typed_target.ports.port must be between 1 and 65535")
+			}
+			t.PortDetails = append(t.PortDetails, coreworkload.Port{Port: uint32(port)})
+			t.Ports = append(t.Ports, int32(port))
+		}
+	}
+	if grants, ok := raw["network_grants"]; ok {
+		items, ok := grants.([]any)
+		if !ok {
+			return coreworkload.TargetSettings{}, actionbase.BadRequest("typed_target.network_grants must be an array")
+		}
+		t.NetworkGrantDetails = make([]coreworkload.NetworkGrant, 0, len(items))
+		for _, item := range items {
+			grant, ok := item.(map[string]any)
+			if !ok {
+				return coreworkload.TargetSettings{}, actionbase.BadRequest("typed_target.network_grants must contain objects")
+			}
+			ref, rok := grant["reference_id"].(string)
+			grantKind, kok := grant["kind"].(string)
+			if !rok || !kok || strings.TrimSpace(ref) == "" || strings.TrimSpace(grantKind) == "" {
+				return coreworkload.TargetSettings{}, actionbase.BadRequest("typed_target.network_grants entries are invalid")
+			}
+			t.NetworkGrantDetails = append(t.NetworkGrantDetails, coreworkload.NetworkGrant{ReferenceID: strings.TrimSpace(ref), Kind: strings.TrimSpace(grantKind)})
+		}
+	}
+	if labels, e := getStringMap(raw, "labels"); e != nil {
+		return coreworkload.TargetSettings{}, e
+	} else {
+		t.Labels = labels
 	}
 	return t, nil
 }
@@ -554,6 +699,7 @@ func workloadOperationMap(v coreworkload.Operation, plan coreworkload.Plan, actu
 	return map[string]any{
 		"operation_id": v.ID, "workload_id": v.WorkloadID, "plan_id": v.PlanID,
 		"kind": string(v.Kind), "plan_revision": v.PlanRevision, "plan_digest": v.PlanDigest,
+		"summary":     plan.Summary,
 		"target_kind": workloadTargetKindWire(v.TargetKind),
 		"task_id":     v.TaskID, "confirmation_id": v.ConfirmationID,
 		"status": string(v.Status), "revision": v.Revision,

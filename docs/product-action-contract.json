@@ -2027,10 +2027,7 @@
           },
           "expected_revision": {
             "type": "integer",
-            "presence": {
-              "omitted": "no_revision_check",
-              "present": "must_match_current_revision"
-            }
+            "required": true
           },
           "idempotency_key": {
             "type": "string",
@@ -2056,10 +2053,7 @@
           },
           "expected_revision": {
             "type": "integer",
-            "presence": {
-              "omitted": "no_revision_check",
-              "present": "must_match_current_revision"
-            }
+            "required": true
           },
           "idempotency_key": {
             "type": "string",
@@ -4136,7 +4130,10 @@
               "properties": {
                 "binding_digest": {
                   "type": "string",
-                  "required": true
+                  "presence": {
+                    "omitted": "allowed_only_when_purpose_is_aws_credential; server_pins_the_owner_bound_encrypted_credential_revision",
+                    "present": "required_for_non_aws_grants; aws_credential_values_are_replaced_by_the_server_pinned_digest"
+                  }
                 },
                 "purpose": {
                   "type": "string",

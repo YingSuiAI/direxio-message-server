@@ -101,7 +101,7 @@ func TestCoreRunnerWorkloadPlanIsRejectedBeforePersistence(t *testing.T) {
 		"artifact":        "sha256:artifact",
 		"source":          "test",
 		"target_kind":     "CORE_RUNNER",
-	})
+	}, false)
 	if err == nil || err.Status != 400 || plan.TargetKind != "" {
 		t.Fatalf("CORE_RUNNER plan = %#v, %#v", plan, err)
 	}

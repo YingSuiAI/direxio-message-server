@@ -30,6 +30,9 @@ type PostgresWorkloadStore struct {
 
 var _ workload.Store = (*PostgresWorkloadStore)(nil)
 var _ workload.FencedStore = (*PostgresWorkloadStore)(nil)
+var _ workload.AWSCredentialGrantPinningStore = (*PostgresWorkloadStore)(nil)
+
+func (*PostgresWorkloadStore) PinsAWSCredentialGrants() bool { return true }
 
 func NewAgentWorkloadStore(store *DatabaseStore, ownerID string) (*PostgresWorkloadStore, error) {
 	if store == nil || strings.TrimSpace(ownerID) == "" {

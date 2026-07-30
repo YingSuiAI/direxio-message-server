@@ -80,7 +80,7 @@ func (m *Module) confirmationHandler(action string) actionbase.Handler {
 			if e != nil {
 				return nil, e
 			}
-			rev, e := optionalInt64(p, "expected_revision")
+			rev, e := requiredPositiveInt64(p, "expected_revision")
 			if e != nil {
 				return nil, e
 			}
