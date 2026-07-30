@@ -120,9 +120,9 @@ func TestPostgresAWSCommitProviderMutationUsesAtomicFence(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO core_aws_events")).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT change_id::text,plan_id::text,credential_id::text,task_id::text,confirmation_id::text,operation,status,stage,change_set_id,provider_request_digest,provider_token,revision,error_code,error_summary,created_at,updated_at FROM core_aws_changes")).
-		WillReturnRows(sqlmock.NewRows([]string{"change_id", "plan_id", "credential_id", "task_id", "confirmation_id", "operation", "status", "stage", "change_set_id", "provider_request_digest", "provider_token", "revision", "error_code", "error_summary", "created_at", "updated_at"}).
-			AddRow(cmd.ChangeID, "44444444-4444-4444-8444-444444444444", "55555555-5555-4555-8555-555555555555", cmd.TaskID, cmd.ConfirmationID, "create", "running", "change_set_ready", "changeset-1", "digest", "token", cmd.ExpectedChangeRevision+1, "", "", time.Now().UTC(), time.Now().UTC()))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT change_id::text,plan_id::text,credential_id::text,COALESCE(provision_id::text,''),task_id::text,confirmation_id::text,operation,status,stage,change_set_id,provider_request_digest,provider_token,revision,error_code,error_summary,created_at,updated_at FROM core_aws_changes")).
+		WillReturnRows(sqlmock.NewRows([]string{"change_id", "plan_id", "credential_id", "provision_id", "task_id", "confirmation_id", "operation", "status", "stage", "change_set_id", "provider_request_digest", "provider_token", "revision", "error_code", "error_summary", "created_at", "updated_at"}).
+			AddRow(cmd.ChangeID, "44444444-4444-4444-8444-444444444444", "55555555-5555-4555-8555-555555555555", "", cmd.TaskID, cmd.ConfirmationID, "create", "running", "change_set_ready", "changeset-1", "digest", "token", cmd.ExpectedChangeRevision+1, "", "", time.Now().UTC(), time.Now().UTC()))
 
 	got, err := repo.CommitProviderMutation(t.Context(), agentaws.ProviderMutationResult{
 		Command:             cmd,

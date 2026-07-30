@@ -24,4 +24,11 @@ type Repository interface {
 	GetChangeByConfirmation(context.Context, string) (Change, error)
 	ListChanges(context.Context, int, string, string) (ChangePage, error)
 	UpdateChange(context.Context, Change, int64) (Change, error)
+	CreateProvision(context.Context, Provision) (Provision, error)
+	// RetryProvision explicitly re-arms a failed/destroyed deterministic
+	// provision after an owner-supplied revision and idempotency fence. It does
+	// not overwrite the row or erase prior change/event history.
+	RetryProvision(context.Context, string, int64, string) (Provision, error)
+	GetProvision(context.Context, string) (Provision, error)
+	GetProvisionByChange(context.Context, string) (Provision, error)
 }

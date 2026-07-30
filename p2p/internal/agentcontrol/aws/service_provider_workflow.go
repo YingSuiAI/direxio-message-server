@@ -121,7 +121,7 @@ func (s *Service) executeChangeStrict(ctx context.Context, confirmationID string
 			if err == ErrResponseUncertain {
 				return c, err
 			}
-			completed, ce := s.completeExecution(ctx, c, Change{Status: ChangeFailed, ErrorCode: "provider_error", ErrorSummary: "AWS delete failed"})
+			completed, ce := s.completeExecution(ctx, c, Change{Status: ChangeFailed, ErrorCode: "provider_error", ErrorSummary: "AWS delete failed"}, nil)
 			if ce != nil {
 				return Change{}, ce
 			}
@@ -155,7 +155,7 @@ func (s *Service) executeChangeStrict(ctx context.Context, confirmationID string
 			if e == ErrResponseUncertain {
 				return c, e
 			}
-			completed, ce := s.completeExecution(ctx, c, Change{Status: ChangeFailed, ErrorCode: "provider_error", ErrorSummary: "AWS change-set creation failed"})
+			completed, ce := s.completeExecution(ctx, c, Change{Status: ChangeFailed, ErrorCode: "provider_error", ErrorSummary: "AWS change-set creation failed"}, nil)
 			if ce != nil {
 				return Change{}, ce
 			}
@@ -184,7 +184,7 @@ func (s *Service) executeChangeStrict(ctx context.Context, confirmationID string
 			if err == ErrResponseUncertain {
 				return c, err
 			}
-			completed, ce := s.completeExecution(ctx, c, Change{Status: ChangeFailed, ErrorCode: "provider_error", ErrorSummary: "AWS change-set execution failed"})
+			completed, ce := s.completeExecution(ctx, c, Change{Status: ChangeFailed, ErrorCode: "provider_error", ErrorSummary: "AWS change-set execution failed"}, nil)
 			if ce != nil {
 				return Change{}, ce
 			}
@@ -194,7 +194,7 @@ func (s *Service) executeChangeStrict(ctx context.Context, confirmationID string
 	return s.reconcileChange(ctx, c, p)
 }
 
-func (s *Service) completeExecution(ctx context.Context, previous, terminal Change) (Change, error) {
+func (s *Service) completeExecution(ctx context.Context, previous, terminal Change, readback *ProvisionReadback) (Change, error) {
 	if s.coordinator == nil {
 		return Change{}, ErrConflict
 	}
@@ -205,7 +205,7 @@ func (s *Service) completeExecution(ctx context.Context, previous, terminal Chan
 	if fence.Change.ID != previous.ID || fence.Task.Status != "running" || !fence.Reservation.Active {
 		return Change{}, ErrRevisionConflict
 	}
-	return s.coordinator.CompleteChange(ctx, CompleteChangeCommand{ChangeID: previous.ID, ConfirmationID: previous.ConfirmationID, TaskID: fence.Task.ID, Attempt: fence.Task.Attempt, LeaseEpoch: fence.Task.LeaseEpoch, ExpectedTaskRevision: fence.Task.Revision, ExpectedChangeRevision: previous.Revision, ExpectedConfirmationRevision: fence.Confirmation.Revision, Status: terminal.Status, ErrorCode: terminal.ErrorCode, ErrorSummary: terminal.ErrorSummary, OperationKey: operationKey(previous.ID, previous.ProviderToken, "complete:"+string(terminal.Status), fence.Task.Attempt, fence.Task.LeaseEpoch)})
+	return s.coordinator.CompleteChange(ctx, CompleteChangeCommand{ChangeID: previous.ID, ConfirmationID: previous.ConfirmationID, TaskID: fence.Task.ID, Attempt: fence.Task.Attempt, LeaseEpoch: fence.Task.LeaseEpoch, ExpectedTaskRevision: fence.Task.Revision, ExpectedChangeRevision: previous.Revision, ExpectedConfirmationRevision: fence.Confirmation.Revision, Status: terminal.Status, ErrorCode: terminal.ErrorCode, ErrorSummary: terminal.ErrorSummary, OperationKey: operationKey(previous.ID, previous.ProviderToken, "complete:"+string(terminal.Status), fence.Task.Attempt, fence.Task.LeaseEpoch), Readback: readback})
 }
 
 // reconcileChange derives typed output requirements from the durable plan tag.
@@ -227,7 +227,7 @@ func (s *Service) reconcileChange(ctx context.Context, c Change, p Plan) (Change
 		n.Stage = StageSucceeded
 		n.Revision++
 		n.UpdatedAt = s.now().UTC()
-		return s.completeExecution(ctx, c, n)
+		return s.completeExecution(ctx, c, n, nil)
 	}
 	if e != nil {
 		return c, ErrResponseUncertain
@@ -246,7 +246,17 @@ func (s *Service) reconcileChange(ctx context.Context, c Change, p Plan) (Change
 		n.Stage = StageSucceeded
 		n.Revision++
 		n.UpdatedAt = s.now().UTC()
-		return s.completeExecution(ctx, c, n)
+		var readback *ProvisionReadback
+		if _, provisionErr := s.repo.GetProvisionByChange(ctx, c.ID); provisionErr == nil && c.Operation == OperationCreate {
+			value, readbackErr := ProvisionReadbackFromStack(stack.Outputs, s.now())
+			if readbackErr != nil {
+				return c, ErrResponseUncertain
+			}
+			readback = &value
+		} else if provisionErr != nil && provisionErr != ErrNotFound {
+			return c, ErrResponseUncertain
+		}
+		return s.completeExecution(ctx, c, n, readback)
 	}
 	return c, ErrResponseUncertain
 }

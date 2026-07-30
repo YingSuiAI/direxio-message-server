@@ -115,6 +115,7 @@ type CompleteChangeCommand struct {
 	Status                                       ChangeStatus
 	ErrorCode, ErrorSummary                      string
 	OperationKey                                 string
+	Readback                                     *ProvisionReadback
 }
 
 // operationKey identifies one provider-side action.  It deliberately excludes

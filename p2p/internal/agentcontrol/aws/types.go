@@ -225,16 +225,63 @@ type Quote struct {
 }
 
 type Change struct {
-	ID, PlanID, CredentialID, TaskID, ConfirmationID string
-	Operation                                        Operation
-	Status                                           ChangeStatus
-	Stage                                            ChangeStage
-	ChangeSetID                                      string
-	ProviderRequestDigest                            string
-	Revision                                         int64
-	ErrorCode, ErrorSummary                          string
-	ProviderToken                                    string
-	CreatedAt, UpdatedAt                             time.Time
+	ID, PlanID, CredentialID, ProvisionID, TaskID, ConfirmationID string
+	Operation                                                     Operation
+	Status                                                        ChangeStatus
+	Stage                                                         ChangeStage
+	ChangeSetID                                                   string
+	ProviderRequestDigest                                         string
+	Revision                                                      int64
+	ErrorCode, ErrorSummary                                       string
+	ProviderToken                                                 string
+	CreatedAt, UpdatedAt                                          time.Time
+}
+
+// Provision is the durable, owner-scoped identity for a typed EC2 deployment.
+// It deliberately stores only verified stack readback, never provider request
+// payloads or credentials.
+type Provision struct {
+	ID, PlanID, CredentialID, Region, StackName, Profile, OwnerDigest string
+	CredentialRevision, PlanRevision                                  int64
+	TemplateSHA256, PlanDigest                                        string
+	State                                                             string
+	Revision                                                          int64
+	CreateChangeID, DestroyChangeID, ActiveChangeID                   string
+	Readback                                                          ProvisionReadback
+	ReconciliationRequired                                            bool
+	ErrorCode, ErrorSummary                                           string
+	CreatedAt, UpdatedAt                                              time.Time
+}
+
+// ProvisionReadback is accepted only after a typed CloudFormation readback
+// has validated the exact allowlisted outputs.
+type ProvisionReadback struct {
+	StackID, InstanceID, PublicIP, SecurityGroupID, OutputDigest string
+	ObservedAt                                                   time.Time
+}
+
+func (p Provision) Validate() error {
+	if !validUUID(p.ID) || !validUUID(p.PlanID) || !validUUID(p.CredentialID) || !validRegion(p.Region) || !validStackName(p.StackName) || p.CredentialRevision < 1 || p.PlanRevision < 1 || p.Revision < 1 || !validSHA256(p.TemplateSHA256) || !validSHA256(p.PlanDigest) || !validOwnerDigest(p.OwnerDigest) || strings.TrimSpace(p.Profile) == "" {
+		return ErrInvalid
+	}
+	if p.State != "planned" && p.State != "creating" && p.State != "active" && p.State != "destroying" && p.State != "destroyed" && p.State != "uncertain" && p.State != "failed" {
+		return ErrInvalid
+	}
+	return nil
+}
+
+func (r ProvisionReadback) Validate() error {
+	if strings.TrimSpace(r.StackID) == "" || strings.TrimSpace(r.InstanceID) == "" || strings.TrimSpace(r.SecurityGroupID) == "" || !validSHA256(r.OutputDigest) || r.ObservedAt.IsZero() {
+		return ErrInvalid
+	}
+	outputs := map[string]string{string(StackOutputStackID): r.StackID, string(StackOutputInstanceID): r.InstanceID, string(StackOutputSecurityGroup): r.SecurityGroupID}
+	if strings.TrimSpace(r.PublicIP) != "" {
+		outputs[string(StackOutputPublicIP)] = r.PublicIP
+	}
+	if r.OutputDigest != canonicalDigest(outputs) {
+		return ErrInvalid
+	}
+	return nil
 }
 
 type Page[T any] struct {
@@ -333,6 +380,13 @@ func validUUID(s string) bool {
 	u, e := uuid.Parse(strings.TrimSpace(s))
 	return e == nil && u != uuid.Nil && u.String() == strings.TrimSpace(s)
 }
+func validSHA256(s string) bool {
+	return regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(strings.TrimSpace(s))
+}
+func validOwnerDigest(s string) bool {
+	s = strings.TrimSpace(s)
+	return strings.HasPrefix(s, "sha256:") && validSHA256(strings.TrimPrefix(s, "sha256:"))
+}
 func validOperation(o Operation) bool {
 	return o == OperationCreate || o == OperationUpdate || o == OperationDelete
 }
@@ -349,6 +403,16 @@ func planDigest(p Plan) string {
 		Parameters, Tags                    map[string]string
 		Capabilities                        []string
 	}{p.ID, p.CredentialID, p.Region, p.StackName, p.Operation, p.TemplateSHA256, p.Parameters, p.Tags, p.Capabilities})
+}
+
+// PlanDigest returns the canonical immutable digest used to bind a provision
+// snapshot to its plan row. It intentionally excludes mutable execution state.
+func PlanDigest(p Plan) string { return planDigest(p) }
+
+// OwnerBindingDigest is the canonical, explicitly typed owner tag format.
+func OwnerBindingDigest(ownerID string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(ownerID)))
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 func sortedKeys(m map[string]string) []string {
 	k := make([]string, 0, len(m))

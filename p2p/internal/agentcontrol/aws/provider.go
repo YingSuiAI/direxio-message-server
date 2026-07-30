@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 )
 
 // AWSChangeTaskHandler is the narrow seam for a future durable Task executor.
@@ -113,6 +114,24 @@ type Stack struct {
 	TemplateSHA256    string
 	Parameters, Tags  map[string]string
 	Outputs           StackOutputs
+}
+
+// ProvisionReadbackFromStack is the sole conversion from provider values to a
+// durable typed provision readback. Unknown output keys are intentionally
+// discarded before persistence.
+func ProvisionReadbackFromStack(outputs StackOutputs, observedAt time.Time) (ProvisionReadback, error) {
+	allowed := map[string]string{}
+	for _, key := range []StackOutputKey{StackOutputStackID, StackOutputInstanceID, StackOutputPublicIP, StackOutputSecurityGroup} {
+		if value := strings.TrimSpace(outputs[string(key)]); value != "" {
+			allowed[string(key)] = value
+		}
+	}
+	r := ProvisionReadback{StackID: allowed[string(StackOutputStackID)], InstanceID: allowed[string(StackOutputInstanceID)], PublicIP: allowed[string(StackOutputPublicIP)], SecurityGroupID: allowed[string(StackOutputSecurityGroup)], ObservedAt: observedAt.UTC()}
+	r.OutputDigest = canonicalDigest(allowed)
+	if r.Validate() != nil {
+		return ProvisionReadback{}, ErrInvalid
+	}
+	return r, nil
 }
 
 // CloudProvider is deliberately closed over the exact CloudFormation calls

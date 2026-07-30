@@ -54,6 +54,201 @@ type PostgresAWSRepository struct {
 var _ agentaws.Repository = (*PostgresAWSRepository)(nil)
 var _ agentaws.ChangeCoordinator = (*PostgresAWSRepository)(nil)
 
+func (r *PostgresAWSRepository) CreateProvision(ctx context.Context, p agentaws.Provision) (agentaws.Provision, error) {
+	if r == nil || r.store == nil || r.store.db == nil || p.Validate() != nil {
+		return agentaws.Provision{}, agentaws.ErrInvalid
+	}
+	tx, err := r.store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return agentaws.Provision{}, err
+	}
+	defer tx.Rollback()
+	var plan agentaws.Plan
+	var params, tags, caps []byte
+	if err = tx.QueryRowContext(ctx, `SELECT plan_id::text,credential_id::text,credential_revision,region,stack_name,operation,template,template_sha256,parameters_json,tags_json,capabilities_json,revision,created_at FROM core_aws_plans WHERE owner_id=$1 AND plan_id=$2 FOR UPDATE`, r.ownerID, p.PlanID).Scan(&plan.ID, &plan.CredentialID, &plan.CredentialRevision, &plan.Region, &plan.StackName, &plan.Operation, &plan.Template, &plan.TemplateSHA256, &params, &tags, &caps, &plan.Revision, &plan.CreatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return agentaws.Provision{}, agentaws.ErrNotFound
+		}
+		return agentaws.Provision{}, err
+	}
+	if json.Unmarshal(params, &plan.Parameters) != nil || json.Unmarshal(tags, &plan.Tags) != nil || json.Unmarshal(caps, &plan.Capabilities) != nil || !agentaws.ProvisionSnapshotMatches(p, plan) {
+		return agentaws.Provision{}, agentaws.ErrRevisionConflict
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO core_aws_ec2_provisions(owner_id,provision_id,plan_id,credential_id,credential_revision,region,stack_name,profile,owner_digest,plan_revision,template_sha256,plan_digest,state,revision,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$15)`, r.ownerID, p.ID, p.PlanID, p.CredentialID, p.CredentialRevision, p.Region, p.StackName, p.Profile, p.OwnerDigest, p.PlanRevision, p.TemplateSHA256, p.PlanDigest, p.State, p.Revision, p.CreatedAt.UTC())
+	if err != nil {
+		return agentaws.Provision{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return agentaws.Provision{}, err
+	}
+	return p, nil
+}
+
+func (r *PostgresAWSRepository) RetryProvision(ctx context.Context, provisionID string, expectedRevision int64, idempotencyKey string) (agentaws.Provision, error) {
+	if r == nil || r.store == nil || r.store.db == nil || !validAWSUUID(provisionID) || !validAWSUUID(idempotencyKey) || expectedRevision < 1 {
+		return agentaws.Provision{}, agentaws.ErrInvalid
+	}
+	tx, err := r.store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return agentaws.Provision{}, err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, r.ownerID+"\x00provision-retry\x00"+idempotencyKey); err != nil {
+		return agentaws.Provision{}, err
+	}
+	digest := stringDigest(struct {
+		ProvisionID string
+		Revision    int64
+	}{provisionID, expectedRevision})
+	var priorHash string
+	var priorRaw []byte
+	if err = tx.QueryRowContext(ctx, `SELECT request_hash,response_json FROM core_aws_replays WHERE owner_id=$1 AND operation='provision-retry' AND idempotency_key=$2 FOR UPDATE`, r.ownerID, idempotencyKey).Scan(&priorHash, &priorRaw); err == nil {
+		if priorHash != digest {
+			return agentaws.Provision{}, agentaws.ErrIdempotencyConflict
+		}
+		var replay agentaws.Provision
+		if json.Unmarshal(priorRaw, &replay) != nil {
+			return agentaws.Provision{}, agentaws.ErrConflict
+		}
+		return replay, tx.Commit()
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return agentaws.Provision{}, err
+	}
+	var p agentaws.Provision
+	var observed *time.Time
+	if err = tx.QueryRowContext(ctx, `SELECT provision_id::text,plan_id::text,credential_id::text,credential_revision,region,stack_name,profile,owner_digest,plan_revision,template_sha256,plan_digest,state,revision,COALESCE(create_change_id::text,''),COALESCE(destroy_change_id::text,''),stack_id,instance_id,public_ip,security_group_id,output_digest,observed_at,reconciliation_required,error_code,error_summary,created_at,updated_at FROM core_aws_ec2_provisions WHERE owner_id=$1 AND provision_id=$2 FOR UPDATE`, r.ownerID, provisionID).Scan(&p.ID, &p.PlanID, &p.CredentialID, &p.CredentialRevision, &p.Region, &p.StackName, &p.Profile, &p.OwnerDigest, &p.PlanRevision, &p.TemplateSHA256, &p.PlanDigest, &p.State, &p.Revision, &p.CreateChangeID, &p.DestroyChangeID, &p.Readback.StackID, &p.Readback.InstanceID, &p.Readback.PublicIP, &p.Readback.SecurityGroupID, &p.Readback.OutputDigest, &observed, &p.ReconciliationRequired, &p.ErrorCode, &p.ErrorSummary, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return agentaws.Provision{}, agentaws.ErrNotFound
+		}
+		return agentaws.Provision{}, err
+	}
+	if observed != nil {
+		p.Readback.ObservedAt = *observed
+	}
+	var plan agentaws.Plan
+	var params, tags, caps []byte
+	if err = tx.QueryRowContext(ctx, `SELECT plan_id::text,credential_id::text,credential_revision,region,stack_name,operation,template,template_sha256,parameters_json,tags_json,capabilities_json,revision,created_at FROM core_aws_plans WHERE owner_id=$1 AND plan_id=$2 FOR UPDATE`, r.ownerID, p.PlanID).Scan(&plan.ID, &plan.CredentialID, &plan.CredentialRevision, &plan.Region, &plan.StackName, &plan.Operation, &plan.Template, &plan.TemplateSHA256, &params, &tags, &caps, &plan.Revision, &plan.CreatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return agentaws.Provision{}, agentaws.ErrNotFound
+		}
+		return agentaws.Provision{}, err
+	}
+	if json.Unmarshal(params, &plan.Parameters) != nil || json.Unmarshal(tags, &plan.Tags) != nil || json.Unmarshal(caps, &plan.Capabilities) != nil {
+		return agentaws.Provision{}, agentaws.ErrConflict
+	}
+	if p.Revision != expectedRevision || (p.State != "failed" && p.State != "destroyed") || !agentaws.ProvisionSnapshotMatches(p, plan) {
+		return agentaws.Provision{}, agentaws.ErrRevisionConflict
+	}
+	retryState := "planned"
+	clearReadback := true
+	selectedChangeID := ""
+	if p.State == "failed" {
+		var failedOperation agentaws.Operation
+		failedCount := 0
+		for _, changeID := range []string{p.CreateChangeID, p.DestroyChangeID} {
+			if changeID == "" {
+				continue
+			}
+			var operation agentaws.Operation
+			var status agentaws.ChangeStatus
+			var boundProvisionID string
+			if queryErr := tx.QueryRowContext(ctx, `SELECT provision_id::text,operation,status FROM core_aws_changes WHERE owner_id=$1 AND change_id=$2 FOR UPDATE`, r.ownerID, changeID).Scan(&boundProvisionID, &operation, &status); queryErr != nil || boundProvisionID != provisionID || status != agentaws.ChangeFailed {
+				continue
+			}
+			if operation != agentaws.OperationCreate && operation != agentaws.OperationDelete {
+				return agentaws.Provision{}, agentaws.ErrRevisionConflict
+			}
+			failedCount++
+			failedOperation = operation
+			selectedChangeID = changeID
+		}
+		if failedCount != 1 {
+			return agentaws.Provision{}, agentaws.ErrRevisionConflict
+		}
+		if failedOperation == agentaws.OperationDelete {
+			if p.Readback.Validate() != nil {
+				return agentaws.Provision{}, agentaws.ErrRevisionConflict
+			}
+			retryState, clearReadback = "active", false
+		} else if failedOperation != agentaws.OperationCreate {
+			return agentaws.Provision{}, agentaws.ErrRevisionConflict
+		}
+	}
+	now := time.Now().UTC()
+	var updateErr error
+	var updateResult sql.Result
+	if retryState == "active" && !clearReadback {
+		updateResult, updateErr = tx.ExecContext(ctx, `UPDATE core_aws_ec2_provisions SET state='active',active_change_id=NULL,reconciliation_required=false,error_code='',error_summary='',revision=revision+1,updated_at=$1 WHERE owner_id=$2 AND provision_id=$3 AND revision=$4 AND state='failed'`, now, r.ownerID, provisionID, expectedRevision)
+	} else {
+		updateResult, updateErr = tx.ExecContext(ctx, `UPDATE core_aws_ec2_provisions SET state='planned',active_change_id=NULL,stack_id='',instance_id='',public_ip='',security_group_id='',output_digest='',observed_at=NULL,reconciliation_required=false,error_code='',error_summary='',revision=revision+1,updated_at=$1 WHERE owner_id=$2 AND provision_id=$3 AND revision=$4 AND state IN ('failed','destroyed')`, now, r.ownerID, provisionID, expectedRevision)
+	}
+	if updateErr != nil {
+		return agentaws.Provision{}, updateErr
+	}
+	if affected, _ := updateResult.RowsAffected(); affected != 1 {
+		return agentaws.Provision{}, agentaws.ErrRevisionConflict
+	}
+	var seq int64
+	if err = tx.QueryRowContext(ctx, `INSERT INTO core_aws_ec2_provision_event_counters(owner_id,provision_id,next_sequence) VALUES($1,$2,2) ON CONFLICT(owner_id,provision_id) DO UPDATE SET next_sequence=core_aws_ec2_provision_event_counters.next_sequence+1 RETURNING next_sequence-1`, r.ownerID, provisionID).Scan(&seq); err != nil {
+		return agentaws.Provision{}, err
+	}
+	if selectedChangeID == "" {
+		selectedChangeID = p.DestroyChangeID
+		if selectedChangeID == "" {
+			selectedChangeID = p.CreateChangeID
+		}
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO core_aws_ec2_provision_events(owner_id,provision_id,change_id,sequence,event_id,kind,revision,at) VALUES($1,$2,NULLIF($3,'')::uuid,$4,$5,$6,$7,$8)`, r.ownerID, provisionID, selectedChangeID, seq, uuid.NewString(), "provision_retry_requested", expectedRevision+1, now); err != nil {
+		return agentaws.Provision{}, err
+	}
+	p.State, p.ActiveChangeID = retryState, ""
+	if clearReadback {
+		p.Readback = agentaws.ProvisionReadback{}
+	}
+	p.ReconciliationRequired, p.ErrorCode, p.ErrorSummary = false, "", ""
+	p.Revision, p.UpdatedAt = expectedRevision+1, now
+	raw, _ := json.Marshal(p)
+	if _, err = tx.ExecContext(ctx, `INSERT INTO core_aws_replays(owner_id,operation,idempotency_key,request_hash,response_json) VALUES($1,'provision-retry',$2,$3,$4)`, r.ownerID, idempotencyKey, digest, raw); err != nil {
+		return agentaws.Provision{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return agentaws.Provision{}, err
+	}
+	return p, nil
+}
+func (r *PostgresAWSRepository) GetProvision(ctx context.Context, id string) (agentaws.Provision, error) {
+	if r == nil || r.store == nil || r.store.db == nil || !validAWSUUID(id) {
+		return agentaws.Provision{}, agentaws.ErrInvalid
+	}
+	var p agentaws.Provision
+	var observed *time.Time
+	err := r.store.db.QueryRowContext(ctx, `SELECT provision_id::text,plan_id::text,credential_id::text,credential_revision,region,stack_name,profile,owner_digest,plan_revision,template_sha256,plan_digest,state,revision,COALESCE(create_change_id::text,''),COALESCE(destroy_change_id::text,''),COALESCE(active_change_id::text,''),stack_id,instance_id,public_ip,security_group_id,output_digest,observed_at,reconciliation_required,error_code,error_summary,created_at,updated_at FROM core_aws_ec2_provisions WHERE owner_id=$1 AND provision_id=$2`, r.ownerID, id).Scan(&p.ID, &p.PlanID, &p.CredentialID, &p.CredentialRevision, &p.Region, &p.StackName, &p.Profile, &p.OwnerDigest, &p.PlanRevision, &p.TemplateSHA256, &p.PlanDigest, &p.State, &p.Revision, &p.CreateChangeID, &p.DestroyChangeID, &p.ActiveChangeID, &p.Readback.StackID, &p.Readback.InstanceID, &p.Readback.PublicIP, &p.Readback.SecurityGroupID, &p.Readback.OutputDigest, &observed, &p.ReconciliationRequired, &p.ErrorCode, &p.ErrorSummary, &p.CreatedAt, &p.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return agentaws.Provision{}, agentaws.ErrNotFound
+	}
+	if err != nil {
+		return agentaws.Provision{}, err
+	}
+	if observed != nil {
+		p.Readback.ObservedAt = *observed
+	}
+	return p, nil
+}
+func (r *PostgresAWSRepository) GetProvisionByChange(ctx context.Context, changeID string) (agentaws.Provision, error) {
+	if r == nil || r.store == nil || r.store.db == nil || !validAWSUUID(changeID) {
+		return agentaws.Provision{}, agentaws.ErrInvalid
+	}
+	var id string
+	err := r.store.db.QueryRowContext(ctx, `SELECT provision_id::text FROM core_aws_changes WHERE owner_id=$1 AND change_id=$2 AND provision_id IS NOT NULL`, r.ownerID, changeID).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return agentaws.Provision{}, agentaws.ErrNotFound
+	}
+	if err != nil {
+		return agentaws.Provision{}, err
+	}
+	return r.GetProvision(ctx, id)
+}
+
 func validAWSUUID(v string) bool {
 	id, err := uuid.Parse(strings.TrimSpace(v))
 	return err == nil && id != uuid.Nil && id.String() == strings.TrimSpace(v)
@@ -163,9 +358,9 @@ func (r *PostgresAWSRepository) RequestChange(ctx context.Context, in agentaws.R
 	}
 	defer tx.Rollback()
 	replayDigest := stringDigest(struct {
-		PlanID  string
-		Binding coreconfirmation.Binding
-	}{in.PlanID, in.Binding})
+		PlanID, ProvisionID string
+		Binding             coreconfirmation.Binding
+	}{in.PlanID, in.ProvisionID, in.Binding})
 	var priorHash string
 	var priorRaw []byte
 	if e := tx.QueryRowContext(ctx, `SELECT request_hash,response_json FROM core_aws_replays WHERE owner_id=$1 AND operation='change-request' AND idempotency_key=$2 FOR UPDATE`, r.ownerID, in.IdempotencyKey).Scan(&priorHash, &priorRaw); e == nil {
@@ -180,18 +375,54 @@ func (r *PostgresAWSRepository) RequestChange(ctx context.Context, in agentaws.R
 	} else if !errors.Is(e, sql.ErrNoRows) {
 		return agentaws.ChangeRequestResult{}, e
 	}
+	// Lock and rehydrate the complete immutable plan before binding a linked
+	// provision. This prevents a forged request from being checked against a
+	// stale/non-authoritative plan projection.
+	var lockedPlan agentaws.Plan
+	var lockedParams, lockedTags, lockedCaps []byte
+	if err = tx.QueryRowContext(ctx, `SELECT plan_id::text,credential_id::text,credential_revision,region,stack_name,operation,template,template_sha256,parameters_json,tags_json,capabilities_json,revision,created_at FROM core_aws_plans WHERE owner_id=$1 AND plan_id=$2 FOR UPDATE`, r.ownerID, in.PlanID).Scan(&lockedPlan.ID, &lockedPlan.CredentialID, &lockedPlan.CredentialRevision, &lockedPlan.Region, &lockedPlan.StackName, &lockedPlan.Operation, &lockedPlan.Template, &lockedPlan.TemplateSHA256, &lockedParams, &lockedTags, &lockedCaps, &lockedPlan.Revision, &lockedPlan.CreatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return agentaws.ChangeRequestResult{}, agentaws.ErrNotFound
+		}
+		return agentaws.ChangeRequestResult{}, err
+	}
+	if json.Unmarshal(lockedParams, &lockedPlan.Parameters) != nil || json.Unmarshal(lockedTags, &lockedPlan.Tags) != nil || json.Unmarshal(lockedCaps, &lockedPlan.Capabilities) != nil {
+		return agentaws.ChangeRequestResult{}, agentaws.ErrConflict
+	}
+	p = lockedPlan
+	if in.ProvisionID != "" {
+		var provision agentaws.Provision
+		if err = tx.QueryRowContext(ctx, `SELECT plan_id::text,credential_id::text,credential_revision,region,stack_name,profile,owner_digest,plan_revision,template_sha256,plan_digest,state,COALESCE(active_change_id::text,'') FROM core_aws_ec2_provisions WHERE owner_id=$1 AND provision_id=$2 FOR UPDATE`, r.ownerID, in.ProvisionID).Scan(&provision.PlanID, &provision.CredentialID, &provision.CredentialRevision, &provision.Region, &provision.StackName, &provision.Profile, &provision.OwnerDigest, &provision.PlanRevision, &provision.TemplateSHA256, &provision.PlanDigest, &provision.State, &provision.ActiveChangeID); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return agentaws.ChangeRequestResult{}, agentaws.ErrNotFound
+			}
+			return agentaws.ChangeRequestResult{}, err
+		}
+		if provision.ActiveChangeID != "" || provision.State == "destroyed" || !agentaws.ProvisionPlanMatches(provision, p) {
+			return agentaws.ChangeRequestResult{}, agentaws.ErrRevisionConflict
+		}
+	}
 	if _, err = tx.ExecContext(ctx, `INSERT INTO agent_tasks(task_id,owner_id,spec_json,status,attempt,revision,available_at,created_at,updated_at) VALUES($1,$2,$3,'waiting_user',1,1,$4,$4,$4)`, taskID, r.ownerID, specRaw, now); err != nil {
 		return agentaws.ChangeRequestResult{}, err
 	}
 	if _, err = tx.ExecContext(ctx, `INSERT INTO agent_confirmations(confirmation_id,owner_id,operation_domain,target_id,target_revision,binding_digest,binding_json,task_id,state,revision,expires_at,created_at,updated_at) VALUES($1,$2,'aws',$3,$4,$5,$6,$7,'pending',1,$8,$9,$9)`, confID, r.ownerID, p.ID, p.Revision, b.Digest, bRaw, taskID, now.Add(24*time.Hour), now); err != nil {
 		return agentaws.ChangeRequestResult{}, err
 	}
-	v := agentaws.Change{ID: changeID, PlanID: p.ID, CredentialID: p.CredentialID, TaskID: taskID, ConfirmationID: confID, Operation: p.Operation, Status: agentaws.ChangeWaitingUser, Stage: agentaws.StageRequested, Revision: 1, ProviderToken: confID, ProviderRequestDigest: stringDigest(struct {
+	v := agentaws.Change{ID: changeID, PlanID: p.ID, CredentialID: p.CredentialID, ProvisionID: in.ProvisionID, TaskID: taskID, ConfirmationID: confID, Operation: p.Operation, Status: agentaws.ChangeWaitingUser, Stage: agentaws.StageRequested, Revision: 1, ProviderToken: confID, ProviderRequestDigest: stringDigest(struct {
 		Plan  string
 		Token string
 	}{p.ID, confID}), CreatedAt: now, UpdatedAt: now}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO core_aws_changes(owner_id,change_id,plan_id,credential_id,credential_revision,task_id,confirmation_id,operation,status,stage,provider_token,provider_request_digest,revision,created_at,updated_at) VALUES($1,$2,$3,$4,(SELECT credential_revision FROM core_aws_plans WHERE owner_id=$1 AND plan_id=$3),$5,$6,$7,$8,$9,$10,$11,1,$12,$12)`, r.ownerID, v.ID, v.PlanID, v.CredentialID, v.TaskID, v.ConfirmationID, v.Operation, v.Status, v.Stage, v.ProviderToken, v.ProviderRequestDigest, now); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO core_aws_changes(owner_id,change_id,plan_id,credential_id,credential_revision,provision_id,task_id,confirmation_id,operation,status,stage,provider_token,provider_request_digest,revision,created_at,updated_at) VALUES($1,$2,$3,$4,(SELECT credential_revision FROM core_aws_plans WHERE owner_id=$1 AND plan_id=$3),NULLIF($5,'')::uuid,$6,$7,$8,$9,$10,$11,$12,1,$13,$13)`, r.ownerID, v.ID, v.PlanID, v.CredentialID, v.ProvisionID, v.TaskID, v.ConfirmationID, v.Operation, v.Status, v.Stage, v.ProviderToken, v.ProviderRequestDigest, now); err != nil {
 		return agentaws.ChangeRequestResult{}, err
+	}
+	if in.ProvisionID != "" {
+		state := "creating"
+		if p.Operation == agentaws.OperationDelete {
+			state = "destroying"
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE core_aws_ec2_provisions SET active_change_id=$1,state=$2,revision=revision+1,updated_at=$3 WHERE owner_id=$4 AND provision_id=$5 AND active_change_id IS NULL`, changeID, state, now, r.ownerID, in.ProvisionID); err != nil {
+			return agentaws.ChangeRequestResult{}, err
+		}
 	}
 	out := agentaws.ChangeRequestResult{Change: v, Task: agentaws.Task{ID: taskID, Status: "waiting_user", Revision: 1, PlanID: p.ID, ConfirmationID: confID}, Confirmation: coreconfirmation.Confirmation{ConfirmationID: confID, OwnerID: r.ownerID, Binding: b, TaskID: taskID, State: coreconfirmation.StatePending, Revision: 1, CreatedAt: now, UpdatedAt: now, ExpiresAt: now.Add(24 * time.Hour)}}
 	outRaw, _ := json.Marshal(out)
@@ -668,12 +899,12 @@ func (r *PostgresAWSRepository) CreateChange(c context.Context, v agentaws.Chang
 		}
 		return agentaws.Change{}, err
 	}
-	_, err := r.store.db.ExecContext(c, `INSERT INTO core_aws_changes(owner_id,change_id,plan_id,credential_id,credential_revision,task_id,confirmation_id,operation,status,stage,change_set_id,provider_request_digest,provider_token,revision,error_code,error_summary,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`, r.ownerID, v.ID, v.PlanID, v.CredentialID, credentialRevision, v.TaskID, v.ConfirmationID, v.Operation, v.Status, v.Stage, v.ChangeSetID, v.ProviderRequestDigest, v.ProviderToken, v.Revision, v.ErrorCode, v.ErrorSummary, v.CreatedAt, v.UpdatedAt)
+	_, err := r.store.db.ExecContext(c, `INSERT INTO core_aws_changes(owner_id,change_id,plan_id,credential_id,credential_revision,provision_id,task_id,confirmation_id,operation,status,stage,change_set_id,provider_request_digest,provider_token,revision,error_code,error_summary,created_at,updated_at) VALUES($1,$2,$3,$4,$5,NULLIF($6,'')::uuid,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`, r.ownerID, v.ID, v.PlanID, v.CredentialID, credentialRevision, v.ProvisionID, v.TaskID, v.ConfirmationID, v.Operation, v.Status, v.Stage, v.ChangeSetID, v.ProviderRequestDigest, v.ProviderToken, v.Revision, v.ErrorCode, v.ErrorSummary, v.CreatedAt, v.UpdatedAt)
 	return v, mapAWSError(err)
 }
 func (r *PostgresAWSRepository) GetChange(c context.Context, id string) (agentaws.Change, error) {
 	var v agentaws.Change
-	err := r.store.db.QueryRowContext(c, `SELECT change_id::text,plan_id::text,credential_id::text,task_id::text,confirmation_id::text,operation,status,stage,change_set_id,provider_request_digest,provider_token,revision,error_code,error_summary,created_at,updated_at FROM core_aws_changes WHERE owner_id=$1 AND change_id=$2`, r.ownerID, id).Scan(&v.ID, &v.PlanID, &v.CredentialID, &v.TaskID, &v.ConfirmationID, &v.Operation, &v.Status, &v.Stage, &v.ChangeSetID, &v.ProviderRequestDigest, &v.ProviderToken, &v.Revision, &v.ErrorCode, &v.ErrorSummary, &v.CreatedAt, &v.UpdatedAt)
+	err := r.store.db.QueryRowContext(c, `SELECT change_id::text,plan_id::text,credential_id::text,COALESCE(provision_id::text,''),task_id::text,confirmation_id::text,operation,status,stage,change_set_id,provider_request_digest,provider_token,revision,error_code,error_summary,created_at,updated_at FROM core_aws_changes WHERE owner_id=$1 AND change_id=$2`, r.ownerID, id).Scan(&v.ID, &v.PlanID, &v.CredentialID, &v.ProvisionID, &v.TaskID, &v.ConfirmationID, &v.Operation, &v.Status, &v.Stage, &v.ChangeSetID, &v.ProviderRequestDigest, &v.ProviderToken, &v.Revision, &v.ErrorCode, &v.ErrorSummary, &v.CreatedAt, &v.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return v, agentaws.ErrNotFound
 	}
@@ -681,7 +912,7 @@ func (r *PostgresAWSRepository) GetChange(c context.Context, id string) (agentaw
 }
 func (r *PostgresAWSRepository) GetChangeByConfirmation(c context.Context, id string) (agentaws.Change, error) {
 	var v agentaws.Change
-	err := r.store.db.QueryRowContext(c, `SELECT change_id::text,plan_id::text,credential_id::text,task_id::text,confirmation_id::text,operation,status,stage,change_set_id,provider_request_digest,provider_token,revision,error_code,error_summary,created_at,updated_at FROM core_aws_changes WHERE owner_id=$1 AND confirmation_id=$2`, r.ownerID, id).Scan(&v.ID, &v.PlanID, &v.CredentialID, &v.TaskID, &v.ConfirmationID, &v.Operation, &v.Status, &v.Stage, &v.ChangeSetID, &v.ProviderRequestDigest, &v.ProviderToken, &v.Revision, &v.ErrorCode, &v.ErrorSummary, &v.CreatedAt, &v.UpdatedAt)
+	err := r.store.db.QueryRowContext(c, `SELECT change_id::text,plan_id::text,credential_id::text,COALESCE(provision_id::text,''),task_id::text,confirmation_id::text,operation,status,stage,change_set_id,provider_request_digest,provider_token,revision,error_code,error_summary,created_at,updated_at FROM core_aws_changes WHERE owner_id=$1 AND confirmation_id=$2`, r.ownerID, id).Scan(&v.ID, &v.PlanID, &v.CredentialID, &v.ProvisionID, &v.TaskID, &v.ConfirmationID, &v.Operation, &v.Status, &v.Stage, &v.ChangeSetID, &v.ProviderRequestDigest, &v.ProviderToken, &v.Revision, &v.ErrorCode, &v.ErrorSummary, &v.CreatedAt, &v.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return v, agentaws.ErrNotFound
 	}
@@ -693,7 +924,7 @@ func (r *PostgresAWSRepository) ListChanges(c context.Context, n int, p, k strin
 	if n < 0 || n > 100 || (p != "" && !validAWSUUID(p)) || (k != "" && !validAWSUUID(k)) {
 		return agentaws.ChangePage{}, agentaws.ErrInvalid
 	}
-	rows, err := r.store.db.QueryContext(c, `SELECT change_id::text,plan_id::text,credential_id::text,task_id::text,confirmation_id::text,operation,status,stage,change_set_id,provider_request_digest,provider_token,revision,error_code,error_summary,created_at,updated_at FROM core_aws_changes WHERE owner_id=$1 AND ($2='' OR plan_id=NULLIF($2,'')::uuid) AND change_id>COALESCE(NULLIF($3,'')::uuid,'00000000-0000-0000-0000-000000000000'::uuid) ORDER BY change_id LIMIT $4`, r.ownerID, p, k, func() int {
+	rows, err := r.store.db.QueryContext(c, `SELECT change_id::text,plan_id::text,credential_id::text,COALESCE(provision_id::text,''),task_id::text,confirmation_id::text,operation,status,stage,change_set_id,provider_request_digest,provider_token,revision,error_code,error_summary,created_at,updated_at FROM core_aws_changes WHERE owner_id=$1 AND ($2='' OR plan_id=NULLIF($2,'')::uuid) AND change_id>COALESCE(NULLIF($3,'')::uuid,'00000000-0000-0000-0000-000000000000'::uuid) ORDER BY change_id LIMIT $4`, r.ownerID, p, k, func() int {
 		if n == 0 {
 			return 101
 		}
@@ -706,7 +937,7 @@ func (r *PostgresAWSRepository) ListChanges(c context.Context, n int, p, k strin
 	out := agentaws.ChangePage{}
 	for rows.Next() {
 		var v agentaws.Change
-		if err := rows.Scan(&v.ID, &v.PlanID, &v.CredentialID, &v.TaskID, &v.ConfirmationID, &v.Operation, &v.Status, &v.Stage, &v.ChangeSetID, &v.ProviderRequestDigest, &v.ProviderToken, &v.Revision, &v.ErrorCode, &v.ErrorSummary, &v.CreatedAt, &v.UpdatedAt); err != nil {
+		if err := rows.Scan(&v.ID, &v.PlanID, &v.CredentialID, &v.ProvisionID, &v.TaskID, &v.ConfirmationID, &v.Operation, &v.Status, &v.Stage, &v.ChangeSetID, &v.ProviderRequestDigest, &v.ProviderToken, &v.Revision, &v.ErrorCode, &v.ErrorSummary, &v.CreatedAt, &v.UpdatedAt); err != nil {
 			return out, err
 		}
 		out.Items = append(out.Items, v)
@@ -893,6 +1124,26 @@ func (r *PostgresAWSRepository) CompleteChange(ctx context.Context, cmd agentaws
 		return agentaws.Change{}, err
 	}
 	defer tx.Rollback()
+	completionDigest := stringDigest(cmd)
+	if cmd.OperationKey != "" {
+		if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, r.ownerID+"\x00change-complete\x00"+cmd.OperationKey); err != nil {
+			return agentaws.Change{}, err
+		}
+		var priorHash string
+		var priorRaw []byte
+		if err = tx.QueryRowContext(ctx, `SELECT request_hash,response_json FROM core_aws_replays WHERE owner_id=$1 AND operation='change-complete' AND idempotency_key=$2 FOR UPDATE`, r.ownerID, cmd.OperationKey).Scan(&priorHash, &priorRaw); err == nil {
+			if priorHash != completionDigest {
+				return agentaws.Change{}, agentaws.ErrIdempotencyConflict
+			}
+			var replay agentaws.Change
+			if json.Unmarshal(priorRaw, &replay) != nil {
+				return agentaws.Change{}, agentaws.ErrConflict
+			}
+			return replay, tx.Commit()
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return agentaws.Change{}, err
+		}
+	}
 	var (
 		changeTaskID         string
 		changeConfirmationID string
@@ -917,6 +1168,30 @@ func (r *PostgresAWSRepository) CompleteChange(ctx context.Context, cmd agentaws
 		changeRevision != cmd.ExpectedChangeRevision ||
 		(changeStatus != agentaws.ChangeRunning && (changeStatus != cmd.Status || changeStage != stage)) {
 		return agentaws.Change{}, agentaws.ErrRevisionConflict
+	}
+	if cmd.Status == agentaws.ChangeCanceled && changeStage == agentaws.StageReconciling {
+		stage = agentaws.StageReconciliationRequired
+	}
+	var provisionID sql.NullString
+	var changeOperation agentaws.Operation
+	if err = tx.QueryRowContext(ctx, `SELECT provision_id::text,operation FROM core_aws_changes WHERE owner_id=$1 AND change_id=$2 FOR UPDATE`, r.ownerID, cmd.ChangeID).Scan(&provisionID, &changeOperation); err != nil {
+		return agentaws.Change{}, err
+	}
+	var provisionRevision int64
+	if provisionID.Valid {
+		var active string
+		if err = tx.QueryRowContext(ctx, `SELECT revision,COALESCE(active_change_id::text,'') FROM core_aws_ec2_provisions WHERE owner_id=$1 AND provision_id=$2 FOR UPDATE`, r.ownerID, provisionID.String).Scan(&provisionRevision, &active); err != nil || active != cmd.ChangeID {
+			return agentaws.Change{}, agentaws.ErrRevisionConflict
+		}
+		if cmd.Status == agentaws.ChangeSucceeded && changeOperation == agentaws.OperationCreate && cmd.Readback == nil {
+			return agentaws.Change{}, agentaws.ErrRevisionConflict
+		}
+		if cmd.Readback != nil && (changeOperation != agentaws.OperationCreate || cmd.Status != agentaws.ChangeSucceeded) {
+			return agentaws.Change{}, agentaws.ErrInvalid
+		}
+		if cmd.Readback != nil && cmd.Readback.Validate() != nil {
+			return agentaws.Change{}, agentaws.ErrInvalid
+		}
 	}
 	var (
 		currentTaskStatus   string
@@ -1015,10 +1290,73 @@ func (r *PostgresAWSRepository) CompleteChange(ctx context.Context, cmd agentaws
 	if _, err = tx.ExecContext(ctx, `INSERT INTO core_aws_events(owner_id,change_id,sequence,event_id,task_id,kind,revision,at) VALUES($1,$2,$3,$4,$5,'change_completed',$6,$7)`, r.ownerID, cmd.ChangeID, changeSequence, uuid.NewString(), cmd.TaskID, changeRevision+1, now); err != nil {
 		return agentaws.Change{}, err
 	}
+	if provisionID.Valid {
+		state, kind := "failed", "provision_failed"
+		uncertain := cmd.Status == agentaws.ChangeCanceled && changeStage == agentaws.StageReconciling
+		if uncertain {
+			state, kind = "uncertain", "provision_reconciliation_required"
+		}
+		if cmd.Status == agentaws.ChangeSucceeded {
+			if changeStage == agentaws.StageSucceeded {
+				return agentaws.Change{}, agentaws.ErrRevisionConflict
+			}
+			// A typed create has no safe terminal state without verified output.
+			if changeOperation == agentaws.OperationCreate && cmd.Readback == nil {
+				return agentaws.Change{}, agentaws.ErrRevisionConflict
+			}
+			if changeOperation == agentaws.OperationCreate {
+				state, kind = "active", "provision_active"
+			} else if changeOperation == agentaws.OperationDelete {
+				state, kind = "destroyed", "provision_destroyed"
+			} else {
+				return agentaws.Change{}, agentaws.ErrRevisionConflict
+			}
+		}
+		var result sql.Result
+		if cmd.Readback != nil {
+			result, err = tx.ExecContext(ctx, `UPDATE core_aws_ec2_provisions SET state=$1,active_change_id=NULL,create_change_id=$2,stack_id=$3,instance_id=$4,public_ip=$5,security_group_id=$6,output_digest=$7,observed_at=$8,reconciliation_required=false,error_code='',error_summary='',revision=revision+1,updated_at=$9 WHERE owner_id=$10 AND provision_id=$11 AND revision=$12`, state, cmd.ChangeID, cmd.Readback.StackID, cmd.Readback.InstanceID, cmd.Readback.PublicIP, cmd.Readback.SecurityGroupID, cmd.Readback.OutputDigest, cmd.Readback.ObservedAt, now, r.ownerID, provisionID.String, provisionRevision)
+		} else if state == "destroyed" {
+			result, err = tx.ExecContext(ctx, `UPDATE core_aws_ec2_provisions SET state='destroyed',active_change_id=NULL,destroy_change_id=$1,reconciliation_required=false,revision=revision+1,updated_at=$2 WHERE owner_id=$3 AND provision_id=$4 AND revision=$5`, cmd.ChangeID, now, r.ownerID, provisionID.String, provisionRevision)
+		} else if uncertain {
+			result, err = tx.ExecContext(ctx, `UPDATE core_aws_ec2_provisions SET state='uncertain',active_change_id=NULL,reconciliation_required=true,error_code='canceled_after_dispatch',error_summary=$1,revision=revision+1,updated_at=$2 WHERE owner_id=$3 AND provision_id=$4 AND revision=$5`, cmd.ErrorSummary, now, r.ownerID, provisionID.String, provisionRevision)
+		} else {
+			if changeOperation == agentaws.OperationDelete {
+				result, err = tx.ExecContext(ctx, `UPDATE core_aws_ec2_provisions SET state='failed',active_change_id=NULL,destroy_change_id=$1,reconciliation_required=false,error_code=$2,error_summary=$3,revision=revision+1,updated_at=$4 WHERE owner_id=$5 AND provision_id=$6 AND revision=$7`, cmd.ChangeID, cmd.ErrorCode, cmd.ErrorSummary, now, r.ownerID, provisionID.String, provisionRevision)
+			} else {
+				result, err = tx.ExecContext(ctx, `UPDATE core_aws_ec2_provisions SET state='failed',active_change_id=NULL,create_change_id=$1,reconciliation_required=false,error_code=$2,error_summary=$3,revision=revision+1,updated_at=$4 WHERE owner_id=$5 AND provision_id=$6 AND revision=$7`, cmd.ChangeID, cmd.ErrorCode, cmd.ErrorSummary, now, r.ownerID, provisionID.String, provisionRevision)
+			}
+		}
+		if err != nil {
+			return agentaws.Change{}, err
+		}
+		if n, _ := result.RowsAffected(); n != 1 {
+			return agentaws.Change{}, agentaws.ErrRevisionConflict
+		}
+		var provisionSequence int64
+		if err = tx.QueryRowContext(ctx, `INSERT INTO core_aws_ec2_provision_event_counters(owner_id,provision_id,next_sequence) VALUES($1,$2,2) ON CONFLICT(owner_id,provision_id) DO UPDATE SET next_sequence=core_aws_ec2_provision_event_counters.next_sequence+1 RETURNING next_sequence-1`, r.ownerID, provisionID.String).Scan(&provisionSequence); err != nil {
+			return agentaws.Change{}, err
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO core_aws_ec2_provision_events(owner_id,provision_id,change_id,sequence,event_id,kind,revision,at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, r.ownerID, provisionID.String, cmd.ChangeID, provisionSequence, uuid.NewString(), kind, provisionRevision+1, now); err != nil {
+			return agentaws.Change{}, err
+		}
+	}
+	var terminal agentaws.Change
+	if err = tx.QueryRowContext(ctx, `SELECT change_id::text,plan_id::text,credential_id::text,COALESCE(provision_id::text,''),task_id::text,confirmation_id::text,operation,status,stage,change_set_id,provider_request_digest,provider_token,revision,error_code,error_summary,created_at,updated_at FROM core_aws_changes WHERE owner_id=$1 AND change_id=$2`, r.ownerID, cmd.ChangeID).Scan(&terminal.ID, &terminal.PlanID, &terminal.CredentialID, &terminal.ProvisionID, &terminal.TaskID, &terminal.ConfirmationID, &terminal.Operation, &terminal.Status, &terminal.Stage, &terminal.ChangeSetID, &terminal.ProviderRequestDigest, &terminal.ProviderToken, &terminal.Revision, &terminal.ErrorCode, &terminal.ErrorSummary, &terminal.CreatedAt, &terminal.UpdatedAt); err != nil {
+		return agentaws.Change{}, err
+	}
+	if cmd.OperationKey != "" {
+		raw, marshalErr := json.Marshal(terminal)
+		if marshalErr != nil {
+			return agentaws.Change{}, marshalErr
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO core_aws_replays(owner_id,operation,idempotency_key,request_hash,response_json) VALUES($1,'change-complete',$2,$3,$4)`, r.ownerID, cmd.OperationKey, completionDigest, raw); err != nil {
+			return agentaws.Change{}, err
+		}
+	}
 	if err = tx.Commit(); err != nil {
 		return agentaws.Change{}, err
 	}
-	return r.GetChange(ctx, cmd.ChangeID)
+	return terminal, nil
 }
 func (r *PostgresAWSRepository) ReconcileChange(ctx context.Context, cmd agentaws.ReconcileChangeCommand) (agentaws.Change, error) {
 	f, err := r.ExecutionFence(ctx, cmd.ConfirmationID)

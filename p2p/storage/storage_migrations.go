@@ -1341,6 +1341,35 @@ func (s *DatabaseStore) migrate(ctx context.Context) error {
 		}
 		return nil
 	}})
+	m.AddMigrations(sqlutil.Migration{Version: "p2p: typed EC2 provision readback v103", Up: func(ctx context.Context, txn *sql.Tx) error {
+		return execMigrationStatements(ctx, txn, []string{
+			`CREATE TABLE IF NOT EXISTS core_aws_ec2_provisions (
+				owner_id TEXT NOT NULL, provision_id UUID NOT NULL, plan_id UUID NOT NULL,
+				credential_id UUID NOT NULL, credential_revision BIGINT NOT NULL CHECK (credential_revision > 0),
+				region TEXT NOT NULL, stack_name TEXT NOT NULL, profile TEXT NOT NULL,
+				owner_digest TEXT NOT NULL CHECK (owner_digest ~ '^sha256:[a-f0-9]{64}$'),
+				plan_revision BIGINT NOT NULL CHECK (plan_revision > 0), template_sha256 TEXT NOT NULL CHECK (template_sha256 ~ '^[a-f0-9]{64}$'),
+				plan_digest TEXT NOT NULL CHECK (plan_digest ~ '^[a-f0-9]{64}$'), state TEXT NOT NULL CHECK (state IN ('planned','creating','active','destroying','destroyed','uncertain','failed')),
+				revision BIGINT NOT NULL CHECK (revision > 0), create_change_id UUID, destroy_change_id UUID, active_change_id UUID,
+				stack_id TEXT NOT NULL DEFAULT '', instance_id TEXT NOT NULL DEFAULT '', public_ip TEXT NOT NULL DEFAULT '', security_group_id TEXT NOT NULL DEFAULT '',
+				output_digest TEXT NOT NULL DEFAULT '', observed_at TIMESTAMPTZ, reconciliation_required BOOLEAN NOT NULL DEFAULT FALSE,
+				error_code TEXT NOT NULL DEFAULT '', error_summary TEXT NOT NULL DEFAULT '', created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL,
+				PRIMARY KEY(owner_id,provision_id), UNIQUE(owner_id,plan_id),
+				FOREIGN KEY(owner_id,plan_id) REFERENCES core_aws_plans(owner_id,plan_id) ON DELETE RESTRICT,
+				FOREIGN KEY(owner_id,credential_id,credential_revision) REFERENCES core_aws_credentials(owner_id,credential_id,revision) ON DELETE RESTRICT
+			)`,
+			`CREATE TABLE IF NOT EXISTS core_aws_ec2_provision_events (
+				owner_id TEXT NOT NULL, provision_id UUID NOT NULL, change_id UUID, sequence BIGINT NOT NULL, event_id UUID NOT NULL, kind TEXT NOT NULL, revision BIGINT NOT NULL, at TIMESTAMPTZ NOT NULL,
+				PRIMARY KEY(owner_id,provision_id,sequence), FOREIGN KEY(owner_id,provision_id) REFERENCES core_aws_ec2_provisions(owner_id,provision_id) ON DELETE CASCADE
+			)`,
+			`ALTER TABLE core_aws_ec2_provision_events ADD COLUMN IF NOT EXISTS change_id UUID`,
+			`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='core_aws_ec2_provision_events_change_fk' AND conrelid='core_aws_ec2_provision_events'::regclass) THEN ALTER TABLE core_aws_ec2_provision_events ADD CONSTRAINT core_aws_ec2_provision_events_change_fk FOREIGN KEY(owner_id,change_id) REFERENCES core_aws_changes(owner_id,change_id) ON DELETE RESTRICT; END IF; END $$`,
+			`CREATE TABLE IF NOT EXISTS core_aws_ec2_provision_event_counters (owner_id TEXT NOT NULL, provision_id UUID NOT NULL, next_sequence BIGINT NOT NULL CHECK(next_sequence>0), PRIMARY KEY(owner_id,provision_id), FOREIGN KEY(owner_id,provision_id) REFERENCES core_aws_ec2_provisions(owner_id,provision_id) ON DELETE CASCADE)`,
+			`ALTER TABLE core_aws_changes ADD COLUMN IF NOT EXISTS provision_id UUID`,
+			`CREATE UNIQUE INDEX IF NOT EXISTS core_aws_changes_active_provision_idx ON core_aws_changes(owner_id,provision_id) WHERE provision_id IS NOT NULL AND status IN ('waiting_user','running')`,
+			`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='core_aws_changes_provision_fk' AND conrelid='core_aws_changes'::regclass) THEN ALTER TABLE core_aws_changes ADD CONSTRAINT core_aws_changes_provision_fk FOREIGN KEY(owner_id,provision_id) REFERENCES core_aws_ec2_provisions(owner_id,provision_id) ON DELETE RESTRICT; END IF; END $$`,
+		})
+	}})
 	return m.Up(ctx)
 }
 

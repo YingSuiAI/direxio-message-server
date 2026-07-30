@@ -36,6 +36,7 @@ type MemoryRepository struct {
 	credentialHistory map[string]map[int64]Credentials
 	credentialDeleted map[string]bool
 	plans             map[string]Plan
+	provisions        map[string]Provision
 	changes           map[string]Change
 	tasks             map[string]Task
 	confirmations     map[string]coreconfirmation.Confirmation
@@ -58,11 +59,150 @@ type memoryReplay struct {
 	credential *CredentialView
 	plan       *PlanView
 	change     *ChangeRequestResult
+	provision  *Provision
 	deleted    bool
 }
 
 func NewMemoryRepository() *MemoryRepository {
-	return &MemoryRepository{credentials: map[string]Credentials{}, credentialHistory: map[string]map[int64]Credentials{}, credentialDeleted: map[string]bool{}, plans: map[string]Plan{}, changes: map[string]Change{}, tasks: map[string]Task{}, confirmations: map[string]coreconfirmation.Confirmation{}, reservations: map[string]Reservation{}, replays: map[string]memoryReplay{}}
+	return &MemoryRepository{credentials: map[string]Credentials{}, credentialHistory: map[string]map[int64]Credentials{}, credentialDeleted: map[string]bool{}, plans: map[string]Plan{}, provisions: map[string]Provision{}, changes: map[string]Change{}, tasks: map[string]Task{}, confirmations: map[string]coreconfirmation.Confirmation{}, reservations: map[string]Reservation{}, replays: map[string]memoryReplay{}}
+}
+
+func (r *MemoryRepository) CreateProvision(_ context.Context, p Provision) (Provision, error) {
+	if p.Validate() != nil {
+		return Provision{}, ErrInvalid
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	plan, ok := r.plans[p.PlanID]
+	if !ok {
+		return Provision{}, ErrNotFound
+	}
+	if !ProvisionPlanMatches(p, plan) {
+		return Provision{}, ErrRevisionConflict
+	}
+	if _, ok := r.provisions[p.ID]; ok {
+		return Provision{}, ErrConflict
+	}
+	r.provisions[p.ID] = p
+	return p, nil
+}
+
+func (r *MemoryRepository) RetryProvision(_ context.Context, provisionID string, expectedRevision int64, idempotencyKey string) (Provision, error) {
+	if !validUUID(provisionID) || !validUUID(idempotencyKey) || expectedRevision < 1 {
+		return Provision{}, ErrInvalid
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.replays == nil {
+		r.replays = map[string]memoryReplay{}
+	}
+	digest := canonicalDigest(struct {
+		ProvisionID string
+		Revision    int64
+	}{provisionID, expectedRevision})
+	if v, ok, err := r.replayLocked("provision-retry", idempotencyKey, digest); ok {
+		if err != nil {
+			return Provision{}, err
+		}
+		if v.provision == nil {
+			return Provision{}, ErrConflict
+		}
+		return *v.provision, nil
+	}
+	p, ok := r.provisions[provisionID]
+	if !ok {
+		return Provision{}, ErrNotFound
+	}
+	plan, ok := r.plans[p.PlanID]
+	if !ok {
+		return Provision{}, ErrNotFound
+	}
+	if p.Revision != expectedRevision || (p.State != "failed" && p.State != "destroyed") || !provisionSnapshotMatches(p, plan) {
+		return Provision{}, ErrRevisionConflict
+	}
+	now := time.Now().UTC()
+	// A failed delete means the provider may still have the active service.
+	// Restore the verified readback and require a new explicit delete request;
+	// failed creates and destroyed resources are safe to re-arm as planned.
+	retryState := "planned"
+	clearReadback := true
+	selectedChangeID := ""
+	if p.State == "failed" {
+		var failed *Change
+		for _, changeID := range []string{p.CreateChangeID, p.DestroyChangeID} {
+			if changeID == "" {
+				continue
+			}
+			change, found := r.changes[changeID]
+			if !found || change.Status != ChangeFailed || change.ProvisionID != p.ID {
+				continue
+			}
+			if failed != nil || (change.Operation != OperationCreate && change.Operation != OperationDelete) {
+				return Provision{}, ErrRevisionConflict
+			}
+			candidate := change
+			failed = &candidate
+			selectedChangeID = changeID
+		}
+		if failed == nil {
+			return Provision{}, ErrRevisionConflict
+		}
+		if failed.Operation == OperationDelete {
+			if p.Readback.Validate() != nil {
+				return Provision{}, ErrRevisionConflict
+			}
+			retryState, clearReadback = "active", false
+		}
+	}
+	if selectedChangeID == "" {
+		selectedChangeID = p.DestroyChangeID
+		if selectedChangeID == "" {
+			selectedChangeID = p.CreateChangeID
+		}
+	}
+	p.State, p.ActiveChangeID = retryState, ""
+	if clearReadback {
+		p.Readback = ProvisionReadback{}
+	}
+	p.ReconciliationRequired, p.ErrorCode, p.ErrorSummary = false, "", ""
+	p.Revision, p.UpdatedAt = p.Revision+1, now
+	r.provisions[p.ID] = p
+	changeID := p.DestroyChangeID
+	if changeID == "" {
+		changeID = p.CreateChangeID
+	}
+	if selectedChangeID != "" {
+		changeID = selectedChangeID
+	}
+	r.events = append(r.events, ChangeEvent{ChangeID: changeID, TaskID: "", Kind: "provision_retry_requested", Revision: p.Revision, At: now})
+	copy := p
+	r.replays[replayKey("provision-retry", idempotencyKey)] = memoryReplay{digest: digest, provision: &copy}
+	return p, nil
+}
+func (r *MemoryRepository) GetProvision(_ context.Context, id string) (Provision, error) {
+	if !validUUID(id) {
+		return Provision{}, ErrInvalid
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	p, ok := r.provisions[id]
+	if !ok {
+		return Provision{}, ErrNotFound
+	}
+	return p, nil
+}
+func (r *MemoryRepository) GetProvisionByChange(_ context.Context, changeID string) (Provision, error) {
+	if !validUUID(changeID) {
+		return Provision{}, ErrInvalid
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, p := range r.provisions {
+		if p.ActiveChangeID == changeID || p.CreateChangeID == changeID || p.DestroyChangeID == changeID {
+			return p, nil
+		}
+	}
+	return Provision{}, ErrNotFound
 }
 
 func (r *MemoryRepository) rememberCredentialLocked(c Credentials) {

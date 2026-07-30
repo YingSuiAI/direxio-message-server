@@ -19,8 +19,8 @@ func (s *Service) ListChanges(ctx context.Context, size int, planID, token strin
 }
 
 type RequestChangeInput struct {
-	PlanID, IdempotencyKey string
-	Binding                coreconfirmation.Binding
+	PlanID, ProvisionID, IdempotencyKey string
+	Binding                             coreconfirmation.Binding
 }
 type ChangeRequestResult struct {
 	Change       Change
@@ -29,10 +29,21 @@ type ChangeRequestResult struct {
 }
 
 func (s *Service) RequestChange(ctx context.Context, in RequestChangeInput) (ChangeRequestResult, error) {
-	if s == nil || s.coordinator == nil || !validUUID(in.PlanID) || !validUUID(in.IdempotencyKey) {
+	if s == nil || s.coordinator == nil || !validUUID(in.PlanID) || !validUUID(in.IdempotencyKey) || (in.ProvisionID != "" && !validUUID(in.ProvisionID)) {
 		return ChangeRequestResult{}, ErrInvalid
 	}
 	return s.coordinator.RequestChange(ctx, in)
+}
+
+// RetryProvision is the explicit terminal retry transition for deterministic
+// plans. Callers must supply the observed provision revision and a UUID
+// idempotency key; the durable row remains the same so prior changes/events
+// stay auditable.
+func (s *Service) RetryProvision(ctx context.Context, provisionID string, expectedRevision int64, idempotencyKey string) (Provision, error) {
+	if s == nil || s.repo == nil || !validUUID(provisionID) || !validUUID(idempotencyKey) || expectedRevision < 1 {
+		return Provision{}, ErrInvalid
+	}
+	return s.repo.RetryProvision(ctx, provisionID, expectedRevision, idempotencyKey)
 }
 
 func (s *Service) ConsumeChange(ctx context.Context, cmd ConsumeChangeCommand) (Reservation, error) {

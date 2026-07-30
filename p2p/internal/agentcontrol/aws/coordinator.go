@@ -37,9 +37,9 @@ func (m *MemoryChangeCoordinator) RequestChange(ctx context.Context, in RequestC
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	digest := canonicalDigest(struct {
-		PlanID  string
-		Binding coreconfirmation.Binding
-	}{in.PlanID, in.Binding})
+		PlanID, ProvisionID string
+		Binding             coreconfirmation.Binding
+	}{in.PlanID, in.ProvisionID, in.Binding})
 	m.repo.mu.Lock()
 	defer m.repo.mu.Unlock()
 	if v, ok, e := m.repo.replayLocked("change-request", in.IdempotencyKey, digest); ok {
@@ -54,6 +54,12 @@ func (m *MemoryChangeCoordinator) RequestChange(ctx context.Context, in RequestC
 	p, ok := m.repo.plans[in.PlanID]
 	if !ok {
 		return ChangeRequestResult{}, ErrNotFound
+	}
+	if in.ProvisionID != "" {
+		provision, found := m.repo.provisions[in.ProvisionID]
+		if !found || provision.State == "destroyed" || provision.ActiveChangeID != "" || !ProvisionPlanMatches(provision, p) {
+			return ChangeRequestResult{}, ErrRevisionConflict
+		}
 	}
 	cred, ok := m.repo.credentialHistory[p.CredentialID][p.CredentialRevision]
 	if !ok {
@@ -75,12 +81,49 @@ func (m *MemoryChangeCoordinator) RequestChange(ctx context.Context, in RequestC
 	task := Task{ID: newUUID(), Status: "waiting_user", Revision: 1, PlanID: p.ID}
 	conf := coreconfirmation.Confirmation{ConfirmationID: newUUID(), Binding: binding, TaskID: task.ID, State: coreconfirmation.StatePending, Revision: 1, CreatedAt: now, UpdatedAt: now, ExpiresAt: now.Add(24 * time.Hour)}
 	task.ConfirmationID = conf.ConfirmationID
-	c := Change{ID: newUUID(), PlanID: p.ID, CredentialID: p.CredentialID, TaskID: task.ID, ConfirmationID: conf.ConfirmationID, Operation: p.Operation, Status: ChangeWaitingUser, Stage: StageRequested, Revision: 1, ProviderToken: conf.ConfirmationID, ProviderRequestDigest: providerRequestDigest(p, conf.ConfirmationID), CreatedAt: now, UpdatedAt: now}
+	c := Change{ID: newUUID(), PlanID: p.ID, CredentialID: p.CredentialID, ProvisionID: in.ProvisionID, TaskID: task.ID, ConfirmationID: conf.ConfirmationID, Operation: p.Operation, Status: ChangeWaitingUser, Stage: StageRequested, Revision: 1, ProviderToken: conf.ConfirmationID, ProviderRequestDigest: providerRequestDigest(p, conf.ConfirmationID), CreatedAt: now, UpdatedAt: now}
+	if in.ProvisionID != "" {
+		provision := m.repo.provisions[in.ProvisionID]
+		if p.Operation == OperationCreate {
+			provision.State = "creating"
+		} else if p.Operation == OperationDelete {
+			provision.State = "destroying"
+		} else {
+			return ChangeRequestResult{}, ErrInvalid
+		}
+		provision.ActiveChangeID, provision.Revision, provision.UpdatedAt = c.ID, provision.Revision+1, now
+		m.repo.provisions[in.ProvisionID] = provision
+	}
 	out := ChangeRequestResult{Change: c, Task: task, Confirmation: conf}
 	m.repo.changes[c.ID], m.repo.tasks[task.ID], m.repo.confirmations[conf.ConfirmationID] = c, task, conf
 	m.repo.events = append(m.repo.events, ChangeEvent{ChangeID: c.ID, TaskID: task.ID, Kind: "change_requested", Revision: c.Revision, At: now})
 	m.repo.replays[replayKey("change-request", in.IdempotencyKey)] = memoryReplay{digest: digest, change: &out}
 	return out, nil
+}
+
+func ProvisionPlanMatches(provision Provision, plan Plan) bool {
+	if plan.Operation == OperationCreate {
+		return provision.State == "planned" && provisionSnapshotMatches(provision, plan)
+	}
+	return plan.Operation == OperationDelete && provision.State == "active" && provision.CredentialID == plan.CredentialID && provision.CredentialRevision == plan.CredentialRevision && provision.Region == plan.Region && provision.StackName == plan.StackName && provision.TemplateSHA256 == plan.TemplateSHA256 && provision.Profile == plan.Tags["service"] && provision.OwnerDigest == plan.Tags["owner"] && validOwnerDigest(provision.OwnerDigest)
+}
+
+// provisionSnapshotMatches binds every immutable provision field to the
+// locked create plan. A caller cannot smuggle a different template, owner,
+// credential revision or profile by supplying a forged Provision DTO.
+func provisionSnapshotMatches(provision Provision, plan Plan) bool {
+	return plan.Operation == OperationCreate && provision.PlanID == plan.ID &&
+		provision.CredentialID == plan.CredentialID && provision.CredentialRevision == plan.CredentialRevision &&
+		provision.Region == plan.Region && provision.StackName == plan.StackName &&
+		provision.Profile == plan.Tags["service"] && provision.OwnerDigest == plan.Tags["owner"] &&
+		validOwnerDigest(provision.OwnerDigest) && provision.PlanRevision == plan.Revision &&
+		provision.TemplateSHA256 == plan.TemplateSHA256 && provision.PlanDigest == planDigest(plan)
+}
+
+// ProvisionSnapshotMatches exposes the immutable binding check to storage
+// adapters without exposing mutable coordinator state.
+func ProvisionSnapshotMatches(provision Provision, plan Plan) bool {
+	return provisionSnapshotMatches(provision, plan)
 }
 
 func bindingEmpty(b coreconfirmation.Binding) bool {
@@ -211,11 +254,56 @@ func (m *MemoryChangeCoordinator) CompleteChange(_ context.Context, cmd Complete
 	if cmd.Status != ChangeSucceeded && cmd.Status != ChangeFailed && cmd.Status != ChangeCanceled {
 		return Change{}, ErrInvalid
 	}
+	var provision Provision
+	if c.ProvisionID != "" {
+		var found bool
+		provision, found = m.repo.provisions[c.ProvisionID]
+		if !found || provision.ActiveChangeID != c.ID {
+			return Change{}, ErrRevisionConflict
+		}
+		if cmd.Status == ChangeSucceeded && c.Operation == OperationCreate && (cmd.Readback == nil || cmd.Readback.Validate() != nil) {
+			return Change{}, ErrRevisionConflict
+		}
+		if cmd.Readback != nil && (c.Operation != OperationCreate || cmd.Status != ChangeSucceeded) {
+			return Change{}, ErrInvalid
+		}
+	}
 	now := m.now().UTC()
-	c.Status, c.Stage, c.ErrorCode, c.ErrorSummary, c.Revision, c.UpdatedAt = cmd.Status, map[ChangeStatus]ChangeStage{ChangeSucceeded: StageSucceeded, ChangeFailed: StageFailed, ChangeCanceled: StageCanceled}[cmd.Status], cmd.ErrorCode, cmd.ErrorSummary, c.Revision+1, now
+	terminalStage := map[ChangeStatus]ChangeStage{ChangeSucceeded: StageSucceeded, ChangeFailed: StageFailed, ChangeCanceled: StageCanceled}[cmd.Status]
+	if cmd.Status == ChangeCanceled && c.Stage == StageReconciling {
+		terminalStage = StageReconciliationRequired
+	}
+	c.Status, c.Stage, c.ErrorCode, c.ErrorSummary, c.Revision, c.UpdatedAt = cmd.Status, terminalStage, cmd.ErrorCode, cmd.ErrorSummary, c.Revision+1, now
 	t.Status, t.Revision = map[ChangeStatus]string{ChangeSucceeded: "succeeded", ChangeFailed: "failed", ChangeCanceled: "canceled"}[cmd.Status], t.Revision+1
 	r.Active = false
 	m.repo.changes[c.ID], m.repo.tasks[t.ID], m.repo.reservations[r.ConfirmationID] = c, t, r
+	if c.ProvisionID != "" {
+		provision.ActiveChangeID, provision.Revision, provision.UpdatedAt = "", provision.Revision+1, now
+		if cmd.Status == ChangeSucceeded {
+			if c.Operation == OperationCreate {
+				provision.State, provision.CreateChangeID, provision.Readback, provision.ReconciliationRequired = "active", c.ID, *cmd.Readback, false
+			} else if c.Operation == OperationDelete {
+				provision.State, provision.DestroyChangeID, provision.ReconciliationRequired = "destroyed", c.ID, false
+			}
+		} else if cmd.Status == ChangeFailed {
+			provision.State, provision.ReconciliationRequired, provision.ErrorCode, provision.ErrorSummary = "failed", false, cmd.ErrorCode, cmd.ErrorSummary
+			if c.Operation == OperationDelete {
+				provision.DestroyChangeID = c.ID
+			} else if c.Operation == OperationCreate {
+				provision.CreateChangeID = c.ID
+			}
+		} else {
+			provision.State = "uncertain"
+			provision.ReconciliationRequired = true
+			if c.Operation == OperationDelete {
+				provision.DestroyChangeID = c.ID
+			} else if c.Operation == OperationCreate {
+				provision.CreateChangeID = c.ID
+			}
+		}
+		m.repo.provisions[provision.ID] = provision
+		m.repo.events = append(m.repo.events, ChangeEvent{ChangeID: c.ID, TaskID: t.ID, Kind: "provision_" + provision.State, Revision: provision.Revision, At: now})
+	}
 	m.repo.events = append(m.repo.events, ChangeEvent{ChangeID: c.ID, TaskID: t.ID, Kind: "change_completed", Revision: c.Revision, At: now})
 	m.repo.replays[replayKey("change-complete", replayID)] = memoryReplay{digest: digest, change: &ChangeRequestResult{Change: c}}
 	return c, nil

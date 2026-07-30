@@ -235,8 +235,7 @@ func forcedTags(displayName, ownerDigest, planID string) []any {
 }
 
 func ec2OwnerBindingDigest(ownerID string) string {
-	sum := sha256.Sum256([]byte(strings.TrimSpace(ownerID)))
-	return "sha256:" + hex.EncodeToString(sum[:])
+	return OwnerBindingDigest(ownerID)
 }
 
 // CanonicalJSONHash returns the SHA-256 hash of canonical JSON after the same
