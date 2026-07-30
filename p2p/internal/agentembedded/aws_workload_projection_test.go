@@ -135,3 +135,77 @@ func TestEmbeddedAWSPlanProjectionIncludesCredentialRevision(t *testing.T) {
 		t.Fatalf("credential_revision = %v", projected["credential_revision"])
 	}
 }
+
+func TestEmbeddedAWSPlanAndChangeProjectionPreserveBindingDigests(t *testing.T) {
+	binding := coreconfirmation.Binding{
+		TargetID:          "aws-target:" + strings.Repeat("a", 64),
+		ContentDigest:     coreconfirmation.Digest(strings.Repeat("b", 64)),
+		ParameterDigest:   coreconfirmation.Digest(strings.Repeat("c", 64)),
+		NetworkDigest:     coreconfirmation.Digest(strings.Repeat("d", 64)),
+		SecretGrantDigest: coreconfirmation.Digest(strings.Repeat("e", 64)),
+	}
+	view := coreaws.PlanView{ID: "33333333-3333-4333-8333-333333333333", CredentialID: "11111111-1111-4111-8111-111111111111", PlanDigest: strings.Repeat("f", 64), ContentDigest: string(binding.ContentDigest), ParameterDigest: string(binding.ParameterDigest), NetworkDigest: string(binding.NetworkDigest), SecretGrantDigest: string(binding.SecretGrantDigest), TargetID: binding.TargetID}
+	plan := planViewMap(view)
+	for key, want := range map[string]string{"target_id": binding.TargetID, "content_digest": string(binding.ContentDigest), "parameter_digest": string(binding.ParameterDigest), "network_digest": string(binding.NetworkDigest), "secret_grant_digest": string(binding.SecretGrantDigest)} {
+		if plan[key] != want {
+			t.Fatalf("plan.%s = %#v, want %q", key, plan[key], want)
+		}
+	}
+	action := changeRequestMap(coreaws.ChangeRequestResult{
+		Change:       coreaws.Change{ID: "22222222-2222-4222-8222-222222222222", PlanID: view.ID, ProvisionID: "44444444-4444-4444-8444-444444444444", TaskID: "55555555-5555-4555-8555-555555555555", ConfirmationID: "66666666-6666-4666-8666-666666666666", Operation: coreaws.OperationCreate, Status: coreaws.ChangeWaitingUser, Revision: 1},
+		Task:         coreaws.Task{ID: "55555555-5555-4555-8555-555555555555", PlanID: view.ID, ConfirmationID: "66666666-6666-4666-8666-666666666666", Status: "waiting_user", Revision: 1},
+		Confirmation: coreconfirmation.Confirmation{ConfirmationID: "66666666-6666-4666-8666-666666666666", Binding: binding},
+		Provision:    coreaws.Provision{ID: "44444444-4444-4444-8444-444444444444", PlanID: view.ID, PlanDigest: view.PlanDigest},
+	})
+	projected := action["provision"].(map[string]any)
+	for key, want := range map[string]string{"target_id": binding.TargetID, "content_digest": string(binding.ContentDigest), "parameter_digest": string(binding.ParameterDigest), "network_digest": string(binding.NetworkDigest), "secret_grant_digest": string(binding.SecretGrantDigest)} {
+		if projected[key] != want {
+			t.Fatalf("change provision.%s = %#v, want %q", key, projected[key], want)
+		}
+	}
+}
+
+func TestEmbeddedEC2ChangeRequestProjectsCanonicalConfirmationTarget(t *testing.T) {
+	targetID := "aws-target:" + strings.Repeat("a", 64)
+	result := changeRequestMap(coreaws.ChangeRequestResult{
+		Change:       coreaws.Change{ID: "22222222-2222-4222-8222-222222222222", PlanID: "33333333-3333-4333-8333-333333333333", ProvisionID: "11111111-1111-4111-8111-111111111111", TaskID: "44444444-4444-4444-8444-444444444444", ConfirmationID: "55555555-5555-4555-8555-555555555555", Operation: coreaws.OperationCreate, Status: coreaws.ChangeWaitingUser, Revision: 1},
+		Task:         coreaws.Task{ID: "44444444-4444-4444-8444-444444444444", PlanID: "33333333-3333-4333-8333-333333333333", ConfirmationID: "55555555-5555-4555-8555-555555555555", Status: "waiting_user", Revision: 1},
+		Confirmation: coreconfirmation.Confirmation{ConfirmationID: "55555555-5555-4555-8555-555555555555", Binding: coreconfirmation.Binding{TargetID: targetID}},
+		Provision:    coreaws.Provision{ID: "11111111-1111-4111-8111-111111111111", PlanID: "33333333-3333-4333-8333-333333333333"},
+	})
+	projected := result["provision"].(map[string]any)
+	if projected["target_id"] != targetID {
+		t.Fatalf("target_id = %#v, want %q", projected["target_id"], targetID)
+	}
+}
+
+func TestEmbeddedGeoLibrePlanProjectionUsesFlatTypedTarget(t *testing.T) {
+	digest := strings.Repeat("a", 64)
+	plan := coreworkload.Plan{
+		ID: "33333333-3333-4333-8333-333333333333", Revision: 2, Digest: digest,
+		TargetKind: coreworkload.TargetAWSEC2SSM,
+		Target: coreworkload.TargetSettings{
+			Identity: coreworkload.TargetIdentity{Kind: coreworkload.TargetAWSEC2SSM, AccountID: "123456789012", Region: "us-east-1", InstanceID: "i-0123456789abcdef0"},
+			Labels:   map[string]string{"dirextalk:provision-id": "11111111-1111-4111-8111-111111111111", "dirextalk:provision-revision": "7", "owner_id": "must-not-project"},
+		},
+		SecretGrantRefs: []coreworkload.SecretGrantRef{{ReferenceID: "77777777-7777-4777-8777-777777777777", Purpose: coreconfirmation.SecretPurposeAWSCredential, Revision: 4, BindingDigest: coreconfirmation.Digest(digest)}},
+		ExpiresAt:       time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+	projected := geoLibrePlanMap(plan)
+	target, ok := projected["typed_target"].(map[string]any)
+	if !ok {
+		t.Fatalf("typed_target = %#v", projected["typed_target"])
+	}
+	for key, want := range map[string]any{
+		"provision_id": "11111111-1111-4111-8111-111111111111", "provision_revision": "7",
+		"credential_id": "77777777-7777-4777-8777-777777777777", "credential_revision": int64(4),
+		"account_id": "123456789012", "region": "us-east-1", "instance_id": "i-0123456789abcdef0",
+	} {
+		if target[key] != want {
+			t.Fatalf("typed_target.%s = %#v, want %#v", key, target[key], want)
+		}
+	}
+	if _, ok := target["labels"]; ok {
+		t.Fatal("GeoLibre typed_target leaked raw labels")
+	}
+}

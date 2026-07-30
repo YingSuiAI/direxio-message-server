@@ -440,6 +440,14 @@ func changeRequestMap(v coreaws.ChangeRequestResult) map[string]any {
 		provision["parameter_digest"] = string(v.Confirmation.Binding.ParameterDigest)
 		provision["network_digest"] = string(v.Confirmation.Binding.NetworkDigest)
 		provision["secret_grant_digest"] = string(v.Confirmation.Binding.SecretGrantDigest)
+		for _, grant := range v.Confirmation.Binding.SecretGrants {
+			if grant.ReferenceID == v.Provision.CredentialID && grant.Purpose == coreconfirmation.SecretPurposeAWSCredential {
+				// This is the immutable per-grant owner/AAD binding. It is
+				// intentionally distinct from the aggregate secret_grant_digest.
+				provision["credential_binding_digest"] = string(grant.BindingDigest)
+				break
+			}
+		}
 		out["provision"] = provision
 	}
 	return out
@@ -604,11 +612,15 @@ func (p workloadActionPort) Handle(ctx context.Context, owner, action string, pa
 		if ae != nil {
 			return nil, ae
 		}
+		expectedWorkloadRevision, ae := optionalUint64(params, "expected_workload_revision")
+		if ae != nil {
+			return nil, ae
+		}
 		var r coreworkload.RequestResult
 		if action[len(action)-5:] == "apply" {
-			r, err = s.RequestApply(ctx, coreworkload.RequestApplyInput{PlanID: planID, WorkloadID: workloadID, IdempotencyKey: key})
+			r, err = s.RequestApply(ctx, coreworkload.RequestApplyInput{PlanID: planID, WorkloadID: workloadID, ExpectedWorkloadRevision: expectedWorkloadRevision, IdempotencyKey: key})
 		} else {
-			r, err = s.RequestDestroy(ctx, coreworkload.RequestDestroyInput{PlanID: planID, WorkloadID: workloadID, IdempotencyKey: key})
+			r, err = s.RequestDestroy(ctx, coreworkload.RequestDestroyInput{PlanID: planID, WorkloadID: workloadID, ExpectedWorkloadRevision: expectedWorkloadRevision, IdempotencyKey: key})
 		}
 		if err != nil {
 			return nil, workloadError(err)
@@ -617,7 +629,9 @@ func (p workloadActionPort) Handle(ctx context.Context, owner, action string, pa
 		if err != nil {
 			return nil, workloadError(err)
 		}
-		return map[string]any{"operation": operation, "confirmation": confirmationMap(r.Confirmation), "task_id": r.Task.ID}, nil
+		confirmation := confirmationMap(r.Confirmation)
+		confirmation["expected_workload_revision"] = r.Operation.ExpectedWorkloadRevision
+		return map[string]any{"operation": operation, "confirmation": confirmation, "task_id": r.Task.ID, "expected_workload_revision": r.Operation.ExpectedWorkloadRevision}, nil
 	case "agent.core.workloads.operations.get":
 		id, ae := requiredUUID(params, "operation_id")
 		if ae != nil {
@@ -654,6 +668,20 @@ func (p workloadActionPort) Handle(ctx context.Context, owner, action string, pa
 			items = append(items, item)
 		}
 		return map[string]any{"events": items}, nil
+	case "agent.core.workloads.operations.reconcile":
+		id, ae := requiredUUID(params, "operation_id")
+		if ae != nil {
+			return nil, ae
+		}
+		v, err := h.Reconcile(ctx, id)
+		if err != nil {
+			return nil, workloadError(err)
+		}
+		operation, err := workloadOperationProjection(ctx, s, v)
+		if err != nil {
+			return nil, workloadError(err)
+		}
+		return map[string]any{"operation": operation}, nil
 	case "agent.core.workloads.actual.get":
 		id, ae := requiredUUID(params, "workload_id")
 		if ae != nil {
@@ -995,15 +1023,21 @@ func workloadOperationProjection(ctx context.Context, service *coreworkload.Serv
 func workloadOperationMap(v coreworkload.Operation, plan coreworkload.Plan, actual *coreworkload.ActualSnapshot) map[string]any {
 	return map[string]any{
 		"operation_id": v.ID, "workload_id": v.WorkloadID, "plan_id": v.PlanID,
-		"kind": string(v.Kind), "plan_revision": v.PlanRevision, "plan_digest": v.PlanDigest,
+		"expected_workload_revision": v.ExpectedWorkloadRevision,
+		"kind":                       string(v.Kind), "plan_revision": v.PlanRevision, "plan_digest": v.PlanDigest,
 		"summary":     plan.Summary,
 		"target_kind": workloadTargetKindWire(v.TargetKind),
 		"task_id":     v.TaskID, "confirmation_id": v.ConfirmationID,
 		"status": string(v.Status), "revision": v.Revision,
 		"failure_code": v.FailureCode, "failure_summary": v.FailureSummary,
-		"created_at":           v.CreatedAt.UTC().Format(time.RFC3339Nano),
-		"updated_at":           v.UpdatedAt.UTC().Format(time.RFC3339Nano),
-		"desired_plan":         workloadDesiredPlanMap(plan),
+		"created_at":   v.CreatedAt.UTC().Format(time.RFC3339Nano),
+		"updated_at":   v.UpdatedAt.UTC().Format(time.RFC3339Nano),
+		"desired_plan": workloadDesiredPlanMap(plan),
+		// Keep the immutable, non-secret grant descriptors available to the
+		// Native Agent confirmation-card extractor. Redaction removes the
+		// richer desired_plan object, but these IDs/revisions/digests contain no
+		// credential material and remain required for per-grant pin validation.
+		"secret_grant_refs":    workloadSecretGrantRefsMap(plan.SecretGrantRefs),
 		"actual":               workloadActualPointerMap(actual),
 		"dispatch_epoch":       v.DispatchEpoch,
 		"dispatch_lease_until": v.DispatchLeaseUntil.UTC().Format(time.RFC3339Nano),

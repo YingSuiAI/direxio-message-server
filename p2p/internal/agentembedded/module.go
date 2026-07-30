@@ -76,6 +76,7 @@ type Config struct {
 	MCP             ActionPort
 	Skills          ActionPort
 	AWS             ActionPort
+	GeoLibre        ActionPort
 	Workloads       ActionPort
 	Deployments     DeploymentLedger
 	// CapabilityReady is an optional dynamic fail-closed readiness gate. A
@@ -163,16 +164,31 @@ func (m *Module) Handlers() map[string]actionbase.Handler {
 		// process, even if a caller accidentally supplies a port.
 		h[name] = unavailable
 	}
-	for _, name := range []string{"agent.core.aws.credentials.create", "agent.core.aws.credentials.update", "agent.core.aws.credentials.delete", "agent.core.aws.credentials.list", "agent.core.aws.credentials.test", "agent.core.aws.plans.get", "agent.core.aws.plans.list", "agent.core.aws.plans.quote", "agent.core.aws.changes.get", "agent.core.aws.changes.list", "agent.core.aws.changes.status"} {
+	for _, name := range []string{"agent.core.aws.credentials.create", "agent.core.aws.credentials.update", "agent.core.aws.credentials.delete", "agent.core.aws.credentials.list", "agent.core.aws.credentials.test", "agent.core.aws.plans.get", "agent.core.aws.plans.list", "agent.core.aws.plans.quote", "agent.core.aws.changes.get", "agent.core.aws.changes.list", "agent.core.aws.changes.status", "agent.core.aws.ec2_provisions.plan", "agent.core.aws.ec2_provisions.get", "agent.core.aws.ec2_provisions.list", "agent.core.aws.ec2_provisions.events", "agent.core.aws.ec2_provisions.create.request", "agent.core.aws.ec2_provisions.destroy.request", "agent.core.aws.ec2_provisions.retry"} {
 		h[name] = m.delegated(m.cfg.AWS, name, "aws.control")
 	}
-	for _, name := range []string{"agent.core.workloads.plan", "agent.core.workloads.get", "agent.core.workloads.list", "agent.core.workloads.quote", "agent.core.workloads.apply", "agent.core.workloads.destroy", "agent.core.workloads.operations.get", "agent.core.workloads.operations.events", "agent.core.workloads.actual.get"} {
+	for _, name := range []string{"agent.core.aws.ec2_provisions.geolibre_install.plan", "agent.core.aws.ec2_provisions.geolibre_install.request"} {
+		h[name] = m.delegatedGeoLibre(name)
+	}
+	for _, name := range []string{"agent.core.workloads.plan", "agent.core.workloads.get", "agent.core.workloads.list", "agent.core.workloads.quote", "agent.core.workloads.apply", "agent.core.workloads.destroy", "agent.core.workloads.operations.get", "agent.core.workloads.operations.events", "agent.core.workloads.operations.reconcile", "agent.core.workloads.actual.get"} {
 		h[name] = m.delegatedWorkload(name)
 	}
 	for _, name := range []string{"agent.core.dashboard.get", "agent.core.deployments.list", "agent.core.deployments.get", "agent.core.deployments.events"} {
 		h[name] = m.deploymentHandler(name)
 	}
 	return h
+}
+
+func (m *Module) delegatedGeoLibre(action string) actionbase.Handler {
+	return func(ctx context.Context, params map[string]any) (any, *actionbase.Error) {
+		if _, e := m.requireCapability(ctx, params, "aws.control", m.cfg.GeoLibre != nil); e != nil {
+			return nil, e
+		}
+		if _, e := m.requireCapability(ctx, params, "workload.aws_ssm", m.cfg.GeoLibre != nil); e != nil {
+			return nil, e
+		}
+		return m.cfg.GeoLibre.Handle(ctx, m.owner(), action, params)
+	}
 }
 
 func (m *Module) delegatedWorkload(action string) actionbase.Handler {

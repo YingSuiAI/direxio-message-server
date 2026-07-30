@@ -154,6 +154,51 @@ func TestPublicWorkloadPlanECSStillRequiresCapability(t *testing.T) {
 	}
 }
 
+func TestGeoLibreActionsRequireAWSAndSSMReadinessTogether(t *testing.T) {
+	for _, ready := range []map[string]bool{
+		{"aws.control": false, "workload.aws_ssm": true},
+		{"aws.control": true, "workload.aws_ssm": false},
+	} {
+		portCalls := 0
+		module := New(Config{
+			OwnerID: func() string { return "@owner:example" },
+			GeoLibre: ActionPortFunc(func(context.Context, string, string, map[string]any) (any, *actionbase.Error) {
+				portCalls++
+				return map[string]any{"unexpected": true}, nil
+			}),
+			CapabilityReady: func(capability string) bool { return ready[capability] },
+		})
+		for _, action := range []string{
+			"agent.core.aws.ec2_provisions.geolibre_install.plan",
+			"agent.core.aws.ec2_provisions.geolibre_install.request",
+		} {
+			result, apiErr := module.Handlers()[action](context.Background(), map[string]any{})
+			if result != nil || apiErr == nil || apiErr.Status != 412 || apiErr.Code != "agent_embedded_unavailable" {
+				t.Fatalf("%s with readiness %#v = %#v, %#v", action, ready, result, apiErr)
+			}
+		}
+		if portCalls != 0 {
+			t.Fatalf("GeoLibre port called %d times with partial readiness %#v", portCalls, ready)
+		}
+	}
+
+	portCalls := 0
+	module := New(Config{
+		OwnerID: func() string { return "@owner:example" },
+		GeoLibre: ActionPortFunc(func(_ context.Context, owner, action string, _ map[string]any) (any, *actionbase.Error) {
+			portCalls++
+			return map[string]any{"owner": owner, "action": action}, nil
+		}),
+		CapabilityReady: func(capability string) bool {
+			return capability == "aws.control" || capability == "workload.aws_ssm"
+		},
+	})
+	result, apiErr := module.Handlers()["agent.core.aws.ec2_provisions.geolibre_install.plan"](context.Background(), map[string]any{})
+	if apiErr != nil || result == nil || portCalls != 1 {
+		t.Fatalf("ready GeoLibre action = %#v, %#v, calls=%d", result, apiErr, portCalls)
+	}
+}
+
 func TestMCPSecretInputsUseTheWriteOnlyWireField(t *testing.T) {
 	inputs, err := secretInputsParam([]any{map[string]any{
 		"reference_id": "00000000-0000-4000-8000-000000000001",
