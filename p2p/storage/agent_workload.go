@@ -909,8 +909,11 @@ func (s *PostgresWorkloadStore) ConsumeFenced(c context.Context, id, cid, digest
 	}
 	var workloadID string
 	var expectedWorkloadRevision, operationRevision int64
-	var operationTaskID string
-	if err = tx.QueryRowContext(c, `SELECT workload_id::text,expected_workload_revision,task_id::text,revision FROM core_workload_operations WHERE owner_id=$1 AND operation_id=$2 FOR UPDATE`, s.ownerID, id).Scan(&workloadID, &expectedWorkloadRevision, &operationTaskID, &operationRevision); err != nil {
+	var operationTaskID, storedConfirmationID string
+	if err = tx.QueryRowContext(c, `SELECT workload_id::text,expected_workload_revision,task_id::text,confirmation_id::text,revision FROM core_workload_operations WHERE owner_id=$1 AND operation_id=$2 FOR UPDATE`, s.ownerID, id).Scan(&workloadID, &expectedWorkloadRevision, &operationTaskID, &storedConfirmationID, &operationRevision); err != nil {
+		return workload.Operation{}, coretask.Task{}, workload.ErrRevisionConflict
+	}
+	if operationTaskID != fence.TaskID || storedConfirmationID != cid {
 		return workload.Operation{}, coretask.Task{}, workload.ErrRevisionConflict
 	}
 	var currentWorkloadRevision int64

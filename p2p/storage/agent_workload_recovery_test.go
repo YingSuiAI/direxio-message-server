@@ -276,8 +276,8 @@ func TestPostgresWorkloadConsumeAllowsLeaseRenewalRevision(t *testing.T) {
 			AddRow("running", 5, 1, 1, "worker", now.Add(time.Hour)))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT p.expires_at FROM core_workload_operations o JOIN core_workload_plans p")).
 		WillReturnRows(sqlmock.NewRows([]string{"expires_at"}).AddRow(now.Add(time.Hour)))
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT workload_id::text,expected_workload_revision,task_id::text,revision FROM core_workload_operations")).
-		WillReturnRows(sqlmock.NewRows([]string{"workload_id", "expected_workload_revision", "task_id", "revision"}).AddRow(testWorkloadID, 1, testWorkloadTaskID, 2))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT workload_id::text,expected_workload_revision,task_id::text,confirmation_id::text,revision FROM core_workload_operations")).
+		WillReturnRows(sqlmock.NewRows([]string{"workload_id", "expected_workload_revision", "task_id", "confirmation_id", "revision"}).AddRow(testWorkloadID, 1, testWorkloadTaskID, testWorkloadConfirmationID, 2))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT revision FROM core_workloads")).
 		WillReturnRows(sqlmock.NewRows([]string{"revision"}).AddRow(1))
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE core_workload_operations SET status='running'")).

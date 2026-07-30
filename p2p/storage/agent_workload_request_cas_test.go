@@ -60,3 +60,44 @@ func TestPostgresRequestOperationWorkloadRevisionCASMissingAndStale(t *testing.T
 		})
 	}
 }
+
+func TestPostgresConsumeFencedStaleRevisionRejectsWrongConfirmationOrTask(t *testing.T) {
+	tests := []struct {
+		name         string
+		confirmation string
+		fenceTask    string
+	}{
+		{name: "wrong confirmation", confirmation: "66666666-6666-4666-8666-666666666666", fenceTask: testWorkloadTaskID},
+		{name: "wrong task", confirmation: testWorkloadConfirmationID, fenceTask: "77777777-7777-4777-8777-777777777777"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			repo, err := NewAgentWorkloadStore(NewUnmigratedDatabaseStore(db, sqlutil.NewDummyWriter()), testWorkloadOwnerID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			now := time.Now().UTC()
+			fence := workload.TaskFence{TaskID: tc.fenceTask, Attempt: 1, LeaseEpoch: 2, Revision: 4, Holder: "worker", ExpiresAt: now.Add(time.Hour)}
+			mock.ExpectBegin()
+			mock.ExpectQuery(regexp.QuoteMeta("SELECT status,revision,attempt,lease_epoch,lease_holder,lease_expires_at FROM agent_tasks")).
+				WillReturnRows(sqlmock.NewRows([]string{"status", "revision", "attempt", "lease_epoch", "lease_holder", "lease_expires_at"}).AddRow("running", 5, 1, 2, "worker", now.Add(time.Hour)))
+			mock.ExpectQuery(regexp.QuoteMeta("SELECT p.expires_at FROM core_workload_operations o JOIN core_workload_plans p")).
+				WillReturnRows(sqlmock.NewRows([]string{"expires_at"}).AddRow(now.Add(time.Hour)))
+			mock.ExpectQuery(regexp.QuoteMeta("SELECT workload_id::text,expected_workload_revision,task_id::text,confirmation_id::text,revision FROM core_workload_operations")).
+				WillReturnRows(sqlmock.NewRows([]string{"workload_id", "expected_workload_revision", "task_id", "confirmation_id", "revision"}).AddRow(testWorkloadID, 2, testWorkloadTaskID, testWorkloadConfirmationID, 5))
+			mock.ExpectRollback()
+			_, _, err = repo.ConsumeFenced(t.Context(), testWorkloadOperationID, tc.confirmation, "digest", 5, fence)
+			if !errors.Is(err, workload.ErrRevisionConflict) {
+				t.Fatalf("error = %v, want revision conflict", err)
+			}
+			if err = mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
