@@ -149,6 +149,111 @@ func TestPostgresScheduleMaterializationIsOwnerScoped(t *testing.T) {
 	if occurrences != 2 || runs != 2 {
 		t.Fatalf("owner-scoped rows occurrences=%d runs=%d", occurrences, runs)
 	}
+	var runOccurrence, runTask, occurrenceID, occurrenceTask string
+	if err := s.db.QueryRowContext(ctx, `SELECT r.occurrence_id::text,r.task_id::text,o.occurrence_id::text,o.task_id::text FROM p2p_agent_schedule_runs r JOIN agent_schedule_occurrences o ON o.owner_id=r.owner_id AND o.occurrence_id=r.occurrence_id WHERE r.owner_id=$1 AND r.schedule_id=$2 AND r.scheduled_for=$3`, "owner-a", scheduleID, at).Scan(&runOccurrence, &runTask, &occurrenceID, &occurrenceTask); err != nil {
+		t.Fatal(err)
+	}
+	if runOccurrence != occA || runTask != taskA || occurrenceID != occA || occurrenceTask != taskA {
+		t.Fatalf("owner-a links run=(%s,%s) occurrence=(%s,%s), want (%s,%s)", runOccurrence, runTask, occurrenceID, occurrenceTask, occA, taskA)
+	}
+	var tasks int
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM agent_tasks WHERE owner_id=$1 AND task_id=$2`, "owner-a", taskA).Scan(&tasks); err != nil {
+		t.Fatal(err)
+	}
+	if tasks != 1 {
+		t.Fatalf("owner-a task rows=%d", tasks)
+	}
+}
+
+func TestPostgresDueMaterializationLinksAndExplicitReplay(t *testing.T) {
+	ctx := context.Background()
+	conn, closeDB := test.PrepareDBConnectionString(t, test.DBTypePostgres)
+	defer closeDB()
+	opts := config.DatabaseOptions{ConnectionString: config.DataSource(conn)}
+	s, err := NewDatabaseStore(ctx, sqlutil.NewConnectionManager(nil, opts), &opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	const (
+		owner    = "due-owner"
+		schedule = "00000000-0000-4000-8000-000000000052"
+		profile  = "00000000-0000-4000-8000-000000000053"
+	)
+	at := time.Date(2026, 7, 29, 2, 3, 4, 0, time.UTC)
+	if _, err := s.CreateSchedule(ctx, Schedule{
+		OwnerID: owner, ScheduleID: schedule, Name: "due", Prompt: "work",
+		TriggerKind: "one_time", TriggerValue: at.Format(time.RFC3339), Timezone: "UTC", Status: "enabled",
+		ModelProfileID: profile, TaskTemplate: json.RawMessage(`{"goal":"work","model_profile_id":"` + profile + `"}`), NextRunAt: &at,
+	}, ""); err != nil {
+		t.Fatal(err)
+	}
+	materializedAt := at.Add(time.Minute)
+	if materialized, err := s.MaterializeNextDue(ctx, materializedAt, nil); err != nil || !materialized {
+		t.Fatalf("due materialization=%v err=%v", materialized, err)
+	}
+
+	var occurrenceID, taskID, runOccurrence, runTask string
+	var occurrenceCreatedAt time.Time
+	if err := s.db.QueryRowContext(ctx, `SELECT o.occurrence_id::text,o.task_id::text,r.occurrence_id::text,r.task_id::text,o.created_at FROM agent_schedule_occurrences o JOIN p2p_agent_schedule_runs r ON r.owner_id=o.owner_id AND r.run_id::text=o.run_id::text WHERE o.owner_id=$1 AND o.schedule_id=$2 AND o.scheduled_for=$3`, owner, schedule, at).Scan(&occurrenceID, &taskID, &runOccurrence, &runTask, &occurrenceCreatedAt); err != nil {
+		t.Fatal(err)
+	}
+	if occurrenceID == "" || taskID == "" || runOccurrence != occurrenceID || runTask != taskID {
+		t.Fatalf("due links occurrence=%s task=%s run=(%s,%s)", occurrenceID, taskID, runOccurrence, runTask)
+	}
+	if !occurrenceCreatedAt.Equal(materializedAt) {
+		t.Fatalf("due occurrence created_at=%s, want %s", occurrenceCreatedAt, materializedAt)
+	}
+
+	// Simulate the v102 upgrade shape: the task and occurrence survived, but
+	// the legacy run has nullable links. Both materializers must repair it.
+	if _, err := s.db.ExecContext(ctx, `UPDATE p2p_agent_schedule_runs SET occurrence_id=NULL,task_id=NULL WHERE owner_id=$1 AND schedule_id=$2 AND scheduled_for=$3`, owner, schedule, at); err != nil {
+		t.Fatal(err)
+	}
+	if occ, task, err := s.MaterializeScheduleTask(ctx, owner, schedule, at); err != nil || occ != occurrenceID || task != taskID {
+		t.Fatalf("explicit legacy replay occurrence=%s task=%s err=%v", occ, task, err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE p2p_agent_schedule_runs SET occurrence_id=NULL,task_id=NULL WHERE owner_id=$1 AND schedule_id=$2 AND scheduled_for=$3`, owner, schedule, at); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE p2p_agent_schedules SET next_run_at=$1 WHERE owner_id=$2 AND schedule_id=$3`, at, owner, schedule); err != nil {
+		t.Fatal(err)
+	}
+	if materialized, err := s.MaterializeNextDue(ctx, materializedAt, nil); err != nil || !materialized {
+		t.Fatalf("due legacy replay=%v err=%v", materialized, err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE p2p_agent_schedule_runs SET occurrence_id=NULL,task_id=NULL WHERE owner_id=$1 AND schedule_id=$2 AND scheduled_for=$3`, owner, schedule, at); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM agent_schedule_occurrences WHERE owner_id=$1 AND schedule_id=$2 AND scheduled_for=$3`, owner, schedule, at); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE p2p_agent_schedules SET next_run_at=$1 WHERE owner_id=$2 AND schedule_id=$3`, at, owner, schedule); err != nil {
+		t.Fatal(err)
+	}
+	if materialized, err := s.MaterializeNextDue(ctx, materializedAt, nil); err != nil || !materialized {
+		t.Fatalf("due run-only replay=%v err=%v", materialized, err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE p2p_agent_schedule_runs SET occurrence_id=NULL,task_id=NULL WHERE owner_id=$1 AND schedule_id=$2 AND scheduled_for=$3`, owner, schedule, at); err != nil {
+		t.Fatal(err)
+	}
+	if occ, task, err := s.MaterializeScheduleTask(ctx, owner, schedule, at); err != nil || occ != occurrenceID || task != taskID {
+		t.Fatalf("explicit run repair occurrence=%s task=%s err=%v", occ, task, err)
+	}
+	var occurrences, runs, tasks int
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM agent_schedule_occurrences WHERE owner_id=$1 AND schedule_id=$2 AND scheduled_for=$3`, owner, schedule, at).Scan(&occurrences); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM p2p_agent_schedule_runs WHERE owner_id=$1 AND schedule_id=$2 AND scheduled_for=$3`, owner, schedule, at).Scan(&runs); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM agent_tasks WHERE owner_id=$1 AND task_id=$2`, owner, taskID).Scan(&tasks); err != nil {
+		t.Fatal(err)
+	}
+	if occurrences != 1 || runs != 1 || tasks != 1 {
+		t.Fatalf("replay duplicates occurrences=%d runs=%d tasks=%d", occurrences, runs, tasks)
+	}
 }
 
 func TestPostgresActiveLeaseRejectsUpdateAndDelete(t *testing.T) {

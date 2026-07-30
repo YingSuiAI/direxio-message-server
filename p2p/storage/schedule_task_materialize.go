@@ -11,6 +11,55 @@ import (
 	"time"
 )
 
+func ptrTime(value time.Time) *time.Time { return &value }
+
+// ensureScheduleRunLink repairs the nullable v102 links left by older rows,
+// while rejecting a row that belongs to a different deterministic identity.
+func ensureScheduleRunLink(ctx context.Context, tx *sql.Tx, owner, scheduleID string, scheduledFor time.Time, status string, startedAt *time.Time, runID, occurrenceID, taskID string) error {
+	var existingRun string
+	var existingOccurrence, existingTask sql.NullString
+	query := `SELECT run_id,occurrence_id::text,task_id::text FROM p2p_agent_schedule_runs WHERE owner_id=$1 AND schedule_id=$2 AND scheduled_for=$3 FOR UPDATE`
+	err := tx.QueryRowContext(ctx, query, owner, scheduleID, scheduledFor).Scan(&existingRun, &existingOccurrence, &existingTask)
+	if errors.Is(err, sql.ErrNoRows) {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO p2p_agent_schedule_runs(run_id,schedule_id,owner_id,status,scheduled_for,started_at,result,error,lease_epoch,occurrence_id,task_id) VALUES($1,$2,$3,$4,$5,$6,'','',0,$8::uuid,$7::uuid) ON CONFLICT(owner_id,schedule_id,scheduled_for) DO NOTHING`, runID, scheduleID, owner, status, scheduledFor, startedAt, taskID, occurrenceID); err != nil {
+			return err
+		}
+		err = tx.QueryRowContext(ctx, query, owner, scheduleID, scheduledFor).Scan(&existingRun, &existingOccurrence, &existingTask)
+	}
+	if err != nil {
+		return err
+	}
+	if existingRun != runID || (existingOccurrence.Valid && existingOccurrence.String != occurrenceID) || (existingTask.Valid && existingTask.String != taskID) {
+		return task.ErrConflict
+	}
+	if existingOccurrence.Valid && existingTask.Valid {
+		return nil
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE p2p_agent_schedule_runs SET occurrence_id=COALESCE(p2p_agent_schedule_runs.occurrence_id,$4::uuid),task_id=COALESCE(p2p_agent_schedule_runs.task_id,$5::uuid) WHERE owner_id=$1 AND schedule_id=$2 AND scheduled_for=$3`, owner, scheduleID, scheduledFor, occurrenceID, taskID)
+	return err
+}
+
+// ensureScheduleOccurrenceLink validates an existing occurrence or creates
+// the deterministic projection after the linked task/run are in place.
+func ensureScheduleOccurrenceLink(ctx context.Context, tx *sql.Tx, owner, scheduleID string, scheduledFor time.Time, occurrenceID, taskID, runID string, createdAt time.Time) error {
+	var existingOccurrence, existingTask, existingRun string
+	query := `SELECT occurrence_id::text,task_id::text,run_id::text FROM agent_schedule_occurrences WHERE owner_id=$1 AND schedule_id=$2 AND scheduled_for=$3 FOR UPDATE`
+	err := tx.QueryRowContext(ctx, query, owner, scheduleID, scheduledFor).Scan(&existingOccurrence, &existingTask, &existingRun)
+	if errors.Is(err, sql.ErrNoRows) {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO agent_schedule_occurrences(occurrence_id,schedule_id,owner_id,scheduled_for,task_id,run_id,created_at) VALUES($1::uuid,$2,$3,$4,$5::uuid,$6::uuid,$7) ON CONFLICT(owner_id,schedule_id,scheduled_for) DO NOTHING`, occurrenceID, scheduleID, owner, scheduledFor, taskID, runID, createdAt); err != nil {
+			return err
+		}
+		err = tx.QueryRowContext(ctx, query, owner, scheduleID, scheduledFor).Scan(&existingOccurrence, &existingTask, &existingRun)
+	}
+	if err != nil {
+		return err
+	}
+	if existingOccurrence != occurrenceID || existingTask != taskID || existingRun != runID {
+		return task.ErrConflict
+	}
+	return nil
+}
+
 // MaterializeScheduleTask atomically links one legacy schedule run to one
 // generic task. The deterministic IDs make retries and multiple workers safe.
 func (s *DatabaseStore) MaterializeScheduleTask(ctx context.Context, owner, scheduleID string, at time.Time) (string, string, error) {
@@ -33,10 +82,18 @@ func (s *DatabaseStore) MaterializeScheduleTask(ctx context.Context, owner, sche
 	occ := uuid.NewSHA1(uuid.Nil, []byte(owner+"\x00"+scheduleID+"\x00scheduled\x00"+at.UTC().Format(time.RFC3339Nano))).String()
 	tid := uuid.NewSHA1(uuid.Nil, []byte(occ+"\x00task")).String()
 	runID := occ
-	var existing string
-	if e = tx.QueryRowContext(ctx, `SELECT task_id::text FROM agent_schedule_occurrences WHERE owner_id=$1 AND schedule_id=$2 AND scheduled_for=$3 FOR UPDATE`, owner, scheduleID, at.UTC()).Scan(&existing); e == nil {
-		_ = tx.Rollback()
-		return occ, existing, nil
+	var existingOccurrence, existingTask, existingRun string
+	if e = tx.QueryRowContext(ctx, `SELECT occurrence_id::text,task_id::text,run_id::text FROM agent_schedule_occurrences WHERE owner_id=$1 AND schedule_id=$2 AND scheduled_for=$3 FOR UPDATE`, owner, scheduleID, at.UTC()).Scan(&existingOccurrence, &existingTask, &existingRun); e == nil {
+		if existingOccurrence != occ || existingTask != tid || existingRun != runID {
+			return "", "", task.ErrConflict
+		}
+		if e = ensureScheduleRunLink(ctx, tx, owner, scheduleID, at.UTC(), "running", ptrTime(at.UTC()), runID, occ, tid); e != nil {
+			return "", "", e
+		}
+		if e = tx.Commit(); e != nil {
+			return "", "", e
+		}
+		return occ, tid, nil
 	} else if !errors.Is(e, sql.ErrNoRows) {
 		return "", "", e
 	}
@@ -49,16 +106,14 @@ func (s *DatabaseStore) MaterializeScheduleTask(ctx context.Context, owner, sche
 		return "", "", e
 	}
 	tpl, _ = json.Marshal(materialized)
-	_, e = tx.ExecContext(ctx, `INSERT INTO p2p_agent_schedule_runs(run_id,schedule_id,owner_id,status,scheduled_for,started_at,result,error,lease_epoch) VALUES($1,$2,$3,'running',$4,$4,'','',0) ON CONFLICT(owner_id,schedule_id,scheduled_for) DO NOTHING`, runID, scheduleID, owner, at.UTC())
-	if e != nil {
-		return "", "", e
-	}
 	_, e = tx.ExecContext(ctx, `INSERT INTO agent_tasks(task_id,owner_id,spec_json,status,available_at,created_at,updated_at) VALUES($1,$2,$3,'queued',$4,$4,$4) ON CONFLICT(task_id) DO NOTHING`, tid, owner, tpl, at.UTC())
 	if e != nil {
 		return "", "", e
 	}
-	_, e = tx.ExecContext(ctx, `INSERT INTO agent_schedule_occurrences(occurrence_id,schedule_id,owner_id,scheduled_for,task_id,run_id,created_at) VALUES($1,$2,$3,$4,$5,$6,$4) ON CONFLICT(owner_id,schedule_id,scheduled_for) DO NOTHING`, occ, scheduleID, owner, at.UTC(), tid, runID)
-	if e != nil {
+	if e = ensureScheduleRunLink(ctx, tx, owner, scheduleID, at.UTC(), "running", ptrTime(at.UTC()), runID, occ, tid); e != nil {
+		return "", "", e
+	}
+	if e = ensureScheduleOccurrenceLink(ctx, tx, owner, scheduleID, at.UTC(), occ, tid, runID, at.UTC()); e != nil {
 		return "", "", e
 	}
 	_, e = tx.ExecContext(ctx, `UPDATE p2p_agent_schedules SET latest_run_at=$1,revision=revision+1,updated_at=$1 WHERE owner_id=$2 AND schedule_id=$3 AND revision=$4`, at.UTC(), owner, scheduleID, rev)
@@ -100,8 +155,15 @@ func (s *DatabaseStore) TriggerSchedule(ctx context.Context, owner, scheduleID, 
 	// into this transaction and receive links to this one generic task.
 	occ := uuid.NewSHA1(uuid.Nil, []byte(owner+"\x00agent.schedules.run_now\x00"+key)).String()
 	tid := uuid.NewSHA1(uuid.Nil, []byte(occ+"\x00task")).String()
-	var existingTask string
-	if e = tx.QueryRowContext(ctx, `SELECT task_id::text FROM agent_schedule_occurrences WHERE owner_id=$1 AND occurrence_id=$2 FOR UPDATE`, owner, occ).Scan(&existingTask); e == nil {
+	var existingOccurrence, existingTask, existingRun string
+	var existingScheduled time.Time
+	if e = tx.QueryRowContext(ctx, `SELECT occurrence_id::text,task_id::text,run_id::text,scheduled_for FROM agent_schedule_occurrences WHERE owner_id=$1 AND occurrence_id=$2 FOR UPDATE`, owner, occ).Scan(&existingOccurrence, &existingTask, &existingRun, &existingScheduled); e == nil {
+		if existingOccurrence != occ || existingTask != tid || existingRun != occ {
+			return Schedule{}, "", "", task.ErrConflict
+		}
+		if e = ensureScheduleRunLink(ctx, tx, owner, scheduleID, existingScheduled.UTC(), "queued", nil, occ, occ, tid); e != nil {
+			return Schedule{}, "", "", e
+		}
 		if e = tx.Commit(); e != nil {
 			return Schedule{}, "", "", e
 		}
@@ -119,13 +181,13 @@ func (s *DatabaseStore) TriggerSchedule(ctx context.Context, owner, scheduleID, 
 		return Schedule{}, "", "", e
 	}
 	specRaw, _ := json.Marshal(materialized)
-	if _, e = tx.ExecContext(ctx, `INSERT INTO agent_tasks(task_id,owner_id,spec_json,status,available_at,created_at,updated_at) VALUES($1,$2,$3,'queued',$4,$5,$5)`, tid, owner, specRaw, at, at); e != nil {
+	if _, e = tx.ExecContext(ctx, `INSERT INTO agent_tasks(task_id,owner_id,spec_json,status,available_at,created_at,updated_at) VALUES($1,$2,$3,'queued',$4,$5,$5) ON CONFLICT(task_id) DO NOTHING`, tid, owner, specRaw, at, at); e != nil {
 		return Schedule{}, "", "", e
 	}
-	if _, e = tx.ExecContext(ctx, `INSERT INTO p2p_agent_schedule_runs(run_id,schedule_id,owner_id,status,scheduled_for,started_at,result,error,lease_epoch,occurrence_id,task_id) VALUES($1,$2,$3,'queued',$4,NULL,'','',0,$1,$5)`, occ, scheduleID, owner, at, tid); e != nil {
+	if e = ensureScheduleRunLink(ctx, tx, owner, scheduleID, at.UTC(), "queued", nil, occ, occ, tid); e != nil {
 		return Schedule{}, "", "", e
 	}
-	if _, e = tx.ExecContext(ctx, `INSERT INTO agent_schedule_occurrences(occurrence_id,schedule_id,owner_id,scheduled_for,task_id,run_id,created_at) VALUES($1,$2,$3,$4,$5,$1,$4)`, occ, scheduleID, owner, at, tid); e != nil {
+	if e = ensureScheduleOccurrenceLink(ctx, tx, owner, scheduleID, at.UTC(), occ, tid, occ, at.UTC()); e != nil {
 		return Schedule{}, "", "", e
 	}
 	r, e := tx.ExecContext(ctx, `UPDATE p2p_agent_schedules SET latest_run_at=$1,revision=revision+1,updated_at=$1 WHERE owner_id=$2 AND schedule_id=$3 AND revision=$4`, at, owner, scheduleID, v.Revision)
@@ -177,10 +239,10 @@ func (s *DatabaseStore) MaterializeNextDue(ctx context.Context, at time.Time, ca
 	if _, e = tx.ExecContext(ctx, `INSERT INTO agent_tasks(task_id,owner_id,spec_json,status,available_at,created_at,updated_at) VALUES($1,$2,$3,'queued',$4,$5,$5) ON CONFLICT(task_id) DO NOTHING`, tid, owner, tpl, scheduled, at.UTC()); e != nil {
 		return false, e
 	}
-	if _, e = tx.ExecContext(ctx, `INSERT INTO agent_schedule_occurrences(occurrence_id,schedule_id,owner_id,scheduled_for,task_id,run_id,created_at) VALUES($1,$2,$3,$4,$5,$1,$6) ON CONFLICT(owner_id,schedule_id,scheduled_for) DO NOTHING`, occ, id, owner, scheduled, tid, at.UTC()); e != nil {
+	if e = ensureScheduleRunLink(ctx, tx, owner, id, scheduled, "queued", nil, occ, occ, tid); e != nil {
 		return false, e
 	}
-	if _, e = tx.ExecContext(ctx, `INSERT INTO p2p_agent_schedule_runs(run_id,schedule_id,owner_id,status,scheduled_for,started_at,result,error,lease_epoch) VALUES($1,$2,$3,'queued',$4,NULL,'','',0) ON CONFLICT(owner_id,schedule_id,scheduled_for) DO NOTHING`, occ, id, owner, scheduled); e != nil {
+	if e = ensureScheduleOccurrenceLink(ctx, tx, owner, id, scheduled, occ, tid, occ, at.UTC()); e != nil {
 		return false, e
 	}
 	var following *time.Time
