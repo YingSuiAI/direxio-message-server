@@ -2,6 +2,7 @@ package p2p
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -205,6 +206,109 @@ func TestChannelPostAndCommentListsExposeCountsMediaAndReactionState(t *testing.
 	comments := mustHandle[map[string]any](t, service, "channels.comments.list", map[string]any{"post_id": post.PostID})["comments"].([]channelCommentRecord)
 	if len(comments) != 1 || comments[0].ReactionCount != 1 || !comments[0].ReactedByMe || !strings.Contains(comments[0].MediaJSON, "mxc://example.com/comment") {
 		t.Fatalf("expected comment list reaction state and media, got %#v", comments)
+	}
+}
+
+func TestChannelPostVisibilityDefaultsPrivateAndPublicListPaginatesWithCounts(t *testing.T) {
+	service := NewService(Config{ServerName: "example.com"})
+	bootstrapService(t, service)
+
+	privatePost := mustHandle[channelPostRecord](t, service, "channels.posts.create", map[string]any{
+		"channel_id": "ch_visibility",
+		"body":       "private by default",
+	})
+	if privatePost.Visibility != "private" {
+		t.Fatalf("default post visibility = %q, want private", privatePost.Visibility)
+	}
+	if _, apiErr := service.Handle(context.Background(), "channels.posts.create", map[string]any{
+		"channel_id": "ch_visibility",
+		"body":       "invalid visibility",
+		"visibility": "friends",
+	}); apiErr == nil || apiErr.Status != http.StatusBadRequest {
+		t.Fatalf("invalid create visibility error = %#v, want 400", apiErr)
+	}
+	if _, apiErr := service.Handle(context.Background(), "channels.posts.create", map[string]any{
+		"channel_id": "ch_visibility",
+		"body":       "invalid visibility type",
+		"visibility": true,
+	}); apiErr == nil || apiErr.Status != http.StatusBadRequest {
+		t.Fatalf("non-string create visibility error = %#v, want 400", apiErr)
+	}
+
+	publicPosts := make([]channelPostRecord, 0, 7)
+	for i := 0; i < 7; i++ {
+		publicPosts = append(publicPosts, mustHandle[channelPostRecord](t, service, "channels.posts.create", map[string]any{
+			"channel_id": "ch_visibility",
+			"body":       fmt.Sprintf("public %d", i),
+			"visibility": "public",
+		}))
+	}
+	target := publicPosts[len(publicPosts)-1]
+	mustHandle[channelCommentRecord](t, service, "channels.comments.create", map[string]any{
+		"channel_id": "ch_visibility",
+		"post_id":    target.PostID,
+		"body":       "comment",
+	})
+	mustHandle[map[string]any](t, service, "channels.post_reaction.toggle", map[string]any{
+		"channel_id": "ch_visibility",
+		"post_id":    target.PostID,
+		"reaction":   "like",
+	})
+	mustHandle[map[string]any](t, service, "channels.post_reaction.toggle", map[string]any{
+		"channel_id": "ch_visibility",
+		"post_id":    target.PostID,
+		"reaction":   "favorite",
+	})
+
+	first := mustHandle[map[string]any](t, service, "channels.posts.list", map[string]any{
+		"channel_id": "ch_visibility",
+		"visibility": "public",
+	})
+	firstPosts := first["posts"].([]channelPostRecord)
+	if len(firstPosts) != 5 || first["has_more"] != true || first["page"] != int64(1) || first["page_size"] != int64(5) || first["next_page"] != int64(2) {
+		t.Fatalf("first public page = %#v", first)
+	}
+	second := mustHandle[map[string]any](t, service, "channels.posts.list", map[string]any{
+		"channel_id": "ch_visibility",
+		"visibility": "public",
+		"page":       2,
+	})
+	secondPosts := second["posts"].([]channelPostRecord)
+	if len(secondPosts) != 2 || second["has_more"] != false {
+		t.Fatalf("second public page = %#v", second)
+	}
+	seen := make(map[string]channelPostRecord, 7)
+	for _, post := range append(firstPosts, secondPosts...) {
+		if post.Visibility != "public" {
+			t.Fatalf("public page exposed %q post: %#v", post.Visibility, post)
+		}
+		seen[post.PostID] = post
+	}
+	if len(seen) != 7 {
+		t.Fatalf("public pages contained %d unique posts, want 7", len(seen))
+	}
+	enriched := seen[target.PostID]
+	if enriched.CommentCount != 1 || enriched.ReactionCount != 1 || enriched.LikeCount != 1 || enriched.FavoriteCount != 1 {
+		t.Fatalf("public post counts = %#v", enriched)
+	}
+	private := mustHandle[map[string]any](t, service, "channels.posts.list", map[string]any{
+		"channel_id": "ch_visibility",
+		"visibility": "private",
+	})
+	if posts := private["posts"].([]channelPostRecord); len(posts) != 1 || posts[0].PostID != privatePost.PostID {
+		t.Fatalf("private page = %#v", private)
+	}
+	if _, apiErr := service.Handle(context.Background(), "channels.posts.list", map[string]any{
+		"channel_id": "ch_visibility",
+		"visibility": "friends",
+	}); apiErr == nil || apiErr.Status != http.StatusBadRequest {
+		t.Fatalf("invalid list visibility error = %#v, want 400", apiErr)
+	}
+	legacy := mustHandle[map[string]any](t, service, "channels.posts.list", map[string]any{
+		"channel_id": "ch_visibility",
+	})
+	if posts := legacy["posts"].([]channelPostRecord); len(posts) != 8 {
+		t.Fatalf("legacy unfiltered list = %#v", legacy)
 	}
 }
 

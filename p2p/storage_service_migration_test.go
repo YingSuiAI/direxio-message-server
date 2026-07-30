@@ -162,7 +162,7 @@ func TestDatabaseStoreRestoresPortalAndBusinessState(t *testing.T) {
 	ch := mustHandle[channel](t, service, "channels.create", map[string]any{"channel_id": "ch_news", "name": "News", "channel_type": "post"})
 	mustHandle[groupRecord](t, service, "groups.invite_policy.update", map[string]any{"room_id": group.RoomID, "invite_policy": "owner"})
 	mustHandle[map[string]any](t, service, "channels.mute", map[string]any{"channel_id": ch.ChannelID})
-	post := mustHandle[channelPostRecord](t, service, "channels.posts.create", map[string]any{"channel_id": ch.ChannelID, "body": "post body"})
+	post := mustHandle[channelPostRecord](t, service, "channels.posts.create", map[string]any{"channel_id": ch.ChannelID, "body": "post body", "visibility": "public"})
 	mustHandle[channelCommentRecord](t, service, "channels.comments.create", map[string]any{"channel_id": ch.ChannelID, "post_id": post.PostID, "body": "comment body"})
 	mustHandle[map[string]any](t, service, "agent.config.update", map[string]any{
 		"display_name":         "Storage Agent",
@@ -262,7 +262,7 @@ func TestDatabaseStoreRestoresPortalAndBusinessState(t *testing.T) {
 		t.Fatalf("expected restored follow, got %#v", follows)
 	}
 	posts := mustHandle[map[string]any](t, reloaded, "channels.posts.list", map[string]any{"channel_id": ch.ChannelID})
-	if got, ok := posts["posts"].([]channelPostRecord); !ok || len(got) != 1 || got[0].Body != "post body" {
+	if got, ok := posts["posts"].([]channelPostRecord); !ok || len(got) != 1 || got[0].Body != "post body" || got[0].Visibility != "public" {
 		t.Fatalf("expected restored post, got %#v", posts)
 	}
 	comments := mustHandle[map[string]any](t, reloaded, "channels.comments.list", map[string]any{"post_id": post.PostID})

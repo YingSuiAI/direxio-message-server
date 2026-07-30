@@ -127,6 +127,7 @@ func (m *ContentModule) EnrichPosts(ctx context.Context, posts []Post, ownerMXID
 		}
 		if count, err := m.store.CountActiveReactions(ctx, "post", posts[i].PostID, "like"); err == nil {
 			posts[i].ReactionCount = count
+			posts[i].LikeCount = count
 		}
 		if ownerMXID != "" {
 			if reaction, ok, err := m.store.GetReaction(ctx, "post", posts[i].PostID, "like", ownerMXID); err == nil && ok {
@@ -271,6 +272,7 @@ func (m *ContentModule) ProjectPost(ctx context.Context, event ProjectionEvent) 
 		EventID: event.EventID, AuthorMXID: event.SenderMXID,
 		AuthorName: params.String("sender_name"), Body: event.Body,
 		MessageType: event.MessageType, MediaJSON: params.String("media_json"),
+		Visibility:     dirextalkdomain.NormalizeChannelPostVisibility(params.String("visibility")),
 		OriginServerTS: event.OriginServerTS,
 	})
 }

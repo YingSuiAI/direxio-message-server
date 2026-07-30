@@ -3,6 +3,7 @@ package channels
 import (
 	"context"
 	"errors"
+	"math"
 	"net/http"
 	"strings"
 
@@ -23,6 +24,15 @@ func (m *ContentModule) CreatePost(ctx context.Context, raw map[string]any) (any
 	}
 	body := fallback(params.String("body"), params.String("content"))
 	messageType := fallback(params.String("message_type"), "text")
+	if value, exists := raw["visibility"]; exists && value != nil {
+		if _, ok := value.(string); !ok {
+			return nil, actionbase.BadRequest("visibility must be public or private")
+		}
+	}
+	visibility, ok := validatedPostVisibility(params.String("visibility"))
+	if !ok {
+		return nil, actionbase.BadRequest("visibility must be public or private")
+	}
 	mediaJSON, media, err := mediaPayload(params.Raw("media_json"))
 	if err != nil {
 		return nil, actionbase.BadRequest("media_json is invalid")
@@ -33,6 +43,7 @@ func (m *ContentModule) CreatePost(ctx context.Context, raw map[string]any) (any
 		content := channelMessageContent("channel_post", body, messageType, mediaJSON, media)
 		content["channel_id"] = channelID
 		content["post_id"] = postID
+		content["visibility"] = visibility
 		result, err := matrix.SendMessage(ctx, dirextalktransport.SendMessageRequest{
 			SenderMXID: owner.MXID, RoomID: roomID, MessageType: messageType,
 			Timestamp: now, Content: content,
@@ -46,7 +57,8 @@ func (m *ContentModule) CreatePost(ctx context.Context, raw map[string]any) (any
 	post := Post{
 		PostID: postID, ChannelID: channelID, RoomID: roomID, EventID: eventID,
 		AuthorMXID: owner.MXID, AuthorName: owner.DisplayName, Body: body,
-		MessageType: messageType, MediaJSON: mediaJSON, OriginServerTS: originServerTS,
+		MessageType: messageType, MediaJSON: mediaJSON, Visibility: visibility,
+		OriginServerTS: originServerTS,
 	}
 	if m.store == nil {
 		return nil, actionbase.InternalError(errors.New("channel content store is not configured"))
@@ -61,9 +73,54 @@ func (m *ContentModule) CreatePost(ctx context.Context, raw map[string]any) (any
 }
 
 func (m *ContentModule) Posts(ctx context.Context, raw map[string]any) (any, *actionbase.Error) {
-	channelID := actionbase.Params(raw).String("channel_id")
+	params := actionbase.Params(raw)
+	channelID := params.String("channel_id")
 	if m.store == nil {
 		return map[string]any{"posts": []Post{}}, nil
+	}
+	if value, exists := raw["visibility"]; exists {
+		if _, ok := value.(string); !ok || params.String("visibility") == "" {
+			return nil, actionbase.BadRequest("visibility must be public or private")
+		}
+		visibility, ok := validatedPostVisibility(params.String("visibility"))
+		if !ok {
+			return nil, actionbase.BadRequest("visibility must be public or private")
+		}
+		if channelID == "" {
+			return nil, actionbase.BadRequest("channel_id is required when visibility is set")
+		}
+		page := params.Int64("page")
+		if page <= 0 {
+			page = 1
+		}
+		pageSize := params.Int64("page_size")
+		if pageSize <= 0 {
+			pageSize = params.Int64("limit")
+		}
+		if pageSize <= 0 {
+			pageSize = 5
+		}
+		if pageSize > 100 {
+			pageSize = 100
+		}
+		if page > math.MaxInt64/pageSize {
+			return nil, actionbase.BadRequest("page is too large")
+		}
+		offset := (page - 1) * pageSize
+		records, hasMore, err := m.store.ListChannelPostsByVisibilityPage(ctx, channelID, visibility, offset, int(pageSize))
+		if err != nil {
+			return nil, actionbase.InternalError(err)
+		}
+		posts := PostsFromRecords(records)
+		m.EnrichPosts(ctx, posts, m.owner().MXID)
+		result := map[string]any{
+			"posts": posts, "visibility": visibility, "page": page,
+			"page_size": pageSize, "has_more": hasMore,
+		}
+		if hasMore {
+			result["next_page"] = page + 1
+		}
+		return result, nil
 	}
 	records, err := m.store.ListChannelPosts(ctx, channelID)
 	if err != nil {
@@ -72,6 +129,19 @@ func (m *ContentModule) Posts(ctx context.Context, raw map[string]any) (any, *ac
 	posts := PostsFromRecords(records)
 	m.EnrichPosts(ctx, posts, m.owner().MXID)
 	return map[string]any{"posts": posts}, nil
+}
+
+func validatedPostVisibility(value string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "":
+		return dirextalkdomain.ChannelPostVisibilityPrivate, true
+	case dirextalkdomain.ChannelPostVisibilityPrivate:
+		return dirextalkdomain.ChannelPostVisibilityPrivate, true
+	case dirextalkdomain.ChannelPostVisibilityPublic:
+		return dirextalkdomain.ChannelPostVisibilityPublic, true
+	default:
+		return "", false
+	}
 }
 
 func (m *ContentModule) PostPage(ctx context.Context, channelID string, fromTS, snapshotTS, cursorTS int64, cursorID string, limit int) ([]Post, bool, error) {

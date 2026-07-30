@@ -242,6 +242,8 @@ Channel posts/comments/reactions：
 
 - 仍是产品内容 projection。
 - 使用 Matrix `m.room.message` 携带 `p2p_kind=channel_post` 或 `p2p_kind=channel_comment`。
+- `channels.posts.create` 的 `visibility` 只接受 `public`/`private`，缺省为 `private`；该字段随 Matrix 帖子事件传播并投影到 PostgreSQL，缺少字段的历史帖子按私有处理。
+- `channels.posts.list` 未传 `visibility` 时保留旧的频道帖子列表行为；传 `public` 或 `private` 时要求 `channel_id`，按最新帖子优先分页，`page` 默认 1、`page_size` 默认 5 且最大 100，并返回 `has_more`/`next_page`。公开帖子结果逐条提供 `comment_count`、`like_count`/兼容字段 `reaction_count`、`favorite_count` 和当前 owner 的点赞/收藏状态。
 - reaction 使用 Matrix reaction/内容字段投影到 P2P reaction read model；点赞开关事件携带 `active`，因此取消点赞也会覆盖到其他节点的 read model。
 - 新成员加入 channel 后，服务端会从 Matrix `/messages` 历史回填当前频道已有 posts/comments/reactions 到本节点 projection，客户端可通过 product list 接口和 Matrix history 同时看到入群前内容。普通聊天消息仍走 Matrix timeline，不写入帖子/评论 projection。
 - recall 通过 Matrix redaction。

@@ -61,12 +61,14 @@ func (s *DatabaseStore) migrate(ctx context.Context) error {
 					body TEXT NOT NULL,
 					message_type TEXT NOT NULL,
 					media_json TEXT NOT NULL,
+					visibility TEXT NOT NULL DEFAULT 'private' CHECK (visibility IN ('public', 'private')),
 					origin_server_ts BIGINT NOT NULL,
 					comment_count BIGINT NOT NULL
 				)`,
 				`CREATE INDEX IF NOT EXISTS p2p_channel_posts_channel_idx ON p2p_channel_posts(channel_id, origin_server_ts)`,
 				`CREATE INDEX IF NOT EXISTS p2p_channel_posts_event_idx ON p2p_channel_posts(event_id)`,
 				`CREATE INDEX IF NOT EXISTS p2p_channel_posts_author_idx ON p2p_channel_posts(author_mxid, origin_server_ts)`,
+				`CREATE INDEX IF NOT EXISTS p2p_channel_posts_channel_visibility_idx ON p2p_channel_posts(channel_id, visibility, origin_server_ts DESC, post_id DESC)`,
 				`CREATE TABLE IF NOT EXISTS p2p_channel_comments (
 					comment_id TEXT PRIMARY KEY NOT NULL,
 					post_id TEXT NOT NULL,
@@ -831,6 +833,19 @@ func (s *DatabaseStore) migrate(ctx context.Context) error {
 				END
 			`)
 			return err
+		},
+	})
+	m.AddMigrations(sqlutil.Migration{
+		Version: "p2p: channel post visibility v78",
+		Up: func(ctx context.Context, txn *sql.Tx) error {
+			exists, err := productTableExists(ctx, txn, "p2p_channel_posts")
+			if err != nil || !exists {
+				return err
+			}
+			return execMigrationStatements(ctx, txn, []string{
+				`ALTER TABLE p2p_channel_posts ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'private' CHECK (visibility IN ('public', 'private'))`,
+				`CREATE INDEX IF NOT EXISTS p2p_channel_posts_channel_visibility_idx ON p2p_channel_posts(channel_id, visibility, origin_server_ts DESC, post_id DESC)`,
+			})
 		},
 	})
 	return m.Up(ctx)

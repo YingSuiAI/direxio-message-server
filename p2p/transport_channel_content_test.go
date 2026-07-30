@@ -180,6 +180,7 @@ func TestChannelPostAndCommentUseChannelRoomAndMediaThroughTransport(t *testing.
 		"message_type": "m.image",
 		"body":         "photo.jpg",
 		"media_json":   `{"url":"mxc://example.com/photo","info":{"mimetype":"image/jpeg"}}`,
+		"visibility":   "public",
 	})
 	comment := mustHandle[channelCommentRecord](t, service, "channels.comments.create", map[string]any{
 		"channel_id":   ch.ChannelID,
@@ -196,7 +197,7 @@ func TestChannelPostAndCommentUseChannelRoomAndMediaThroughTransport(t *testing.
 		t.Fatalf("expected post and comment to be sent through Matrix transport, got %#v", transport.messages)
 	}
 	postContent := transport.messages[0].Content
-	if transport.messages[0].RoomID != ch.RoomID || postContent["msgtype"] != "m.image" || postContent["url"] != "mxc://example.com/photo" {
+	if transport.messages[0].RoomID != ch.RoomID || postContent["msgtype"] != "m.image" || postContent["url"] != "mxc://example.com/photo" || postContent["visibility"] != "public" || post.Visibility != "public" {
 		t.Fatalf("expected image post Matrix content with channel room, got %#v", transport.messages[0])
 	}
 	commentContent := transport.messages[1].Content

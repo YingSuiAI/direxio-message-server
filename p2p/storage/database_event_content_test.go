@@ -241,3 +241,36 @@ func TestDatabaseStoreGetsChannelContentByIDAndEventID(t *testing.T) {
 		t.Fatalf("expected comment lookup by event id, got ok=%v comment=%#v", ok, commentByEvent)
 	}
 }
+
+func TestDatabaseStoreListsChannelPostsByVisibilityPage(t *testing.T) {
+	ctx := context.Background()
+	connStr, closeDB := test.PrepareDBConnectionString(t, test.DBTypePostgres)
+	defer closeDB()
+
+	dbOpts := config.DatabaseOptions{ConnectionString: config.DataSource(connStr)}
+	store, err := NewDatabaseStore(ctx, sqlutil.NewConnectionManager(nil, dbOpts), &dbOpts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	for _, post := range []channelPostRecord{
+		{PostID: "public_old", ChannelID: "ch", Visibility: "public", OriginServerTS: 10},
+		{PostID: "public_new", ChannelID: "ch", Visibility: "public", OriginServerTS: 20},
+		{PostID: "private_newest", ChannelID: "ch", Visibility: "private", OriginServerTS: 30},
+		{PostID: "other_public", ChannelID: "other", Visibility: "public", OriginServerTS: 40},
+	} {
+		if err := store.InsertChannelPost(ctx, post); err != nil {
+			t.Fatalf("InsertChannelPost(%s): %v", post.PostID, err)
+		}
+	}
+
+	first, more, err := store.ListChannelPostsByVisibilityPage(ctx, "ch", "public", 0, 1)
+	if err != nil || !more || len(first) != 1 || first[0].PostID != "public_new" {
+		t.Fatalf("first public page = %#v more=%v err=%v", first, more, err)
+	}
+	second, more, err := store.ListChannelPostsByVisibilityPage(ctx, "ch", "public", 1, 1)
+	if err != nil || more || len(second) != 1 || second[0].PostID != "public_old" {
+		t.Fatalf("second public page = %#v more=%v err=%v", second, more, err)
+	}
+}

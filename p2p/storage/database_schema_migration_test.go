@@ -42,6 +42,7 @@ func TestDatabaseStoreCreatesBusinessIndexes(t *testing.T) {
 		"p2p_channel_posts_channel_idx",
 		"p2p_channel_posts_event_idx",
 		"p2p_channel_posts_author_idx",
+		"p2p_channel_posts_channel_visibility_idx",
 		"p2p_channel_comments_post_idx",
 		"p2p_channel_comments_channel_idx",
 		"p2p_channel_comments_event_idx",

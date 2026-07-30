@@ -1,6 +1,14 @@
 # API Interface Change Record
 
-Last updated: 2026-07-23
+Last updated: 2026-07-30
+
+## 2026-07-30 Channel Post Visibility And Public-Post Paging
+
+`channels.posts.create` accepts optional `visibility="public"|"private"`. Missing visibility defaults to `private`; any other explicit value returns `400`. The canonical visibility is written into the Matrix `m.room.message` content for `p2p_kind=channel_post` and into the PostgreSQL projection. Legacy Matrix events and existing rows without the field remain private.
+
+`channels.posts.list` keeps its existing unfiltered response when `visibility` is omitted. When `visibility` is `public` or `private`, `channel_id` is required and the action returns that channel's matching posts newest-first with page pagination. `page` defaults to `1`; `page_size` defaults to `5` and is capped at `100`. `limit` is accepted as a compatibility alias when `page_size` is absent. The response adds `visibility`, `page`, `page_size`, `has_more`, and optional `next_page`.
+
+Each returned post exposes `comment_count`, `like_count`, `reaction_count` (the compatibility alias for likes), `favorite_count`, `reacted_by_me`, and `favorited_by_me`. Counts remain derived from the Matrix-backed comment/reaction projections rather than being stored as a second public-feed source of truth.
 
 ## 2026-07-23 Native Agent Anthropic, Gemini, And xAI Model Lists
 

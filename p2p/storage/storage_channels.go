@@ -251,12 +251,13 @@ func (s *DatabaseStore) ListChannelInviteGrants(ctx context.Context) ([]channelI
 }
 
 func (s *DatabaseStore) InsertChannelPost(ctx context.Context, post channelPostRecord) error {
+	post = normalizeChannelPostRecord(post)
 	return s.writer.Do(nil, nil, func(txn *sql.Tx) error {
 		_, err := s.db.ExecContext(ctx, `
 			INSERT INTO p2p_channel_posts (
 				post_id, channel_id, room_id, event_id, author_mxid, author_name,
-				body, message_type, media_json, origin_server_ts, comment_count
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+				body, message_type, media_json, visibility, origin_server_ts, comment_count
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 			ON CONFLICT(post_id) DO UPDATE SET
 				channel_id = EXCLUDED.channel_id,
 				room_id = EXCLUDED.room_id,
@@ -266,10 +267,11 @@ func (s *DatabaseStore) InsertChannelPost(ctx context.Context, post channelPostR
 				body = EXCLUDED.body,
 				message_type = EXCLUDED.message_type,
 				media_json = EXCLUDED.media_json,
+				visibility = EXCLUDED.visibility,
 				origin_server_ts = EXCLUDED.origin_server_ts,
 				comment_count = EXCLUDED.comment_count
 		`, post.PostID, post.ChannelID, post.RoomID, post.EventID, post.AuthorMXID, post.AuthorName,
-			post.Body, post.MessageType, post.MediaJSON, post.OriginServerTS, post.CommentCount)
+			post.Body, post.MessageType, post.MediaJSON, post.Visibility, post.OriginServerTS, post.CommentCount)
 		return err
 	})
 }
@@ -350,12 +352,41 @@ func (s *DatabaseStore) ListChannelPostsPage(ctx context.Context, channelID stri
 	)
 }
 
-const listPostsSelect = `SELECT post_id, channel_id, room_id, event_id, author_mxid, author_name, body, message_type, media_json, origin_server_ts, comment_count FROM p2p_channel_posts`
+func (s *DatabaseStore) ListChannelPostsByVisibilityPage(ctx context.Context, channelID, visibility string, offset int64, limit int) ([]channelPostRecord, bool, error) {
+	visibility = normalizeChannelPostRecord(channelPostRecord{Visibility: visibility}).Visibility
+	rows, err := s.db.QueryContext(ctx, listPostsSelect+`
+		WHERE channel_id = $1 AND visibility = $2
+		ORDER BY origin_server_ts DESC, post_id DESC
+		LIMIT $3 OFFSET $4
+	`, channelID, visibility, limit+1, offset)
+	if err != nil {
+		return nil, false, err
+	}
+	defer closeResource(rows)
+	posts := make([]channelPostRecord, 0, limit+1)
+	for rows.Next() {
+		post, err := scanChannelPost(rows)
+		if err != nil {
+			return nil, false, err
+		}
+		posts = append(posts, post)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	hasMore := len(posts) > limit
+	if hasMore {
+		posts = posts[:limit]
+	}
+	return posts, hasMore, nil
+}
+
+const listPostsSelect = `SELECT post_id, channel_id, room_id, event_id, author_mxid, author_name, body, message_type, media_json, visibility, origin_server_ts, comment_count FROM p2p_channel_posts`
 
 func scanChannelPost(row channelScanner) (channelPostRecord, error) {
 	var post channelPostRecord
 	if err := row.Scan(&post.PostID, &post.ChannelID, &post.RoomID, &post.EventID, &post.AuthorMXID, &post.AuthorName,
-		&post.Body, &post.MessageType, &post.MediaJSON, &post.OriginServerTS, &post.CommentCount); err != nil {
+		&post.Body, &post.MessageType, &post.MediaJSON, &post.Visibility, &post.OriginServerTS, &post.CommentCount); err != nil {
 		return channelPostRecord{}, err
 	}
 	return post, nil
