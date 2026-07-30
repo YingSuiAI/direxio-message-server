@@ -254,7 +254,9 @@ func (p *SDKProvider) decodeChangeSet(out *cloudformation.DescribeChangeSetOutpu
 	if out == nil {
 		return known
 	}
-	cs := ChangeSet{ID: aws.ToString(out.ChangeSetId), Name: aws.ToString(out.ChangeSetName), StackName: stack, Region: region, Status: string(out.Status), ExecutionStatus: string(out.ExecutionStatus), Parameters: parametersFromSDK(out.Parameters), Tags: tagsFromSDK(out.Tags)}
+	csTags := tagsFromSDK(out.Tags)
+	csParams, _ := parametersFromSDK(out.Parameters, csTags)
+	cs := ChangeSet{ID: aws.ToString(out.ChangeSetId), Name: aws.ToString(out.ChangeSetName), StackName: stack, Region: region, Status: string(out.Status), ExecutionStatus: string(out.ExecutionStatus), Parameters: csParams, Tags: csTags}
 	if cs.Name == "" {
 		cs.Name = name
 	}
@@ -331,7 +333,7 @@ func (p *SDKProvider) DeleteStack(ctx context.Context, handle CredentialHandle, 
 	if err := validateHandleRegion(handle, region); err != nil {
 		return err
 	}
-	if !validStackName(stack) || strings.TrimSpace(token) == "" {
+	if !validStackReference(stack, region, handle.AccountID) || strings.TrimSpace(token) == "" {
 		return ErrInvalid
 	}
 	client, err := p.factory.NewCloudFormation(handle)
@@ -380,7 +382,12 @@ func (p *SDKProvider) DescribeStack(ctx context.Context, handle CredentialHandle
 		outputs = StackOutputs{}
 	}
 	outputs[string(StackOutputStackID)] = stackID
-	stackOut := Stack{Region: region, StackName: stack, Status: string(s.StackStatus), Parameters: parametersFromSDK(s.Parameters), Tags: tagsFromSDK(s.Tags), Outputs: outputs}
+	stackTags := tagsFromSDK(s.Tags)
+	stackParameters, parametersErr := parametersFromSDK(s.Parameters, stackTags)
+	if parametersErr != nil {
+		return Stack{}, parametersErr
+	}
+	stackOut := Stack{Region: region, StackName: stack, Status: string(s.StackStatus), Parameters: stackParameters, Tags: stackTags, Outputs: outputs}
 	templateOut, err := client.GetTemplate(callCtx, &cloudformation.GetTemplateInput{StackName: aws.String(stack)})
 	if err != nil {
 		return Stack{}, mapSDKError(err, false)
@@ -522,14 +529,35 @@ func parametersToSDK(values map[string]string) []cloudformationtypes.Parameter {
 	return out
 }
 
-func parametersFromSDK(values []cloudformationtypes.Parameter) map[string]string {
+func parametersFromSDK(values []cloudformationtypes.Parameter, tags map[string]string) (map[string]string, error) {
 	out := make(map[string]string, len(values))
+	geoLibre := tags["service"] == EC2ServiceProfile && tags["dirextalk:template-profile"] == EC2ServiceProfile && tags["dirextalk:template-version"] == ec2TemplateVersion
 	for _, v := range values {
 		if v.ParameterKey != nil {
-			out[aws.ToString(v.ParameterKey)] = aws.ToString(v.ParameterValue)
+			key := aws.ToString(v.ParameterKey)
+			value := aws.ToString(v.ParameterValue)
+			if key == "LatestAmiId" && geoLibre {
+				if v.ResolvedValue == nil || !ec2ResolvedAMIRe.MatchString(strings.TrimSpace(aws.ToString(v.ResolvedValue))) {
+					return nil, ErrProvider
+				}
+				value = aws.ToString(v.ResolvedValue)
+			}
+			out[key] = value
 		}
 	}
-	return out
+	return out, nil
+}
+
+func validStackReference(value, region, account string) bool {
+	if validStackName(value) {
+		return true
+	}
+	parsed, err := arn.Parse(strings.TrimSpace(value))
+	if err != nil || parsed.Service != "cloudformation" || parsed.Region != region || !accountIDValid(parsed.AccountID) || (account != "" && parsed.AccountID != account) {
+		return false
+	}
+	parts := strings.Split(parsed.Resource, "/")
+	return len(parts) == 3 && parts[0] == "stack" && validStackName(parts[1]) && validUUID(parts[2])
 }
 
 func tagsToSDK(values map[string]string) []cloudformationtypes.Tag {

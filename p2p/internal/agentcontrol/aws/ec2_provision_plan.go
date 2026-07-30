@@ -18,6 +18,11 @@ const (
 	EC2ServiceProfile     = "geolibre"
 	ec2TemplateVersion    = "ec2-geolibre-v1"
 	ec2LatestAMIParameter = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
+	// The plan identifier is derived from a template rendered with this fixed
+	// value before the final plan id is inserted into the resource tags.  This
+	// breaks the otherwise circular dependency between the id and template
+	// digest while keeping the identity input deterministic.
+	ec2PlanIDPlaceholder = "00000000-0000-4000-8000-000000000000"
 )
 
 // EC2ProvisionRequest is the complete public input to the typed provision
@@ -71,12 +76,13 @@ func BuildEC2ProvisionPlan(req EC2ProvisionRequest) (EC2ProvisionPlan, error) {
 
 	ownerDigest := ec2OwnerBindingDigest(req.OwnerID)
 	requestDigest := canonicalDigest(struct {
-		TemplateVersion, OwnerID, CredentialID, Region, StackName, DisplayName, InstanceType string
-		CredentialRevision, VolumeGiB                                                        int64
-		PublicHTTP, AcknowledgePublicExposure                                                bool
+		TemplateProfile, TemplateVersion, OwnerBinding, CredentialID, Region, StackName, DisplayName, InstanceType string
+		CredentialRevision, VolumeGiB                                                                              int64
+		PublicHTTP, AcknowledgePublicExposure                                                                      bool
 	}{
+		TemplateProfile:           EC2ServiceProfile,
 		TemplateVersion:           ec2TemplateVersion,
-		OwnerID:                   strings.TrimSpace(req.OwnerID),
+		OwnerBinding:              ownerDigest,
 		CredentialID:              req.CredentialID,
 		Region:                    req.Region,
 		StackName:                 req.StackName,
@@ -87,13 +93,25 @@ func BuildEC2ProvisionPlan(req EC2ProvisionRequest) (EC2ProvisionPlan, error) {
 		PublicHTTP:                req.PublicHTTP,
 		AcknowledgePublicExposure: req.AcknowledgePublicExposure,
 	})
-	// The ID is derived from the authenticated, canonical request so equal
-	// requests produce equal plans without introducing a random digest input.
-	planID := uuid.NewSHA1(uuid.Nil, []byte("ec2-provision:"+requestDigest)).String()
+	// First render with a fixed plan-id marker.  The resulting digest is part of
+	// the identity seed, so a template profile/version or structural template
+	// change cannot silently reuse an old deterministic plan id.
+	identityRaw, err := json.Marshal(ec2Template(req, ownerDigest, ec2PlanIDPlaceholder, requestDigest))
+	if err != nil {
+		return EC2ProvisionPlan{}, ErrInvalid
+	}
+	_, identityTemplateDigest, err := NormalizeTemplate(identityRaw)
+	if err != nil {
+		return EC2ProvisionPlan{}, err
+	}
+	planIdentityDigest := canonicalDigest(struct {
+		TemplateProfile, TemplateVersion, TemplateDigest, OwnerBinding, RequestDigest string
+	}{EC2ServiceProfile, ec2TemplateVersion, identityTemplateDigest, ownerDigest, requestDigest})
+	planID := uuid.NewSHA1(uuid.Nil, []byte("ec2-provision:"+planIdentityDigest)).String()
 
 	// CloudFormation's JSON encoder sorts map keys, and NormalizeTemplate then
 	// performs the repository's canonical JSON normalization once more.
-	templateValue := ec2Template(req, ownerDigest, planID)
+	templateValue := ec2Template(req, ownerDigest, planID, requestDigest)
 	raw, err := json.Marshal(templateValue)
 	if err != nil {
 		return EC2ProvisionPlan{}, ErrInvalid
@@ -112,10 +130,14 @@ func BuildEC2ProvisionPlan(req EC2ProvisionRequest) (EC2ProvisionPlan, error) {
 	}
 	tags := map[string]string{
 		"owner":                      ownerDigest,
+		"dirextalk:owner-binding":    ownerDigest,
 		"managed":                    "true",
 		"service":                    EC2ServiceProfile,
+		"dirextalk:template-profile": EC2ServiceProfile,
 		"dirextalk:plan-id":          planID,
 		"dirextalk:request-digest":   requestDigest,
+		"dirextalk:template-digest":  templateDigest,
+		"dirextalk:stack-name":       req.StackName,
 		RequiredOutputsTag:           strings.Join([]string{string(StackOutputInstanceID), string(StackOutputPublicIP), string(StackOutputSecurityGroup), string(StackOutputStackID)}, ","),
 		"dirextalk:price-status":     "unavailable",
 		"dirextalk:template-version": ec2TemplateVersion,
@@ -188,7 +210,7 @@ func validateEC2ProvisionRequest(req EC2ProvisionRequest) error {
 	return nil
 }
 
-func ec2Template(req EC2ProvisionRequest, ownerDigest, planID string) map[string]any {
+func ec2Template(req EC2ProvisionRequest, ownerDigest, planID, requestDigest string) map[string]any {
 	publicIngress := []any{}
 	if req.PublicHTTP {
 		publicIngress = append(publicIngress, map[string]any{"IpProtocol": "tcp", "FromPort": 80, "ToPort": 80, "CidrIp": "0.0.0.0/0"})
@@ -204,17 +226,17 @@ func ec2Template(req EC2ProvisionRequest, ownerDigest, planID string) map[string
 			"LatestAmiId":  map[string]any{"Type": "AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>", "Default": ec2LatestAMIParameter},
 		},
 		"Resources": map[string]any{
-			"VPC":                         map[string]any{"Type": "AWS::EC2::VPC", "Properties": map[string]any{"CidrBlock": "10.0.0.0/16", "Tags": forcedTags(req.DisplayName, ownerDigest, planID)}},
-			"InternetGateway":             map[string]any{"Type": "AWS::EC2::InternetGateway", "Properties": map[string]any{"Tags": forcedTags(req.DisplayName, ownerDigest, planID)}},
+			"VPC":                         map[string]any{"Type": "AWS::EC2::VPC", "Properties": map[string]any{"CidrBlock": "10.0.0.0/16", "Tags": forcedTags(req.DisplayName, req.StackName, ownerDigest, planID, requestDigest)}},
+			"InternetGateway":             map[string]any{"Type": "AWS::EC2::InternetGateway", "Properties": map[string]any{"Tags": forcedTags(req.DisplayName, req.StackName, ownerDigest, planID, requestDigest)}},
 			"VPCGatewayAttachment":        map[string]any{"Type": "AWS::EC2::VPCGatewayAttachment", "Properties": map[string]any{"InternetGatewayId": map[string]any{"Ref": "InternetGateway"}, "VpcId": map[string]any{"Ref": "VPC"}}},
-			"PublicSubnet":                map[string]any{"Type": "AWS::EC2::Subnet", "Properties": map[string]any{"VpcId": map[string]any{"Ref": "VPC"}, "CidrBlock": "10.0.1.0/24", "MapPublicIpOnLaunch": true, "Tags": forcedTags(req.DisplayName, ownerDigest, planID)}},
-			"RouteTable":                  map[string]any{"Type": "AWS::EC2::RouteTable", "Properties": map[string]any{"VpcId": map[string]any{"Ref": "VPC"}, "Tags": forcedTags(req.DisplayName, ownerDigest, planID)}},
+			"PublicSubnet":                map[string]any{"Type": "AWS::EC2::Subnet", "Properties": map[string]any{"VpcId": map[string]any{"Ref": "VPC"}, "CidrBlock": "10.0.1.0/24", "MapPublicIpOnLaunch": true, "Tags": forcedTags(req.DisplayName, req.StackName, ownerDigest, planID, requestDigest)}},
+			"RouteTable":                  map[string]any{"Type": "AWS::EC2::RouteTable", "Properties": map[string]any{"VpcId": map[string]any{"Ref": "VPC"}, "Tags": forcedTags(req.DisplayName, req.StackName, ownerDigest, planID, requestDigest)}},
 			"DefaultRoute":                map[string]any{"Type": "AWS::EC2::Route", "DependsOn": "VPCGatewayAttachment", "Properties": map[string]any{"RouteTableId": map[string]any{"Ref": "RouteTable"}, "DestinationCidrBlock": "0.0.0.0/0", "GatewayId": map[string]any{"Ref": "InternetGateway"}}},
 			"SubnetRouteTableAssociation": map[string]any{"Type": "AWS::EC2::SubnetRouteTableAssociation", "Properties": map[string]any{"RouteTableId": map[string]any{"Ref": "RouteTable"}, "SubnetId": map[string]any{"Ref": "PublicSubnet"}}},
-			"SecurityGroup":               map[string]any{"Type": "AWS::EC2::SecurityGroup", "Properties": map[string]any{"GroupDescription": "Dirextalk geolibre web service (no SSH)", "VpcId": map[string]any{"Ref": "VPC"}, "SecurityGroupIngress": publicIngress, "SecurityGroupEgress": []any{map[string]any{"IpProtocol": "-1", "CidrIp": "0.0.0.0/0"}}, "Tags": forcedTags(req.DisplayName, ownerDigest, planID)}},
-			"SSMRole":                     map[string]any{"Type": "AWS::IAM::Role", "Properties": map[string]any{"AssumeRolePolicyDocument": map[string]any{"Version": "2012-10-17", "Statement": []any{map[string]any{"Effect": "Allow", "Principal": map[string]any{"Service": "ec2.amazonaws.com"}, "Action": "sts:AssumeRole"}}}, "ManagedPolicyArns": []string{"arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"}, "Tags": forcedTags(req.DisplayName, ownerDigest, planID)}},
+			"SecurityGroup":               map[string]any{"Type": "AWS::EC2::SecurityGroup", "Properties": map[string]any{"GroupDescription": "Dirextalk geolibre web service (no SSH)", "VpcId": map[string]any{"Ref": "VPC"}, "SecurityGroupIngress": publicIngress, "SecurityGroupEgress": []any{map[string]any{"IpProtocol": "-1", "CidrIp": "0.0.0.0/0"}}, "Tags": forcedTags(req.DisplayName, req.StackName, ownerDigest, planID, requestDigest)}},
+			"SSMRole":                     map[string]any{"Type": "AWS::IAM::Role", "Properties": map[string]any{"AssumeRolePolicyDocument": map[string]any{"Version": "2012-10-17", "Statement": []any{map[string]any{"Effect": "Allow", "Principal": map[string]any{"Service": "ec2.amazonaws.com"}, "Action": "sts:AssumeRole"}}}, "ManagedPolicyArns": []string{"arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"}, "Tags": forcedTags(req.DisplayName, req.StackName, ownerDigest, planID, requestDigest)}},
 			"SSMInstanceProfile":          map[string]any{"Type": "AWS::IAM::InstanceProfile", "Properties": map[string]any{"Roles": []any{map[string]any{"Ref": "SSMRole"}}}},
-			"Instance":                    map[string]any{"Type": "AWS::EC2::Instance", "Properties": map[string]any{"ImageId": map[string]any{"Ref": "LatestAmiId"}, "InstanceType": map[string]any{"Ref": "InstanceType"}, "SubnetId": map[string]any{"Ref": "PublicSubnet"}, "SecurityGroupIds": []any{map[string]any{"Ref": "SecurityGroup"}}, "IamInstanceProfile": map[string]any{"Ref": "SSMInstanceProfile"}, "BlockDeviceMappings": []any{map[string]any{"DeviceName": "/dev/xvda", "Ebs": map[string]any{"VolumeType": "gp3", "VolumeSize": map[string]any{"Ref": "VolumeSize"}, "Encrypted": true, "DeleteOnTermination": true}}}, "UserData": map[string]any{"Fn::Base64": "#!/bin/bash\nset -euo pipefail\ndnf install -y docker\nsystemctl enable --now docker\n"}, "Tags": forcedTags(req.DisplayName, ownerDigest, planID)}},
+			"Instance":                    map[string]any{"Type": "AWS::EC2::Instance", "Properties": map[string]any{"ImageId": map[string]any{"Ref": "LatestAmiId"}, "InstanceType": map[string]any{"Ref": "InstanceType"}, "SubnetId": map[string]any{"Ref": "PublicSubnet"}, "SecurityGroupIds": []any{map[string]any{"Ref": "SecurityGroup"}}, "IamInstanceProfile": map[string]any{"Ref": "SSMInstanceProfile"}, "BlockDeviceMappings": []any{map[string]any{"DeviceName": "/dev/xvda", "Ebs": map[string]any{"VolumeType": "gp3", "VolumeSize": map[string]any{"Ref": "VolumeSize"}, "Encrypted": true, "DeleteOnTermination": true}}}, "UserData": map[string]any{"Fn::Base64": "#!/bin/bash\nset -euo pipefail\ndnf install -y docker\nsystemctl enable --now docker\n"}, "Tags": forcedTags(req.DisplayName, req.StackName, ownerDigest, planID, requestDigest)}},
 		},
 		"Outputs": map[string]any{
 			"InstanceId":      map[string]any{"Value": map[string]any{"Ref": "Instance"}},
@@ -224,12 +246,17 @@ func ec2Template(req EC2ProvisionRequest, ownerDigest, planID string) map[string
 	}
 }
 
-func forcedTags(displayName, ownerDigest, planID string) []any {
+func forcedTags(displayName, stackName, ownerDigest, planID, requestDigest string) []any {
 	return []any{
 		map[string]any{"Key": "owner", "Value": ownerDigest},
+		map[string]any{"Key": "dirextalk:owner-binding", "Value": ownerDigest},
 		map[string]any{"Key": "managed", "Value": "true"},
 		map[string]any{"Key": "service", "Value": EC2ServiceProfile},
+		map[string]any{"Key": "dirextalk:template-profile", "Value": EC2ServiceProfile},
+		map[string]any{"Key": "dirextalk:template-version", "Value": ec2TemplateVersion},
 		map[string]any{"Key": "dirextalk:plan-id", "Value": planID},
+		map[string]any{"Key": "dirextalk:request-digest", "Value": requestDigest},
+		map[string]any{"Key": "dirextalk:stack-name", "Value": stackName},
 		map[string]any{"Key": "Name", "Value": displayName},
 	}
 }

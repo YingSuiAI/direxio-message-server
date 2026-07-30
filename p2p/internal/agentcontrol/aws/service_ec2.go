@@ -17,6 +17,9 @@ func (s *Service) CreateEC2Provision(ctx context.Context, req EC2ProvisionReques
 	if s == nil || s.repo == nil || !validUUID(idempotencyKey) || ValidateEC2ProvisionRequest(req) != nil {
 		return EC2ProvisionResult{}, ErrInvalid
 	}
+	if err := s.requireCredentialReady(ctx, req.CredentialID, req.CredentialRevision); err != nil {
+		return EC2ProvisionResult{}, err
+	}
 	built, err := BuildEC2ProvisionPlan(req)
 	if err != nil {
 		return EC2ProvisionResult{}, err
@@ -36,7 +39,11 @@ func (s *Service) CreateEC2Provision(ctx context.Context, req EC2ProvisionReques
 	if err != nil {
 		return EC2ProvisionResult{}, err
 	}
-	return EC2ProvisionResult{Plan: plan.View(), Quote: quoteFor(plan), Provision: provision}, nil
+	view, err := s.planViewWithCredential(ctx, plan)
+	if err != nil {
+		return EC2ProvisionResult{}, err
+	}
+	return EC2ProvisionResult{Plan: view, Quote: quoteFor(plan), Provision: provision}, nil
 }
 
 func (s *Service) GetPlanForOwner(ctx context.Context, id, owner string) (PlanView, error) {
@@ -47,7 +54,7 @@ func (s *Service) GetPlanForOwner(ctx context.Context, id, owner string) (PlanVi
 	if !ownerMatchesPlan(p, owner) {
 		return PlanView{}, ErrNotFound
 	}
-	return p.View(), nil
+	return s.planViewWithCredential(ctx, p)
 }
 func (s *Service) GetProvisionForOwner(ctx context.Context, id, owner string) (Provision, error) {
 	p, err := s.repo.GetProvision(ctx, id)

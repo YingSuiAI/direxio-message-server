@@ -91,6 +91,13 @@ func RehydrateCredentials(id, name, region, accountID, userARN string, accessKey
 	return Credentials{ID: id, Name: name, Region: region, AccountID: accountID, UserARN: userARN, VerifiedRevision: verifiedRevision, Revision: revision, CreatedAt: createdAt, UpdatedAt: updatedAt, private: &credentialPayload{string(accessKeyID), string(secretAccessKey), string(sessionToken)}}
 }
 
+// RehydrateCredentialMetadata rebuilds the non-secret credential projection
+// used when deriving plan bindings. It deliberately leaves private nil so
+// metadata-only plan reads cannot accidentally decrypt or expose credentials.
+func RehydrateCredentialMetadata(id, name, region, accountID, userARN string, verifiedRevision, revision int64, createdAt, updatedAt time.Time) Credentials {
+	return Credentials{ID: id, Name: name, Region: region, AccountID: accountID, UserARN: userARN, VerifiedRevision: verifiedRevision, Revision: revision, CreatedAt: createdAt, UpdatedAt: updatedAt}
+}
+
 type credentialPayload struct{ accessKeyID, secretAccessKey, sessionToken string }
 type CredentialHandle struct {
 	credential *credentialPayload
@@ -211,11 +218,30 @@ type PlanView struct {
 	Parameters, Tags                                    map[string]string
 	Capabilities                                        []string
 	CredentialRevision, Revision                        int64
-	CreatedAt                                           time.Time
+	// The following fields are immutable confirmation-binding projections. They
+	// are derived from the same canonical binding builder used by RequestChange;
+	// callers must never reconstruct them from mutable request fields.
+	PlanDigest, ContentDigest, ParameterDigest, NetworkDigest, SecretGrantDigest string
+	TargetID                                                                     string
+	CreatedAt                                                                    time.Time
 }
 
 func (p Plan) View() PlanView {
-	return PlanView{ID: p.ID, CredentialID: p.CredentialID, CredentialRevision: p.CredentialRevision, Region: p.Region, StackName: p.StackName, TemplateSHA256: p.TemplateSHA256, Operation: p.Operation, Parameters: cloneMap(p.Parameters), Tags: cloneMap(p.Tags), Capabilities: append([]string(nil), p.Capabilities...), Revision: p.Revision, CreatedAt: p.CreatedAt}
+	return PlanView{ID: p.ID, CredentialID: p.CredentialID, CredentialRevision: p.CredentialRevision, Region: p.Region, StackName: p.StackName, TemplateSHA256: p.TemplateSHA256, Operation: p.Operation, Parameters: cloneMap(p.Parameters), Tags: cloneMap(p.Tags), Capabilities: append([]string(nil), p.Capabilities...), Revision: p.Revision, PlanDigest: planDigest(p), ContentDigest: p.TemplateSHA256, CreatedAt: p.CreatedAt}
+}
+
+// ViewWithCredentials projects the immutable binding fields using the exact
+// canonical builder consumed by RequestChange. Credential bytes are never
+// included in the resulting view.
+func (p Plan) ViewWithCredentials(c Credentials) PlanView {
+	v := p.View()
+	b := bindingForPlan(p, c)
+	v.TargetID = b.TargetID
+	v.ContentDigest = string(b.ContentDigest)
+	v.ParameterDigest = string(b.ParameterDigest)
+	v.NetworkDigest = string(b.NetworkDigest)
+	v.SecretGrantDigest = string(b.SecretGrantDigest)
+	return v
 }
 
 type Quote struct {
@@ -390,6 +416,7 @@ func cloneMap(m map[string]string) map[string]string {
 }
 
 var stackNameRE = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9-]{0,127}$`)
+var ec2ResolvedAMIRe = regexp.MustCompile(`^ami-[0-9a-f]{8,17}$`)
 
 func validStackName(s string) bool { return stackNameRE.MatchString(s) }
 func validRegion(s string) bool {
@@ -408,6 +435,34 @@ func validOwnerDigest(s string) bool {
 }
 func validOperation(o Operation) bool {
 	return o == OperationCreate || o == OperationUpdate || o == OperationDelete
+}
+
+// PlanParametersMatchReadback validates the typed parameter projection
+// returned by CloudFormation DescribeStacks. CloudFormation resolves an
+// AWS::SSM::Parameter::Value parameter to the concrete AMI id on readback;
+// all other parameters remain exact immutable values. Unknown or missing
+// parameters fail closed so a different stack cannot be accepted as ours.
+func PlanParametersMatchReadback(p Plan, observed map[string]string) bool {
+	if len(observed) != len(p.Parameters) {
+		return false
+	}
+	geoLibre := p.Tags["service"] == EC2ServiceProfile && p.Tags["dirextalk:template-profile"] == EC2ServiceProfile && p.Tags["dirextalk:template-version"] == ec2TemplateVersion
+	for key, expected := range p.Parameters {
+		actual, ok := observed[key]
+		if !ok {
+			return false
+		}
+		if key == "LatestAmiId" && expected == ec2LatestAMIParameter && geoLibre {
+			if !ec2ResolvedAMIRe.MatchString(strings.TrimSpace(actual)) {
+				return false
+			}
+			continue
+		}
+		if actual != expected {
+			return false
+		}
+	}
+	return true
 }
 func canonicalDigest(v any) string {
 	b, _ := json.Marshal(v)

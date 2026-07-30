@@ -37,11 +37,132 @@ func TestCredentialViewRedactsSecrets(t *testing.T) {
 	}
 }
 
+func TestCredentialIdentityIsImmutableAndIdempotent(t *testing.T) {
+	r := NewMemoryRepository()
+	s := NewService(r, &testConfirm{}, testTasks{}, nil, NewFakeProvider(), nil)
+	c, err := s.SaveCredential(context.Background(), CredentialInput{Name: "identity", Region: "us-east-1", AccessKeyID: "a", SecretAccessKey: "b", IdempotencyKey: uuid.NewString()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = r.RecordCredentialIdentity(context.Background(), c.ID, c.Revision, Identity{AccountID: "123456789012", UserARN: "arn:aws:iam::123456789012:user/a"}); err != nil {
+		t.Fatal(err)
+	}
+	first, err := r.GetCredentialRevision(context.Background(), c.ID, c.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := r.RecordCredentialIdentity(context.Background(), c.ID, c.Revision, Identity{AccountID: first.AccountID, UserARN: first.UserARN})
+	if err != nil || second.AccountID != first.AccountID || second.UserARN != first.UserARN {
+		t.Fatalf("same identity was not idempotent: %#v %v", second, err)
+	}
+	if _, err = r.RecordCredentialIdentity(context.Background(), c.ID, c.Revision, Identity{AccountID: "999999999999", UserARN: first.UserARN}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("identity replacement accepted: %v", err)
+	}
+	if _, err = r.RecordCredentialIdentity(context.Background(), c.ID, c.Revision, Identity{AccountID: "", UserARN: first.UserARN}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("empty account accepted: %v", err)
+	}
+}
+
+func TestCreatePlanRequiresVerifiedCredentialIdentity(t *testing.T) {
+	ctx := context.Background()
+	r := NewMemoryRepository()
+	s := NewService(r, &testConfirm{}, testTasks{}, nil, NewFakeProvider(), nil)
+	c, err := s.SaveCredential(ctx, CredentialInput{Name: "unverified", Region: "us-east-1", AccessKeyID: "a", SecretAccessKey: "b", IdempotencyKey: uuid.NewString()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := PlanInput{CredentialID: c.ID, StackName: "verified-gate", Operation: OperationCreate, Template: []byte(`{"Resources":{}}`), IdempotencyKey: uuid.NewString()}
+	if _, err = s.CreatePlan(ctx, input); !errors.Is(err, ErrConflict) {
+		t.Fatalf("unverified plan accepted: %v", err)
+	}
+	if _, err = r.RecordCredentialIdentity(ctx, c.ID, c.Revision, Identity{AccountID: "123456789012", UserARN: "arn:aws:iam::123456789012:user/a"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.CreatePlan(ctx, input); err != nil {
+		t.Fatalf("verified plan rejected: %v", err)
+	}
+}
+
+func TestMemoryCreatePlanReplayRejectsHistoricalUnverifiedCredential(t *testing.T) {
+	ctx := context.Background()
+	r := NewMemoryRepository()
+	s := NewService(r, &testConfirm{}, testTasks{}, nil, NewFakeProvider(), nil)
+	cred, err := s.SaveCredential(ctx, CredentialInput{Name: "replay-unverified", Region: "us-east-1", AccessKeyID: "a", SecretAccessKey: "b", IdempotencyKey: uuid.NewString()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := PlanInput{ID: uuid.NewString(), CredentialID: cred.ID, Region: cred.Region, StackName: "historical-replay", Operation: OperationCreate, Template: []byte(`{"Resources":{}}`), IdempotencyKey: uuid.NewString()}
+	normalized, digest, err := normalizeTemplate(input.Template)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := Plan{ID: input.ID, CredentialID: input.CredentialID, CredentialRevision: cred.Revision, Region: input.Region, StackName: input.StackName, Operation: input.Operation, Template: normalized, TemplateSHA256: digest, Revision: 1, CreatedAt: time.Now().UTC()}
+	if _, err = r.createPlanIdempotent(ctx, p, input.IdempotencyKey, canonicalDigest(input)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.CreatePlan(ctx, input); !errors.Is(err, ErrConflict) {
+		t.Fatalf("historical unverified replay error = %v, want conflict", err)
+	}
+}
+
+func TestMemoryRequestChangeRejectsForgedBinding(t *testing.T) {
+	ctx := context.Background()
+	r := NewMemoryRepository()
+	s := NewService(r, &testConfirm{}, testTasks{}, nil, NewFakeProvider(), nil)
+	c, err := s.SaveCredential(ctx, CredentialInput{Name: "binding", Region: "us-east-1", AccessKeyID: "a", SecretAccessKey: "b", IdempotencyKey: uuid.NewString()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = r.RecordCredentialIdentity(ctx, c.ID, c.Revision, Identity{AccountID: "123456789012", UserARN: "arn:aws:iam::123456789012:user/a"}); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := s.CreatePlan(ctx, PlanInput{CredentialID: c.ID, StackName: "binding", Operation: OperationCreate, Template: []byte(`{"Resources":{}}`), IdempotencyKey: uuid.NewString()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := r.GetPlan(ctx, plan.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := BindingForPlan(p, mustCredential(t, r, c.ID, c.Revision))
+	b.ParameterDigest = "forged"
+	if _, err = s.RequestChange(ctx, RequestChangeInput{PlanID: p.ID, Binding: b, IdempotencyKey: uuid.NewString()}); !errors.Is(err, ErrRevisionConflict) {
+		t.Fatalf("forged binding accepted: %v", err)
+	}
+}
+
+func mustCredential(t *testing.T, r *MemoryRepository, id string, revision int64) Credentials {
+	t.Helper()
+	c, err := r.GetCredentialRevision(context.Background(), id, revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func TestPlanViewBindingFieldsMatchConfirmationForCreateAndDerivedDelete(t *testing.T) {
+	cred := RehydrateCredentials("11111111-1111-4111-8111-111111111111", "deploy", "us-east-1", "123456789012", "arn:aws:iam::123456789012:user/deploy", []byte("AKIA"), []byte("secret"), nil, 3, 3, time.Unix(1, 0), time.Unix(2, 0))
+	create := Plan{ID: "22222222-2222-4222-8222-222222222222", CredentialID: cred.ID, CredentialRevision: cred.Revision, Region: "us-east-1", StackName: "geolibre", Operation: OperationCreate, Template: []byte(`{"Resources":{}}`), TemplateSHA256: CanonicalJSONHash([]byte(`{"Resources":{}}`)), Parameters: map[string]string{"InstanceType": "t3.medium"}, Tags: map[string]string{"service": EC2ServiceProfile}, Capabilities: []string{}, Revision: 1, CreatedAt: time.Unix(3, 0)}
+	delete := create
+	delete.ID = "33333333-3333-4333-8333-333333333333"
+	delete.Operation = OperationDelete
+	for _, plan := range []Plan{create, delete} {
+		binding := BindingForPlan(plan, cred)
+		view := plan.ViewWithCredentials(cred)
+		if view.TargetID != binding.TargetID || view.ContentDigest != string(binding.ContentDigest) || view.ParameterDigest != string(binding.ParameterDigest) || view.NetworkDigest != string(binding.NetworkDigest) || view.SecretGrantDigest != string(binding.SecretGrantDigest) {
+			t.Fatalf("plan view binding mismatch for %s: view=%+v binding=%+v", plan.Operation, view, binding)
+		}
+		if view.PlanDigest != PlanDigest(plan) {
+			t.Fatalf("plan digest mismatch for %s: %q", plan.Operation, view.PlanDigest)
+		}
+	}
+}
+
 func TestPlanPinsCredentialRevisionAndDeleteTombstonesCurrentProjection(t *testing.T) {
 	ctx := context.Background()
 	r := NewMemoryRepository()
 	s := NewService(r, &testConfirm{}, testTasks{}, nil, NewFakeProvider(), time.Now)
-	created, err := s.SaveCredential(ctx, CredentialInput{Name: "rev-one", Region: "us-east-1", AccessKeyID: "old-access", SecretAccessKey: "old-secret", IdempotencyKey: uuid.NewString()})
+	created, err := saveVerifiedCredential(t, s, r, CredentialInput{Name: "rev-one", Region: "us-east-1", AccessKeyID: "old-access", SecretAccessKey: "old-secret", IdempotencyKey: uuid.NewString()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +295,7 @@ func TestServiceRejectsUnconfirmedMutation(t *testing.T) {
 	r := NewMemoryRepository()
 	now := func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
 	s := NewService(r, &testConfirm{}, testTasks{}, nil, NewFakeProvider(), now)
-	cred, _ := s.SaveCredential(context.Background(), CredentialInput{Name: "x", Region: "us-east-1", AccessKeyID: "a", SecretAccessKey: "b"})
+	cred, _ := saveVerifiedCredential(t, s, r, CredentialInput{Name: "x", Region: "us-east-1", AccessKeyID: "a", SecretAccessKey: "b"})
 	p, _ := s.CreatePlan(context.Background(), PlanInput{CredentialID: cred.ID, StackName: "demo", Operation: OperationCreate, Template: []byte(`{"Resources":{"X":{"Type":"AWS::S3::Bucket"}}}`)})
 	out, e := s.RequestChange(context.Background(), RequestChangeInput{PlanID: p.ID, IdempotencyKey: "44444444-4444-4444-8444-444444444444"})
 	if e != nil {
@@ -193,7 +314,7 @@ func TestRequestChangeConcurrentReplay(t *testing.T) {
 	now := func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
 	conf := &testConfirm{}
 	s := NewService(r, conf, testTasks{}, nil, NewFakeProvider(), now)
-	cred, _ := s.SaveCredential(context.Background(), CredentialInput{Name: "x", Region: "us-east-1", AccessKeyID: "a", SecretAccessKey: "b"})
+	cred, _ := saveVerifiedCredential(t, s, r, CredentialInput{Name: "x", Region: "us-east-1", AccessKeyID: "a", SecretAccessKey: "b"})
 	p, _ := s.CreatePlan(context.Background(), PlanInput{CredentialID: cred.ID, StackName: "demo", Operation: OperationCreate, Template: []byte(`{"Resources":{"X":{"Type":"AWS::S3::Bucket"}}}`)})
 	input := RequestChangeInput{PlanID: p.ID, IdempotencyKey: "55555555-5555-4555-8555-555555555555"}
 	var wg sync.WaitGroup

@@ -12,7 +12,7 @@ func TestCreateEC2ProvisionIsAtomicOwnerBoundAndReplayStable(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMemoryRepository()
 	s := NewService(repo, &testConfirm{}, testTasks{}, nil, NewFakeProvider(), nil)
-	cred, err := s.SaveCredential(ctx, CredentialInput{Name: "deploy", Region: "us-east-1", AccessKeyID: "AKIA", SecretAccessKey: "secret", IdempotencyKey: uuid.NewString()})
+	cred, err := saveVerifiedCredential(t, s, repo, CredentialInput{Name: "deploy", Region: "us-east-1", AccessKeyID: "AKIA", SecretAccessKey: "secret", IdempotencyKey: uuid.NewString()})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -570,6 +570,36 @@ func (r *MemoryRepository) GetCredentialRevision(_ context.Context, id string, r
 	}
 	return cloneCredential(c), nil
 }
+
+func (r *MemoryRepository) GetCredentialRevisionMetadata(_ context.Context, id string, revision int64) (Credentials, error) {
+	if revision < 1 {
+		return Credentials{}, ErrInvalid
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	c, ok := r.credentialHistory[id][revision]
+	if !ok {
+		return Credentials{}, ErrNotFound
+	}
+	return RehydrateCredentialMetadata(c.ID, c.Name, c.Region, c.AccountID, c.UserARN, c.VerifiedRevision, c.Revision, c.CreatedAt, c.UpdatedAt), nil
+}
+
+func (r *MemoryRepository) ListCredentialRevisionMetadata(_ context.Context, refs []CredentialRevisionRef) (map[string]Credentials, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make(map[string]Credentials, len(refs))
+	for _, ref := range refs {
+		if ref.Revision < 1 {
+			return nil, ErrInvalid
+		}
+		c, ok := r.credentialHistory[ref.ID][ref.Revision]
+		if !ok {
+			return nil, ErrNotFound
+		}
+		out[ref.ID+":"+strconv.FormatInt(ref.Revision, 10)] = RehydrateCredentialMetadata(c.ID, c.Name, c.Region, c.AccountID, c.UserARN, c.VerifiedRevision, c.Revision, c.CreatedAt, c.UpdatedAt)
+	}
+	return out, nil
+}
 func (r *MemoryRepository) ListCredentials(_ context.Context, size int, token string) (CredentialPage, error) {
 	if size < 0 || size > 100 {
 		return CredentialPage{}, ErrInvalid
@@ -641,6 +671,9 @@ func (r *MemoryRepository) DeleteCredential(_ context.Context, id string, expect
 }
 
 func (r *MemoryRepository) RecordCredentialIdentity(_ context.Context, id string, expected int64, identity Identity) (Credentials, error) {
+	if strings.TrimSpace(identity.AccountID) == "" || strings.TrimSpace(identity.UserARN) == "" {
+		return Credentials{}, ErrInvalid
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	c, ok := r.credentials[id]
@@ -649,6 +682,12 @@ func (r *MemoryRepository) RecordCredentialIdentity(_ context.Context, id string
 	}
 	if c.Revision != expected {
 		return Credentials{}, ErrRevisionConflict
+	}
+	if c.VerifiedRevision == c.Revision {
+		if c.AccountID != identity.AccountID || c.UserARN != identity.UserARN {
+			return Credentials{}, ErrConflict
+		}
+		return cloneCredential(c), nil
 	}
 	c.AccountID, c.UserARN, c.VerifiedRevision, c.UpdatedAt = identity.AccountID, identity.UserARN, c.Revision, time.Now().UTC()
 	r.credentials[id] = cloneCredential(c)

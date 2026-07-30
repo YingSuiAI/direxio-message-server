@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws/arn"
 )
 
 // AWSChangeTaskHandler is the narrow seam for a future durable Task executor.
@@ -308,7 +310,14 @@ func (f *FakeProvider) DeleteStack(_ context.Context, handle CredentialHandle, r
 	if f.DeletedTokens[token] {
 		return nil
 	}
-	if _, ok := f.Stacks[region+"/"+stack]; !ok {
+	stackKey := region + "/" + stack
+	if parsed, err := arn.Parse(stack); err == nil && parsed.Service == "cloudformation" {
+		parts := strings.Split(parsed.Resource, "/")
+		if len(parts) == 3 && parts[0] == "stack" {
+			stackKey = region + "/" + parts[1]
+		}
+	}
+	if _, ok := f.Stacks[stackKey]; !ok {
 		if f.ResponseLoss || f.ResponseLossDelete {
 			f.DeletedTokens[token] = true
 			return ErrResponseUncertain
@@ -316,11 +325,11 @@ func (f *FakeProvider) DeleteStack(_ context.Context, handle CredentialHandle, r
 		return ErrNotFound
 	}
 	if f.Async {
-		current := f.Stacks[region+"/"+stack]
+		current := f.Stacks[stackKey]
 		current.Status = "DELETE_IN_PROGRESS"
-		f.Stacks[region+"/"+stack] = current
+		f.Stacks[stackKey] = current
 	} else {
-		delete(f.Stacks, region+"/"+stack)
+		delete(f.Stacks, stackKey)
 	}
 	f.DeletedTokens[token] = true
 	if f.ResponseLoss || f.ResponseLossDelete {

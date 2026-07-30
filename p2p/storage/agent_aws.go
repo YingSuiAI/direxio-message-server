@@ -498,22 +498,8 @@ func (r *PostgresAWSRepository) RequestChange(ctx context.Context, in agentaws.R
 	}
 	now := time.Now().UTC()
 	changeID, taskID, confID := uuid.NewString(), uuid.NewString(), uuid.NewString()
-	b := in.Binding
-	if b.OperationDomain == "" {
-		cred, e := r.GetCredentialRevision(ctx, p.CredentialID, p.CredentialRevision)
-		if e != nil {
-			return agentaws.ChangeRequestResult{}, e
-		}
-		b = agentaws.BindingForPlan(p, cred)
-	}
-	b.OwnerID = r.ownerID
-	b, err = b.Normalize()
-	if err != nil {
-		return agentaws.ChangeRequestResult{}, agentaws.ErrInvalid
-	}
 	spec, _ := (coretask.TaskSpec{Kind: coretask.TaskKindAWSChange, Payload: coretask.TaskPayload{AWSChange: &coretask.AWSChangeTaskPayload{ChangeID: changeID}}, Goal: "AWS change", IdempotencyKey: uuid.NewString(), AvailableAt: now}).Normalize()
 	specRaw, _ := json.Marshal(spec)
-	bRaw, _ := json.Marshal(b)
 	tx, err := r.store.db.BeginTx(ctx, nil)
 	if err != nil {
 		return agentaws.ChangeRequestResult{}, err
@@ -556,6 +542,39 @@ func (r *PostgresAWSRepository) RequestChange(ctx context.Context, in agentaws.R
 		return agentaws.ChangeRequestResult{}, agentaws.ErrConflict
 	}
 	p = lockedPlan
+	// Always derive the persisted confirmation binding from the locked plan and
+	// immutable credential identity metadata. A caller-supplied binding is only
+	// an optional exact expectation and can never become the stored authority.
+	var account, arn sql.NullString
+	var verified, credentialRevision int64
+	var credentialName, credentialRegion string
+	var credentialCreated, credentialUpdated time.Time
+	if err = tx.QueryRowContext(ctx, `SELECT name,region,account_id,user_arn,verified_revision,revision,created_at,updated_at FROM core_aws_credentials WHERE owner_id=$1 AND credential_id=$2 AND revision=$3 FOR SHARE`, r.ownerID, p.CredentialID, p.CredentialRevision).Scan(&credentialName, &credentialRegion, &account, &arn, &verified, &credentialRevision, &credentialCreated, &credentialUpdated); errors.Is(err, sql.ErrNoRows) {
+		return agentaws.ChangeRequestResult{}, agentaws.ErrNotFound
+	} else if err != nil {
+		return agentaws.ChangeRequestResult{}, err
+	}
+	credential := agentaws.RehydrateCredentialMetadata(p.CredentialID, credentialName, credentialRegion, account.String, arn.String, verified, credentialRevision, credentialCreated, credentialUpdated)
+	if !agentaws.CredentialReadyForPlan(credential) {
+		return agentaws.ChangeRequestResult{}, agentaws.ErrConflict
+	}
+	b := agentaws.BindingForPlan(p, credential)
+	b.OwnerID = r.ownerID
+	if !in.Binding.IsZero() {
+		expected := in.Binding
+		if expected.OwnerID == "" {
+			expected.OwnerID = r.ownerID
+		}
+		normalized, normalizeErr := expected.Normalize()
+		if normalizeErr != nil || !normalized.Equal(b) {
+			return agentaws.ChangeRequestResult{}, agentaws.ErrRevisionConflict
+		}
+	}
+	b, err = b.Normalize()
+	if err != nil {
+		return agentaws.ChangeRequestResult{}, agentaws.ErrInvalid
+	}
+	bRaw, _ := json.Marshal(b)
 	if in.ProvisionID != "" {
 		var provision agentaws.Provision
 		if err = tx.QueryRowContext(ctx, `SELECT plan_id::text,credential_id::text,credential_revision,region,stack_name,profile,owner_digest,plan_revision,template_sha256,plan_digest,state,COALESCE(active_change_id::text,'') FROM core_aws_ec2_provisions WHERE owner_id=$1 AND provision_id=$2 FOR UPDATE`, r.ownerID, in.ProvisionID).Scan(&provision.PlanID, &provision.CredentialID, &provision.CredentialRevision, &provision.Region, &provision.StackName, &provision.Profile, &provision.OwnerDigest, &provision.PlanRevision, &provision.TemplateSHA256, &provision.PlanDigest, &provision.State, &provision.ActiveChangeID); err != nil {
@@ -755,6 +774,72 @@ func (r *PostgresAWSRepository) GetCredentialRevision(c context.Context, id stri
 		return agentaws.Credentials{}, agentaws.ErrInvalid
 	}
 	return r.getCredential(c, id, revision, true)
+}
+
+// GetCredentialRevisionMetadata reads only immutable identity/revision
+// columns. Plan projections use this path so listing historical plans never
+// decrypts credential envelopes.
+func (r *PostgresAWSRepository) GetCredentialRevisionMetadata(c context.Context, id string, revision int64) (agentaws.Credentials, error) {
+	if r == nil || r.store == nil || r.store.db == nil || strings.TrimSpace(id) == "" || revision < 1 {
+		return agentaws.Credentials{}, agentaws.ErrInvalid
+	}
+	var v struct {
+		ID, Name, Region, AccountID, UserARN string
+		VerifiedRevision, Revision           int64
+		CreatedAt, UpdatedAt                 time.Time
+	}
+	err := r.store.db.QueryRowContext(c, `SELECT credential_id::text,name,region,account_id,user_arn,verified_revision,revision,created_at,updated_at FROM core_aws_credentials WHERE owner_id=$1 AND credential_id=$2 AND revision=$3`, r.ownerID, id, revision).Scan(&v.ID, &v.Name, &v.Region, &v.AccountID, &v.UserARN, &v.VerifiedRevision, &v.Revision, &v.CreatedAt, &v.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return agentaws.Credentials{}, agentaws.ErrNotFound
+	}
+	if err != nil {
+		return agentaws.Credentials{}, err
+	}
+	return agentaws.RehydrateCredentialMetadata(v.ID, v.Name, v.Region, v.AccountID, v.UserARN, v.VerifiedRevision, v.Revision, v.CreatedAt, v.UpdatedAt), nil
+}
+
+func (r *PostgresAWSRepository) ListCredentialRevisionMetadata(c context.Context, refs []agentaws.CredentialRevisionRef) (map[string]agentaws.Credentials, error) {
+	if r == nil || r.store == nil || r.store.db == nil {
+		return nil, agentaws.ErrInvalid
+	}
+	if len(refs) == 0 {
+		return map[string]agentaws.Credentials{}, nil
+	}
+	args := []any{r.ownerID}
+	parts := make([]string, 0, len(refs))
+	expected := make(map[string]struct{}, len(refs))
+	for i, ref := range refs {
+		if strings.TrimSpace(ref.ID) == "" || ref.Revision < 1 {
+			return nil, agentaws.ErrInvalid
+		}
+		base := 2 + i*2
+		parts = append(parts, fmt.Sprintf("(credential_id=$%d AND revision=$%d)", base, base+1))
+		args = append(args, ref.ID, ref.Revision)
+		expected[ref.ID+":"+fmt.Sprint(ref.Revision)] = struct{}{}
+	}
+	query := `SELECT credential_id::text,name,region,account_id,user_arn,verified_revision,revision,created_at,updated_at FROM core_aws_credentials WHERE owner_id=$1 AND (` + strings.Join(parts, " OR ") + `)`
+	rows, err := r.store.db.QueryContext(c, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]agentaws.Credentials, len(refs))
+	for rows.Next() {
+		var id, name, region, account, arn string
+		var verified, revision int64
+		var created, updated time.Time
+		if err = rows.Scan(&id, &name, &region, &account, &arn, &verified, &revision, &created, &updated); err != nil {
+			return nil, err
+		}
+		out[id+":"+fmt.Sprint(revision)] = agentaws.RehydrateCredentialMetadata(id, name, region, account, arn, verified, revision, created, updated)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(out) != len(expected) {
+		return nil, agentaws.ErrNotFound
+	}
+	return out, nil
 }
 func (r *PostgresAWSRepository) getCredential(c context.Context, id string, revision int64, exact bool) (agentaws.Credentials, error) {
 	if r == nil || r.store == nil || r.store.db == nil || strings.TrimSpace(id) == "" {
@@ -993,13 +1078,41 @@ func (r *PostgresAWSRepository) RecordCredentialIdentity(c context.Context, id s
 	if r == nil || r.store == nil || r.store.db == nil {
 		return agentaws.Credentials{}, agentaws.ErrInvalid
 	}
-	res, err := r.store.db.ExecContext(c, `UPDATE core_aws_credentials SET account_id=$1,user_arn=$2,verified_revision=revision,updated_at=clock_timestamp() WHERE owner_id=$3 AND credential_id=$4 AND revision=$5`, i.AccountID, i.UserARN, r.ownerID, id, rev)
+	if strings.TrimSpace(i.AccountID) == "" || strings.TrimSpace(i.UserARN) == "" || rev < 1 {
+		return agentaws.Credentials{}, agentaws.ErrInvalid
+	}
+	tx, err := r.store.db.BeginTx(c, nil)
 	if err != nil {
 		return agentaws.Credentials{}, err
 	}
-	n, _ := res.RowsAffected()
-	if n != 1 {
+	defer tx.Rollback()
+	var account, arn sql.NullString
+	var verified, current int64
+	if err = tx.QueryRowContext(c, `SELECT account_id,user_arn,verified_revision,revision FROM core_aws_credentials WHERE owner_id=$1 AND credential_id=$2 AND revision=$3 FOR UPDATE`, r.ownerID, id, rev).Scan(&account, &arn, &verified, &current); errors.Is(err, sql.ErrNoRows) {
 		return agentaws.Credentials{}, agentaws.ErrRevisionConflict
+	} else if err != nil {
+		return agentaws.Credentials{}, err
+	}
+	if current != rev {
+		return agentaws.Credentials{}, agentaws.ErrRevisionConflict
+	}
+	if verified == rev {
+		if account.String != i.AccountID || arn.String != i.UserARN {
+			return agentaws.Credentials{}, agentaws.ErrConflict
+		}
+		if err = tx.Commit(); err != nil {
+			return agentaws.Credentials{}, err
+		}
+		return r.GetCredentialRevision(c, id, rev)
+	}
+	if (account.Valid && strings.TrimSpace(account.String) != "") || (arn.Valid && strings.TrimSpace(arn.String) != "") {
+		return agentaws.Credentials{}, agentaws.ErrConflict
+	}
+	if _, err = tx.ExecContext(c, `UPDATE core_aws_credentials SET account_id=$1,user_arn=$2,verified_revision=revision,updated_at=clock_timestamp() WHERE owner_id=$3 AND credential_id=$4 AND revision=$5`, i.AccountID, i.UserARN, r.ownerID, id, rev); err != nil {
+		return agentaws.Credentials{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return agentaws.Credentials{}, err
 	}
 	return r.GetCredentialRevision(c, id, rev)
 }
@@ -1128,6 +1241,7 @@ func mapAWSError(err error) error {
 	}
 	return err
 }
+
 func (r *PostgresAWSRepository) CreatePlan(c context.Context, v agentaws.Plan) (agentaws.Plan, error) {
 	if r == nil || r.store == nil || r.store.db == nil {
 		return agentaws.Plan{}, agentaws.ErrInvalid

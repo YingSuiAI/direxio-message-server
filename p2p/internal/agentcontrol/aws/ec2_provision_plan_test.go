@@ -47,6 +47,12 @@ func TestBuildEC2ProvisionPlanIsDeterministicAndCanonical(t *testing.T) {
 	if onePlan.Parameters["LatestAmiId"] != ec2LatestAMIParameter {
 		t.Fatalf("fixed AMI parameter was not persisted: %#v", onePlan.Parameters)
 	}
+	if onePlan.Tags["dirextalk:template-profile"] != EC2ServiceProfile ||
+		onePlan.Tags["dirextalk:template-version"] != ec2TemplateVersion ||
+		onePlan.Tags["dirextalk:template-digest"] != one.TemplateDigest() ||
+		onePlan.Tags["dirextalk:owner-binding"] != ec2OwnerBindingDigest(request.OwnerID) {
+		t.Fatalf("plan identity metadata is not fully bound: %#v", onePlan.Tags)
+	}
 	if err := onePlan.Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +186,7 @@ func TestEC2ProvisionPlanRejectsCredentialRotationAndUsesUnavailableQuote(t *tes
 	ctx := context.Background()
 	repo := NewMemoryRepository()
 	service := NewService(repo, &testConfirm{}, testTasks{}, nil, NewFakeProvider(), time.Now)
-	created, err := service.SaveCredential(ctx, CredentialInput{
+	created, err := saveVerifiedCredential(t, service, repo, CredentialInput{
 		Name: "aws", Region: "us-east-1", AccessKeyID: "access", SecretAccessKey: "secret",
 		IdempotencyKey: uuid.NewString(),
 	})
@@ -205,6 +211,9 @@ func TestEC2ProvisionPlanRejectsCredentialRotationAndUsesUnavailableQuote(t *tes
 	}
 
 	request.CredentialRevision++
+	if _, err = repo.RecordCredentialIdentity(ctx, created.ID, request.CredentialRevision, Identity{AccountID: "123456789012", UserARN: "arn:aws:iam::123456789012:user/test"}); err != nil {
+		t.Fatal(err)
+	}
 	fresh, err := BuildEC2ProvisionPlan(request)
 	if err != nil {
 		t.Fatal(err)
@@ -230,7 +239,7 @@ func TestEC2ProvisionPlanReconcilesDefaultedAMIParameter(t *testing.T) {
 	repo := NewMemoryRepository()
 	provider := NewFakeProvider()
 	service := NewService(repo, &testConfirm{}, testTasks{}, nil, provider, time.Now)
-	credential, err := service.SaveCredential(ctx, CredentialInput{
+	credential, err := saveVerifiedCredential(t, service, repo, CredentialInput{
 		Name: "aws", Region: "us-east-1", AccessKeyID: "access", SecretAccessKey: "secret",
 		IdempotencyKey: uuid.NewString(),
 	})
@@ -273,6 +282,7 @@ func TestEC2ProvisionPlanReconcilesDefaultedAMIParameter(t *testing.T) {
 			string(StackOutputStackID):       "arn:aws:cloudformation:us-east-1:123456789012:stack/geolibre-prod/01234567-89ab-cdef-0123-456789abcdef",
 		},
 	}
+	provider.Stacks[plan.Region+"/"+plan.StackName].Parameters["LatestAmiId"] = "ami-0123456789abcdef0"
 	done, err := service.reconcileChange(ctx, change, plan)
 	if err != nil || done.Status != ChangeSucceeded {
 		t.Fatalf("defaulted AMI parameter did not reconcile: done=%#v err=%v", done, err)
@@ -302,6 +312,38 @@ func TestQuoteCountsOnlyTopLevelCloudFormationResources(t *testing.T) {
 	})
 	if unknown.ResourceCount != 0 || unknown.PriceStatus != "unavailable" || strings.Contains(unknown.Summary, "$") {
 		t.Fatalf("unknown quote was not fail closed: %#v", unknown)
+	}
+}
+
+func TestPlanParametersMatchReadbackResolvesFixedSSMAMI(t *testing.T) {
+	request := validEC2ProvisionRequest()
+	built, err := BuildEC2ProvisionPlan(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := built.CorePlan()
+	observed := cloneMap(plan.Parameters)
+	observed["LatestAmiId"] = "ami-0123456789abcdef0"
+	if !PlanParametersMatchReadback(plan, observed) {
+		t.Fatalf("resolved AMI readback should match: %#v", observed)
+	}
+	for name, mutate := range map[string]func(map[string]string){
+		"wrong ami":             func(v map[string]string) { v["LatestAmiId"] = "ami-not-hex" },
+		"wrong fixed parameter": func(v map[string]string) { v["DisplayName"] = "other" },
+		"unknown parameter":     func(v map[string]string) { v["Unexpected"] = "value" },
+		"missing parameter":     func(v map[string]string) { delete(v, "InstanceType") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := cloneMap(observed)
+			mutate(candidate)
+			if PlanParametersMatchReadback(plan, candidate) {
+				t.Fatalf("malformed readback accepted: %#v", candidate)
+			}
+		})
+	}
+	generic := Plan{Parameters: map[string]string{"LatestAmiId": ec2LatestAMIParameter}}
+	if PlanParametersMatchReadback(generic, map[string]string{"LatestAmiId": "ami-0123456789abcdef0"}) || !PlanParametersMatchReadback(generic, generic.Parameters) {
+		t.Fatal("AMI resolution must remain profile-scoped")
 	}
 }
 

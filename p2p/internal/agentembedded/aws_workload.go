@@ -371,14 +371,16 @@ func credentialViewMap(v coreaws.CredentialView) map[string]any {
 	return out
 }
 func planViewMap(v coreaws.PlanView) map[string]any {
-	return map[string]any{"plan_id": v.ID, "credential_id": v.CredentialID, "credential_revision": v.CredentialRevision, "region": v.Region, "stack_name": v.StackName, "operation": string(v.Operation), "template_sha256": v.TemplateSHA256, "parameters": v.Parameters, "tags": v.Tags, "capabilities": v.Capabilities, "revision": v.Revision, "created_at": v.CreatedAt.UTC().Format(time.RFC3339Nano)}
+	return map[string]any{"plan_id": v.ID, "credential_id": v.CredentialID, "credential_revision": v.CredentialRevision, "region": v.Region, "stack_name": v.StackName, "operation": string(v.Operation), "template_sha256": v.TemplateSHA256, "plan_digest": v.PlanDigest, "content_digest": v.ContentDigest, "parameter_digest": v.ParameterDigest, "network_digest": v.NetworkDigest, "secret_grant_digest": v.SecretGrantDigest, "target_id": v.TargetID, "parameters": v.Parameters, "tags": v.Tags, "capabilities": v.Capabilities, "revision": v.Revision, "created_at": v.CreatedAt.UTC().Format(time.RFC3339Nano)}
 }
 func quoteMap(v coreaws.Quote) map[string]any {
 	return map[string]any{"plan_id": v.PlanID, "operation": string(v.Operation), "region": v.Region, "stack_name": v.StackName, "resource_count": v.ResourceCount, "parameter_count": v.ParameterCount, "tag_count": v.TagCount, "estimated_monthly_usd": v.EstimatedMonthlyUSD, "price_status": v.PriceStatus, "summary": v.Summary, "plan_digest": v.PlanDigest}
 }
 func changeMap(v coreaws.Change) map[string]any {
 	out := map[string]any{"change_id": v.ID, "plan_id": v.PlanID, "credential_id": v.CredentialID, "task_id": v.TaskID, "confirmation_id": v.ConfirmationID, "operation": string(v.Operation), "status": string(v.Status), "stage": string(v.Stage), "change_set_id": v.ChangeSetID, "provider_request_digest": v.ProviderRequestDigest, "revision": v.Revision, "error_code": v.ErrorCode, "error_summary": v.ErrorSummary, "created_at": v.CreatedAt.UTC().Format(time.RFC3339Nano), "updated_at": v.UpdatedAt.UTC().Format(time.RFC3339Nano)}
-	if v.ProvisionID != "" { out["provision_id"] = v.ProvisionID }
+	if v.ProvisionID != "" {
+		out["provision_id"] = v.ProvisionID
+	}
 	return out
 }
 
@@ -408,7 +410,11 @@ func provisionMap(v coreaws.Provision) map[string]any {
 }
 func ec2ProvisionPlanMap(v coreaws.PlanView, p coreaws.Provision) map[string]any {
 	volume, _ := strconv.ParseInt(v.Parameters["VolumeSize"], 10, 64)
-	return map[string]any{"plan_id": v.ID, "credential_id": v.CredentialID, "credential_revision": v.CredentialRevision, "region": v.Region, "stack_name": v.StackName, "display_name": v.Parameters["DisplayName"], "instance_type": v.Parameters["InstanceType"], "volume_gib": volume, "public_http": v.Parameters["PublicHTTP"] == "true", "acknowledge_public_exposure": true, "operation": string(v.Operation), "template_sha256": v.TemplateSHA256, "plan_digest": p.PlanDigest, "revision": v.Revision, "created_at": v.CreatedAt.UTC().Format(time.RFC3339Nano)}
+	planDigest := v.PlanDigest
+	if planDigest == "" {
+		planDigest = p.PlanDigest
+	}
+	return map[string]any{"plan_id": v.ID, "credential_id": v.CredentialID, "credential_revision": v.CredentialRevision, "region": v.Region, "stack_name": v.StackName, "display_name": v.Parameters["DisplayName"], "instance_type": v.Parameters["InstanceType"], "volume_gib": volume, "public_http": v.Parameters["PublicHTTP"] == "true", "acknowledge_public_exposure": true, "operation": string(v.Operation), "template_sha256": v.TemplateSHA256, "plan_digest": planDigest, "content_digest": v.ContentDigest, "parameter_digest": v.ParameterDigest, "network_digest": v.NetworkDigest, "secret_grant_digest": v.SecretGrantDigest, "target_id": v.TargetID, "revision": v.Revision, "created_at": v.CreatedAt.UTC().Format(time.RFC3339Nano)}
 }
 func provisionEventMap(v coreaws.ProvisionEvent) map[string]any {
 	return map[string]any{"provision_id": v.ProvisionID, "event_id": v.EventID, "change_id": v.ChangeID, "task_id": v.TaskID, "kind": v.Kind, "sequence": v.Sequence, "revision": v.Revision, "at": v.At.UTC().Format(time.RFC3339Nano)}
@@ -420,7 +426,21 @@ func changeRequestMap(v coreaws.ChangeRequestResult) map[string]any {
 	out["task"].(map[string]any)["failure_code"] = v.Task.FailureCode
 	out["task"].(map[string]any)["failure_summary"] = v.Task.FailureSummary
 	if v.Provision.ID != "" {
-		out["provision"] = provisionMap(v.Provision)
+		provision := provisionMap(v.Provision)
+		// The canonical AWS target digest is derived from the credential's
+		// account/region/stack binding. It is not persisted on Provision, so
+		// project the exact value captured in the immutable confirmation
+		// snapshot for request responses; callers must compare it byte-for-byte.
+		if targetID := strings.TrimSpace(v.Confirmation.Binding.TargetID); targetID != "" {
+			provision["target_id"] = targetID
+		}
+		// Echo the immutable binding digests captured by the confirmation. This
+		// is a response-only projection; no client-supplied value is trusted.
+		provision["content_digest"] = string(v.Confirmation.Binding.ContentDigest)
+		provision["parameter_digest"] = string(v.Confirmation.Binding.ParameterDigest)
+		provision["network_digest"] = string(v.Confirmation.Binding.NetworkDigest)
+		provision["secret_grant_digest"] = string(v.Confirmation.Binding.SecretGrantDigest)
+		out["provision"] = provision
 	}
 	return out
 }

@@ -15,7 +15,7 @@ func workflowFixture(t *testing.T) (*Service, *MemoryRepository, *FakeProvider, 
 	r := NewMemoryRepository()
 	c := &testConfirm{}
 	s := NewService(r, c, testTasks{}, nil, NewFakeProvider(), nil)
-	cred, e := s.SaveCredential(context.Background(), CredentialInput{Name: "x", Region: "us-east-1", AccessKeyID: "a", SecretAccessKey: "b", IdempotencyKey: uuid.NewString()})
+	cred, e := saveVerifiedCredential(t, s, r, CredentialInput{Name: "x", Region: "us-east-1", AccessKeyID: "a", SecretAccessKey: "b", IdempotencyKey: uuid.NewString()})
 	if e != nil {
 		t.Fatal(e)
 	}

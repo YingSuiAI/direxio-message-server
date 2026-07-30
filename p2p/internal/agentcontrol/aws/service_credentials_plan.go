@@ -2,6 +2,7 @@ package aws
 
 import (
 	"context"
+	"strconv"
 	"strings"
 )
 
@@ -216,7 +217,7 @@ func (s *Service) CreatePlan(ctx context.Context, in PlanInput) (PlanView, error
 			if e != nil {
 				return PlanView{}, e
 			}
-			return *v.plan, nil
+			return s.planViewFromView(ctx, *v.plan)
 		}
 		mr.mu.Unlock()
 	}
@@ -232,6 +233,9 @@ func (s *Service) CreatePlan(ctx context.Context, in PlanInput) (PlanView, error
 	}
 	if in.ExpectedCredentialRevision > 0 && in.ExpectedCredentialRevision != cred.Revision {
 		return PlanView{}, ErrRevisionConflict
+	}
+	if !credentialReadyForPlan(cred) {
+		return PlanView{}, ErrConflict
 	}
 	norm, digest, e := normalizeTemplate(in.Template)
 	if e != nil {
@@ -252,24 +256,132 @@ func (s *Service) CreatePlan(ctx context.Context, in PlanInput) (PlanView, error
 		return PlanView{}, ErrConflict
 	}
 	if mr, ok := s.repo.(*MemoryRepository); ok {
-		return mr.createPlanIdempotent(ctx, p, in.IdempotencyKey, dig)
+		view, err := mr.createPlanIdempotent(ctx, p, in.IdempotencyKey, dig)
+		if err != nil {
+			return PlanView{}, err
+		}
+		return s.planViewFromView(ctx, view)
 	}
 	v, e := s.repo.CreatePlan(ctx, p)
 	if e != nil {
 		return PlanView{}, e
 	}
-	view := v.View()
-	return view, nil
+	return s.planViewWithCredential(ctx, v)
 }
 func (s *Service) GetPlan(ctx context.Context, id string) (PlanView, error) {
 	p, e := s.repo.GetPlan(ctx, id)
 	if e != nil {
 		return PlanView{}, e
 	}
-	return p.View(), nil
+	return s.planViewWithCredential(ctx, p)
 }
 func (s *Service) ListPlans(ctx context.Context, size int, token string) (PlanPage, error) {
-	return s.repo.ListPlans(ctx, size, token)
+	page, err := s.repo.ListPlans(ctx, size, token)
+	if err != nil {
+		return PlanPage{}, err
+	}
+	if batch, ok := s.repo.(CredentialMetadataBatchRepository); ok {
+		refs := make([]CredentialRevisionRef, 0, len(page.Items))
+		for _, view := range page.Items {
+			refs = append(refs, CredentialRevisionRef{ID: view.CredentialID, Revision: view.CredentialRevision})
+		}
+		metadata, batchErr := batch.ListCredentialRevisionMetadata(ctx, refs)
+		if batchErr != nil {
+			return PlanPage{}, batchErr
+		}
+		for i, view := range page.Items {
+			key := view.CredentialID + ":" + strconv.FormatInt(view.CredentialRevision, 10)
+			cred, found := metadata[key]
+			if !found {
+				return PlanPage{}, ErrNotFound
+			}
+			if !credentialReadyForPlan(cred) {
+				return PlanPage{}, ErrConflict
+			}
+			page.Items[i] = viewWithCredential(view, cred)
+		}
+		return page, nil
+	}
+	for i, view := range page.Items {
+		page.Items[i], err = s.planViewFromView(ctx, view)
+		if err != nil {
+			return PlanPage{}, err
+		}
+	}
+	return page, nil
+}
+
+func viewWithCredential(v PlanView, cred Credentials) PlanView {
+	p := Plan{ID: v.ID, CredentialID: v.CredentialID, CredentialRevision: v.CredentialRevision, Region: v.Region, StackName: v.StackName, Operation: v.Operation, TemplateSHA256: v.TemplateSHA256, Parameters: cloneMap(v.Parameters), Tags: cloneMap(v.Tags), Capabilities: append([]string(nil), v.Capabilities...), Revision: v.Revision, CreatedAt: v.CreatedAt}
+	return p.ViewWithCredentials(cred)
+}
+
+func (s *Service) planViewWithCredential(ctx context.Context, p Plan) (PlanView, error) {
+	if s == nil || s.repo == nil || p.CredentialRevision < 1 {
+		return PlanView{}, ErrInvalid
+	}
+	var cred Credentials
+	var err error
+	if metadata, ok := s.repo.(CredentialMetadataRepository); ok {
+		cred, err = metadata.GetCredentialRevisionMetadata(ctx, p.CredentialID, p.CredentialRevision)
+	} else {
+		cred, err = s.repo.GetCredentialRevision(ctx, p.CredentialID, p.CredentialRevision)
+	}
+	if err != nil {
+		return PlanView{}, err
+	}
+	if !credentialReadyForPlan(cred) {
+		return PlanView{}, ErrConflict
+	}
+	return p.ViewWithCredentials(cred), nil
+}
+
+func credentialReadyForPlan(c Credentials) bool {
+	return c.Revision > 0 && c.VerifiedRevision == c.Revision && strings.TrimSpace(c.AccountID) != "" && strings.TrimSpace(c.UserARN) != ""
+}
+
+// CredentialReadyForPlan exposes the fail-closed identity gate to storage
+// adapters that rehydrate historical credential metadata inside transactions.
+func CredentialReadyForPlan(c Credentials) bool { return credentialReadyForPlan(c) }
+
+func (s *Service) requireCredentialReady(ctx context.Context, id string, revision int64) error {
+	if s == nil || s.repo == nil || revision < 1 {
+		return ErrInvalid
+	}
+	var c Credentials
+	var err error
+	if metadata, ok := s.repo.(CredentialMetadataRepository); ok {
+		c, err = metadata.GetCredentialRevisionMetadata(ctx, id, revision)
+	} else {
+		c, err = s.repo.GetCredentialRevision(ctx, id, revision)
+	}
+	if err != nil {
+		return err
+	}
+	if !credentialReadyForPlan(c) {
+		return ErrConflict
+	}
+	return nil
+}
+
+// planViewFromView rehydrates only the non-secret immutable plan fields. This
+// keeps ListPlans storage-agnostic while still deriving binding digests from
+// the historical credential revision selected by the plan.
+func (s *Service) planViewFromView(ctx context.Context, v PlanView) (PlanView, error) {
+	var cred Credentials
+	var err error
+	if metadata, ok := s.repo.(CredentialMetadataRepository); ok {
+		cred, err = metadata.GetCredentialRevisionMetadata(ctx, v.CredentialID, v.CredentialRevision)
+	} else {
+		cred, err = s.repo.GetCredentialRevision(ctx, v.CredentialID, v.CredentialRevision)
+	}
+	if err != nil {
+		return PlanView{}, err
+	}
+	if !credentialReadyForPlan(cred) {
+		return PlanView{}, ErrConflict
+	}
+	return viewWithCredential(v, cred), nil
 }
 func (s *Service) Quote(ctx context.Context, id string) (Quote, error) {
 	p, e := s.repo.GetPlan(ctx, id)

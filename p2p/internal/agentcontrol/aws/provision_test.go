@@ -31,7 +31,7 @@ func TestProvisionIsPinnedAndChangeLinkIsExclusive(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMemoryRepository()
 	s := NewService(repo, &testConfirm{}, testTasks{}, nil, NewFakeProvider(), time.Now)
-	credential, err := s.SaveCredential(ctx, CredentialInput{Name: "provision", Region: "us-east-1", AccessKeyID: "a", SecretAccessKey: "b", IdempotencyKey: uuid.NewString()})
+	credential, err := saveVerifiedCredential(t, s, repo, CredentialInput{Name: "provision", Region: "us-east-1", AccessKeyID: "a", SecretAccessKey: "b", IdempotencyKey: uuid.NewString()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestTypedProvisionCompletionFailsClosedThenPersistsReadbackAtomically(t *te
 	ctx := context.Background()
 	repo := NewMemoryRepository()
 	s := NewService(repo, &testConfirm{}, testTasks{}, nil, NewFakeProvider(), time.Now)
-	credential, _ := s.SaveCredential(ctx, CredentialInput{Name: "complete", Region: "us-east-1", AccessKeyID: "a", SecretAccessKey: "b", IdempotencyKey: uuid.NewString()})
+	credential, _ := saveVerifiedCredential(t, s, repo, CredentialInput{Name: "complete", Region: "us-east-1", AccessKeyID: "a", SecretAccessKey: "b", IdempotencyKey: uuid.NewString()})
 	planView, _ := s.CreatePlan(ctx, PlanInput{CredentialID: credential.ID, StackName: "complete-stack", Operation: OperationCreate, Template: []byte(`{"Resources":{}}`), Tags: map[string]string{"service": EC2ServiceProfile, "owner": OwnerBindingDigest("owner")}, IdempotencyKey: uuid.NewString()})
 	plan, _ := repo.GetPlan(ctx, planView.ID)
 	p := Provision{ID: uuid.NewString(), PlanID: plan.ID, CredentialID: credential.ID, CredentialRevision: credential.Revision, Region: plan.Region, StackName: plan.StackName, Profile: EC2ServiceProfile, OwnerDigest: plan.Tags["owner"], PlanRevision: plan.Revision, TemplateSHA256: plan.TemplateSHA256, PlanDigest: PlanDigest(plan), State: "planned", Revision: 1, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
@@ -133,7 +133,7 @@ func TestCreateProvisionBindsRealEC2BuilderSnapshotAndRejectsForgedFields(t *tes
 	ctx := context.Background()
 	repo := NewMemoryRepository()
 	s := NewService(repo, &testConfirm{}, testTasks{}, nil, NewFakeProvider(), time.Now)
-	credential, err := s.SaveCredential(ctx, CredentialInput{Name: "builder", Region: "us-east-1", AccessKeyID: "a", SecretAccessKey: "b", IdempotencyKey: uuid.NewString()})
+	credential, err := saveVerifiedCredential(t, s, repo, CredentialInput{Name: "builder", Region: "us-east-1", AccessKeyID: "a", SecretAccessKey: "b", IdempotencyKey: uuid.NewString()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +179,7 @@ func TestRetryProvisionIsExplicitRevisionFencedAndReplayStable(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMemoryRepository()
 	s := NewService(repo, &testConfirm{}, testTasks{}, nil, NewFakeProvider(), time.Now)
-	credential, err := s.SaveCredential(ctx, CredentialInput{Name: "retry", Region: "us-east-1", AccessKeyID: "a", SecretAccessKey: "b", IdempotencyKey: uuid.NewString()})
+	credential, err := saveVerifiedCredential(t, s, repo, CredentialInput{Name: "retry", Region: "us-east-1", AccessKeyID: "a", SecretAccessKey: "b", IdempotencyKey: uuid.NewString()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +253,7 @@ func TestRetryProvisionRecreateIgnoresStaleSuccessfulDestroyIntent(t *testing.T)
 	ctx := context.Background()
 	repo := NewMemoryRepository()
 	s := NewService(repo, &testConfirm{}, testTasks{}, nil, NewFakeProvider(), time.Now)
-	credential, err := s.SaveCredential(ctx, CredentialInput{Name: "lifecycle", Region: "us-east-1", AccessKeyID: "a", SecretAccessKey: "b", IdempotencyKey: uuid.NewString()})
+	credential, err := saveVerifiedCredential(t, s, repo, CredentialInput{Name: "lifecycle", Region: "us-east-1", AccessKeyID: "a", SecretAccessKey: "b", IdempotencyKey: uuid.NewString()})
 	if err != nil {
 		t.Fatal(err)
 	}

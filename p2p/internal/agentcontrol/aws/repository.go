@@ -33,6 +33,22 @@ type Repository interface {
 	GetProvisionByChange(context.Context, string) (Provision, error)
 }
 
+// CredentialMetadataRepository exposes immutable identity/revision metadata
+// without loading or decrypting the credential secret envelope. It is an
+// optional acceleration boundary used by plan read/list projections.
+type CredentialMetadataRepository interface {
+	GetCredentialRevisionMetadata(context.Context, string, int64) (Credentials, error)
+}
+
+type CredentialRevisionRef struct {
+	ID       string
+	Revision int64
+}
+
+type CredentialMetadataBatchRepository interface {
+	ListCredentialRevisionMetadata(context.Context, []CredentialRevisionRef) (map[string]Credentials, error)
+}
+
 // EC2ProvisionRepository is the narrow atomic boundary for typed EC2 plans.
 // Implementations must persist the immutable plan and its planned provision in
 // one transaction and replay an identical idempotency key exactly.

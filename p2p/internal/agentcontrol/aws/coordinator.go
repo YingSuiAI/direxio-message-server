@@ -85,7 +85,16 @@ func (m *MemoryChangeCoordinator) RequestChange(ctx context.Context, in RequestC
 	if !ok {
 		return ChangeRequestResult{}, ErrNotFound
 	}
+	if !credentialReadyForPlan(cred) {
+		return ChangeRequestResult{}, ErrConflict
+	}
 	binding := bindingForPlan(p, cred)
+	if !in.Binding.IsZero() {
+		expected := in.Binding
+		if !expected.Equal(binding) {
+			return ChangeRequestResult{}, ErrRevisionConflict
+		}
+	}
 	now := m.now().UTC()
 	for _, existing := range m.repo.confirmations {
 		if existing.Binding.TargetID == p.ID && (existing.State == coreconfirmation.StatePending || existing.State == coreconfirmation.StateConfirmed || existing.State == coreconfirmation.StateConsumed) {
@@ -151,10 +160,6 @@ func provisionSnapshotMatches(provision Provision, plan Plan) bool {
 // adapters without exposing mutable coordinator state.
 func ProvisionSnapshotMatches(provision Provision, plan Plan) bool {
 	return provisionSnapshotMatches(provision, plan)
-}
-
-func bindingEmpty(b coreconfirmation.Binding) bool {
-	return b.OperationDomain == "" && b.TargetID == "" && b.TargetRevision == 0 && b.SourceVersion == "" && b.SourceCommit == "" && b.ContentDigest == "" && b.ParameterDigest == "" && b.NetworkDigest == "" && b.SecretGrantDigest == ""
 }
 
 // SetTaskRunning records the scheduler's exact lease fence before Consume.
@@ -225,7 +230,7 @@ func (m *MemoryChangeCoordinator) ConsumeChange(_ context.Context, cmd ConsumeCh
 	now := m.now().UTC()
 	p, pok := m.repo.plans[c.PlanID]
 	cred, cok := m.repo.credentialHistory[p.CredentialID][p.CredentialRevision]
-	if !pok || !cok || !conf.ExpiresAt.After(now) || !conf.Binding.Equal(bindingForPlan(p, cred)) || (!bindingEmpty(cmd.Binding) && !conf.Binding.Equal(cmd.Binding)) {
+	if !pok || !cok || !credentialReadyForPlan(cred) || !conf.ExpiresAt.After(now) || !conf.Binding.Equal(bindingForPlan(p, cred)) || (!cmd.Binding.IsZero() && !conf.Binding.Equal(cmd.Binding)) {
 		conf.State, conf.Revision, conf.UpdatedAt = coreconfirmation.StateExpired, conf.Revision+1, now
 		t.Status, t.FailureCode, t.FailureSummary, t.Revision = "failed", "confirmation_stale", "AWS confirmation binding is stale or expired", t.Revision+1
 		c.Status, c.Stage, c.ErrorCode, c.ErrorSummary, c.Revision, c.UpdatedAt = ChangeFailed, StageFailed, "confirmation_stale", "AWS confirmation binding is stale or expired", c.Revision+1, now

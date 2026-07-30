@@ -102,6 +102,13 @@ func TestSDKProviderSafetyTokensAndFreshRecovery(t *testing.T) {
 	if err = p.DeleteStack(context.Background(), safetyHandle(), "us-east-1", "safety-stack", token); err != nil || client.deleteToken != token {
 		t.Fatalf("delete token=%q err=%v", client.deleteToken, err)
 	}
+	stackARN := "arn:aws:cloudformation:us-east-1:123456789012:stack/safety-stack/01234567-89ab-cdef-0123-456789abcdef"
+	if err = p.DeleteStack(context.Background(), safetyHandle(), "us-east-1", stackARN, token); err != nil || client.deleteToken != token {
+		t.Fatalf("authoritative stack ARN delete token=%q err=%v", client.deleteToken, err)
+	}
+	if err = p.DeleteStack(context.Background(), safetyHandle(), "us-east-1", "arn:aws:cloudformation:eu-west-1:123456789012:stack/safety-stack/01234567-89ab-cdef-0123-456789abcdef", token); err != ErrInvalid {
+		t.Fatalf("cross-region stack ARN err=%v, want ErrInvalid", err)
+	}
 	client.executeErr = context.Canceled
 	if err = p.ExecuteChangeSet(context.Background(), safetyHandle(), "us-east-1", "safety-stack", "cs-safety", token); err != ErrResponseUncertain {
 		t.Fatalf("cancelled mutation err=%v", err)
@@ -168,5 +175,41 @@ func TestSDKProviderDescribeStackAllowlistedOutputs(t *testing.T) {
 	}
 	if got := stack.Outputs[string(StackOutputStackID)]; got != "arn:aws:cloudformation:us-east-1:123456789012:stack/output-stack/01234567-89ab-cdef-0123-456789abcdef" {
 		t.Fatalf("authoritative stack id=%q", got)
+	}
+}
+
+func TestSDKProviderDescribeStackUsesResolvedAMIOnlyForTypedGeoLibreTags(t *testing.T) {
+	stack := cloudformationtypes.Stack{
+		StackName:   aws.String("geolibre-stack"),
+		StackStatus: cloudformationtypes.StackStatusCreateComplete,
+		StackId:     aws.String("arn:aws:cloudformation:us-east-1:123456789012:stack/geolibre-stack/01234567-89ab-cdef-0123-456789abcdef"),
+		Parameters:  []cloudformationtypes.Parameter{{ParameterKey: aws.String("LatestAmiId"), ParameterValue: aws.String("/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"), ResolvedValue: aws.String("ami-0123456789abcdef0")}},
+		Tags: []cloudformationtypes.Tag{
+			{Key: aws.String("service"), Value: aws.String(EC2ServiceProfile)},
+			{Key: aws.String("dirextalk:template-profile"), Value: aws.String(EC2ServiceProfile)},
+			{Key: aws.String("dirextalk:template-version"), Value: aws.String(ec2TemplateVersion)},
+		},
+	}
+	client := &safetyCloudClient{describeStack: &cloudformation.DescribeStacksOutput{Stacks: []cloudformationtypes.Stack{stack}}, templateBody: `{"Resources":{}}`}
+	p, err := NewSDKProvider(SDKClients{CloudFormation: client})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := p.DescribeStack(context.Background(), safetyHandle(), "us-east-1", "geolibre-stack")
+	if err != nil || got.Parameters["LatestAmiId"] != "ami-0123456789abcdef0" {
+		t.Fatalf("typed resolved AMI=%#v err=%v", got.Parameters, err)
+	}
+
+	client.describeStack.Stacks[0].Tags[0].Value = aws.String("other")
+	client.describeStack.Stacks[0].Parameters[0].ResolvedValue = aws.String("not-an-ami")
+	got, err = p.DescribeStack(context.Background(), safetyHandle(), "us-east-1", "geolibre-stack")
+	if err != nil || got.Parameters["LatestAmiId"] != "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64" {
+		t.Fatalf("untagged stack must retain parameter value=%#v err=%v", got.Parameters, err)
+	}
+
+	client.describeStack.Stacks[0].Tags[0].Value = aws.String(EC2ServiceProfile)
+	client.describeStack.Stacks[0].Parameters[0].ResolvedValue = nil
+	if _, err = p.DescribeStack(context.Background(), safetyHandle(), "us-east-1", "geolibre-stack"); err != ErrProvider {
+		t.Fatalf("typed stack without resolved AMI err=%v, want ErrProvider", err)
 	}
 }

@@ -50,6 +50,12 @@ func (s *Service) executeChangeStrict(ctx context.Context, confirmationID string
 	if err != nil {
 		return Change{}, err
 	}
+	// Historical plans are executable only when their pinned credential
+	// revision has a verified caller identity. Check this before any provider
+	// read as well as again immediately before each provider mutation below.
+	if !credentialReadyForPlan(cred) {
+		return Change{}, ErrConflict
+	}
 	if !conf.Binding.Equal(bindingForPlan(p, cred)) {
 		return Change{}, ErrRevisionConflict
 	}
@@ -100,6 +106,30 @@ func (s *Service) executeChangeStrict(ctx context.Context, confirmationID string
 		return Change{}, ErrRevisionConflict
 	}
 	if c.Operation == OperationDelete && c.Stage == StageChangeSetCreating {
+		deleteReference := p.StackName
+		if isTypedEC2Plan(p) {
+			required, valid := requiredStackOutputs(p)
+			if !valid || len(required) == 0 {
+				return c, ErrResponseUncertain
+			}
+			// A destroy is destructive even though the provider call only carries a
+			// stack name. Re-read the authoritative stack first and refuse to act on
+			// a same-name replacement or any immutable-plan drift. The ARN is then
+			// used as the DeleteStack reference so CloudFormation cannot resolve a
+			// different stack by name between read and delete.
+			expectedStackID := ""
+			if provision, provisionErr := s.repo.GetProvisionByChange(ctx, c.ID); provisionErr == nil {
+				expectedStackID = provision.Readback.StackID
+			}
+			if expectedStackID == "" {
+				return c, ErrResponseUncertain
+			}
+			current, readErr := s.provider.DescribeStack(ctx, cred.handle(), p.Region, p.StackName)
+			if readErr != nil || !destroyReadbackMatches(current, p, required, expectedStackID) {
+				return c, ErrResponseUncertain
+			}
+			deleteReference = current.Outputs[string(StackOutputStackID)]
+		}
 		fence, fe := s.coordinator.ExecutionFence(ctx, c.ConfirmationID)
 		if fe != nil {
 			return Change{}, fe
@@ -110,7 +140,10 @@ func (s *Service) executeChangeStrict(ctx context.Context, confirmationID string
 			err = claimErr
 			return Change{}, err
 		}
-		err = s.provider.DeleteStack(ctx, cred.handle(), p.Region, p.StackName, c.ProviderToken)
+		if err = s.requireCredentialReady(ctx, p.CredentialID, p.CredentialRevision); err != nil {
+			return Change{}, err
+		}
+		err = s.provider.DeleteStack(ctx, cred.handle(), p.Region, deleteReference, c.ProviderToken)
 		claim.ExpectedChangeRevision, claim.ExpectedTaskRevision, claim.ExpectedConfirmationRevision = claimedFence.Change.Revision, claimedFence.Task.Revision, claimedFence.Confirmation.Revision
 		committed, ce := s.coordinator.CommitProviderMutation(ctx, ProviderMutationResult{Command: claim, Success: err == nil, ResponseUncertain: err == ErrResponseUncertain, ErrorCode: "provider_error", ErrorSummary: "AWS delete failed"})
 		if ce != nil {
@@ -139,6 +172,9 @@ func (s *Service) executeChangeStrict(ctx context.Context, confirmationID string
 		claimedFence, claimErr := s.coordinator.ClaimProviderMutation(ctx, claim)
 		if claimErr != nil {
 			err = claimErr
+			return Change{}, err
+		}
+		if err = s.requireCredentialReady(ctx, p.CredentialID, p.CredentialRevision); err != nil {
 			return Change{}, err
 		}
 		cs, e := s.provider.CreateChangeSet(ctx, cred.handle(), req)
@@ -173,6 +209,9 @@ func (s *Service) executeChangeStrict(ctx context.Context, confirmationID string
 			err = claimErr
 			return Change{}, err
 		}
+		if err = s.requireCredentialReady(ctx, p.CredentialID, p.CredentialRevision); err != nil {
+			return Change{}, err
+		}
 		err = s.provider.ExecuteChangeSet(ctx, cred.handle(), p.Region, p.StackName, c.ChangeSetID, c.ProviderToken)
 		claim.ExpectedChangeRevision, claim.ExpectedTaskRevision, claim.ExpectedConfirmationRevision = claimedFence.Change.Revision, claimedFence.Task.Revision, claimedFence.Confirmation.Revision
 		committed, ce := s.coordinator.CommitProviderMutation(ctx, ProviderMutationResult{Command: claim, Success: err == nil, ResponseUncertain: err == ErrResponseUncertain, ErrorCode: "provider_error", ErrorSummary: "AWS change-set execution failed"})
@@ -192,6 +231,32 @@ func (s *Service) executeChangeStrict(ctx context.Context, confirmationID string
 		}
 	}
 	return s.reconcileChange(ctx, c, p)
+}
+
+func destroyReadbackMatches(stack Stack, plan Plan, required []string, expectedStackID string) bool {
+	if stack.Region != plan.Region || stack.StackName != plan.StackName || stack.TemplateSHA256 != plan.TemplateSHA256 || !PlanParametersMatchReadback(plan, stack.Parameters) || canonicalDigest(stack.Tags) != canonicalDigest(plan.Tags) || !stack.Outputs.HasAll(required...) {
+		return false
+	}
+	if stack.Status != "CREATE_COMPLETE" && stack.Status != "UPDATE_COMPLETE" {
+		return false
+	}
+	stackID := stack.Outputs[string(StackOutputStackID)]
+	if stackID == "" || (plan.Tags["service"] == EC2ServiceProfile && plan.Tags["dirextalk:template-profile"] == EC2ServiceProfile && plan.Tags["dirextalk:template-version"] == ec2TemplateVersion && plan.Tags["dirextalk:request-digest"] == "") {
+		return false
+	}
+	if expectedStackID != "" && stackID != expectedStackID {
+		return false
+	}
+	if plan.Tags["service"] == EC2ServiceProfile && plan.Tags["dirextalk:template-profile"] == EC2ServiceProfile && plan.Tags["dirextalk:template-version"] == ec2TemplateVersion && plan.Tags["dirextalk:template-digest"] != plan.TemplateSHA256 {
+		return false
+	}
+	return true
+}
+
+func isTypedEC2Plan(plan Plan) bool {
+	return plan.Tags["service"] == EC2ServiceProfile &&
+		plan.Tags["dirextalk:template-profile"] == EC2ServiceProfile &&
+		plan.Tags["dirextalk:template-version"] == ec2TemplateVersion
 }
 
 func (s *Service) completeExecution(ctx context.Context, previous, terminal Change, readback *ProvisionReadback) (Change, error) {
@@ -233,14 +298,14 @@ func (s *Service) reconcileChange(ctx context.Context, c Change, p Plan) (Change
 		return c, ErrResponseUncertain
 	}
 	requiredOutputs, validRequirements := requiredStackOutputs(p)
-	if !validRequirements {
+	if !validRequirements || (isTypedEC2Plan(p) && len(requiredOutputs) == 0) {
 		return c, ErrResponseUncertain
 	}
 	want := map[Operation]string{OperationCreate: "CREATE_COMPLETE", OperationUpdate: "UPDATE_COMPLETE", OperationDelete: "DELETE_COMPLETE"}[c.Operation]
 	if c.Operation == OperationDelete && e == ErrNotFound {
 		want = ""
 	}
-	if (c.Operation == OperationDelete && e == ErrNotFound) || (want != "" && stack.Region == p.Region && stack.StackName == p.StackName && stack.Status == want && stack.TemplateSHA256 != "" && stack.TemplateSHA256 == p.TemplateSHA256 && canonicalDigest(stack.Parameters) == canonicalDigest(p.Parameters) && canonicalDigest(stack.Tags) == canonicalDigest(p.Tags) && stack.Outputs.HasAll(requiredOutputs...)) {
+	if (c.Operation == OperationDelete && e == ErrNotFound) || (want != "" && stack.Region == p.Region && stack.StackName == p.StackName && stack.Status == want && stack.TemplateSHA256 != "" && stack.TemplateSHA256 == p.TemplateSHA256 && PlanParametersMatchReadback(p, stack.Parameters) && canonicalDigest(stack.Tags) == canonicalDigest(p.Tags) && stack.Outputs.HasAll(requiredOutputs...)) {
 		n := c
 		n.Status = ChangeSucceeded
 		n.Stage = StageSucceeded
