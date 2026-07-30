@@ -197,7 +197,7 @@ func (m *Module) modelSync(ctx context.Context, owner string, params map[string]
 func profileMap(p storage.ModelProfile) map[string]any {
 	hint := p.APIKeyHint
 	if hint == "" && p.APIKey != "" {
-		hint = storage.ModelProfileAPIKeyHintForProvider(p.Provider, p.ModelKind, p.APIKey)
+		hint = storage.ModelProfileAPIKeyHint(p.ModelKind, p.APIKey)
 	}
 	result := map[string]any{
 		"profile_id": p.ProfileID, "client_profile_id": p.ClientProfileID,

@@ -75,25 +75,3 @@ func TestMemoryModelProfileRolesAndDefaults(t *testing.T) {
 		t.Fatalf("generic to speech without bundle = %v", err)
 	}
 }
-
-func TestMemoryOpenRouterSpeechUsesAPIKeyCredentialShape(t *testing.T) {
-	store := NewMemoryStore()
-	key := "sk-openrouter-speech-secret"
-	result, err := store.SyncModelProfiles(context.Background(), "owner", "openrouter-speech", "", []ModelProfileSyncEntry{{
-		ClientProfileID: "speech", Provider: "openrouter", ModelKind: ModelKindSpeech, BaseURL: "https://openrouter.ai/api/v1", Model: "provider/tts", APIKey: &key,
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	profile := result.Profiles[0]
-	if profile.Provider != "openrouter" || profile.ModelKind != ModelKindSpeech || !profile.APIKeyConfigured || profile.CredentialVersion != 1 {
-		t.Fatalf("profile metadata = %#v", profile)
-	}
-	if profile.ProviderSecretStatus != nil {
-		t.Fatalf("generic speech profile must not expose Volc secret status: %#v", profile.ProviderSecretStatus)
-	}
-	resolved, err := store.ResolveModelProfile(context.Background(), "owner", profile.ProfileID)
-	if err != nil || resolved.APIKey != key {
-		t.Fatalf("speech API key persistence = %#v, %v", resolved, err)
-	}
-}

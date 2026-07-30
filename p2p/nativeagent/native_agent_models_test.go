@@ -212,31 +212,6 @@ func TestModelsListOpenRouterConversationFiltersNonTextModels(t *testing.T) {
 	}
 }
 
-func TestModelsListOpenRouterSpeechUsesAudioOutputMetadata(t *testing.T) {
-	var gotPath, gotQuery, gotAuth string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath, gotQuery, gotAuth = r.URL.Path, r.URL.RawQuery, r.Header.Get("Authorization")
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":[{"id":"audio-explicit","architecture":{"output_modalities":["audio"]}},{"id":"speech-explicit","output_modalities":["speech"]},{"id":"audio-name-only"},{"id":"text-only","architecture":{"output_modalities":["text"]}}]}`))
-	}))
-	defer server.Close()
-
-	runtime := New(Config{DataDir: filepath.Join(t.TempDir(), "agent")})
-	result, err := runtime.Invoke(context.Background(), "agent.models.list", map[string]any{
-		"provider": "openrouter", "base_url": server.URL + "/v1", "api_key": "openrouter-key", "model_kind": "speech",
-	})
-	if err != nil {
-		t.Fatalf("agent.models.list speech: %v", err)
-	}
-	if gotPath != "/v1/models" || gotQuery != "output_modalities=audio" || gotAuth != "Bearer openrouter-key" {
-		t.Fatalf("unexpected speech request path=%q query=%q authorization=%q", gotPath, gotQuery, gotAuth)
-	}
-	models := result["models"].([]map[string]any)
-	if len(models) != 2 || models[0]["id"] != "audio-explicit" || models[1]["id"] != "speech-explicit" {
-		t.Fatalf("speech models must require explicit audio/speech output modalities: %#v", models)
-	}
-}
-
 func TestModelsListOpenRouterConversationPreservesInputModalities(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -329,18 +304,6 @@ func TestModelsListServerProfileRejectsProviderMismatch(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "does not match model profile provider") {
 		t.Fatalf("expected provider mismatch error, got %v", err)
-	}
-}
-
-func TestModelsListServerProfileRejectsKindMismatch(t *testing.T) {
-	runtime := New(Config{ModelProfiles: &modelListProfileResolver{profile: ServerModelProfile{
-		Provider: "openrouter", ModelKind: "speech", BaseURL: "https://openrouter.ai/api/v1", APIKey: "stored-key",
-	}}})
-	_, err := runtime.Invoke(context.Background(), "agent.models.list", map[string]any{
-		"model_profile_id": "profile-speech", "model_kind": "conversation",
-	})
-	if err == nil || !strings.Contains(err.Error(), "does not match model profile kind") {
-		t.Fatalf("expected kind mismatch error, got %v", err)
 	}
 }
 

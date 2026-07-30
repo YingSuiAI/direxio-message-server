@@ -2,7 +2,6 @@ package storage
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,92 +13,6 @@ import (
 	"github.com/YingSuiAI/dirextalk-message-server/setup/config"
 	"github.com/YingSuiAI/dirextalk-message-server/test"
 )
-
-func TestPostgresOpenRouterSpeechAPIKeyRoundTripAndCredentialShapeTransitions(t *testing.T) {
-	ctx := context.Background()
-	connStr, closeDB := test.PrepareDBConnectionString(t, test.DBTypePostgres)
-	defer closeDB()
-	dbOpts := config.DatabaseOptions{ConnectionString: config.DataSource(connStr)}
-	store, err := NewDatabaseStore(ctx, sqlutil.NewConnectionManager(nil, dbOpts), &dbOpts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	keyringDir := t.TempDir()
-	if err := os.Chmod(keyringDir, 0700); err != nil {
-		t.Fatal(err)
-	}
-	keyringPath := filepath.Join(keyringDir, "secret-keyring.json")
-	if _, err := LoadOrCreateAgentSecretKeyring(keyringPath); err != nil {
-		t.Fatal(err)
-	}
-	profiles, err := NewDatabaseModelProfileStoreWithKeyring(ctx, store, keyringPath, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	openRouterKey := "sk-openrouter-speech-1234"
-	result, err := profiles.SyncModelProfiles(ctx, "owner", "openrouter-speech-create", "", []ModelProfileSyncEntry{{
-		ClientProfileID: "speech", Provider: "openrouter", BaseURL: "https://openrouter.ai/api/v1", Model: "provider/tts", ModelKind: ModelKindSpeech, APIKey: &openRouterKey,
-	}})
-	if err != nil || len(result.Profiles) != 1 {
-		t.Fatalf("openrouter speech sync: %#v, %v", result, err)
-	}
-	created := result.Profiles[0]
-	if created.Provider != "openrouter" || created.ModelKind != ModelKindSpeech || !created.APIKeyConfigured || created.CredentialVersion != 1 || created.APIKeyHint != "sk-********1234" || created.ProviderSecretStatus != nil {
-		t.Fatalf("openrouter speech metadata = %#v", created)
-	}
-	var ciphertext []byte
-	if err := store.DB().QueryRowContext(ctx, `SELECT api_key_ciphertext FROM p2p_agent_model_profiles WHERE owner_id=$1 AND profile_id=$2`, "owner", created.ProfileID).Scan(&ciphertext); err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(ciphertext), openRouterKey) {
-		t.Fatal("OpenRouter speech ciphertext contains plaintext API key")
-	}
-	listed, err := profiles.ListModelProfiles(ctx, "owner", 0, "")
-	if err != nil || len(listed.Profiles) != 1 {
-		t.Fatalf("openrouter speech list: %#v, %v", listed, err)
-	}
-	readback, err := profiles.ResolveModelProfile(ctx, "owner", created.ProfileID)
-	if err != nil || readback.APIKey != openRouterKey || readback.APIKeyHint != "sk-********1234" || !readback.APIKeyConfigured || readback.CredentialVersion != 1 || readback.ProviderSecretStatus != nil {
-		t.Fatalf("openrouter speech readback: %#v, %v", readback, err)
-	}
-	redacted, _ := json.Marshal(readback)
-	if strings.Contains(string(redacted), openRouterKey) || strings.Contains(string(redacted), "provider_secret_status") {
-		t.Fatalf("openrouter speech redaction = %s", redacted)
-	}
-	if _, err := profiles.SyncModelProfiles(ctx, "owner", "openrouter-to-volc-missing", "", []ModelProfileSyncEntry{{
-		ClientProfileID: "speech", Provider: "volc_voice", ModelKind: ModelKindSpeech, ExpectedRevision: &created.Revision,
-	}}); err != ErrModelProfileInvalid {
-		t.Fatalf("OpenRouter to Volc without bundle err=%v", err)
-	}
-	volc, err := profiles.SyncModelProfiles(ctx, "owner", "openrouter-to-volc", "", []ModelProfileSyncEntry{{
-		ClientProfileID: "speech", Provider: "volc_voice", ModelKind: ModelKindSpeech, ExpectedRevision: &created.Revision,
-		ProviderConfig: map[string]any{"app_id": "app"}, ProviderSecrets: map[string]string{"rtc_app_key": "rtc", "access_key_id": "access", "secret_access_key": "secret"},
-	}})
-	if err != nil {
-		t.Fatalf("OpenRouter to Volc transition: %v", err)
-	}
-	volcProfile := volc.Profiles[0]
-	if volcProfile.CredentialVersion != created.CredentialVersion+1 || volcProfile.Provider != "volc_voice" {
-		t.Fatalf("Volc transition metadata = %#v", volcProfile)
-	}
-	if _, err := profiles.SyncModelProfiles(ctx, "owner", "volc-to-openrouter-missing", "", []ModelProfileSyncEntry{{
-		ClientProfileID: "speech", Provider: "openrouter", ModelKind: ModelKindSpeech, ExpectedRevision: &volcProfile.Revision,
-	}}); err != ErrModelProfileInvalid {
-		t.Fatalf("Volc to OpenRouter without API key err=%v", err)
-	}
-	newKey := "sk-openrouter-speech-5678"
-	rotated, err := profiles.SyncModelProfiles(ctx, "owner", "volc-to-openrouter", "", []ModelProfileSyncEntry{{
-		ClientProfileID: "speech", Provider: "openrouter", BaseURL: "https://openrouter.ai/api/v1", Model: "provider/tts-v2", ModelKind: ModelKindSpeech, APIKey: &newKey, ExpectedRevision: &volcProfile.Revision,
-	}})
-	if err != nil {
-		t.Fatalf("Volc to OpenRouter transition: %v", err)
-	}
-	final := rotated.Profiles[0]
-	if final.CredentialVersion != volcProfile.CredentialVersion+1 || final.Provider != "openrouter" || final.APIKeyHint != "sk-********5678" || final.ProviderSecretStatus != nil {
-		t.Fatalf("final OpenRouter speech metadata = %#v", final)
-	}
-}
 
 func TestPostgresModelProfileSyncReadbackAndRestart(t *testing.T) {
 	ctx := context.Background()

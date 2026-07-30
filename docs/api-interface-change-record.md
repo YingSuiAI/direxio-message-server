@@ -130,15 +130,14 @@ Agent Matrix conversations remain a separate transport.
 ## 2026-07-27 Server-owned Native Agent model profiles
 
 Added owner-only `agent.model_profiles.sync`, `.list`, `.get`, and `.delete`
-actions. Profiles are persisted in PostgreSQL with the Message Server's
-versioned AES-256-GCM keyring selected by `P2P_AGENT_SECRET_KEYRING_FILE`; this
-read/write path does not call or depend on updater. API keys are write-only and
-are never returned; reads expose `api_key_configured`, credential version, and
-an optional read-only `api_key_hint` mask (for example `sk-********0420`) for
-generic API-key profiles, including OpenRouter speech. The hint is never
-accepted as a credential or stored in the profile table; a redacted
-idempotency response cache may retain the mask for replay. `volc_voice` speech
-profiles expose only their `provider_secret_status`.
+actions. Profiles are persisted in PostgreSQL with an independently managed
+AES-GCM key under the updater-backed Message Server data root (or the protected
+`P2P_AGENT_MODEL_PROFILE_KEY_FILE` override). API keys are write-only and are
+never returned; reads expose `api_key_configured`, credential version, and an
+optional read-only `api_key_hint` mask (for example `sk-********0420`) for
+non-speech profiles. The hint is never accepted as a credential or stored in
+the profile table; a redacted idempotency response cache may retain the mask
+for replay. Speech profiles expose only their `provider_secret_status`.
 Profile revisions are separate from retained encrypted credential versions so
 long-running work can resolve a pinned version after restart. Server model
 profile resolution is selected by a profile ID; `agent.models.list` may add
@@ -221,10 +220,8 @@ same scheme, hostname, and effective port as the stored profile URL. Malformed
 URLs, userinfo, and cross-origin overrides are rejected before any outbound
 request. A request `api_key` is rejected; the server uses the decrypted
 profile key for the outbound lookup. The optional `model_kind` defaults to
-`conversation` and must match a selected profile's stored kind. V1 `embedding`
-lists are OpenRouter-only and use `{base_url}/embeddings/models`; OpenRouter
-`speech` lists request `output_modalities=audio` and retain only entries with
-explicit audio/speech output metadata. Conversation lists request OpenRouter's
+`conversation`; V1 `embedding` lists are OpenRouter-only and use
+`{base_url}/embeddings/models`, while conversation lists request OpenRouter's
 text-output filter (and SiliconFlow's `type=text&sub_type=chat` filter) and
 remove explicitly non-text models. The action never
 persists or mutates the selected profile.

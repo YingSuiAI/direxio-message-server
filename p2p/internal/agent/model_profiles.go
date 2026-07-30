@@ -441,7 +441,7 @@ func strictProfileFloat64(value any) (float64, error) {
 func profileMap(p storage.ModelProfile) map[string]any {
 	hint := p.APIKeyHint
 	if hint == "" && p.APIKey != "" {
-		hint = storage.ModelProfileAPIKeyHintForProvider(p.Provider, p.ModelKind, p.APIKey)
+		hint = storage.ModelProfileAPIKeyHint(p.ModelKind, p.APIKey)
 	}
 	result := map[string]any{"profile_id": p.ProfileID, "client_profile_id": p.ClientProfileID, "display_name": p.DisplayName, "provider": p.Provider, "model_kind": p.ModelKind, "input_modalities": p.InputModalities, "provider_config": p.ProviderConfig, "provider_secret_status": p.ProviderSecretStatus, "base_url": p.BaseURL, "model": p.Model, "system_prompt": p.SystemPrompt, "api_key_configured": p.APIKeyConfigured, "temperature": p.Temperature, "top_p": p.TopP, "max_output_tokens": p.MaxOutputTokens, "context_window": p.ContextWindow, "reasoning_effort": p.ReasoningEffort, "revision": p.Revision, "credential_version": p.CredentialVersion, "created_at": p.CreatedAt.UTC().Format("2006-01-02T15:04:05.999999999Z07:00"), "updated_at": p.UpdatedAt.UTC().Format("2006-01-02T15:04:05.999999999Z07:00")}
 	if hint != "" {

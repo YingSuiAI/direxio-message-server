@@ -479,7 +479,7 @@ func (s *encryptedModelProfileStore) upsertProfileTx(ctx context.Context, tx *sq
 	}
 	isNew := errors.Is(err, sql.ErrNoRows)
 	if !isNew {
-		if err := validateModelProfileCredentialTransition(profile.Provider, profile.ModelKind, entry.Provider, entry.ModelKind, entry.APIKey, entry.ProviderSecrets); err != nil {
+		if err := validateModelProfileCredentialTransition(profile.ModelKind, entry.ModelKind, entry.APIKey, entry.ProviderSecrets); err != nil {
 			return err
 		}
 	}
@@ -497,10 +497,7 @@ func (s *encryptedModelProfileStore) upsertProfileTx(ctx context.Context, tx *sq
 	if provider == "" {
 		return ErrModelProfileInvalid
 	}
-	if isNew && entry.ModelKind == ModelKindSpeech && provider != "volc_voice" && entry.APIKey == nil {
-		return ErrModelProfileInvalid
-	}
-	if provider == "volc_voice" && entry.ModelKind == ModelKindSpeech && (profile.Revision == 0 || len(entry.ProviderSecrets) > 0) {
+	if entry.ModelKind == ModelKindSpeech && (profile.Revision == 0 || len(entry.ProviderSecrets) > 0) {
 		for _, key := range []string{"rtc_app_key", "access_key_id", "secret_access_key"} {
 			if strings.TrimSpace(entry.ProviderSecrets[key]) == "" {
 				return ErrModelProfileInvalid
@@ -511,7 +508,7 @@ func (s *encryptedModelProfileStore) upsertProfileTx(ctx context.Context, tx *sq
 	var boundRevision int64
 	var nonce, ciphertext []byte
 	credentialRotated := entry.APIKey != nil
-	if provider == "volc_voice" && entry.ModelKind == ModelKindSpeech {
+	if entry.ModelKind == ModelKindSpeech {
 		credentialRotated = len(entry.ProviderSecrets) > 0
 	}
 	nextCredentialVersion := profile.CredentialVersion
@@ -522,7 +519,7 @@ func (s *encryptedModelProfileStore) upsertProfileTx(ctx context.Context, tx *sq
 		}
 	}
 	if isNew || entry.APIKey != nil || len(entry.ProviderSecrets) > 0 {
-		if provider == "volc_voice" && entry.ModelKind == ModelKindSpeech && len(entry.ProviderSecrets) > 0 {
+		if entry.ModelKind == ModelKindSpeech && len(entry.ProviderSecrets) > 0 {
 			encoded, encodeErr := json.Marshal(entry.ProviderSecrets)
 			if encodeErr != nil {
 				return ErrModelProfileInvalid
@@ -786,7 +783,7 @@ func (s *encryptedModelProfileStore) scanProfile(row modelProfileScanner, ownerI
 	if p.ModelKind == "" {
 		p.ModelKind = ModelKindConversation
 	}
-	if p.Provider == "volc_voice" && p.ModelKind == ModelKindSpeech && p.CredentialVersion > 0 {
+	if p.ModelKind == ModelKindSpeech && p.CredentialVersion > 0 {
 		p.ProviderSecretStatus = map[string]bool{"rtc_app_key": true, "access_key_id": true, "secret_access_key": true}
 	}
 	p.Deleted = deletedAt.Valid
@@ -796,8 +793,8 @@ func (s *encryptedModelProfileStore) scanProfile(row modelProfileScanner, ownerI
 			return ModelProfile{}, err
 		}
 		p.APIKeyConfigured = true
-		p.APIKeyHint = ModelProfileAPIKeyHintForProvider(p.Provider, p.ModelKind, p.APIKey)
-		if p.Provider == "volc_voice" && p.ModelKind == ModelKindSpeech {
+		p.APIKeyHint = ModelProfileAPIKeyHint(p.ModelKind, p.APIKey)
+		if p.ModelKind == ModelKindSpeech {
 			var secrets map[string]string
 			if json.Unmarshal([]byte(p.APIKey), &secrets) == nil {
 				p.ProviderSecretStatus = map[string]bool{}
@@ -818,19 +815,6 @@ func ModelProfileAPIKeyHint(modelKind, apiKey string) string {
 	if strings.TrimSpace(modelKind) == ModelKindSpeech {
 		return ""
 	}
-	return modelProfileAPIKeyHint(apiKey)
-}
-
-// ModelProfileAPIKeyHintForProvider masks generic API-key-backed speech
-// profiles while keeping Volc RTC secret bundles completely undisclosed.
-func ModelProfileAPIKeyHintForProvider(provider, modelKind, apiKey string) string {
-	if strings.EqualFold(strings.TrimSpace(provider), "volc_voice") && strings.TrimSpace(modelKind) == ModelKindSpeech {
-		return ""
-	}
-	return modelProfileAPIKeyHint(apiKey)
-}
-
-func modelProfileAPIKeyHint(apiKey string) string {
 	key := strings.TrimSpace(apiKey)
 	if key == "" {
 		return ""
@@ -893,7 +877,7 @@ func scanProfilePin(row modelProfileScanner) (ModelProfile, error) {
 	if p.ModelKind == "" {
 		p.ModelKind = ModelKindConversation
 	}
-	if p.Provider == "volc_voice" && p.ModelKind == ModelKindSpeech && p.CredentialVersion > 0 {
+	if p.ModelKind == ModelKindSpeech && p.CredentialVersion > 0 {
 		p.ProviderSecretStatus = map[string]bool{"rtc_app_key": true, "access_key_id": true, "secret_access_key": true}
 	}
 	return p, nil
@@ -1080,6 +1064,9 @@ func normalizeModelProfileEntry(entry *ModelProfileSyncEntry) error {
 			return ErrModelProfileInvalid
 		}
 	case ModelKindSpeech:
+		if entry.APIKey != nil {
+			return ErrModelProfileInvalid
+		}
 		if len(modalities) == 0 {
 			modalities = []string{"audio"}
 			seen["audio"] = true
@@ -1092,17 +1079,7 @@ func normalizeModelProfileEntry(entry *ModelProfileSyncEntry) error {
 	}
 	entry.InputModalities = modalities
 	if entry.ModelKind == ModelKindSpeech {
-		provider := strings.ToLower(strings.TrimSpace(entry.Provider))
-		if provider != "volc_voice" && provider != "openrouter" {
-			return ErrModelProfileInvalid
-		}
-		if provider == "openrouter" {
-			if len(entry.ProviderSecrets) > 0 || len(entry.ProviderConfig) > 0 {
-				return ErrModelProfileInvalid
-			}
-			return nil
-		}
-		if entry.APIKey != nil {
+		if strings.ToLower(strings.TrimSpace(entry.Provider)) != "volc_voice" {
 			return ErrModelProfileInvalid
 		}
 		if entry.ProviderConfig == nil {
@@ -1134,25 +1111,25 @@ func normalizeModelProfileEntry(entry *ModelProfileSyncEntry) error {
 	return nil
 }
 
-func validateModelProfileCredentialTransition(existingProvider, existingKind, requestedProvider, requestedKind string, apiKey *string, providerSecrets map[string]string) error {
+func validateModelProfileCredentialTransition(existingKind, requestedKind string, apiKey *string, providerSecrets map[string]string) error {
 	if existingKind == "" {
 		existingKind = ModelKindConversation
 	}
-	existingProvider = strings.ToLower(strings.TrimSpace(existingProvider))
-	requestedProvider = strings.ToLower(strings.TrimSpace(requestedProvider))
-	existingBundle := existingProvider == "volc_voice" && existingKind == ModelKindSpeech
-	requestedBundle := requestedProvider == "volc_voice" && requestedKind == ModelKindSpeech
-	if existingBundle == requestedBundle {
+	if existingKind == requestedKind {
 		return nil
 	}
-	if requestedBundle {
-		if apiKey != nil || len(providerSecrets) == 0 {
+	if existingKind == ModelKindSpeech {
+		// A voice secret bundle must never be reused as a generic API key.
+		if apiKey == nil || len(providerSecrets) != 0 {
 			return ErrModelProfileInvalid
 		}
 		return nil
 	}
-	if existingBundle && (apiKey == nil || len(providerSecrets) != 0) {
-		return ErrModelProfileInvalid
+	if requestedKind == ModelKindSpeech {
+		// A generic API key must never be reinterpreted as voice credentials.
+		if apiKey != nil || len(providerSecrets) == 0 {
+			return ErrModelProfileInvalid
+		}
 	}
 	return nil
 }
