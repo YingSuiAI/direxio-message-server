@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -33,16 +34,14 @@ func main() {
 			fail()
 		}
 	case "verify":
-		if _, err := storage.LoadAgentSecretKeyring(path); err != nil {
+		dsn := strings.TrimSpace(os.Getenv("P2P_AGENT_SECRET_DATABASE_DSN"))
+		if err := requireAgentSecretDatabaseDSN(dsn); err != nil {
 			fail()
 		}
-		dsn := strings.TrimSpace(os.Getenv("P2P_AGENT_SECRET_DATABASE_DSN"))
-		if dsn != "" {
-			db := openDatabase(dsn)
-			defer db.Close()
-			if err := storage.VerifyAgentSecretDatabase(context.Background(), db, rotationOptions(path)); err != nil {
-				fail()
-			}
+		db := openDatabase(dsn)
+		defer db.Close()
+		if err := verifyAgentSecretDatabase(context.Background(), path, dsn, db); err != nil {
+			fail()
 		}
 	case "rotate":
 		dsn := strings.TrimSpace(os.Getenv("P2P_AGENT_SECRET_DATABASE_DSN"))
@@ -57,6 +56,32 @@ func main() {
 	default:
 		fail()
 	}
+}
+
+var errAgentSecretDatabaseDSNRequired = errors.New("agent secret database dsn is required")
+
+// verifyAgentSecretDatabase is deliberately the only verify path. A keyring
+// check without the database scan is not a successful verification: callers
+// must provide the database DSN and every Agent secret row must pass the
+// storage-layer validation.
+func verifyAgentSecretDatabase(ctx context.Context, path, dsn string, db *sql.DB) error {
+	if err := requireAgentSecretDatabaseDSN(dsn); err != nil {
+		return err
+	}
+	if _, err := storage.LoadAgentSecretKeyring(path); err != nil {
+		return err
+	}
+	if db == nil {
+		return errors.New("agent secret database is unavailable")
+	}
+	return storage.VerifyAgentSecretDatabase(ctx, db, rotationOptions(path))
+}
+
+func requireAgentSecretDatabaseDSN(dsn string) error {
+	if strings.TrimSpace(dsn) == "" {
+		return errAgentSecretDatabaseDSNRequired
+	}
+	return nil
 }
 
 func rotationOptions(path string) storage.AgentSecretRotationOptions {
