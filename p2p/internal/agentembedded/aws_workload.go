@@ -253,6 +253,14 @@ func NewWorkloadActionPort(resolve WorkloadServiceResolver) (ActionPort, error) 
 type workloadActionPort struct{ resolve WorkloadServiceResolver }
 
 func (p workloadActionPort) Handle(ctx context.Context, owner, action string, params map[string]any) (any, *actionbase.Error) {
+	// Gate the legacy/raw EC2 SSM plan shape before resolving an owner-bound
+	// service. This keeps the public action fail-closed even when the embedded
+	// runtime is unavailable and ensures no secret/provider lookup can occur.
+	if action == "agent.core.workloads.plan" {
+		if _, ae := rejectRawSSMWorkloadPlan(params); ae != nil {
+			return nil, ae
+		}
+	}
 	if p.resolve == nil || strings.TrimSpace(owner) == "" {
 		return unavailable(ctx, params)
 	}
@@ -410,13 +418,15 @@ func workloadPlanInput(p map[string]any, awsCredentialPinningReady bool) (corewo
 	if e != nil {
 		return coreworkload.PlanInput{}, e
 	}
-	kind, e := requiredString(p, "target_kind")
+	targetKind, e := normalizeWorkloadTargetKind(p)
 	if e != nil {
 		return coreworkload.PlanInput{}, e
 	}
-	targetKind := coreworkload.TargetKind(strings.ToUpper(strings.ReplaceAll(kind, "-", "_")))
 	if targetKind == coreworkload.TargetCoreRunner {
 		return coreworkload.PlanInput{}, actionbase.BadRequest("CORE_RUNNER workload targets are not supported")
+	}
+	if targetKind == coreworkload.TargetAWSEC2SSM {
+		return coreworkload.PlanInput{}, actionbase.CodedError(http.StatusBadRequest, "agent_typed_ssm_required", "AWS EC2 SSM workloads must use the typed EC2 provision/install workflow")
 	}
 	raw, e := requiredMap(p, "typed_target")
 	if e != nil {
@@ -494,6 +504,25 @@ func workloadPlanInput(p map[string]any, awsCredentialPinningReady bool) (corewo
 		}
 	}
 	return in, nil
+}
+
+func normalizeWorkloadTargetKind(p map[string]any) (coreworkload.TargetKind, *actionbase.Error) {
+	kind, e := requiredString(p, "target_kind")
+	if e != nil {
+		return "", e
+	}
+	return coreworkload.TargetKind(strings.ToUpper(strings.ReplaceAll(kind, "-", "_"))), nil
+}
+
+func rejectRawSSMWorkloadPlan(p map[string]any) (coreworkload.TargetKind, *actionbase.Error) {
+	targetKind, e := normalizeWorkloadTargetKind(p)
+	if e != nil {
+		return "", e
+	}
+	if targetKind == coreworkload.TargetAWSEC2SSM {
+		return "", actionbase.CodedError(http.StatusBadRequest, "agent_typed_ssm_required", "AWS EC2 SSM workloads must use the typed EC2 provision/install workflow")
+	}
+	return targetKind, nil
 }
 
 func decodeTargetSettings(raw map[string]any, kind coreworkload.TargetKind) (coreworkload.TargetSettings, *actionbase.Error) {

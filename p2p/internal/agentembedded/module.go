@@ -177,6 +177,14 @@ func (m *Module) Handlers() map[string]actionbase.Handler {
 
 func (m *Module) delegatedWorkload(action string) actionbase.Handler {
 	return func(ctx context.Context, params map[string]any) (any, *actionbase.Error) {
+		// Keep the public plan seam fail-closed before capability resolution. Raw
+		// EC2 SSM requests must use the typed provision/install workflow even when
+		// the embedded workload runtime is not ready.
+		if action == "agent.core.workloads.plan" {
+			if _, ae := rejectRawSSMWorkloadPlan(params); ae != nil {
+				return nil, ae
+			}
+		}
 		if target, ok := params["target_kind"].(string); ok && strings.EqualFold(strings.ReplaceAll(target, "-", "_"), "core_runner") {
 			return nil, actionbase.BadRequest("CORE_RUNNER workload targets are not supported")
 		}
