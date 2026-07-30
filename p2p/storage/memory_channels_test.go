@@ -182,6 +182,10 @@ func TestMemoryStoreChannelContentOrderUpsertPaginationAndDelete(t *testing.T) {
 	if more || len(page) != 1 || page[0].PostID != "post_old" {
 		t.Fatalf("post cursor page = %#v more=%v", page, more)
 	}
+	offsetPage, more, err := store.ListChannelPostsOffsetPage(ctx, "ch", 1, 1)
+	if err != nil || !more || len(offsetPage) != 1 || offsetPage[0].PostID != "post_new_a" {
+		t.Fatalf("post offset page = %#v more=%v err=%v", offsetPage, more, err)
+	}
 	for _, post := range []channelPostRecord{
 		{PostID: "public_old", ChannelID: "ch", Visibility: "public", OriginServerTS: 30},
 		{PostID: "public_new", ChannelID: "ch", Visibility: "public", OriginServerTS: 40},

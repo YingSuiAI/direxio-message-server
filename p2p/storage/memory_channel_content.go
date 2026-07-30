@@ -72,6 +72,32 @@ func (s *MemoryStore) ListChannelPostsPage(ctx context.Context, channelID string
 	return posts, hasMore, nil
 }
 
+func (s *MemoryStore) ListChannelPostsOffsetPage(ctx context.Context, channelID string, offset int64, limit int) ([]channelPostRecord, bool, error) {
+	s.mu.RLock()
+	posts := make([]channelPostRecord, 0, len(s.posts))
+	for _, post := range s.posts {
+		if channelID == "" || post.ChannelID == channelID {
+			posts = append(posts, post)
+		}
+	}
+	s.mu.RUnlock()
+	sort.Slice(posts, func(i, j int) bool {
+		if posts[i].OriginServerTS != posts[j].OriginServerTS {
+			return posts[i].OriginServerTS > posts[j].OriginServerTS
+		}
+		return posts[i].PostID > posts[j].PostID
+	})
+	if offset >= int64(len(posts)) {
+		return []channelPostRecord{}, false, nil
+	}
+	posts = posts[offset:]
+	hasMore := len(posts) > limit
+	if hasMore {
+		posts = posts[:limit]
+	}
+	return posts, hasMore, nil
+}
+
 func (s *MemoryStore) ListChannelPostsByVisibilityPage(ctx context.Context, channelID, visibility string, offset int64, limit int) ([]channelPostRecord, bool, error) {
 	visibility = normalizeChannelPostRecord(channelPostRecord{Visibility: visibility}).Visibility
 	s.mu.RLock()

@@ -265,6 +265,11 @@ func TestDatabaseStoreListsChannelPostsByVisibilityPage(t *testing.T) {
 		}
 	}
 
+	offsetPage, more, err := store.ListChannelPostsOffsetPage(ctx, "ch", 1, 1)
+	if err != nil || !more || len(offsetPage) != 1 || offsetPage[0].PostID != "public_new" {
+		t.Fatalf("post offset page = %#v more=%v err=%v", offsetPage, more, err)
+	}
+
 	first, more, err := store.ListChannelPostsByVisibilityPage(ctx, "ch", "public", 0, 1)
 	if err != nil || !more || len(first) != 1 || first[0].PostID != "public_new" {
 		t.Fatalf("first public page = %#v more=%v err=%v", first, more, err)

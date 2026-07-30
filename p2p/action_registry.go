@@ -81,4 +81,5 @@ func (s *Service) registerSyncActions(actions map[string]actionHandler) {
 
 func (s *Service) registerChannelActions(actions map[string]actionHandler) {
 	actions["channels.read_marker"] = s.updateReadMarker
+	actions["channels.public.posts.list"] = s.publicChannelPosts
 }

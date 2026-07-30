@@ -78,6 +78,12 @@ func (m *Module) Update(ctx context.Context, raw map[string]any) (any, *actionba
 	if actionErr != nil || !ok {
 		return nil, actionErr
 	}
+	if m.config.RequireOwner == nil {
+		return nil, actionbase.InternalError(errors.New("channel owner policy is not configured"))
+	}
+	if actionErr := m.config.RequireOwner(ctx, channel.RoomID); actionErr != nil {
+		return nil, actionErr
+	}
 	if name := params.String("name"); name != "" {
 		channel.Name = name
 	}

@@ -688,6 +688,11 @@
       "transport": "http_and_ws_request"
     },
     {
+      "name": "channels.public.posts.list",
+      "auth": "public",
+      "transport": "http_and_ws_request"
+    },
+    {
       "name": "channels.public.join_request",
       "auth": "public",
       "transport": "http_and_ws_request"

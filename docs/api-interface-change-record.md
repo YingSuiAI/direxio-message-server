@@ -6,9 +6,15 @@ Last updated: 2026-07-30
 
 `channels.posts.create` accepts optional `visibility="public"|"private"`. Missing visibility defaults to `private`; any other explicit value returns `400`. The canonical visibility is written into the Matrix `m.room.message` content for `p2p_kind=channel_post` and into the PostgreSQL projection. Legacy Matrix events and existing rows without the field remain private.
 
-`channels.posts.list` keeps its existing unfiltered response when `visibility` is omitted. When `visibility` is `public` or `private`, `channel_id` is required and the action returns that channel's matching posts newest-first with page pagination. `page` defaults to `1`; `page_size` defaults to `5` and is capped at `100`. `limit` is accepted as a compatibility alias when `page_size` is absent. The response adds `visibility`, `page`, `page_size`, `has_more`, and optional `next_page`.
+`channels.posts.list` keeps its original authenticated, unfiltered channel-post list when neither paging field is supplied and no longer accepts `visibility`. For an incremental client migration, optional `page`/`page_size` enables newest-first paging without changing visibility semantics; supplying either field defaults the other to `page=1`/`page_size=5`, with a maximum page size of `100`. A paged response adds `page`, `page_size`, `has_more`, and optional `next_page`.
 
 Each returned post exposes `comment_count`, `like_count`, `reaction_count` (the compatibility alias for likes), `favorite_count`, `reacted_by_me`, and `favorited_by_me`. Counts remain derived from the Matrix-backed comment/reaction projections rather than being stored as a second public-feed source of truth.
+
+`channels.public.posts.list` is the separate unauthenticated read-only action for channel visitors. It requires `channel_id` or `room_id`, always forces post `visibility=public`, returns matching posts newest-first, defaults `page=1` and `page_size=5` (maximum `100`, with `limit` as an alias), and supports remote owner-node forwarding through `remote_node_base_url`. The response includes `visibility`, `page`, `page_size`, `has_more`, and optional `next_page`. Post visibility is independent from channel visibility: a caller that already knows a private channel's identifier may read its explicitly public posts, but never its private posts. Missing channels return `404`, and a remote response containing a non-public or mismatched post is rejected. Visitor responses are deliberately non-personalized: `reacted_by_me` and `favorited_by_me` remain false.
+
+Non-members may call `channels.public.posts.list`, but they may not create comments, like/favorite posts, or react to comments. Those mutations now require the current owner identity to have a joined channel-member projection before any Matrix send or ProductCore projection write; Matrix ProductPolicy remains the final membership and mute-policy authority. Missing reaction targets now return `404` rather than creating orphan reaction projections.
+
+`channels.update` remains the channel-detail update action for `name`, `description`, and `avatar_url` (plus its existing policy fields), and `groups.update` remains the group-detail update action for `name`/`group_name`, `avatar_url`, and `topic`. Both actions now require the current identity to hold the persisted `owner` role before changing durable or Matrix room state; ordinary members receive `403`.
 
 ## 2026-07-23 Native Agent Anthropic, Gemini, And xAI Model Lists
 
@@ -713,7 +719,7 @@ Breaking removals and contract changes:
 - Added protected action `agent.matrix_session.create` on `POST /_p2p/command`. It initially required bearer `access_token`; current servers accept owner `access_token` or `agent_token`. It returns a Matrix Client-Server session: `access_token`, `device_id`, `user_id`, and `homeserver`.
 - `portal.bootstrap`, `portal.auth`, and `portal.password` return one setup state field: `initialized`. It is `false` while the generated initial password is still in use and becomes `true` after `portal.password` changes that password. Clients should store `access_token` and route by `initialized`; profile completion is independent.
 
-The live P2P body-action contract is generated from `p2p/serviceapi.ActionSpecs` into `docs/product-action-contract.json`. Public actions are `portal.bootstrap`, `portal.auth`, `portal.status`, `contacts.reactivate`, `rooms.reactivate`, `reports.submit`, `channels.public.search`, `channels.public.get`, `channels.public.join_request`, `channels.public.join_result`, and `users.public_channels`. `rooms.reactivate` and `channels.public.join_result` are public HTTP-only node-to-node callbacks and are not valid WS `client.request` actions.
+The live P2P body-action contract is generated from `p2p/serviceapi.ActionSpecs` into `docs/product-action-contract.json`. Public actions are `portal.bootstrap`, `portal.auth`, `portal.status`, `contacts.reactivate`, `rooms.reactivate`, `reports.submit`, `channels.public.search`, `channels.public.get`, `channels.public.posts.list`, `channels.public.join_request`, `channels.public.join_result`, and `users.public_channels`. `rooms.reactivate` and `channels.public.join_result` are public HTTP-only node-to-node callbacks and are not valid WS `client.request` actions.
 
 ## Current Pass
 
@@ -799,7 +805,7 @@ The product route contract remains:
 - `GET /_p2p/events`
 - `GET /.well-known/portal/owner.json`
 
-At that point, protected product actions required bearer `access_token`, while `agent_token` was accepted only for fixed `mcp.*` actions and `GET /_p2p/events`. Current servers have removed `GET /_p2p/events` and accept `agent_token` only for product body-action `agent.matrix_session.create` and standard `POST /mcp`. Current public actions are generated into `docs/product-action-contract.json` and include `portal.bootstrap`, `portal.auth`, `portal.status`, `contacts.reactivate`, `rooms.reactivate`, `reports.submit`, `channels.public.search`, `channels.public.get`, `channels.public.join_request`, `channels.public.join_result`, and `users.public_channels`.
+At that point, protected product actions required bearer `access_token`, while `agent_token` was accepted only for fixed `mcp.*` actions and `GET /_p2p/events`. Current servers have removed `GET /_p2p/events` and accept `agent_token` only for product body-action `agent.matrix_session.create` and standard `POST /mcp`. Current public actions are generated into `docs/product-action-contract.json` and include `portal.bootstrap`, `portal.auth`, `portal.status`, `contacts.reactivate`, `rooms.reactivate`, `reports.submit`, `channels.public.search`, `channels.public.get`, `channels.public.posts.list`, `channels.public.join_request`, `channels.public.join_result`, and `users.public_channels`.
 
 Current action metadata is generated into `docs/product-action-contract.json`.
 

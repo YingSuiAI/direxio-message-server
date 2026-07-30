@@ -6,7 +6,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/YingSuiAI/dirextalk-message-server/internal/dirextalkdomain"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/dirextalkstate"
+	channelsmodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/channels"
 )
 
 // authorizeChannelContentRecall preserves the transportless compatibility
@@ -25,6 +27,116 @@ func (s *Service) authorizeChannelContentRecall(ctx context.Context, roomID, aut
 		return statusError(http.StatusForbidden, "content author or channel owner role is required")
 	}
 	return nil
+}
+
+func (s *Service) requireJoinedChannelContent(ctx context.Context, roomID string) *apiError {
+	s.mu.Lock()
+	ownerMXID := s.ownerMXID
+	s.mu.Unlock()
+	member, ok, err := s.lookupMember(ctx, strings.TrimSpace(roomID), ownerMXID)
+	if err != nil {
+		return internalError(err)
+	}
+	if !ok || !strings.EqualFold(strings.TrimSpace(member.Membership), "join") {
+		return statusError(http.StatusForbidden, "channel membership is required")
+	}
+	return nil
+}
+
+type publicChannelPostsPage struct {
+	ChannelID  string                `json:"channel_id"`
+	RoomID     string                `json:"room_id"`
+	Posts      []channelsmodule.Post `json:"posts"`
+	Visibility string                `json:"visibility"`
+	Page       int64                 `json:"page"`
+	PageSize   int64                 `json:"page_size"`
+	HasMore    bool                  `json:"has_more"`
+	NextPage   *int64                `json:"next_page,omitempty"`
+}
+
+func (s *Service) publicChannelPosts(ctx context.Context, params map[string]any) (any, *apiError) {
+	channelID := trimString(params["channel_id"])
+	roomID := trimString(params["room_id"])
+	if channelID == "" && roomID == "" {
+		return nil, badRequest("channel_id or room_id is required")
+	}
+
+	if roomID == "" {
+		ch, found, err := s.channelByIDOrRoom(ctx, channelID, "")
+		if err != nil {
+			return nil, internalError(err)
+		}
+		if !found {
+			return nil, statusError(http.StatusNotFound, "channel not found")
+		}
+		channelID, roomID = ch.ChannelID, ch.RoomID
+	}
+	if roomServer, ok := roomServerFromMatrixRoomID(roomID); ok && roomServer != s.serverName {
+		return s.remotePublicChannelPosts(ctx, channelID, roomID, params)
+	}
+
+	ch, found, err := s.channelByIDOrRoom(ctx, channelID, roomID)
+	if err != nil {
+		return nil, internalError(err)
+	}
+	if !found {
+		return nil, statusError(http.StatusNotFound, "channel not found")
+	}
+	result, actionErr := s.channelContentModule.PublicPosts(ctx, ch.ChannelID, params)
+	if actionErr != nil {
+		return nil, actionErr
+	}
+	result["channel_id"] = ch.ChannelID
+	result["room_id"] = ch.RoomID
+	return result, nil
+}
+
+func (s *Service) remotePublicChannelPosts(
+	ctx context.Context,
+	channelID, roomID string,
+	params map[string]any,
+) (any, *apiError) {
+	roomServer, ok := roomServerFromMatrixRoomID(roomID)
+	if !ok {
+		return nil, badRequest("valid Matrix room_id is required")
+	}
+	forward := cloneParams(params)
+	forward["room_id"] = roomID
+	if channelID != "" {
+		forward["channel_id"] = channelID
+	}
+	var page publicChannelPostsPage
+	status, err := s.remotePublicAction(ctx, roomServer, "channels.public.posts.list", forward, &page)
+	if err != nil {
+		if status != 0 && status != http.StatusBadGateway {
+			return nil, statusError(status, err.Error())
+		}
+		return nil, statusError(http.StatusBadGateway, err.Error())
+	}
+	if status != http.StatusOK {
+		return nil, statusError(status, "target node public posts lookup failed")
+	}
+	if page.RoomID != "" && page.RoomID != roomID {
+		return nil, statusError(http.StatusBadGateway, "target node returned posts for a different room")
+	}
+	if page.ChannelID != "" && channelID != "" && page.ChannelID != channelID {
+		return nil, statusError(http.StatusBadGateway, "target node returned posts for a different channel")
+	}
+	if !strings.EqualFold(strings.TrimSpace(page.Visibility), dirextalkdomain.ChannelPostVisibilityPublic) {
+		return nil, statusError(http.StatusBadGateway, "target node returned a non-public post page")
+	}
+	for _, post := range page.Posts {
+		if !strings.EqualFold(strings.TrimSpace(post.Visibility), dirextalkdomain.ChannelPostVisibilityPublic) ||
+			(post.RoomID != "" && post.RoomID != roomID) ||
+			(page.ChannelID != "" && post.ChannelID != "" && post.ChannelID != page.ChannelID) {
+			return nil, statusError(http.StatusBadGateway, "target node returned invalid public post data")
+		}
+	}
+	page.RoomID = roomID
+	if page.ChannelID == "" {
+		page.ChannelID = channelID
+	}
+	return page, nil
 }
 
 func (s *Service) channelStore() channelStore {

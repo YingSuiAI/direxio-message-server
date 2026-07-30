@@ -352,6 +352,34 @@ func (s *DatabaseStore) ListChannelPostsPage(ctx context.Context, channelID stri
 	)
 }
 
+func (s *DatabaseStore) ListChannelPostsOffsetPage(ctx context.Context, channelID string, offset int64, limit int) ([]channelPostRecord, bool, error) {
+	rows, err := s.db.QueryContext(ctx, listPostsSelect+`
+		WHERE ($1 = '' OR channel_id = $1)
+		ORDER BY origin_server_ts DESC, post_id DESC
+		LIMIT $2 OFFSET $3
+	`, channelID, limit+1, offset)
+	if err != nil {
+		return nil, false, err
+	}
+	defer closeResource(rows)
+	posts := make([]channelPostRecord, 0, limit+1)
+	for rows.Next() {
+		post, err := scanChannelPost(rows)
+		if err != nil {
+			return nil, false, err
+		}
+		posts = append(posts, post)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	hasMore := len(posts) > limit
+	if hasMore {
+		posts = posts[:limit]
+	}
+	return posts, hasMore, nil
+}
+
 func (s *DatabaseStore) ListChannelPostsByVisibilityPage(ctx context.Context, channelID, visibility string, offset int64, limit int) ([]channelPostRecord, bool, error) {
 	visibility = normalizeChannelPostRecord(channelPostRecord{Visibility: visibility}).Visibility
 	rows, err := s.db.QueryContext(ctx, listPostsSelect+`

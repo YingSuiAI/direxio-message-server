@@ -3,6 +3,7 @@ package channels
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 	"time"
 
@@ -39,27 +40,32 @@ func (m *ContentModule) ToggleReaction(ctx context.Context, action string, raw m
 		if err != nil {
 			return nil, actionbase.InternalError(err)
 		}
-		if ok {
-			eventID = post.EventID
-			roomID = fallback(roomID, post.RoomID)
-			channelID = fallback(channelID, post.ChannelID)
-			postID = post.PostID
+		if !ok {
+			return nil, actionbase.StatusError(http.StatusNotFound, "post not found")
 		}
+		eventID = post.EventID
+		roomID = fallback(roomID, post.RoomID)
+		channelID = fallback(channelID, post.ChannelID)
+		postID = post.PostID
 	} else {
 		comment, ok, err := m.CommentByID(ctx, targetID, postID)
 		if err != nil {
 			return nil, actionbase.InternalError(err)
 		}
-		if ok {
-			eventID = comment.EventID
-			channelID = fallback(channelID, comment.ChannelID)
-			postID = fallback(postID, comment.PostID)
-			commentID = comment.CommentID
-			roomID, err = m.RoomIDForComment(ctx, comment, roomID)
-			if err != nil {
-				return nil, actionbase.InternalError(err)
-			}
+		if !ok {
+			return nil, actionbase.StatusError(http.StatusNotFound, "comment not found")
 		}
+		eventID = comment.EventID
+		channelID = fallback(channelID, comment.ChannelID)
+		postID = fallback(postID, comment.PostID)
+		commentID = comment.CommentID
+		roomID, err = m.RoomIDForComment(ctx, comment, roomID)
+		if err != nil {
+			return nil, actionbase.InternalError(err)
+		}
+	}
+	if actionErr := m.requireJoined(ctx, roomID); actionErr != nil {
+		return nil, actionErr
 	}
 	if m.store == nil {
 		return nil, actionbase.InternalError(errors.New("channel content store is not configured"))

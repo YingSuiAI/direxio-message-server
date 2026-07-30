@@ -73,54 +73,18 @@ func (m *ContentModule) CreatePost(ctx context.Context, raw map[string]any) (any
 }
 
 func (m *ContentModule) Posts(ctx context.Context, raw map[string]any) (any, *actionbase.Error) {
-	params := actionbase.Params(raw)
-	channelID := params.String("channel_id")
+	channelID := actionbase.Params(raw).String("channel_id")
 	if m.store == nil {
 		return map[string]any{"posts": []Post{}}, nil
 	}
-	if value, exists := raw["visibility"]; exists {
-		if _, ok := value.(string); !ok || params.String("visibility") == "" {
-			return nil, actionbase.BadRequest("visibility must be public or private")
-		}
-		visibility, ok := validatedPostVisibility(params.String("visibility"))
-		if !ok {
-			return nil, actionbase.BadRequest("visibility must be public or private")
-		}
-		if channelID == "" {
-			return nil, actionbase.BadRequest("channel_id is required when visibility is set")
-		}
-		page := params.Int64("page")
-		if page <= 0 {
-			page = 1
-		}
-		pageSize := params.Int64("page_size")
-		if pageSize <= 0 {
-			pageSize = params.Int64("limit")
-		}
-		if pageSize <= 0 {
-			pageSize = 5
-		}
-		if pageSize > 100 {
-			pageSize = 100
-		}
-		if page > math.MaxInt64/pageSize {
-			return nil, actionbase.BadRequest("page is too large")
-		}
-		offset := (page - 1) * pageSize
-		records, hasMore, err := m.store.ListChannelPostsByVisibilityPage(ctx, channelID, visibility, offset, int(pageSize))
-		if err != nil {
-			return nil, actionbase.InternalError(err)
-		}
-		posts := PostsFromRecords(records)
-		m.EnrichPosts(ctx, posts, m.owner().MXID)
-		result := map[string]any{
-			"posts": posts, "visibility": visibility, "page": page,
-			"page_size": pageSize, "has_more": hasMore,
-		}
-		if hasMore {
-			result["next_page"] = page + 1
-		}
-		return result, nil
+	if _, exists := raw["visibility"]; exists {
+		return nil, actionbase.BadRequest("visibility is only supported by channels.public.posts.list")
+	}
+	if _, hasPage := raw["page"]; hasPage {
+		return m.postsOffsetPage(ctx, channelID, raw, m.owner().MXID)
+	}
+	if _, hasPageSize := raw["page_size"]; hasPageSize {
+		return m.postsOffsetPage(ctx, channelID, raw, m.owner().MXID)
 	}
 	records, err := m.store.ListChannelPosts(ctx, channelID)
 	if err != nil {
@@ -129,6 +93,97 @@ func (m *ContentModule) Posts(ctx context.Context, raw map[string]any) (any, *ac
 	posts := PostsFromRecords(records)
 	m.EnrichPosts(ctx, posts, m.owner().MXID)
 	return map[string]any{"posts": posts}, nil
+}
+
+func (m *ContentModule) postsOffsetPage(
+	ctx context.Context,
+	channelID string,
+	raw map[string]any,
+	ownerMXID string,
+) (map[string]any, *actionbase.Error) {
+	page, pageSize, offset, actionErr := postPageParams(raw)
+	if actionErr != nil {
+		return nil, actionErr
+	}
+	records, hasMore, err := m.store.ListChannelPostsOffsetPage(ctx, channelID, offset, int(pageSize))
+	if err != nil {
+		return nil, actionbase.InternalError(err)
+	}
+	posts := PostsFromRecords(records)
+	m.EnrichPosts(ctx, posts, ownerMXID)
+	result := map[string]any{
+		"posts": posts, "page": page, "page_size": pageSize, "has_more": hasMore,
+	}
+	if hasMore {
+		result["next_page"] = page + 1
+	}
+	return result, nil
+}
+
+// PublicPosts returns a non-personalized page containing public posts only.
+// The root service verifies that the target channel exists before calling it.
+func (m *ContentModule) PublicPosts(ctx context.Context, channelID string, raw map[string]any) (map[string]any, *actionbase.Error) {
+	if m.store == nil {
+		return map[string]any{
+			"posts": []Post{}, "visibility": dirextalkdomain.ChannelPostVisibilityPublic,
+			"page": int64(1), "page_size": int64(5), "has_more": false,
+		}, nil
+	}
+	return m.postsByVisibilityPage(
+		ctx,
+		strings.TrimSpace(channelID),
+		dirextalkdomain.ChannelPostVisibilityPublic,
+		raw,
+		"",
+	)
+}
+
+func (m *ContentModule) postsByVisibilityPage(
+	ctx context.Context,
+	channelID, visibility string,
+	raw map[string]any,
+	ownerMXID string,
+) (map[string]any, *actionbase.Error) {
+	page, pageSize, offset, actionErr := postPageParams(raw)
+	if actionErr != nil {
+		return nil, actionErr
+	}
+	records, hasMore, err := m.store.ListChannelPostsByVisibilityPage(ctx, channelID, visibility, offset, int(pageSize))
+	if err != nil {
+		return nil, actionbase.InternalError(err)
+	}
+	posts := PostsFromRecords(records)
+	m.EnrichPosts(ctx, posts, ownerMXID)
+	result := map[string]any{
+		"posts": posts, "visibility": visibility, "page": page,
+		"page_size": pageSize, "has_more": hasMore,
+	}
+	if hasMore {
+		result["next_page"] = page + 1
+	}
+	return result, nil
+}
+
+func postPageParams(raw map[string]any) (page, pageSize, offset int64, actionErr *actionbase.Error) {
+	params := actionbase.Params(raw)
+	page = params.Int64("page")
+	if page <= 0 {
+		page = 1
+	}
+	pageSize = params.Int64("page_size")
+	if pageSize <= 0 {
+		pageSize = params.Int64("limit")
+	}
+	if pageSize <= 0 {
+		pageSize = 5
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
+	if page > math.MaxInt64/pageSize {
+		return 0, 0, 0, actionbase.BadRequest("page is too large")
+	}
+	return page, pageSize, (page - 1) * pageSize, nil
 }
 
 func validatedPostVisibility(value string) (string, bool) {
@@ -167,11 +222,14 @@ func (m *ContentModule) CreateComment(ctx context.Context, raw map[string]any) (
 	if postID == "" {
 		return nil, actionbase.BadRequest("post_id is required")
 	}
-	if _, ok, err := m.PostByID(ctx, postID, channelID); err != nil {
+	post, ok, err := m.PostByID(ctx, postID, channelID)
+	if err != nil {
 		return nil, actionbase.InternalError(err)
-	} else if !ok {
+	}
+	if !ok {
 		return nil, actionbase.StatusError(http.StatusNotFound, "post not found")
 	}
+	channelID = fallback(channelID, post.ChannelID)
 	body := fallback(params.String("body"), params.String("content"))
 	messageType := fallback(params.String("message_type"), "text")
 	mediaJSON, media, err := mediaPayload(params.Raw("media_json"))
@@ -192,8 +250,11 @@ func (m *ContentModule) CreateComment(ctx context.Context, raw map[string]any) (
 	}
 	eventID := m.eventID(commentID)
 	originServerTS := now.UnixMilli()
-	roomID, actionErr := m.roomIDForChannel(ctx, channelID, params.String("room_id"))
+	roomID, actionErr := m.roomIDForChannel(ctx, channelID, fallback(params.String("room_id"), post.RoomID))
 	if actionErr != nil {
+		return nil, actionErr
+	}
+	if actionErr := m.requireJoined(ctx, roomID); actionErr != nil {
 		return nil, actionErr
 	}
 	if matrix := m.matrixPort(); matrix != nil && roomID != "" {

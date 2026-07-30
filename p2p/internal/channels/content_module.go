@@ -87,6 +87,7 @@ type ContentStore interface {
 	GetChannelPostByEventID(context.Context, string, string) (dirextalkdomain.ChannelPostRecord, bool, error)
 	ListChannelPosts(context.Context, string) ([]dirextalkdomain.ChannelPostRecord, error)
 	ListChannelPostsPage(context.Context, string, int64, int64, int64, string, int) ([]dirextalkdomain.ChannelPostRecord, bool, error)
+	ListChannelPostsOffsetPage(context.Context, string, int64, int) ([]dirextalkdomain.ChannelPostRecord, bool, error)
 	ListChannelPostsByVisibilityPage(context.Context, string, string, int64, int) ([]dirextalkdomain.ChannelPostRecord, bool, error)
 	InsertChannelComment(context.Context, dirextalkdomain.ChannelCommentRecord) error
 	GetChannelCommentByID(context.Context, string, string) (dirextalkdomain.ChannelCommentRecord, bool, error)
@@ -133,6 +134,7 @@ type ContentConfig struct {
 	Now               func() time.Time
 	NewToken          func(string) string
 	NewEventID        func(string) string
+	RequireJoined     func(context.Context, string) *actionbase.Error
 	AuthorizeRecall   func(context.Context, string, string) *actionbase.Error
 	MapTransportError func(error) *actionbase.Error
 }
@@ -204,6 +206,14 @@ func (m *ContentModule) transportError(err error) *actionbase.Error {
 		return m.config.MapTransportError(err)
 	}
 	return actionbase.InternalError(err)
+}
+
+func (m *ContentModule) requireJoined(ctx context.Context, roomID string) *actionbase.Error {
+	roomID = strings.TrimSpace(roomID)
+	if roomID == "" || m.config.RequireJoined == nil {
+		return nil
+	}
+	return m.config.RequireJoined(ctx, roomID)
 }
 
 func (m *ContentModule) roomIDForChannel(ctx context.Context, channelID, fallbackRoomID string) (string, *actionbase.Error) {

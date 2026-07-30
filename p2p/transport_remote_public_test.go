@@ -190,6 +190,59 @@ func TestRemotePublicChannelGetFetchesOwnerNodeByRoomID(t *testing.T) {
 	}
 }
 
+func TestRemotePublicChannelPostsFetchesOnlyPublicOwnerNodePage(t *testing.T) {
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/_p2p/query" {
+			t.Fatalf("expected remote public query path, got %s", r.URL.Path)
+		}
+		var req envelope
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode remote request: %v", err)
+		}
+		if req.Action != "channels.public.posts.list" ||
+			trimString(req.Params["room_id"]) != "!posts:remote.example" ||
+			trimString(req.Params["remote_node_base_url"]) != "" {
+			t.Fatalf("unexpected remote request %#v", req)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"channel_id": "remote_posts",
+			"room_id":    "!posts:remote.example",
+			"visibility": "public",
+			"page":       1,
+			"page_size":  5,
+			"has_more":   false,
+			"posts": []map[string]any{{
+				"post_id":        "post_remote",
+				"channel_id":     "remote_posts",
+				"room_id":        "!posts:remote.example",
+				"visibility":     "public",
+				"body":           "remote public post",
+				"comment_count":  2,
+				"like_count":     3,
+				"favorite_count": 4,
+			}},
+		})
+	}))
+	defer remote.Close()
+
+	service := NewService(Config{
+		ServerName:                     "local.example",
+		RemoteNodeAllowPrivateBaseURLs: true,
+	})
+	bootstrapService(t, service)
+
+	got := mustHandle[publicChannelPostsPage](t, service, "channels.public.posts.list", map[string]any{
+		"channel_id":           "remote_posts",
+		"room_id":              "!posts:remote.example",
+		"remote_node_base_url": remote.URL + "/_p2p",
+	})
+	if len(got.Posts) != 1 || got.Posts[0].PostID != "post_remote" ||
+		got.Posts[0].Visibility != "public" || got.Posts[0].CommentCount != 2 ||
+		got.Posts[0].LikeCount != 3 || got.Posts[0].FavoriteCount != 4 {
+		t.Fatalf("unexpected remote public posts page %#v", got)
+	}
+}
+
 func TestRemotePublicChannelGetUsesClientProvidedOwnerNodeBaseURL(t *testing.T) {
 	calls := 0
 	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
