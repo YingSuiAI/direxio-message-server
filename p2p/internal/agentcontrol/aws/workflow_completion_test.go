@@ -26,6 +26,44 @@ func workflowFixture(t *testing.T) (*Service, *MemoryRepository, *FakeProvider, 
 	return s, r, s.provider.(*FakeProvider), p
 }
 
+type rejectExecuteClaimCoordinator struct{ ChangeCoordinator }
+
+func (c rejectExecuteClaimCoordinator) ClaimProviderMutation(ctx context.Context, cmd ProviderMutationCommand) (ExecutionFence, error) {
+	if cmd.Kind == ProviderMutationExecute {
+		return ExecutionFence{}, ErrConflict
+	}
+	return c.ChangeCoordinator.ClaimProviderMutation(ctx, cmd)
+}
+
+func readyWorkflowChange(t *testing.T) (*Service, *MemoryRepository, *FakeProvider, ChangeRequestResult) {
+	t.Helper()
+	s, repo, provider, plan := workflowFixture(t)
+	out, err := s.RequestChange(context.Background(), RequestChangeInput{PlanID: plan.ID, IdempotencyKey: uuid.NewString()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	consumed := consumeWorkflowChange(t, s, repo, out)
+	fullPlan, err := repo.GetPlan(context.Background(), plan.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cs, err := provider.CreateChangeSet(context.Background(), CredentialHandle{Region: fullPlan.Region}, ChangeSetRequest{
+		Region: fullPlan.Region, StackName: fullPlan.StackName, ChangeSetName: providerChangeSetName(consumed.Change.ProviderToken),
+		ClientToken: consumed.Change.ProviderToken, Operation: fullPlan.Operation, Template: fullPlan.Template,
+		Parameters: fullPlan.Parameters, Tags: fullPlan.Tags, Capabilities: fullPlan.Capabilities,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo.mu.Lock()
+	change := repo.changes[out.Change.ID]
+	change.Stage, change.ChangeSetID, change.Revision = StageChangeSetReady, cs.ID, change.Revision+1
+	repo.changes[change.ID] = change
+	repo.mu.Unlock()
+	consumed.Change = change
+	return s, repo, provider, consumed
+}
+
 // confirmAWSMemory exercises the public shared confirmation service.  The AWS
 // memory repository is a deterministic fake for provider workflow tests, so this
 // helper applies the projection that PostgreSQL performs in the same commit.
@@ -279,6 +317,73 @@ func TestNoDoubleExecute(t *testing.T) {
 		t.Fatal()
 	}
 }
+
+func TestExecuteChangeStrictReadyExecutesExactlyOnce(t *testing.T) {
+	s, _, provider, consumed := readyWorkflowChange(t)
+	done, err := s.ExecuteChange(context.Background(), consumed.Confirmation.ConfirmationID)
+	if err != nil || done.Status != ChangeSucceeded {
+		t.Fatalf("ready execute = %+v err=%v", done, err)
+	}
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	count := 0
+	for _, call := range provider.Calls {
+		if call == "execute_change_set" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("ExecuteChangeSet calls=%d all=%v", count, provider.Calls)
+	}
+}
+
+func TestExecuteChangeStrictReadyClaimErrorSkipsProvider(t *testing.T) {
+	s, repo, provider, consumed := readyWorkflowChange(t)
+	wrapped := NewServiceWithCoordinator(repo, rejectExecuteClaimCoordinator{s.coordinator}, s.confirmations, s.tasks, s.sts, provider, nil)
+	if _, err := wrapped.ExecuteChange(context.Background(), consumed.Confirmation.ConfirmationID); !errors.Is(err, ErrConflict) {
+		t.Fatalf("claim error = %v", err)
+	}
+	if len(provider.Calls) != 1 || provider.Calls[0] != "create_change_set" {
+		t.Fatalf("provider calls after claim error = %v", provider.Calls)
+	}
+}
+
+func TestExecuteChangeStrictReadyResponseLossStaysUncertain(t *testing.T) {
+	s, repo, provider, consumed := readyWorkflowChange(t)
+	provider.ResponseLossExecute = true
+	uncertain, err := s.ExecuteChange(context.Background(), consumed.Confirmation.ConfirmationID)
+	if !errors.Is(err, ErrResponseUncertain) {
+		t.Fatalf("execute response loss = %v", err)
+	}
+	if uncertain.Stage != StageReconciling {
+		t.Fatalf("response-loss stage=%q, want reconciling", uncertain.Stage)
+	}
+	// Re-enter under a reclaimed lease; the reconciling stage must use durable
+	// readback rather than dispatching ExecuteChangeSet again.
+	repo.mu.Lock()
+	task := repo.tasks[consumed.Task.ID]
+	task.Revision++
+	task.LeaseEpoch++
+	repo.tasks[task.ID] = task
+	repo.mu.Unlock()
+	provider.ResponseLossExecute = false
+	done, err := s.ExecuteChange(context.Background(), consumed.Confirmation.ConfirmationID)
+	if err != nil || done.Status != ChangeSucceeded {
+		t.Fatalf("reconcile after response loss = %+v err=%v", done, err)
+	}
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	count := 0
+	for _, call := range provider.Calls {
+		if call == "execute_change_set" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("response-loss ExecuteChangeSet calls=%d all=%v", count, provider.Calls)
+	}
+}
+
 func TestAsyncInProgressNotSuccess(t *testing.T) {
 	f := NewFakeProvider()
 	f.Async = true

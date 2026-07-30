@@ -496,6 +496,103 @@ func TestPostgresClaimProviderMutationNormalizesLegacyConsumedDigest(t *testing.
 	}
 }
 
+func TestPostgresClaimProviderMutationAllowsExecuteAfterCommittedCreate(t *testing.T) {
+	store, repo, fx := newPreProviderPostgresFixture(t)
+	now := time.Now().UTC()
+	reservation, err := json.Marshal(map[string]any{
+		"confirmation_id": fx.confirmationID,
+		"task_id":         fx.taskID,
+		"attempt":         1,
+		"lease_epoch":     4,
+		"task_revision":   7,
+		"active":          true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.DB().ExecContext(fx.ctx, `UPDATE agent_tasks SET status='running',lease_holder='worker',lease_expires_at=$1,available_at=$2 WHERE owner_id=$3 AND task_id=$4`, now.Add(time.Hour), now, fx.owner, fx.taskID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.DB().ExecContext(fx.ctx, `UPDATE agent_confirmations SET state='consumed',revision=4,reservation_json=$1::jsonb,expires_at=$2 WHERE owner_id=$3 AND confirmation_id=$4`, reservation, now.Add(time.Hour), fx.owner, fx.confirmationID); err != nil {
+		t.Fatal(err)
+	}
+	providerDigest := agentaws.ProviderRequestDigest(fx.plan, fx.confirmationID)
+	if _, err = store.DB().ExecContext(fx.ctx, `UPDATE core_aws_changes SET status='running',stage='change_set_creating',revision=2,provider_request_digest=$1 WHERE owner_id=$2 AND change_id=$3`, providerDigest, fx.owner, fx.changeID); err != nil {
+		t.Fatal(err)
+	}
+	create := agentaws.ProviderMutationCommand{
+		ChangeID: fx.changeID, ConfirmationID: fx.confirmationID, TaskID: fx.taskID,
+		Attempt: 1, LeaseEpoch: 4, ExpectedChangeRevision: 2, ExpectedTaskRevision: 7,
+		ExpectedConfirmationRevision: 4, Kind: agentaws.ProviderMutationCreate,
+		OperationKey: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaac",
+	}
+	claimedCreate, err := repo.ClaimProviderMutation(fx.ctx, create)
+	if err != nil || claimedCreate.Change.Stage != agentaws.StageReconciling {
+		t.Fatalf("create claim = %+v err=%v", claimedCreate, err)
+	}
+	create.ExpectedChangeRevision = claimedCreate.Change.Revision
+	create.ExpectedTaskRevision = claimedCreate.Task.Revision
+	create.ExpectedConfirmationRevision = claimedCreate.Confirmation.Revision
+	committedCreate, err := repo.CommitProviderMutation(fx.ctx, agentaws.ProviderMutationResult{
+		Command: create, Success: true, ProviderChangeSetID: "change-set-ready",
+	})
+	if err != nil || committedCreate.Stage != agentaws.StageChangeSetReady {
+		t.Fatalf("create commit = %+v err=%v", committedCreate, err)
+	}
+	// Reclaim the same task attempt under a newer lease epoch. The consumed
+	// reservation is promoted atomically by the execute claim before dispatch.
+	if _, err = store.DB().ExecContext(fx.ctx, `UPDATE agent_tasks SET revision=8,lease_epoch=5,lease_expires_at=$1 WHERE owner_id=$2 AND task_id=$3`, now.Add(time.Hour), fx.owner, fx.taskID); err != nil {
+		t.Fatal(err)
+	}
+	execute := agentaws.ProviderMutationCommand{
+		ChangeID: fx.changeID, ConfirmationID: fx.confirmationID, TaskID: fx.taskID,
+		Attempt: 1, LeaseEpoch: 5, ExpectedChangeRevision: committedCreate.Revision,
+		ExpectedTaskRevision: 8, ExpectedConfirmationRevision: claimedCreate.Confirmation.Revision,
+		Kind: agentaws.ProviderMutationExecute, ProviderChangeSetID: "change-set-ready",
+		OperationKey: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaad",
+	}
+	claimedExecute, err := repo.ClaimProviderMutation(fx.ctx, execute)
+	if err != nil || claimedExecute.Change.Stage != agentaws.StageReconciling {
+		t.Fatalf("execute claim after create = %+v err=%v", claimedExecute, err)
+	}
+	execute.ExpectedChangeRevision = claimedExecute.Change.Revision
+	execute.ExpectedTaskRevision = claimedExecute.Task.Revision
+	execute.ExpectedConfirmationRevision = claimedExecute.Confirmation.Revision
+	uncertain, err := repo.CommitProviderMutation(fx.ctx, agentaws.ProviderMutationResult{
+		Command: execute, ResponseUncertain: true, ErrorCode: "provider_error", ErrorSummary: "AWS response lost",
+	})
+	if err != nil || uncertain.Stage != agentaws.StageReconciling {
+		t.Fatalf("uncertain execute commit = %+v err=%v", uncertain, err)
+	}
+	// A later lease must reconcile the durable uncertain stage; it may not
+	// dispatch ExecuteChangeSet again.
+	if _, err = store.DB().ExecContext(fx.ctx, `UPDATE agent_tasks SET revision=9,lease_epoch=6,lease_expires_at=$1 WHERE owner_id=$2 AND task_id=$3`, now.Add(time.Hour), fx.owner, fx.taskID); err != nil {
+		t.Fatal(err)
+	}
+	reclaimedExecute := execute
+	reclaimedExecute.ExpectedChangeRevision = uncertain.Revision
+	reclaimedExecute.ExpectedTaskRevision = 9
+	reclaimedExecute.ExpectedConfirmationRevision = execute.ExpectedConfirmationRevision
+	reclaimedExecute.LeaseEpoch = 6
+	if _, err = repo.ClaimProviderMutation(fx.ctx, reclaimedExecute); !errors.Is(err, agentaws.ErrRevisionConflict) {
+		t.Fatalf("uncertain lease reclaim execute claim err=%v", err)
+	}
+	var dispatched int
+	if err = store.DB().QueryRowContext(fx.ctx, `SELECT count(*) FROM core_aws_events WHERE owner_id=$1 AND change_id=$2 AND kind='provider_mutation_dispatched'`, fx.owner, fx.changeID).Scan(&dispatched); err != nil {
+		t.Fatal(err)
+	}
+	if dispatched != 2 {
+		t.Fatalf("dispatch event count after create+execute = %d", dispatched)
+	}
+	if _, err = repo.ClaimProviderMutation(fx.ctx, execute); !errors.Is(err, agentaws.ErrRevisionConflict) {
+		t.Fatalf("duplicate execute claim err=%v", err)
+	}
+	var afterDuplicate int
+	if err = store.DB().QueryRowContext(fx.ctx, `SELECT count(*) FROM core_aws_events WHERE owner_id=$1 AND change_id=$2 AND kind='provider_mutation_dispatched'`, fx.owner, fx.changeID).Scan(&afterDuplicate); err != nil || afterDuplicate != dispatched {
+		t.Fatalf("duplicate execute dispatch count=%d err=%v", afterDuplicate, err)
+	}
+}
+
 func TestPostgresConsumeChangeRejectsMismatchedCommandBindingAtomically(t *testing.T) {
 	store, repo, fx := newPreProviderPostgresFixture(t)
 	now := time.Now().UTC()

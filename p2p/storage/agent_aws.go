@@ -2257,12 +2257,19 @@ func (r *PostgresAWSRepository) ClaimProviderMutation(ctx context.Context, cmd a
 	if providerToken != cmd.ConfirmationID || !preProviderProviderDigestMatches(plan, providerToken, storedProviderDigest) {
 		return agentaws.ExecutionFence{}, agentaws.ErrInvalid
 	}
-	var dispatched bool
-	if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM core_aws_events WHERE owner_id=$1 AND change_id=$2 AND kind='provider_mutation_dispatched')`, r.ownerID, cmd.ChangeID).Scan(&dispatched); err != nil {
-		return agentaws.ExecutionFence{}, err
-	}
-	if dispatched {
-		return agentaws.ExecutionFence{}, agentaws.ErrRevisionConflict
+	// A persisted dispatch for create/delete is a no-replay fence. Execute is
+	// intentionally exempt: a successful create commits StageChangeSetReady
+	// while retaining the create dispatch event, and must then admit the
+	// distinct execute operation. The locked stage/change-set checks above and
+	// per-operation replay fence still prevent duplicate execute claims.
+	if cmd.Kind != agentaws.ProviderMutationExecute {
+		var dispatched bool
+		if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM core_aws_events WHERE owner_id=$1 AND change_id=$2 AND kind='provider_mutation_dispatched')`, r.ownerID, cmd.ChangeID).Scan(&dispatched); err != nil {
+			return agentaws.ExecutionFence{}, err
+		}
+		if dispatched {
+			return agentaws.ExecutionFence{}, agentaws.ErrRevisionConflict
+		}
 	}
 	canonicalProviderDigest := agentaws.ProviderRequestDigest(plan, providerToken)
 	if storedProviderDigest != canonicalProviderDigest {
