@@ -138,7 +138,13 @@ func confirmationError(err error) *actionbase.Error {
 	if errors.Is(err, confirmation.ErrNotFound) {
 		return actionbase.CodedError(http.StatusNotFound, "confirmation_not_found", "confirmation was not found")
 	}
-	if errors.Is(err, confirmation.ErrRevisionConflict) || errors.Is(err, confirmation.ErrConflict) {
+	if errors.Is(err, confirmation.ErrExpired) {
+		// Expiry is an expected terminal outcome of a late mutation. Keep the
+		// durable terminalization performed by the repository visible to the
+		// transport instead of masking it as an internal server failure.
+		return actionbase.CodedError(http.StatusGone, "confirmation_expired", "confirmation expired")
+	}
+	if errors.Is(err, confirmation.ErrRevisionConflict) || errors.Is(err, confirmation.ErrConflict) || errors.Is(err, confirmation.ErrIdempotencyConflict) {
 		return actionbase.CodedError(http.StatusConflict, "confirmation_conflict", "confirmation revision conflict")
 	}
 	return actionbase.InternalError(err)

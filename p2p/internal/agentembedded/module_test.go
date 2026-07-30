@@ -2,10 +2,15 @@ package agentembedded
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"testing"
+	"time"
 
 	actionbase "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/action"
+	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcontrol/confirmation"
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/storage"
+	"github.com/google/uuid"
 )
 
 type readyModelProfileStore struct {
@@ -61,6 +66,70 @@ func TestHandlersRegisterEmbeddedAgentSurface(t *testing.T) {
 		if h[name] == nil {
 			t.Fatalf("missing handler %q", name)
 		}
+	}
+}
+
+func TestConfirmationErrorMapsExpiredToGone(t *testing.T) {
+	apiErr := confirmationError(confirmation.ErrExpired)
+	if apiErr == nil || apiErr.Status != http.StatusGone || apiErr.Code != "confirmation_expired" || apiErr.Error != "confirmation expired" {
+		t.Fatalf("expired confirmation error = %#v, want 410 confirmation_expired", apiErr)
+	}
+}
+
+func TestConfirmationErrorKeepsWrappedExpiryStable(t *testing.T) {
+	apiErr := confirmationError(errors.Join(errors.New("repository transition"), confirmation.ErrExpired))
+	if apiErr == nil || apiErr.Status != http.StatusGone || apiErr.Code != "confirmation_expired" {
+		t.Fatalf("wrapped expired confirmation error = %#v, want 410 confirmation_expired", apiErr)
+	}
+}
+
+func TestConfirmationErrorMapsIdempotencyConflictToConflict(t *testing.T) {
+	for _, err := range []error{
+		confirmation.ErrIdempotencyConflict,
+		errors.Join(errors.New("replay digest mismatch"), confirmation.ErrIdempotencyConflict),
+	} {
+		apiErr := confirmationError(err)
+		if apiErr == nil || apiErr.Status != http.StatusConflict || apiErr.Code != "confirmation_conflict" {
+			t.Fatalf("idempotency conflict error = %#v, want 409 confirmation_conflict", apiErr)
+		}
+	}
+}
+
+func TestConfirmationRejectLateExpiryReturnsGoneAfterTerminalizing(t *testing.T) {
+	now := time.Now().UTC()
+	digest := confirmation.Digest("0000000000000000000000000000000000000000000000000000000000000000")
+	repository := confirmation.NewMemoryRepository()
+	requested, err := repository.Request(context.Background(), confirmation.RequestCommand{
+		TaskID:         uuid.NewString(),
+		IdempotencyKey: uuid.NewString(),
+		Binding: confirmation.Binding{
+			OperationDomain:   "workload:apply",
+			TargetID:          "workload-1",
+			TargetRevision:    1,
+			SourceVersion:     "v1",
+			ContentDigest:     digest,
+			ParameterDigest:   digest,
+			NetworkDigest:     digest,
+			SecretGrantDigest: digest,
+		},
+		At:        now.Add(-2 * time.Minute),
+		ExpiresAt: now.Add(-time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("request expired confirmation fixture: %v", err)
+	}
+	module := New(Config{Confirmations: repository})
+	result, apiErr := module.Handlers()["agent.core.confirmations.reject"](context.Background(), map[string]any{
+		"confirmation_id":   requested.ConfirmationID,
+		"idempotency_key":   uuid.NewString(),
+		"expected_revision": int64(1),
+	})
+	if result != nil || apiErr == nil || apiErr.Status != http.StatusGone || apiErr.Code != "confirmation_expired" {
+		t.Fatalf("late rejection = %#v, %#v, want 410 confirmation_expired", result, apiErr)
+	}
+	terminal, err := repository.Get(context.Background(), requested.ConfirmationID)
+	if err != nil || terminal.State != confirmation.StateExpired || terminal.Revision != 2 {
+		t.Fatalf("late rejection terminal state = %#v, err=%v, want expired revision 2", terminal, err)
 	}
 }
 
