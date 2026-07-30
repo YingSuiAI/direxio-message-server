@@ -27,6 +27,7 @@ type PlanInput struct {
 type CreatePlanInput = PlanInput
 type RequestCommand struct {
 	PlanID, WorkloadID, IdempotencyKey string
+	ExpectedWorkloadRevision           uint64
 	Kind                               OperationKind
 	ExpiresAt                          time.Time
 }
@@ -70,6 +71,66 @@ type FencedStore interface {
 	CompleteDispatchFenced(context.Context, string, string, string, uint64, string, Readback, string, TaskFence) (Operation, coretask.Task, error)
 	RenewDispatchLeaseFenced(context.Context, string, string, uint64, TaskFence) (Operation, error)
 	RecoverClaimFenced(context.Context, string, string, TaskFence) (Operation, error)
+}
+
+// UncertainReconciler finalizes an operation whose provider mutation was
+// already fenced as uncertain. It must perform read-only reconciliation only;
+// task/confirmation leases are not recreated and no provider mutation is
+// dispatched by this boundary.
+type UncertainReconciler interface {
+	ReconcileUncertain(context.Context, string, string, Readback, string) (Operation, error)
+}
+
+// MutationLeaseFence is attached to a provider execution context by the
+// embedded AWS executor. Production stores validate it inside the same
+// transaction that persists provider readback and terminal state.
+type MutationLeaseFence struct {
+	OwnerID     string
+	ProvisionID string
+	OperationID string
+	Token       string
+	Epoch       int64
+}
+
+type mutationLeaseFenceContextKey struct{}
+
+func WithMutationLeaseFence(ctx context.Context, fence MutationLeaseFence) context.Context {
+	return context.WithValue(ctx, mutationLeaseFenceContextKey{}, fence)
+}
+
+func MutationLeaseFenceFromContext(ctx context.Context) (MutationLeaseFence, bool) {
+	fence, ok := ctx.Value(mutationLeaseFenceContextKey{}).(MutationLeaseFence)
+	return fence, ok && fence.OwnerID != "" && fence.ProvisionID != "" && fence.Token != "" && fence.Epoch > 0
+}
+
+type ProviderResultEvent struct {
+	Kind     string
+	Status   OperationStatus
+	Message  string
+	Readback []byte
+}
+
+type providerResultEventContextKey struct{}
+
+func WithProviderResultEvent(ctx context.Context, event ProviderResultEvent) context.Context {
+	return context.WithValue(ctx, providerResultEventContextKey{}, event)
+}
+
+func ProviderResultEventFromContext(ctx context.Context) (ProviderResultEvent, bool) {
+	event, ok := ctx.Value(providerResultEventContextKey{}).(ProviderResultEvent)
+	return event, ok && event.Kind != ""
+}
+
+func SafeProviderResultEventMessage(event ProviderResultEvent) string {
+	if event.Message == "" {
+		return ""
+	}
+	code := "provider_error"
+	if event.Status == OperationUncertain {
+		code = "provider_uncertain"
+	}
+	_, message := SafeFailure(code, event.Message)
+	return message
 }
 
 // AWSCredentialGrantPinningStore marks a store that replaces every caller
@@ -245,7 +306,7 @@ func (s *MemoryStore) ListEvents(_ context.Context, id string, after uint64) ([]
 	return out, nil
 }
 func (s *MemoryStore) RequestOperation(_ context.Context, c RequestCommand) (RequestResult, error) {
-	if s == nil || !ValidUUID(c.PlanID) || !ValidUUID(c.IdempotencyKey) || (c.WorkloadID != "" && !ValidUUID(c.WorkloadID)) || (c.Kind != OperationApply && c.Kind != OperationDestroy) {
+	if s == nil || !ValidUUID(c.PlanID) || !ValidUUID(c.IdempotencyKey) || (c.WorkloadID != "" && !ValidUUID(c.WorkloadID)) || (c.WorkloadID == "") != (c.ExpectedWorkloadRevision == 0) || (c.Kind != OperationApply && c.Kind != OperationDestroy) {
 		return RequestResult{}, ErrInvalid
 	}
 	s.mu.Lock()
@@ -262,9 +323,9 @@ func (s *MemoryStore) RequestOperation(_ context.Context, c RequestCommand) (Req
 		return RequestResult{}, ErrNotFound
 	}
 	if c.ExpiresAt.IsZero() {
-		c.ExpiresAt = s.now().UTC().Add(24 * time.Hour)
+		c.ExpiresAt = p.ExpiresAt.UTC()
 	}
-	if !c.ExpiresAt.After(s.now().UTC()) || !p.ExpiresAt.After(s.now().UTC()) {
+	if !c.ExpiresAt.After(s.now().UTC()) || !p.ExpiresAt.After(s.now().UTC()) || c.ExpiresAt.After(p.ExpiresAt.UTC()) {
 		return RequestResult{}, ErrInvalid
 	}
 	wid := c.WorkloadID
@@ -274,7 +335,14 @@ func (s *MemoryStore) RequestOperation(_ context.Context, c RequestCommand) (Req
 	if wid == "" {
 		wid = uuid.New().String()
 	}
+	expectedWorkloadRevision := c.ExpectedWorkloadRevision
+	if expectedWorkloadRevision == 0 {
+		expectedWorkloadRevision = 1
+	}
 	if existing, ok := s.workloads[wid]; ok {
+		if existing.Revision != c.ExpectedWorkloadRevision {
+			return RequestResult{}, ErrRevisionConflict
+		}
 		if c.Kind == OperationDestroy {
 			if existing.State != "ready" || existing.PlanID != p.ID || existing.PlanDigest != p.Digest || existing.TargetKind != p.TargetKind {
 				return RequestResult{}, ErrConflict
@@ -282,15 +350,20 @@ func (s *MemoryStore) RequestOperation(_ context.Context, c RequestCommand) (Req
 		} else if existing.State != "destroyed" && existing.State != "ready" && existing.State != "failed" {
 			return RequestResult{}, ErrConflict
 		}
+	} else if c.WorkloadID != "" {
+		return RequestResult{}, ErrNotFound
 	}
 	opID, taskID, confID := uuid.New().String(), uuid.New().String(), uuid.New().String()
 	now := s.now().UTC()
 	binding := bindingForOperation(p, wid, c.Kind)
 	conf := coreconfirmation.Confirmation{ConfirmationID: confID, Binding: binding, TaskID: taskID, State: coreconfirmation.StatePending, Revision: 1, CreatedAt: now, UpdatedAt: now, ExpiresAt: c.ExpiresAt.UTC()}
-	payload := coretask.WorkloadTaskPayload{WorkloadID: wid, PlanID: p.ID, OperationID: opID, PlanRevision: p.Revision, PlanDigest: p.Digest, TargetKind: string(p.TargetKind), ConfirmationID: confID, ExecutionSnapshot: mustJSON(p)}
+	payload := coretask.WorkloadTaskPayload{WorkloadID: wid, ExpectedWorkloadRevision: expectedWorkloadRevision, PlanID: p.ID, OperationID: opID, PlanRevision: p.Revision, PlanDigest: p.Digest, TargetKind: string(p.TargetKind), ConfirmationID: confID, ExecutionSnapshot: mustJSON(p)}
 	spec, _ := coretask.TaskSpec{Kind: coretask.TaskKindWorkload, Payload: coretask.TaskPayload{Workload: &payload}, Goal: "workload " + string(c.Kind), IdempotencyKey: uuid.New().String(), AvailableAt: now}.Normalize()
 	task := coretask.Task{ID: taskID, Spec: spec, Status: coretask.StatusWaitingUser, Revision: 1, Attempt: 1, CreatedAt: now, UpdatedAt: now, AvailableAt: now}
-	op := Operation{ID: opID, WorkloadID: wid, PlanID: p.ID, Kind: c.Kind, PlanRevision: p.Revision, PlanDigest: p.Digest, TargetKind: p.TargetKind, TaskID: taskID, ConfirmationID: confID, Status: OperationWaitingUser, Revision: 1, CreatedAt: now, UpdatedAt: now, DispatchState: "prepared"}
+	op := Operation{ID: opID, WorkloadID: wid, ExpectedWorkloadRevision: expectedWorkloadRevision, PlanID: p.ID, Kind: c.Kind, PlanRevision: p.Revision, PlanDigest: p.Digest, TargetKind: p.TargetKind, TaskID: taskID, ConfirmationID: confID, Status: OperationWaitingUser, Revision: 1, CreatedAt: now, UpdatedAt: now, DispatchState: "prepared"}
+	if _, exists := s.workloads[wid]; !exists {
+		s.workloads[wid] = Workload{ID: wid, Revision: 1, PlanID: p.ID, PlanDigest: p.Digest, TargetKind: p.TargetKind, State: "pending", UpdatedAt: now}
+	}
 	s.operations[opID], s.tasks[taskID], s.confirmations[confID] = op, task, conf
 	s.events[opID] = []Event{{OperationID: opID, Sequence: 1, Kind: "requested", Status: OperationWaitingUser, Message: "waiting for owner confirmation", At: now}}
 	r := RequestResult{Operation: op, Task: task, Confirmation: conf}
@@ -381,7 +454,12 @@ func (s *MemoryStore) Consume(_ context.Context, opID, confirmationID, planDiges
 	}
 	t := s.tasks[op.TaskID]
 	c := s.confirmations[confirmationID]
-	if op.ConfirmationID != confirmationID || op.PlanDigest != planDigest || op.Revision != expected || op.Status != OperationWaitingUser || c.State != coreconfirmation.StateConfirmed || !c.ExpiresAt.After(s.now().UTC()) {
+	p, planFound := s.plans[op.PlanID]
+	if !planFound || op.ConfirmationID != confirmationID || op.PlanDigest != planDigest || op.Revision != expected || op.Status != OperationWaitingUser || c.State != coreconfirmation.StateConfirmed || !c.ExpiresAt.After(s.now().UTC()) || !p.ExpiresAt.After(s.now().UTC()) || c.ExpiresAt.After(p.ExpiresAt.UTC()) {
+		return Operation{}, coretask.Task{}, ErrRevisionConflict
+	}
+	if w, exists := s.workloads[op.WorkloadID]; !exists || w.Revision != op.ExpectedWorkloadRevision {
+		s.terminalizeWorkloadRevisionMismatchLocked(op, c, t)
 		return Operation{}, coretask.Task{}, ErrRevisionConflict
 	}
 	op.Status = OperationRunning
@@ -429,7 +507,12 @@ func (s *MemoryStore) ConsumeFenced(_ context.Context, opID, confirmationID, pla
 	if !ok {
 		return Operation{}, coretask.Task{}, ErrNotFound
 	}
-	if op.ConfirmationID != confirmationID || op.PlanDigest != planDigest || op.Revision != expected || op.Status != OperationWaitingUser || c.State != coreconfirmation.StateConfirmed || !c.ExpiresAt.After(now) || !sameTaskFence(t, fence) {
+	p, planFound := s.plans[op.PlanID]
+	if !planFound || op.ConfirmationID != confirmationID || op.PlanDigest != planDigest || op.Revision != expected || op.Status != OperationWaitingUser || c.State != coreconfirmation.StateConfirmed || !c.ExpiresAt.After(now) || !p.ExpiresAt.After(now) || c.ExpiresAt.After(p.ExpiresAt.UTC()) || !sameTaskFence(t, fence) {
+		return Operation{}, coretask.Task{}, ErrRevisionConflict
+	}
+	if w, exists := s.workloads[op.WorkloadID]; !exists || w.Revision != op.ExpectedWorkloadRevision {
+		s.terminalizeWorkloadRevisionMismatchLocked(op, c, t)
 		return Operation{}, coretask.Task{}, ErrRevisionConflict
 	}
 	op.Status = OperationRunning
@@ -447,6 +530,16 @@ func (s *MemoryStore) ConsumeFenced(_ context.Context, opID, confirmationID, pla
 	s.events[opID] = append(s.events[opID], Event{OperationID: opID, Sequence: uint64(len(s.events[opID]) + 1), Kind: "consumed", Status: OperationRunning, At: now})
 	return op, t, nil
 }
+
+func (s *MemoryStore) terminalizeWorkloadRevisionMismatchLocked(op Operation, c coreconfirmation.Confirmation, t coretask.Task) {
+	now := s.now().UTC()
+	const code = "workload_revision_conflict"
+	c.State, c.Revision, c.TerminalCode, c.TerminalReason, c.UpdatedAt = coreconfirmation.StateRejected, c.Revision+1, code, code, now
+	op.Status, op.DispatchState, op.FailureCode, op.FailureSummary, op.Revision, op.UpdatedAt = OperationFailed, "terminal", code, "workload revision changed before dispatch", op.Revision+1, now
+	t.Status, t.FailureCode, t.FailureSummary, t.Revision, t.UpdatedAt = coretask.StatusCanceled, code, "workload revision changed before dispatch", t.Revision+1, now
+	s.confirmations[c.ConfirmationID], s.operations[op.ID], s.tasks[t.ID] = c, op, t
+	s.events[op.ID] = append(s.events[op.ID], Event{OperationID: op.ID, Sequence: uint64(len(s.events[op.ID]) + 1), Kind: "terminal", Status: OperationFailed, Message: "workload revision changed before dispatch", At: now})
+}
 func (s *MemoryStore) AppendEvent(_ context.Context, id string, e Event) (Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -461,7 +554,7 @@ func (s *MemoryStore) AppendEvent(_ context.Context, id string, e Event) (Event,
 	s.events[id] = append(s.events[id], e)
 	return e, nil
 }
-func (s *MemoryStore) completeLocked(_ context.Context, id, taskID, code string, readback Readback, summary string, claim string, epoch uint64, fence *TaskFence) (Operation, coretask.Task, error) {
+func (s *MemoryStore) completeLocked(ctx context.Context, id, taskID, code string, readback Readback, summary string, claim string, epoch uint64, fence *TaskFence) (Operation, coretask.Task, error) {
 	op, ok := s.operations[id]
 	if !ok {
 		return Operation{}, coretask.Task{}, ErrNotFound
@@ -487,11 +580,17 @@ func (s *MemoryStore) completeLocked(_ context.Context, id, taskID, code string,
 	if claim == "" || op.DispatchClaim != claim || op.DispatchEpoch != epoch || !op.DispatchLeaseUntil.After(now) || !validTask {
 		return Operation{}, coretask.Task{}, ErrRevisionConflict
 	}
+	if mutationFence, ok := MutationLeaseFenceFromContext(ctx); ok && mutationFence.OperationID != id {
+		return Operation{}, coretask.Task{}, ErrRevisionConflict
+	}
 	if code == "" {
 		plan, ok := s.plans[op.PlanID]
-		if !ok || plan.Digest != op.PlanDigest || plan.Revision != op.PlanRevision || readback.WorkloadID != op.WorkloadID || readback.TargetKind != op.TargetKind || readback.Identity.Validate(op.TargetKind) != nil || !targetIdentityEqual(readback.Identity, plan.Target.Identity, op.TargetKind) || (op.Kind == OperationApply && readback.State != "ready") || (op.Kind == OperationDestroy && readback.State != "destroyed") {
+		if !ok || plan.Digest != op.PlanDigest || plan.Revision != op.PlanRevision || readback.WorkloadID != op.WorkloadID || readback.TargetKind != op.TargetKind || readback.Identity.Validate(op.TargetKind) != nil || !targetIdentityEqualForState(readback.Identity, plan.Target.Identity, op.TargetKind, readback.State) || (op.Kind == OperationApply && readback.State != "ready") || (op.Kind == OperationDestroy && readback.State != "destroyed") {
 			return Operation{}, coretask.Task{}, ErrRevisionConflict
 		}
+	}
+	if resultEvent, ok := ProviderResultEventFromContext(ctx); ok {
+		s.events[id] = append(s.events[id], Event{OperationID: id, Sequence: uint64(len(s.events[id]) + 1), Kind: resultEvent.Kind, Status: resultEvent.Status, Message: SafeProviderResultEventMessage(resultEvent), Readback: resultEvent.Readback, At: now})
 	}
 	if code == "" {
 		op.Status = OperationSucceeded
@@ -571,6 +670,66 @@ func (s *MemoryStore) CompleteDispatchFenced(ctx context.Context, id, taskID, cl
 		return Operation{}, coretask.Task{}, ErrRevisionConflict
 	}
 	return s.completeLocked(ctx, id, taskID, code, readback, summary, claim, epoch, &fence)
+}
+
+func (s *MemoryStore) ReconcileUncertain(ctx context.Context, id, code string, readback Readback, summary string) (Operation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	op, ok := s.operations[id]
+	if !ok {
+		return Operation{}, ErrNotFound
+	}
+	if op.Status != OperationUncertain || op.DispatchState != "uncertain" {
+		return op, nil
+	}
+	now := s.now().UTC()
+	safeCode, safeSummary := SafeFailure(code, summary)
+	fingerprint := CompletionFingerprint(safeCode, readback)
+	if op.CompletionFingerprint != "" && op.CompletionFingerprint == fingerprint {
+		return op, nil
+	}
+	if event, ok := ProviderResultEventFromContext(ctx); ok {
+		s.events[id] = append(s.events[id], Event{OperationID: id, Sequence: uint64(len(s.events[id]) + 1), Kind: event.Kind, Status: event.Status, Message: SafeProviderResultEventMessage(event), Readback: event.Readback, At: now})
+	}
+	if safeCode == "" {
+		op.Status = OperationSucceeded
+		op.DispatchState = "terminal"
+		if w, exists := s.workloads[op.WorkloadID]; exists {
+			w.State = "ready"
+			if op.Kind == OperationDestroy {
+				w.State = "destroyed"
+			}
+			w.Revision++
+			w.UpdatedAt = now
+			s.workloads[op.WorkloadID] = w
+		}
+	} else {
+		op.FailureCode, op.FailureSummary = safeCode, safeSummary
+		if safeCode != "provider_uncertain" {
+			op.Status = OperationFailed
+			op.DispatchState = "terminal"
+		} else {
+			op.Status = OperationUncertain
+			op.DispatchState = "uncertain"
+		}
+		if w, exists := s.workloads[op.WorkloadID]; exists {
+			if safeCode == "provider_uncertain" {
+				w.State = "uncertain"
+			} else {
+				w.State = "failed"
+			}
+			w.Revision++
+			w.UpdatedAt = now
+			s.workloads[op.WorkloadID] = w
+		}
+	}
+	op.DispatchLeaseUntil = time.Time{}
+	op.CompletionFingerprint = fingerprint
+	op.Revision++
+	op.UpdatedAt = now
+	s.operations[id] = op
+	s.events[id] = append(s.events[id], Event{OperationID: id, Sequence: uint64(len(s.events[id]) + 1), Kind: "reconciled", Status: op.Status, Message: safeSummary, At: now})
+	return op, nil
 }
 func (s *MemoryStore) RenewDispatchLease(_ context.Context, id, claim string, epoch uint64) (Operation, error) {
 	s.mu.Lock()

@@ -2,6 +2,7 @@ package ssm
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -52,6 +53,10 @@ func (s *cleanupSSM) GetCommandInvocation(_ context.Context, input *ssm.GetComma
 }
 
 func cleanupProviderFixture(t *testing.T, statuses ...ssmtypes.CommandInvocationStatus) (*Provider, coreworkload.Plan, coreworkload.Operation, *cleanupSSM) {
+	return cleanupProviderFixtureWithEC2(t, nil, statuses...)
+}
+
+func cleanupProviderFixtureWithEC2(t *testing.T, mutate func(*readinessEC2), statuses ...ssmtypes.CommandInvocationStatus) (*Provider, coreworkload.Plan, coreworkload.Operation, *cleanupSSM) {
 	t.Helper()
 	handle := workaws.CredentialHandle{
 		ReferenceID:     uuid.NewString(),
@@ -77,18 +82,20 @@ func cleanupProviderFixture(t *testing.T, statuses ...ssmtypes.CommandInvocation
 		EC2SystemdService:  coreworkload.GeoLibreStaticV1Service,
 		EC2CleanupProfile:  coreworkload.EC2CleanupProfileGeoLibreStaticV1,
 		RequiredInstanceTags: map[string]string{
-			"managed":           "true",
-			"service":           "geolibre",
-			"owner":             "sha256:" + strings.Repeat("d", 64),
-			"dirextalk:plan-id": "22222222-2222-4222-8222-222222222222",
+			"managed":                 "true",
+			"service":                 "geolibre",
+			"owner":                   "sha256:" + strings.Repeat("d", 64),
+			"dirextalk:owner-binding": "sha256:" + strings.Repeat("d", 64),
+			"dirextalk:plan-id":       "22222222-2222-4222-8222-222222222222",
 		},
 		Labels: map[string]string{
-			"dirextalk:manifest-digest": coreworkload.GeoLibreStaticV1ManifestDigest,
-			"dirextalk:command-digest":  coreworkload.GeoLibreStaticV1CommandDigest,
-			"dirextalk:release":         coreworkload.GeoLibreStaticV1Release,
-			"dirextalk:exposure":        "public-unauthenticated-http",
-			"dirextalk:sidecar":         "disabled",
-			"dirextalk:provision-id":    "11111111-1111-4111-8111-111111111111",
+			"dirextalk:manifest-digest":    coreworkload.GeoLibreStaticV1ManifestDigest,
+			"dirextalk:command-digest":     coreworkload.GeoLibreStaticV1CommandDigest,
+			"dirextalk:release":            coreworkload.GeoLibreStaticV1Release,
+			"dirextalk:exposure":           "public-unauthenticated-http",
+			"dirextalk:sidecar":            "disabled",
+			"dirextalk:provision-id":       "11111111-1111-4111-8111-111111111111",
+			"dirextalk:provision-revision": "1",
 		},
 		NetworkGrantDetails: []coreworkload.NetworkGrant{{
 			ReferenceID: "sg-0123456789abcdef0",
@@ -121,17 +128,24 @@ func cleanupProviderFixture(t *testing.T, statuses ...ssmtypes.CommandInvocation
 		t.Fatal(err)
 	}
 	recorder := &cleanupSSM{statuses: statuses}
+	ec2Client := readinessEC2{
+		instance: target.InstanceID,
+		publicIP: "192.0.2.10",
+		groups:   []string{"sg-0123456789abcdef0"},
+		tags: []ec2types.Tag{
+			{Key: aws.String("managed"), Value: aws.String("true")},
+			{Key: aws.String("service"), Value: aws.String("geolibre")},
+			{Key: aws.String("owner"), Value: aws.String("sha256:" + strings.Repeat("d", 64))},
+			{Key: aws.String("dirextalk:owner-binding"), Value: aws.String("sha256:" + strings.Repeat("d", 64))},
+			{Key: aws.String("dirextalk:plan-id"), Value: aws.String("22222222-2222-4222-8222-222222222222")},
+		},
+	}
+	if mutate != nil {
+		mutate(&ec2Client)
+	}
 	clients := Clients{
 		STS: readinessSTS{account: handle.AccountID, arn: handle.PrincipalARN},
-		EC2: readinessEC2{
-			instance: target.InstanceID,
-			tags: []ec2types.Tag{
-				{Key: aws.String("managed"), Value: aws.String("true")},
-				{Key: aws.String("service"), Value: aws.String("geolibre")},
-				{Key: aws.String("owner"), Value: aws.String("sha256:" + strings.Repeat("d", 64))},
-				{Key: aws.String("dirextalk:plan-id"), Value: aws.String("22222222-2222-4222-8222-222222222222")},
-			},
-		},
+		EC2: ec2Client,
 		SSM: recorder,
 	}
 	provider, err := NewProvider(
@@ -155,6 +169,42 @@ func cleanupProviderFixture(t *testing.T, statuses ...ssmtypes.CommandInvocation
 	return provider, plan, operation, recorder
 }
 
+func TestProviderRejectsPublicIPDriftBeforeCommand(t *testing.T) {
+	provider, plan, operation, recorder := cleanupProviderFixtureWithEC2(t, func(ec2 *readinessEC2) {
+		ec2.publicIP = "198.51.100.20"
+	}, ssmtypes.CommandInvocationStatusSuccess)
+	if _, err := provider.Apply(context.Background(), plan, operation); !errors.Is(err, workaws.ErrPrecondition) {
+		t.Fatalf("public IP drift error=%v", err)
+	}
+	if len(recorder.commands) != 0 {
+		t.Fatalf("SSM command sent after public IP drift: %#v", recorder.commands)
+	}
+}
+
+func TestProviderRejectsSecurityGroupDriftBeforeCommand(t *testing.T) {
+	provider, plan, operation, recorder := cleanupProviderFixtureWithEC2(t, func(ec2 *readinessEC2) {
+		ec2.groups = []string{"sg-aaaaaaaa"}
+	}, ssmtypes.CommandInvocationStatusSuccess)
+	if _, err := provider.Apply(context.Background(), plan, operation); !errors.Is(err, workaws.ErrPrecondition) {
+		t.Fatalf("security group drift error=%v", err)
+	}
+	if len(recorder.commands) != 0 {
+		t.Fatalf("SSM command sent after security group drift: %#v", recorder.commands)
+	}
+}
+
+func TestProviderRejectsOwnerBindingDriftBeforeCommand(t *testing.T) {
+	provider, plan, operation, recorder := cleanupProviderFixtureWithEC2(t, func(ec2 *readinessEC2) {
+		ec2.tags = append(ec2.tags, ec2types.Tag{Key: aws.String("dirextalk:owner-binding"), Value: aws.String("sha256:" + strings.Repeat("e", 64))})
+	}, ssmtypes.CommandInvocationStatusSuccess)
+	if _, err := provider.Apply(context.Background(), plan, operation); !errors.Is(err, workaws.ErrPrecondition) {
+		t.Fatalf("owner binding drift error=%v", err)
+	}
+	if len(recorder.commands) != 0 {
+		t.Fatalf("SSM command sent after owner binding drift: %#v", recorder.commands)
+	}
+}
+
 func TestProviderDestroyPromotesGeoLibreOnlyAfterAbsenceProbe(t *testing.T) {
 	provider, plan, operation, recorder := cleanupProviderFixture(
 		t,
@@ -167,6 +217,9 @@ func TestProviderDestroyPromotesGeoLibreOnlyAfterAbsenceProbe(t *testing.T) {
 	}
 	if readback.State != "destroyed" || len(recorder.commands) != 2 {
 		t.Fatalf("readback=%#v commands=%#v", readback, recorder.commands)
+	}
+	if readback.Identity.Endpoint != "" || readback.Identity.AccountID != plan.Target.AccountID || readback.Identity.Region != plan.Target.Region || readback.Identity.InstanceID != plan.Target.InstanceID {
+		t.Fatalf("destroyed readback retained mutable endpoint or lost immutable identity: %#v", readback.Identity)
 	}
 	if !strings.Contains(strings.Join(recorder.commands[1], "\n"), "docker image inspect "+coreworkload.GeoLibreStaticV1ImageURI) {
 		t.Fatalf("terminal probe did not verify the pinned image absence: %#v", recorder.commands[1])

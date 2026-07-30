@@ -45,6 +45,8 @@ func (f readinessSTS) GetCallerIdentity(context.Context, *sts.GetCallerIdentityI
 type readinessEC2 struct {
 	instance  string
 	tags      []ec2types.Tag
+	publicIP  string
+	groups    []string
 	platform  string
 	nextToken string
 	err       error
@@ -58,7 +60,11 @@ func (f readinessEC2) DescribeInstances(context.Context, *ec2.DescribeInstancesI
 	if platform == "" {
 		platform = "Linux/UNIX"
 	}
-	return &ec2.DescribeInstancesOutput{NextToken: aws.String(f.nextToken), Reservations: []ec2types.Reservation{{Instances: []ec2types.Instance{{InstanceId: aws.String(f.instance), PlatformDetails: aws.String(platform), State: &ec2types.InstanceState{Name: ec2types.InstanceStateNameRunning}, Tags: f.tags}}}}}, nil
+	groups := make([]ec2types.GroupIdentifier, 0, len(f.groups))
+	for _, id := range f.groups {
+		groups = append(groups, ec2types.GroupIdentifier{GroupId: aws.String(id)})
+	}
+	return &ec2.DescribeInstancesOutput{NextToken: aws.String(f.nextToken), Reservations: []ec2types.Reservation{{Instances: []ec2types.Instance{{InstanceId: aws.String(f.instance), PublicIpAddress: aws.String(f.publicIP), SecurityGroups: groups, PlatformDetails: aws.String(platform), State: &ec2types.InstanceState{Name: ec2types.InstanceStateNameRunning}, Tags: f.tags}}}}}, nil
 }
 
 type readinessSSM struct {
@@ -84,10 +90,10 @@ func readinessCredential() workaws.CredentialHandle {
 	return workaws.CredentialHandle{ReferenceID: uuid.NewString(), Revision: 1, Region: "ap-northeast-3", AccountID: "123456789012", PrincipalARN: "arn:aws:iam::123456789012:role/agent", AccessKeyID: "access", SecretAccessKey: "secret"}
 }
 func readinessTarget() coreworkload.TargetSettings {
-	return coreworkload.TargetSettings{Region: "ap-northeast-3", AccountID: "123456789012", InstanceID: "i-0123456789abcdef0", Identity: coreworkload.TargetIdentity{Kind: coreworkload.TargetAWSEC2SSM, Region: "ap-northeast-3", AccountID: "123456789012", InstanceID: "i-0123456789abcdef0"}, EC2DocumentVersion: "1", EC2SystemdService: "dirextalk-agent.service", RequiredInstanceTags: map[string]string{"managed": "true"}}
+	return coreworkload.TargetSettings{Region: "ap-northeast-3", AccountID: "123456789012", InstanceID: "i-0123456789abcdef0", Identity: coreworkload.TargetIdentity{Kind: coreworkload.TargetAWSEC2SSM, Region: "ap-northeast-3", AccountID: "123456789012", InstanceID: "i-0123456789abcdef0", Endpoint: "http://192.0.2.10"}, NetworkGrantDetails: []coreworkload.NetworkGrant{{ReferenceID: "sg-0123456789abcdef0", Kind: "aws_security_group"}}, EC2DocumentVersion: "1", EC2SystemdService: "dirextalk-agent.service", RequiredInstanceTags: map[string]string{"managed": "true"}}
 }
 func readinessClients(h workaws.CredentialHandle, target coreworkload.TargetSettings) Clients {
-	return Clients{STS: readinessSTS{account: h.AccountID, arn: h.PrincipalARN}, EC2: readinessEC2{instance: target.InstanceID, tags: []ec2types.Tag{{Key: aws.String("managed"), Value: aws.String("true")}}, platform: "Linux/UNIX"}, SSM: readinessSSM{instance: target.InstanceID}}
+	return Clients{STS: readinessSTS{account: h.AccountID, arn: h.PrincipalARN}, EC2: readinessEC2{instance: target.InstanceID, publicIP: "192.0.2.10", groups: []string{"sg-0123456789abcdef0"}, tags: []ec2types.Tag{{Key: aws.String("managed"), Value: aws.String("true")}}, platform: "Linux/UNIX"}, SSM: readinessSSM{instance: target.InstanceID}}
 }
 
 func TestProbeRequiresExplicitFreshTargetProof(t *testing.T) {
@@ -104,10 +110,10 @@ func TestProbeRequiresExplicitFreshTargetProof(t *testing.T) {
 		{name: "partial-target", target: func() coreworkload.TargetSettings { v := target; v.EC2SystemdService = ""; return v }(), h: h, factory: readinessFactory{clients: readinessClients(h, target)}, want: workaws.ErrPrecondition},
 		{name: "stale-account", target: target, h: func() workaws.CredentialHandle { v := h; v.AccountID = "999999999999"; return v }(), factory: readinessFactory{clients: readinessClients(h, target)}, want: workaws.ErrPrecondition},
 		{name: "provider-error", target: target, h: h, factory: readinessFactory{err: errors.New("offline")}, want: workaws.ErrProvider},
-		{name: "wrong-instance", target: target, h: h, factory: readinessFactory{clients: Clients{STS: readinessSTS{account: h.AccountID, arn: h.PrincipalARN}, EC2: readinessEC2{instance: "i-other", tags: []ec2types.Tag{{Key: aws.String("managed"), Value: aws.String("true")}}}, SSM: readinessSSM{instance: target.InstanceID}}}, want: workaws.ErrPrecondition},
-		{name: "windows", target: target, h: h, factory: readinessFactory{clients: Clients{STS: readinessSTS{account: h.AccountID, arn: h.PrincipalARN}, EC2: readinessEC2{instance: target.InstanceID, platform: "Windows", tags: []ec2types.Tag{{Key: aws.String("managed"), Value: aws.String("true")}}}, SSM: readinessSSM{instance: target.InstanceID}}}, want: workaws.ErrPrecondition},
-		{name: "ec2-pagination", target: target, h: h, factory: readinessFactory{clients: Clients{STS: readinessSTS{account: h.AccountID, arn: h.PrincipalARN}, EC2: readinessEC2{instance: target.InstanceID, nextToken: "next", tags: []ec2types.Tag{{Key: aws.String("managed"), Value: aws.String("true")}}}, SSM: readinessSSM{instance: target.InstanceID}}}, want: workaws.ErrPrecondition},
-		{name: "ssm-pagination", target: target, h: h, factory: readinessFactory{clients: Clients{STS: readinessSTS{account: h.AccountID, arn: h.PrincipalARN}, EC2: readinessEC2{instance: target.InstanceID, tags: []ec2types.Tag{{Key: aws.String("managed"), Value: aws.String("true")}}}, SSM: readinessSSM{instance: target.InstanceID, nextToken: "next"}}}, want: workaws.ErrPrecondition},
+		{name: "wrong-instance", target: target, h: h, factory: readinessFactory{clients: Clients{STS: readinessSTS{account: h.AccountID, arn: h.PrincipalARN}, EC2: readinessEC2{instance: "i-other", publicIP: "192.0.2.10", groups: []string{"sg-0123456789abcdef0"}, tags: []ec2types.Tag{{Key: aws.String("managed"), Value: aws.String("true")}}}, SSM: readinessSSM{instance: target.InstanceID}}}, want: workaws.ErrPrecondition},
+		{name: "windows", target: target, h: h, factory: readinessFactory{clients: Clients{STS: readinessSTS{account: h.AccountID, arn: h.PrincipalARN}, EC2: readinessEC2{instance: target.InstanceID, publicIP: "192.0.2.10", groups: []string{"sg-0123456789abcdef0"}, platform: "Windows", tags: []ec2types.Tag{{Key: aws.String("managed"), Value: aws.String("true")}}}, SSM: readinessSSM{instance: target.InstanceID}}}, want: workaws.ErrPrecondition},
+		{name: "ec2-pagination", target: target, h: h, factory: readinessFactory{clients: Clients{STS: readinessSTS{account: h.AccountID, arn: h.PrincipalARN}, EC2: readinessEC2{instance: target.InstanceID, publicIP: "192.0.2.10", groups: []string{"sg-0123456789abcdef0"}, nextToken: "next", tags: []ec2types.Tag{{Key: aws.String("managed"), Value: aws.String("true")}}}, SSM: readinessSSM{instance: target.InstanceID}}}, want: workaws.ErrPrecondition},
+		{name: "ssm-pagination", target: target, h: h, factory: readinessFactory{clients: Clients{STS: readinessSTS{account: h.AccountID, arn: h.PrincipalARN}, EC2: readinessEC2{instance: target.InstanceID, publicIP: "192.0.2.10", groups: []string{"sg-0123456789abcdef0"}, tags: []ec2types.Tag{{Key: aws.String("managed"), Value: aws.String("true")}}}, SSM: readinessSSM{instance: target.InstanceID, nextToken: "next"}}}, want: workaws.ErrPrecondition},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

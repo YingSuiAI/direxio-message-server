@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcontrol/aws/workload"
@@ -100,7 +101,8 @@ func (p *Provider) Probe(ctx context.Context, target coreworkload.TargetSettings
 		return workaws.ErrProvider
 	}
 	plan := coreworkload.Plan{TargetKind: coreworkload.TargetAWSEC2SSM, Target: target}
-	return p.verify(ctx, h, clients, plan)
+	_, err = p.verify(ctx, h, clients, plan)
+	return err
 }
 
 func (p *Provider) Apply(ctx context.Context, plan coreworkload.Plan, op coreworkload.Operation) (coreworkload.Readback, error) {
@@ -108,7 +110,8 @@ func (p *Provider) Apply(ctx context.Context, plan coreworkload.Plan, op corewor
 	if err != nil {
 		return coreworkload.Readback{}, err
 	}
-	if err = p.verify(ctx, h, clients, plan); err != nil {
+	identity, err := p.verify(ctx, h, clients, plan)
+	if err != nil {
 		return coreworkload.Readback{}, err
 	}
 	if len(plan.CommandSteps) == 0 {
@@ -120,14 +123,15 @@ func (p *Provider) Apply(ctx context.Context, plan coreworkload.Plan, op corewor
 	if _, err = p.command(ctx, clients.SSM, plan.Target.InstanceID, plan, []string{activeProbe(plan.Target.EC2SystemdService)}, "ready"); err != nil {
 		return coreworkload.Readback{}, err
 	}
-	return p.readback(ctx, clients, plan, op, "ready")
+	return p.readback(ctx, clients, plan, op, identity, "ready")
 }
 func (p *Provider) Destroy(ctx context.Context, plan coreworkload.Plan, op coreworkload.Operation) (coreworkload.Readback, error) {
 	h, clients, err := p.prepare(ctx, plan, op)
 	if err != nil {
 		return coreworkload.Readback{}, err
 	}
-	if err = p.verify(ctx, h, clients, plan); err != nil {
+	identity, err := p.verify(ctx, h, clients, plan)
+	if err != nil {
 		return coreworkload.Readback{}, err
 	}
 	commands, err := destroyCommands(plan)
@@ -140,7 +144,7 @@ func (p *Provider) Destroy(ctx context.Context, plan coreworkload.Plan, op corew
 	if _, err = p.command(ctx, clients.SSM, plan.Target.InstanceID, plan, []string{destroyedProbe(plan)}, "destroy-ready"); err != nil {
 		return coreworkload.Readback{}, err
 	}
-	return p.readback(ctx, clients, plan, op, "destroyed")
+	return p.readback(ctx, clients, plan, op, identity, "destroyed")
 }
 
 func destroyCommands(plan coreworkload.Plan) ([]string, error) {
@@ -170,7 +174,8 @@ func (p *Provider) Read(ctx context.Context, plan coreworkload.Plan, op corework
 	if err != nil {
 		return coreworkload.Readback{}, err
 	}
-	if err = p.verify(ctx, h, clients, plan); err != nil {
+	identity, err := p.verify(ctx, h, clients, plan)
+	if err != nil {
 		return coreworkload.Readback{}, err
 	}
 	state := "ready"
@@ -180,7 +185,7 @@ func (p *Provider) Read(ctx context.Context, plan coreworkload.Plan, op corework
 			return coreworkload.Readback{}, err
 		}
 	}
-	return p.readback(ctx, clients, plan, op, state)
+	return p.readback(ctx, clients, plan, op, identity, state)
 }
 func (p *Provider) prepare(ctx context.Context, plan coreworkload.Plan, op coreworkload.Operation) (workaws.CredentialHandle, Clients, error) {
 	if plan.TargetKind != coreworkload.TargetAWSEC2SSM || op.TargetKind != plan.TargetKind || plan.Digest != op.PlanDigest || plan.Revision != op.PlanRevision {
@@ -222,33 +227,108 @@ func workawsResolve(ctx context.Context, p coreworkload.Plan, r workaws.SecretRe
 	return workaws.ResolveApplicationRefs(ctx, p, r)
 }
 
-func (p *Provider) verify(ctx context.Context, h workaws.CredentialHandle, cl Clients, plan coreworkload.Plan) error {
+func (p *Provider) verify(ctx context.Context, h workaws.CredentialHandle, cl Clients, plan coreworkload.Plan) (coreworkload.TargetIdentity, error) {
 	identity, e := cl.STS.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
 	if e != nil || identity == nil || aws.ToString(identity.Account) != plan.Target.AccountID || aws.ToString(identity.Arn) != h.PrincipalARN {
-		return workaws.ErrPrecondition
+		return coreworkload.TargetIdentity{}, workaws.ErrPrecondition
 	}
 	out, e := cl.EC2.DescribeInstances(ctx, &ec2.DescribeInstancesInput{InstanceIds: []string{plan.Target.InstanceID}})
 	if e != nil || out == nil || aws.ToString(out.NextToken) != "" || len(out.Reservations) != 1 || len(out.Reservations[0].Instances) != 1 {
-		return workaws.ErrPrecondition
+		return coreworkload.TargetIdentity{}, workaws.ErrPrecondition
 	}
 	in := out.Reservations[0].Instances[0]
 	if in.InstanceId == nil || aws.ToString(in.InstanceId) != plan.Target.InstanceID || in.State == nil || in.State.Name != ec2types.InstanceStateNameRunning || aws.ToString(in.PlatformDetails) != "Linux/UNIX" {
-		return workaws.ErrPrecondition
+		return coreworkload.TargetIdentity{}, workaws.ErrPrecondition
 	}
 	tags := map[string]string{}
 	for _, t := range in.Tags {
 		tags[aws.ToString(t.Key)] = aws.ToString(t.Value)
 	}
+	if plan.Target.RequiredInstanceTags["service"] == "geolibre" {
+		owner := plan.Target.RequiredInstanceTags["owner"]
+		if !coreworkload.OwnerBindingTagValid(owner) || plan.Target.RequiredInstanceTags["dirextalk:owner-binding"] != owner {
+			return coreworkload.TargetIdentity{}, workaws.ErrPrecondition
+		}
+	}
 	for k, v := range plan.Target.RequiredInstanceTags {
 		if tags[k] != v {
-			return workaws.ErrPrecondition
+			return coreworkload.TargetIdentity{}, workaws.ErrPrecondition
 		}
+	}
+	// The plan's endpoint is an immutable public identity. Never send a command
+	// to an instance whose current public address has drifted from that identity.
+	publicIP := strings.TrimSpace(aws.ToString(in.PublicIpAddress))
+	if publicIP == "" || plan.Target.Identity.Endpoint != "http://"+publicIP {
+		return coreworkload.TargetIdentity{}, workaws.ErrPrecondition
+	}
+	if !matchesBoundSecurityGroups(plan) || !matchesInstanceSecurityGroups(in.SecurityGroups, plan) {
+		return coreworkload.TargetIdentity{}, workaws.ErrPrecondition
 	}
 	si, e := cl.SSM.DescribeInstanceInformation(ctx, &ssm.DescribeInstanceInformationInput{Filters: []ssmtypes.InstanceInformationStringFilter{{Key: aws.String("InstanceIds"), Values: []string{plan.Target.InstanceID}}}})
 	if e != nil || si == nil || aws.ToString(si.NextToken) != "" || len(si.InstanceInformationList) != 1 || aws.ToString(si.InstanceInformationList[0].InstanceId) != plan.Target.InstanceID || si.InstanceInformationList[0].PingStatus != ssmtypes.PingStatusOnline {
-		return workaws.ErrPrecondition
+		return coreworkload.TargetIdentity{}, workaws.ErrPrecondition
 	}
-	return nil
+	verified := plan.Target.Identity
+	verified.Endpoint = "http://" + publicIP
+	return verified, nil
+}
+
+func matchesBoundSecurityGroups(plan coreworkload.Plan) bool {
+	expected := make(map[string]struct{}, len(plan.Target.NetworkGrantDetails))
+	for _, grant := range plan.Target.NetworkGrantDetails {
+		if grant.Kind != "aws_security_group" || strings.TrimSpace(grant.ReferenceID) == "" {
+			return false
+		}
+		if _, duplicate := expected[grant.ReferenceID]; duplicate {
+			return false
+		}
+		expected[grant.ReferenceID] = struct{}{}
+	}
+	if len(expected) == 0 {
+		return false
+	}
+	if len(plan.NetworkGrants) > 0 {
+		if len(plan.NetworkGrants) != len(expected) {
+			return false
+		}
+		seen := make(map[string]struct{}, len(plan.NetworkGrants))
+		for _, value := range plan.NetworkGrants {
+			const prefix = "security-group:"
+			if !strings.HasPrefix(value, prefix) {
+				return false
+			}
+			id := strings.TrimPrefix(value, prefix)
+			if _, duplicate := seen[id]; duplicate {
+				return false
+			}
+			if _, ok := expected[id]; !ok {
+				return false
+			}
+			seen[id] = struct{}{}
+		}
+	}
+	return true
+}
+
+func matchesInstanceSecurityGroups(groups []ec2types.GroupIdentifier, plan coreworkload.Plan) bool {
+	expected := make(map[string]struct{}, len(plan.Target.NetworkGrantDetails))
+	for _, grant := range plan.Target.NetworkGrantDetails {
+		expected[grant.ReferenceID] = struct{}{}
+	}
+	if len(groups) != len(expected) {
+		return false
+	}
+	for _, group := range groups {
+		id := strings.TrimSpace(aws.ToString(group.GroupId))
+		if id == "" {
+			return false
+		}
+		if _, ok := expected[id]; !ok {
+			return false
+		}
+		delete(expected, id)
+	}
+	return len(expected) == 0
 }
 func (p *Provider) command(ctx context.Context, cl SSMClient, instance string, plan coreworkload.Plan, commands []string, kind string) (string, error) {
 	ver, err := strconv.ParseUint(plan.Target.EC2DocumentVersion, 10, 64)
@@ -303,8 +383,12 @@ func DeterministicComment(planDigest, kind, instance string) string {
 	h := sha256.Sum256([]byte(planDigest + ":" + kind + ":" + instance))
 	return "dirextalk-core-v1:" + hex.EncodeToString(h[:])
 }
-func (p *Provider) readback(ctx context.Context, cl Clients, plan coreworkload.Plan, op coreworkload.Operation, state string) (coreworkload.Readback, error) {
-	return coreworkload.Readback{TargetKind: plan.TargetKind, WorkloadID: op.WorkloadID, State: state, Identity: plan.Target.Identity, ProviderVersion: "aws-ssm-v1", At: time.Now().UTC()}, nil
+func (p *Provider) readback(ctx context.Context, cl Clients, plan coreworkload.Plan, op coreworkload.Operation, identity coreworkload.TargetIdentity, state string) (coreworkload.Readback, error) {
+	if state == "destroyed" {
+		// The instance endpoint is no longer an immutable fact after destroy.
+		identity.Endpoint = ""
+	}
+	return coreworkload.Readback{TargetKind: plan.TargetKind, WorkloadID: op.WorkloadID, State: state, Identity: identity, ProviderVersion: "aws-ssm-v1", At: time.Now().UTC()}, nil
 }
 
 var _ coreworkload.Provider = (*Provider)(nil)

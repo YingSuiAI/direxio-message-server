@@ -209,27 +209,28 @@ type Workload struct {
 }
 
 type Operation struct {
-	ID                    string          `json:"operation_id"`
-	WorkloadID            string          `json:"workload_id"`
-	PlanID                string          `json:"plan_id"`
-	Kind                  OperationKind   `json:"kind"`
-	PlanRevision          uint64          `json:"plan_revision"`
-	PlanDigest            string          `json:"plan_digest"`
-	TargetKind            TargetKind      `json:"target_kind"`
-	TaskID                string          `json:"task_id"`
-	ConfirmationID        string          `json:"confirmation_id"`
-	Status                OperationStatus `json:"status"`
-	Revision              uint64          `json:"revision"`
-	FailureCode           string          `json:"failure_code,omitempty"`
-	FailureSummary        string          `json:"failure_summary,omitempty"`
-	CreatedAt             time.Time       `json:"created_at"`
-	UpdatedAt             time.Time       `json:"updated_at"`
-	DispatchState         string          `json:"dispatch_state,omitempty"`
-	DispatchAttempt       uint32          `json:"dispatch_attempt,omitempty"`
-	DispatchEpoch         uint64          `json:"dispatch_epoch,omitempty"`
-	DispatchClaim         string          `json:"dispatch_claim,omitempty"`
-	DispatchLeaseUntil    time.Time       `json:"dispatch_lease_until,omitempty"`
-	CompletionFingerprint string          `json:"completion_fingerprint,omitempty"`
+	ID                       string          `json:"operation_id"`
+	WorkloadID               string          `json:"workload_id"`
+	ExpectedWorkloadRevision uint64          `json:"expected_workload_revision"`
+	PlanID                   string          `json:"plan_id"`
+	Kind                     OperationKind   `json:"kind"`
+	PlanRevision             uint64          `json:"plan_revision"`
+	PlanDigest               string          `json:"plan_digest"`
+	TargetKind               TargetKind      `json:"target_kind"`
+	TaskID                   string          `json:"task_id"`
+	ConfirmationID           string          `json:"confirmation_id"`
+	Status                   OperationStatus `json:"status"`
+	Revision                 uint64          `json:"revision"`
+	FailureCode              string          `json:"failure_code,omitempty"`
+	FailureSummary           string          `json:"failure_summary,omitempty"`
+	CreatedAt                time.Time       `json:"created_at"`
+	UpdatedAt                time.Time       `json:"updated_at"`
+	DispatchState            string          `json:"dispatch_state,omitempty"`
+	DispatchAttempt          uint32          `json:"dispatch_attempt,omitempty"`
+	DispatchEpoch            uint64          `json:"dispatch_epoch,omitempty"`
+	DispatchClaim            string          `json:"dispatch_claim,omitempty"`
+	DispatchLeaseUntil       time.Time       `json:"dispatch_lease_until,omitempty"`
+	CompletionFingerprint    string          `json:"completion_fingerprint,omitempty"`
 }
 
 // TaskFence is the exact generic WorkerPool lease presented to a workload
@@ -293,6 +294,14 @@ func ValidDigest(v string) bool {
 	}
 	_, e := hex.DecodeString(v)
 	return e == nil
+}
+
+// OwnerBindingTagValid accepts only the non-PII owner binding emitted by the
+// authenticated server. Provider targets must never carry a raw Matrix owner
+// id in an instance tag.
+func OwnerBindingTagValid(v string) bool {
+	v = strings.TrimSpace(v)
+	return strings.HasPrefix(v, "sha256:") && ValidDigest(strings.TrimPrefix(v, "sha256:"))
 }
 func validTarget(v TargetKind) bool {
 	return v == TargetAWSEC2SSM || v == TargetAWSECS
@@ -514,7 +523,9 @@ func (p Plan) Normalize() (Plan, error) {
 func validGeoLibreStaticV1Plan(p Plan) bool {
 	manifestDigest := p.Target.Labels["dirextalk:manifest-digest"]
 	commandDigest := p.Target.Labels["dirextalk:command-digest"]
-	ownerBinding := strings.TrimPrefix(p.Target.RequiredInstanceTags["owner"], "sha256:")
+	provisionRevision := p.Target.Labels["dirextalk:provision-revision"]
+	ownerTag := p.Target.RequiredInstanceTags["owner"]
+	ownerBinding := strings.TrimPrefix(ownerTag, "sha256:")
 	planID := p.Target.RequiredInstanceTags["dirextalk:plan-id"]
 	provisionID := p.Target.Labels["dirextalk:provision-id"]
 	if len(p.Target.NetworkGrantDetails) != 1 || len(p.NetworkGrants) != 1 {
@@ -533,9 +544,11 @@ func validGeoLibreStaticV1Plan(p Plan) bool {
 		p.Target.Labels["dirextalk:release"] == GeoLibreStaticV1Release &&
 		p.Target.Labels["dirextalk:exposure"] == "public-unauthenticated-http" &&
 		p.Target.Labels["dirextalk:sidecar"] == "disabled" &&
+		provisionRevision != "" && validPositiveDecimal(provisionRevision) &&
 		p.Target.RequiredInstanceTags["managed"] == "true" &&
 		p.Target.RequiredInstanceTags["service"] == "geolibre" &&
-		strings.HasPrefix(p.Target.RequiredInstanceTags["owner"], "sha256:") &&
+		OwnerBindingTagValid(ownerTag) &&
+		(ownerBinding == strings.TrimPrefix(p.Target.RequiredInstanceTags["dirextalk:owner-binding"], "sha256:") || p.Target.RequiredInstanceTags["dirextalk:owner-binding"] == "") &&
 		ValidDigest(ownerBinding) &&
 		ValidUUID(planID) &&
 		ValidUUID(provisionID) &&
@@ -543,6 +556,18 @@ func validGeoLibreStaticV1Plan(p Plan) bool {
 		validEC2ResourceID(networkGrant.ReferenceID, "sg-") &&
 		p.NetworkGrants[0] == "security-group:"+networkGrant.ReferenceID &&
 		p.Summary == GeoLibreStaticV1Summary(provisionID)
+}
+
+func validPositiveDecimal(v string) bool {
+	if v == "" || strings.TrimSpace(v) != v {
+		return false
+	}
+	for _, r := range v {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return v != "0"
 }
 
 func validEC2ResourceID(value, prefix string) bool {

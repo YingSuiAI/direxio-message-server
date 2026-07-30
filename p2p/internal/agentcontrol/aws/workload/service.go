@@ -85,8 +85,16 @@ func (s *Service) Quote(ctx context.Context, planID string) (Quote, error) {
 	return Quote{PlanID: p.ID, PlanDigest: p.Digest, Summary: p.Summary}, nil
 }
 
-type RequestApplyInput struct{ PlanID, WorkloadID, IdempotencyKey string }
-type RequestDestroyInput struct{ PlanID, WorkloadID, IdempotencyKey string }
+type RequestApplyInput struct {
+	PlanID, WorkloadID, IdempotencyKey string
+	ExpectedWorkloadRevision           uint64
+	ExpiresAt                          time.Time
+}
+type RequestDestroyInput struct {
+	PlanID, WorkloadID, IdempotencyKey string
+	ExpectedWorkloadRevision           uint64
+	ExpiresAt                          time.Time
+}
 
 // RequestApply accepts the structured input used by Go callers. The legacy
 // three-string form remains accepted for small adapters while the API settles.
@@ -94,7 +102,8 @@ func (s *Service) RequestApply(ctx context.Context, input interface{}, rest ...s
 	c := RequestCommand{Kind: OperationApply}
 	switch v := input.(type) {
 	case RequestApplyInput:
-		c.PlanID, c.WorkloadID, c.IdempotencyKey = v.PlanID, v.WorkloadID, v.IdempotencyKey
+		c.PlanID, c.WorkloadID, c.IdempotencyKey, c.ExpectedWorkloadRevision = v.PlanID, v.WorkloadID, v.IdempotencyKey, v.ExpectedWorkloadRevision
+		c.ExpiresAt = v.ExpiresAt
 	case string:
 		if len(rest) != 2 {
 			return RequestResult{}, ErrInvalid
@@ -109,7 +118,8 @@ func (s *Service) RequestDestroy(ctx context.Context, input interface{}, rest ..
 	c := RequestCommand{Kind: OperationDestroy}
 	switch v := input.(type) {
 	case RequestDestroyInput:
-		c.PlanID, c.WorkloadID, c.IdempotencyKey = v.PlanID, v.WorkloadID, v.IdempotencyKey
+		c.PlanID, c.WorkloadID, c.IdempotencyKey, c.ExpectedWorkloadRevision = v.PlanID, v.WorkloadID, v.IdempotencyKey, v.ExpectedWorkloadRevision
+		c.ExpiresAt = v.ExpiresAt
 	case string:
 		if len(rest) != 2 {
 			return RequestResult{}, ErrInvalid
@@ -127,7 +137,10 @@ func (s *Service) Cancel(ctx context.Context, operationID, idempotencyKey string
 	return s.store.CancelOperation(ctx, operationID, idempotencyKey, expected)
 }
 func (s *Service) request(ctx context.Context, c RequestCommand) (RequestResult, error) {
-	if !ValidUUID(c.PlanID) || !ValidUUID(c.IdempotencyKey) {
+	if !ValidUUID(c.PlanID) || !ValidUUID(c.IdempotencyKey) || (c.WorkloadID == "") != (c.ExpectedWorkloadRevision == 0) {
+		return RequestResult{}, ErrInvalid
+	}
+	if !c.ExpiresAt.IsZero() && c.ExpiresAt.Location() != time.UTC {
 		return RequestResult{}, ErrInvalid
 	}
 	return s.store.RequestOperation(ctx, c)
@@ -269,23 +282,19 @@ func (h *Handler) Handle(ctx context.Context, operationID, planDigest string, ex
 		}
 		if readErr != nil {
 			_, readText := SafeFailure("provider_uncertain", readErr.Error())
-			if _, ae := h.store.AppendEvent(ctx, op.ID, Event{Kind: "uncertain", Status: OperationUncertain, Message: readText, Readback: mustJSON(recovered)}); ae != nil {
-				return Operation{}, ae
-			}
-			out, _, ce := h.completeDispatch(ctx, op.ID, op.TaskID, op.DispatchClaim, op.DispatchEpoch, "provider_uncertain", recovered, readText, fence)
+			eventCtx := WithProviderResultEvent(ctx, ProviderResultEvent{Kind: "uncertain", Status: OperationUncertain, Message: readText, Readback: mustJSON(recovered)})
+			out, _, ce := h.completeDispatch(eventCtx, op.ID, op.TaskID, op.DispatchClaim, op.DispatchEpoch, "provider_uncertain", recovered, readText, fence)
 			if ce != nil {
 				return Operation{}, ce
 			}
 			return out, RedactError(readErr)
 		}
-		if _, ae := h.store.AppendEvent(ctx, op.ID, Event{Kind: "recovered_readback", Status: OperationRunning, Readback: mustJSON(recovered)}); ae != nil {
-			return Operation{}, ae
-		}
+		eventCtx := WithProviderResultEvent(ctx, ProviderResultEvent{Kind: "recovered_readback", Status: OperationRunning, Readback: mustJSON(recovered)})
 		code := ""
-		if recovered.WorkloadID == "" || recovered.WorkloadID != op.WorkloadID || recovered.TargetKind != op.TargetKind || !targetIdentityEqual(recovered.Identity, plan.Target.Identity, plan.TargetKind) || (op.Kind == OperationApply && recovered.State != "ready") || (op.Kind == OperationDestroy && recovered.State != "destroyed") {
+		if recovered.WorkloadID == "" || recovered.WorkloadID != op.WorkloadID || recovered.TargetKind != op.TargetKind || !targetIdentityEqualForState(recovered.Identity, plan.Target.Identity, plan.TargetKind, recovered.State) || (op.Kind == OperationApply && recovered.State != "ready") || (op.Kind == OperationDestroy && recovered.State != "destroyed") {
 			code = "provider_uncertain"
 		}
-		out, _, ce := h.completeDispatch(ctx, op.ID, op.TaskID, op.DispatchClaim, op.DispatchEpoch, code, recovered, code, fence)
+		out, _, ce := h.completeDispatch(eventCtx, op.ID, op.TaskID, op.DispatchClaim, op.DispatchEpoch, code, recovered, code, fence)
 		if ce != nil {
 			return Operation{}, ce
 		}
@@ -294,10 +303,8 @@ func (h *Handler) Handle(ctx context.Context, operationID, planDigest string, ex
 	readback, readErr := h.provider.Read(ctx, plan, op)
 	if readErr != nil {
 		_, errText := SafeFailure("provider_uncertain", readErr.Error())
-		if _, ae := h.store.AppendEvent(ctx, op.ID, Event{Kind: "uncertain", Status: OperationUncertain, Message: errText}); ae != nil {
-			return Operation{}, ae
-		}
-		out, _, ce := h.completeDispatch(ctx, op.ID, op.TaskID, op.DispatchClaim, op.DispatchEpoch, "provider_uncertain", SanitizeReadback(readback), errText, fence)
+		eventCtx := WithProviderResultEvent(ctx, ProviderResultEvent{Kind: "uncertain", Status: OperationUncertain, Message: errText, Readback: mustJSON(SanitizeReadback(readback))})
+		out, _, ce := h.completeDispatch(eventCtx, op.ID, op.TaskID, op.DispatchClaim, op.DispatchEpoch, "provider_uncertain", SanitizeReadback(readback), errText, fence)
 		if ce != nil {
 			return Operation{}, ce
 		}
@@ -307,14 +314,12 @@ func (h *Handler) Handle(ctx context.Context, operationID, planDigest string, ex
 	if readback.Digest == "" {
 		readback.Digest = ReadbackDigest(readback)
 	}
-	if _, ae := h.store.AppendEvent(ctx, op.ID, Event{Kind: "readback", Status: OperationRunning, Readback: mustJSON(readback)}); ae != nil {
-		return Operation{}, ae
-	}
+	eventCtx := WithProviderResultEvent(ctx, ProviderResultEvent{Kind: "readback", Status: OperationRunning, Readback: mustJSON(readback)})
 	code := ""
-	if readback.WorkloadID == "" || readback.WorkloadID != op.WorkloadID || readback.TargetKind != op.TargetKind || !targetIdentityEqual(readback.Identity, plan.Target.Identity, plan.TargetKind) || (op.Kind == OperationApply && readback.State != "ready") || (op.Kind == OperationDestroy && readback.State != "destroyed") {
+	if readback.WorkloadID == "" || readback.WorkloadID != op.WorkloadID || readback.TargetKind != op.TargetKind || !targetIdentityEqualForState(readback.Identity, plan.Target.Identity, plan.TargetKind, readback.State) || (op.Kind == OperationApply && readback.State != "ready") || (op.Kind == OperationDestroy && readback.State != "destroyed") {
 		code = "provider_uncertain"
 	}
-	out, _, e := h.completeDispatch(ctx, op.ID, op.TaskID, op.DispatchClaim, op.DispatchEpoch, code, readback, code, fence)
+	out, _, e := h.completeDispatch(eventCtx, op.ID, op.TaskID, op.DispatchClaim, op.DispatchEpoch, code, readback, code, fence)
 	return out, e
 }
 
@@ -371,6 +376,43 @@ func (h *Handler) Recover(ctx context.Context, operationID string, fences ...Tas
 			return Operation{}, ErrRevisionConflict
 		}
 	}
+	// A terminal task cannot reacquire the generic worker fence after an
+	// uncertain provider result. Reconcile that state through the dedicated
+	// read-only path instead of attempting RecoverClaim/CompleteDispatch.
+	current, getErr := h.store.GetOperation(ctx, operationID)
+	if getErr != nil {
+		return Operation{}, getErr
+	}
+	if current.Status == OperationUncertain || (current.Status != OperationRunning && current.DispatchState == "uncertain") {
+		if h.provider == nil {
+			return current, nil
+		}
+		plan, planErr := h.store.GetPlan(ctx, current.PlanID)
+		if planErr != nil {
+			return Operation{}, planErr
+		}
+		rb, readErr := h.provider.Read(ctx, plan, current)
+		rb = SanitizeReadback(rb)
+		if rb.Digest == "" {
+			rb.Digest = ReadbackDigest(rb)
+		}
+		code := ""
+		if readErr != nil || rb.WorkloadID == "" || rb.WorkloadID != current.WorkloadID || rb.TargetKind != current.TargetKind || !targetIdentityEqualForState(rb.Identity, plan.Target.Identity, plan.TargetKind, rb.State) || (current.Kind == OperationApply && rb.State != "ready") || (current.Kind == OperationDestroy && rb.State != "destroyed") {
+			code = "provider_uncertain"
+		}
+		if reconciler, ok := h.store.(UncertainReconciler); ok {
+			message := code
+			if readErr != nil {
+				_, message = SafeFailure("provider_uncertain", readErr.Error())
+			}
+			eventStatus := OperationRunning
+			if code != "" {
+				eventStatus = OperationUncertain
+			}
+			return reconciler.ReconcileUncertain(WithProviderResultEvent(ctx, ProviderResultEvent{Kind: "reconciled_readback", Status: eventStatus, Message: message, Readback: mustJSON(rb)}), operationID, code, rb, message)
+		}
+		return current, nil
+	}
 	var op Operation
 	var err error
 	if fence != nil {
@@ -402,23 +444,19 @@ func (h *Handler) Recover(ctx context.Context, operationID string, fences ...Tas
 	}
 	if readErr != nil {
 		_, errText := SafeFailure("provider_uncertain", readErr.Error())
-		if _, err = h.store.AppendEvent(ctx, op.ID, Event{Kind: "recovered_uncertain", Status: OperationUncertain, Message: errText, Readback: mustJSON(rb)}); err != nil {
-			return Operation{}, err
-		}
-		out, _, completeErr := h.completeDispatch(ctx, op.ID, op.TaskID, op.DispatchClaim, op.DispatchEpoch, "provider_uncertain", rb, errText, fence)
+		eventCtx := WithProviderResultEvent(ctx, ProviderResultEvent{Kind: "recovered_uncertain", Status: OperationUncertain, Message: errText, Readback: mustJSON(rb)})
+		out, _, completeErr := h.completeDispatch(eventCtx, op.ID, op.TaskID, op.DispatchClaim, op.DispatchEpoch, "provider_uncertain", rb, errText, fence)
 		if completeErr != nil {
 			return Operation{}, completeErr
 		}
 		return out, RedactError(readErr)
 	}
-	if _, err = h.store.AppendEvent(ctx, op.ID, Event{Kind: "recovered_readback", Status: OperationRunning, Readback: mustJSON(rb)}); err != nil {
-		return Operation{}, err
-	}
+	eventCtx := WithProviderResultEvent(ctx, ProviderResultEvent{Kind: "recovered_readback", Status: OperationRunning, Readback: mustJSON(rb)})
 	code := ""
-	if rb.WorkloadID == "" || rb.WorkloadID != op.WorkloadID || rb.TargetKind != op.TargetKind || !targetIdentityEqual(rb.Identity, plan.Target.Identity, plan.TargetKind) || (op.Kind == OperationApply && rb.State != "ready") || (op.Kind == OperationDestroy && rb.State != "destroyed") {
+	if rb.WorkloadID == "" || rb.WorkloadID != op.WorkloadID || rb.TargetKind != op.TargetKind || !targetIdentityEqualForState(rb.Identity, plan.Target.Identity, plan.TargetKind, rb.State) || (op.Kind == OperationApply && rb.State != "ready") || (op.Kind == OperationDestroy && rb.State != "destroyed") {
 		code = "provider_uncertain"
 	}
-	out, _, err := h.completeDispatch(ctx, op.ID, op.TaskID, op.DispatchClaim, op.DispatchEpoch, code, rb, code, fence)
+	out, _, err := h.completeDispatch(eventCtx, op.ID, op.TaskID, op.DispatchClaim, op.DispatchEpoch, code, rb, code, fence)
 	return out, err
 }
 
@@ -437,6 +475,13 @@ func targetIdentityEqual(actual, desired TargetIdentity, kind TargetKind) bool {
 		desired.Kind = kind
 	}
 	return actual == desired
+}
+
+func targetIdentityEqualForState(actual, desired TargetIdentity, kind TargetKind, state string) bool {
+	if state == "destroyed" && kind == TargetAWSEC2SSM {
+		desired.Endpoint = ""
+	}
+	return targetIdentityEqual(actual, desired, kind)
 }
 
 type redactedError string

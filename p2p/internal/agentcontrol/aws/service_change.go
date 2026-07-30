@@ -75,6 +75,41 @@ func (s *Service) ExecutionFence(ctx context.Context, confirmationID string) (Ex
 	return s.coordinator.ExecutionFence(ctx, confirmationID)
 }
 
+func (s *Service) AcquireProvisionMutation(ctx context.Context, provisionID string) (ProvisionMutationLease, error) {
+	if s == nil || s.repo == nil || !validUUID(provisionID) {
+		return nil, ErrInvalid
+	}
+	locker, ok := s.repo.(ProvisionMutationLocker)
+	if !ok {
+		return nil, ErrConflict
+	}
+	return locker.AcquireProvisionMutation(ctx, provisionID)
+}
+
+func (s *Service) ResolveProvisionMutation(ctx context.Context, provisionID, operationID string) error {
+	if s == nil || s.repo == nil || !validUUID(provisionID) || !validUUID(operationID) {
+		return ErrInvalid
+	}
+	resolver, ok := s.repo.(interface {
+		ResolveProvisionMutation(context.Context, string, string) error
+	})
+	if !ok {
+		return ErrConflict
+	}
+	return resolver.ResolveProvisionMutation(ctx, provisionID, operationID)
+}
+
+func (s *Service) ClaimProvisionMutation(ctx context.Context, provisionID, operationID string) (ProvisionMutationLease, error) {
+	if s == nil || s.repo == nil || !validUUID(provisionID) || !validUUID(operationID) {
+		return nil, ErrInvalid
+	}
+	reclaimer, ok := s.repo.(ProvisionMutationReclaimer)
+	if !ok {
+		return nil, ErrConflict
+	}
+	return reclaimer.ClaimProvisionMutation(ctx, provisionID, operationID)
+}
+
 func (s *Service) CompleteChange(ctx context.Context, cmd CompleteChangeCommand) (Change, error) {
 	if s == nil || s.coordinator == nil || !validUUID(cmd.ChangeID) || !validUUID(cmd.ConfirmationID) || cmd.ExpectedChangeRevision < 1 || cmd.Status != ChangeSucceeded && cmd.Status != ChangeFailed && cmd.Status != ChangeCanceled {
 		return Change{}, ErrInvalid

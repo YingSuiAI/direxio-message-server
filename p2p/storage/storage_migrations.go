@@ -1370,6 +1370,36 @@ func (s *DatabaseStore) migrate(ctx context.Context) error {
 			`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='core_aws_changes_provision_fk' AND conrelid='core_aws_changes'::regclass) THEN ALTER TABLE core_aws_changes ADD CONSTRAINT core_aws_changes_provision_fk FOREIGN KEY(owner_id,provision_id) REFERENCES core_aws_ec2_provisions(owner_id,provision_id) ON DELETE RESTRICT; END IF; END $$`,
 		})
 	}})
+	m.AddMigrations(sqlutil.Migration{Version: "p2p: durable EC2 provision mutation leases v104", Up: func(ctx context.Context, txn *sql.Tx) error {
+		return execMigrationStatements(ctx, txn, []string{
+			`CREATE TABLE IF NOT EXISTS core_aws_ec2_provision_mutation_leases (
+				owner_id TEXT NOT NULL,
+				provision_id UUID NOT NULL,
+				token UUID,
+				epoch BIGINT NOT NULL DEFAULT 0 CHECK (epoch >= 0),
+				expires_at TIMESTAMPTZ,
+				state TEXT NOT NULL DEFAULT 'active' CHECK (state IN ('active','uncertain')),
+				operation_id UUID,
+				updated_at TIMESTAMPTZ NOT NULL,
+				PRIMARY KEY(owner_id,provision_id),
+				FOREIGN KEY(owner_id,provision_id) REFERENCES core_aws_ec2_provisions(owner_id,provision_id) ON DELETE CASCADE,
+				CHECK ((token IS NULL AND expires_at IS NULL) OR (token IS NOT NULL AND expires_at IS NOT NULL))
+			)`,
+			`CREATE INDEX IF NOT EXISTS core_aws_ec2_provision_mutation_leases_expiry_idx ON core_aws_ec2_provision_mutation_leases(owner_id,expires_at)`,
+			`ALTER TABLE core_aws_ec2_provision_mutation_leases ADD COLUMN IF NOT EXISTS state TEXT NOT NULL DEFAULT 'active' CHECK (state IN ('active','uncertain'))`,
+			`ALTER TABLE core_aws_ec2_provision_mutation_leases ADD COLUMN IF NOT EXISTS operation_id UUID`,
+			`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='core_aws_ec2_provision_mutation_leases_operation_fk' AND conrelid='core_aws_ec2_provision_mutation_leases'::regclass) THEN ALTER TABLE core_aws_ec2_provision_mutation_leases ADD CONSTRAINT core_aws_ec2_provision_mutation_leases_operation_fk FOREIGN KEY(owner_id,operation_id) REFERENCES core_workload_operations(owner_id,operation_id) ON DELETE RESTRICT; END IF; END $$`,
+			`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='core_aws_ec2_provision_mutation_leases_uncertain_op_check' AND conrelid='core_aws_ec2_provision_mutation_leases'::regclass) THEN ALTER TABLE core_aws_ec2_provision_mutation_leases ADD CONSTRAINT core_aws_ec2_provision_mutation_leases_uncertain_op_check CHECK (state <> 'uncertain' OR operation_id IS NOT NULL); END IF; END $$`,
+			`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='core_aws_ec2_provision_mutation_leases_unbound_check' AND conrelid='core_aws_ec2_provision_mutation_leases'::regclass) THEN ALTER TABLE core_aws_ec2_provision_mutation_leases ADD CONSTRAINT core_aws_ec2_provision_mutation_leases_unbound_check CHECK (token IS NOT NULL OR (expires_at IS NULL AND operation_id IS NULL)); END IF; END $$`,
+			`CREATE INDEX IF NOT EXISTS core_aws_ec2_provision_mutation_leases_operation_idx ON core_aws_ec2_provision_mutation_leases(owner_id,operation_id) WHERE operation_id IS NOT NULL`,
+		})
+	}})
+	m.AddMigrations(sqlutil.Migration{Version: "p2p: workload expected revision fence v105", Up: func(ctx context.Context, txn *sql.Tx) error {
+		return execMigrationStatements(ctx, txn, []string{
+			`ALTER TABLE core_workload_operations ADD COLUMN IF NOT EXISTS expected_workload_revision BIGINT NOT NULL DEFAULT 1 CHECK (expected_workload_revision > 0)`,
+			`UPDATE core_workload_operations o SET expected_workload_revision=w.revision FROM core_workloads w WHERE w.owner_id=o.owner_id AND w.workload_id=o.workload_id AND o.expected_workload_revision=1 AND w.revision<>1`,
+		})
+	}})
 	return m.Up(ctx)
 }
 

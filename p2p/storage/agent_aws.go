@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"time"
 
 	agentaws "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcontrol/aws"
@@ -55,6 +56,7 @@ type PostgresAWSRepository struct {
 
 var _ agentaws.Repository = (*PostgresAWSRepository)(nil)
 var _ agentaws.ChangeCoordinator = (*PostgresAWSRepository)(nil)
+var _ agentaws.ProvisionMutationLocker = (*PostgresAWSRepository)(nil)
 
 func (r *PostgresAWSRepository) CreateProvision(ctx context.Context, p agentaws.Provision) (agentaws.Provision, error) {
 	if r == nil || r.store == nil || r.store.db == nil || p.Validate() != nil {
@@ -527,6 +529,26 @@ func (r *PostgresAWSRepository) RequestChange(ctx context.Context, in agentaws.R
 	} else if !errors.Is(e, sql.ErrNoRows) {
 		return agentaws.ChangeRequestResult{}, e
 	}
+	if in.ProvisionID != "" {
+		if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, r.ownerID+"\x00geolibre-provision\x00"+in.ProvisionID); err != nil {
+			return agentaws.ChangeRequestResult{}, err
+		}
+		// The durable lease is the cross-transaction fence held while a typed
+		// provider call is in flight. Lock the lease row in this short
+		// transaction and reject active holders without waiting on a DB
+		// connection-scoped lock. Replays above intentionally bypass this gate.
+		if _, err = tx.ExecContext(ctx, `INSERT INTO core_aws_ec2_provision_mutation_leases(owner_id,provision_id,epoch,updated_at) VALUES($1,$2,0,$3) ON CONFLICT(owner_id,provision_id) DO NOTHING`, r.ownerID, in.ProvisionID, now); err != nil {
+			return agentaws.ChangeRequestResult{}, err
+		}
+		var leaseToken sql.NullString
+		var leaseExpires sql.NullTime
+		if err = tx.QueryRowContext(ctx, `SELECT token::text,expires_at FROM core_aws_ec2_provision_mutation_leases WHERE owner_id=$1 AND provision_id=$2 FOR UPDATE`, r.ownerID, in.ProvisionID).Scan(&leaseToken, &leaseExpires); err != nil {
+			return agentaws.ChangeRequestResult{}, err
+		}
+		if leaseToken.Valid && leaseExpires.Valid && leaseExpires.Time.After(now) {
+			return agentaws.ChangeRequestResult{}, agentaws.ErrConflict
+		}
+	}
 	// Lock and rehydrate the complete immutable plan before binding a linked
 	// provision. This prevents a forged request from being checked against a
 	// stale/non-authoritative plan projection.
@@ -649,6 +671,260 @@ func (r *PostgresAWSRepository) RequestChange(ctx context.Context, in agentaws.R
 		return agentaws.ChangeRequestResult{}, err
 	}
 	return out, nil
+}
+
+const postgresProvisionMutationLeaseDuration = 10 * time.Minute
+
+type postgresProvisionMutationLease struct {
+	repo        *PostgresAWSRepository
+	provisionID string
+	token       string
+	epoch       int64
+	mu          sync.Mutex
+	released    bool
+}
+
+func (l *postgresProvisionMutationLease) Token() string {
+	if l == nil {
+		return ""
+	}
+	return l.token
+}
+func (l *postgresProvisionMutationLease) Epoch() int64 {
+	if l == nil {
+		return 0
+	}
+	return l.epoch
+}
+
+func (r *PostgresAWSRepository) AcquireProvisionMutation(ctx context.Context, provisionID string) (agentaws.ProvisionMutationLease, error) {
+	if r == nil || r.store == nil || r.store.db == nil || !validAWSUUID(provisionID) {
+		return nil, agentaws.ErrInvalid
+	}
+	tx, err := r.store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	now := time.Now().UTC()
+	var exists bool
+	if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM core_aws_ec2_provisions WHERE owner_id=$1 AND provision_id=$2)`, r.ownerID, provisionID).Scan(&exists); err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, agentaws.ErrNotFound
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO core_aws_ec2_provision_mutation_leases(owner_id,provision_id,epoch,updated_at) VALUES($1,$2,0,$3) ON CONFLICT(owner_id,provision_id) DO NOTHING`, r.ownerID, provisionID, now); err != nil {
+		return nil, err
+	}
+	token := uuid.NewString()
+	expiresAt := now.Add(postgresProvisionMutationLeaseDuration)
+	var epoch int64
+	err = tx.QueryRowContext(ctx, `UPDATE core_aws_ec2_provision_mutation_leases SET token=$1,epoch=epoch+1,expires_at=$2,state='active',operation_id=NULL,updated_at=$3 WHERE owner_id=$4 AND provision_id=$5 AND state='active' AND (token IS NULL OR expires_at <= $3) RETURNING epoch`, token, expiresAt, now, r.ownerID, provisionID).Scan(&epoch)
+	if errors.Is(err, sql.ErrNoRows) {
+		// A row that exists but cannot be updated is held by another live
+		// lease. Do not wait for it; callers can retry after reconciliation.
+		return nil, agentaws.ErrConflict
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	return &postgresProvisionMutationLease{repo: r, provisionID: provisionID, token: token, epoch: epoch}, nil
+}
+
+func (r *PostgresAWSRepository) ClaimProvisionMutation(ctx context.Context, provisionID, operationID string) (agentaws.ProvisionMutationLease, error) {
+	if r == nil || r.store == nil || r.store.db == nil || !validAWSUUID(provisionID) || !validAWSUUID(operationID) {
+		return nil, agentaws.ErrInvalid
+	}
+	tx, err := r.store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	token := uuid.NewString()
+	var epoch int64
+	expiresAt := time.Now().UTC().Add(postgresProvisionMutationLeaseDuration)
+	err = tx.QueryRowContext(ctx, `UPDATE core_aws_ec2_provision_mutation_leases SET token=$1,epoch=epoch+1,state='active',expires_at=$5,updated_at=$5 WHERE owner_id=$2 AND provision_id=$3 AND operation_id=$4 AND ((state='uncertain') OR (state='active' AND expires_at<=$5)) RETURNING epoch`, token, r.ownerID, provisionID, operationID, expiresAt).Scan(&epoch)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, agentaws.ErrConflict
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	return &postgresProvisionMutationLease{repo: r, provisionID: provisionID, token: token, epoch: epoch}, nil
+}
+
+func (l *postgresProvisionMutationLease) BindOperation(ctx context.Context, operationID string) error {
+	if l == nil || l.repo == nil || strings.TrimSpace(operationID) == "" || !validAWSUUID(operationID) {
+		return agentaws.ErrInvalid
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.released {
+		return agentaws.ErrConflict
+	}
+	result, err := l.repo.store.db.ExecContext(ctx, `UPDATE core_aws_ec2_provision_mutation_leases SET operation_id=$1,updated_at=$2 WHERE owner_id=$3 AND provision_id=$4 AND token=$5 AND epoch=$6 AND state='active' AND expires_at>$2 AND (operation_id IS NULL OR operation_id=$1)`, operationID, time.Now().UTC(), l.repo.ownerID, l.provisionID, l.token, l.epoch)
+	if err != nil {
+		return err
+	}
+	if affected, err := result.RowsAffected(); err != nil {
+		return err
+	} else if affected != 1 {
+		return agentaws.ErrConflict
+	}
+	return nil
+}
+
+func (l *postgresProvisionMutationLease) Renew(ctx context.Context) error {
+	if l == nil || l.repo == nil {
+		return agentaws.ErrInvalid
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.released {
+		return agentaws.ErrConflict
+	}
+	return l.repo.renewProvisionMutation(ctx, l.provisionID, l.token, l.epoch)
+}
+
+func (l *postgresProvisionMutationLease) Assert(ctx context.Context) error {
+	if l == nil || l.repo == nil {
+		return agentaws.ErrInvalid
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.released {
+		return agentaws.ErrConflict
+	}
+	return l.repo.assertProvisionMutation(ctx, l.provisionID, l.token, l.epoch)
+}
+
+func (l *postgresProvisionMutationLease) MarkUncertain(ctx context.Context, operationID string) error {
+	if l == nil || l.repo == nil || strings.TrimSpace(operationID) == "" {
+		return agentaws.ErrInvalid
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.released {
+		return agentaws.ErrConflict
+	}
+	tx, err := l.repo.store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `UPDATE core_aws_ec2_provision_mutation_leases SET state='uncertain',operation_id=$1,expires_at=$2,updated_at=$3 WHERE owner_id=$4 AND provision_id=$5 AND token=$6 AND epoch=$7 AND state='active'`, operationID, time.Now().UTC().Add(24*time.Hour), time.Now().UTC(), l.repo.ownerID, l.provisionID, l.token, l.epoch)
+	if err != nil {
+		return err
+	}
+	if affected, err := result.RowsAffected(); err != nil {
+		return err
+	} else if affected != 1 {
+		return agentaws.ErrConflict
+	}
+	return tx.Commit()
+}
+
+func (l *postgresProvisionMutationLease) Release(ctx context.Context) error {
+	if l == nil || l.repo == nil {
+		return agentaws.ErrInvalid
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.released {
+		return nil
+	}
+	err := l.repo.releaseProvisionMutation(ctx, l.provisionID, l.token, l.epoch)
+	if err == nil {
+		l.released = true
+	}
+	return err
+}
+
+func (r *PostgresAWSRepository) renewProvisionMutation(ctx context.Context, provisionID, token string, epoch int64) error {
+	if r == nil || r.store == nil || r.store.db == nil || !validAWSUUID(provisionID) || strings.TrimSpace(token) == "" || epoch < 1 {
+		return agentaws.ErrInvalid
+	}
+	tx, err := r.store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := time.Now().UTC()
+	expiresAt := now.Add(postgresProvisionMutationLeaseDuration)
+	result, err := tx.ExecContext(ctx, `UPDATE core_aws_ec2_provision_mutation_leases SET expires_at=$1,updated_at=$2 WHERE owner_id=$3 AND provision_id=$4 AND token=$5 AND epoch=$6 AND expires_at > $2`, expiresAt, now, r.ownerID, provisionID, token, epoch)
+	if err != nil {
+		return err
+	}
+	if affected, err := result.RowsAffected(); err != nil {
+		return err
+	} else if affected != 1 {
+		return agentaws.ErrConflict
+	}
+	return tx.Commit()
+}
+
+func (r *PostgresAWSRepository) assertProvisionMutation(ctx context.Context, provisionID, token string, epoch int64) error {
+	if r == nil || r.store == nil || r.store.db == nil || !validAWSUUID(provisionID) || strings.TrimSpace(token) == "" || epoch < 1 {
+		return agentaws.ErrInvalid
+	}
+	var exists bool
+	err := r.store.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM core_aws_ec2_provision_mutation_leases WHERE owner_id=$1 AND provision_id=$2 AND token=$3 AND epoch=$4 AND expires_at > NOW())`, r.ownerID, provisionID, token, epoch).Scan(&exists)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return agentaws.ErrConflict
+	}
+	return nil
+}
+
+func (r *PostgresAWSRepository) releaseProvisionMutation(ctx context.Context, provisionID, token string, epoch int64) error {
+	if r == nil || r.store == nil || r.store.db == nil || !validAWSUUID(provisionID) || strings.TrimSpace(token) == "" || epoch < 1 {
+		return agentaws.ErrInvalid
+	}
+	tx, err := r.store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `UPDATE core_aws_ec2_provision_mutation_leases SET token=NULL,expires_at=NULL,state='active',operation_id=NULL,updated_at=$1 WHERE owner_id=$2 AND provision_id=$3 AND token=$4 AND epoch=$5 AND state='active'`, time.Now().UTC(), r.ownerID, provisionID, token, epoch)
+	if err != nil {
+		return err
+	}
+	if affected, err := result.RowsAffected(); err != nil {
+		return err
+	} else if affected != 1 {
+		return agentaws.ErrConflict
+	}
+	return tx.Commit()
+}
+
+func (r *PostgresAWSRepository) ResolveProvisionMutation(ctx context.Context, provisionID, operationID string) error {
+	if r == nil || r.store == nil || r.store.db == nil || !validAWSUUID(provisionID) || strings.TrimSpace(operationID) == "" {
+		return agentaws.ErrInvalid
+	}
+	tx, err := r.store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `UPDATE core_aws_ec2_provision_mutation_leases SET token=NULL,expires_at=NULL,state='active',operation_id=NULL,updated_at=$1 WHERE owner_id=$2 AND provision_id=$3 AND state='uncertain' AND operation_id=$4`, time.Now().UTC(), r.ownerID, provisionID, operationID)
+	if err != nil {
+		return err
+	}
+	if affected, err := result.RowsAffected(); err != nil {
+		return err
+	} else if affected != 1 {
+		return agentaws.ErrConflict
+	}
+	return tx.Commit()
 }
 
 func NewAgentAWSRepository(store *DatabaseStore, ownerID string) (*PostgresAWSRepository, error) {

@@ -43,6 +43,26 @@ type MemoryRepository struct {
 	reservations      map[string]Reservation
 	events            []ChangeEvent
 	replays           map[string]memoryReplay
+	provisionLeases   map[string]memoryProvisionLease
+}
+
+const memoryProvisionMutationLeaseDuration = 10 * time.Minute
+
+type memoryProvisionLease struct {
+	token       string
+	epoch       int64
+	expiresAt   time.Time
+	state       string
+	operationID string
+}
+
+type memoryProvisionMutationLease struct {
+	repo        *MemoryRepository
+	provisionID string
+	token       string
+	epoch       int64
+	mu          sync.Mutex
+	released    bool
 }
 
 type ChangeEvent struct {
@@ -67,7 +87,182 @@ type memoryReplay struct {
 }
 
 func NewMemoryRepository() *MemoryRepository {
-	return &MemoryRepository{credentials: map[string]Credentials{}, credentialHistory: map[string]map[int64]Credentials{}, credentialDeleted: map[string]bool{}, plans: map[string]Plan{}, provisions: map[string]Provision{}, changes: map[string]Change{}, tasks: map[string]Task{}, confirmations: map[string]coreconfirmation.Confirmation{}, reservations: map[string]Reservation{}, replays: map[string]memoryReplay{}}
+	return &MemoryRepository{credentials: map[string]Credentials{}, credentialHistory: map[string]map[int64]Credentials{}, credentialDeleted: map[string]bool{}, plans: map[string]Plan{}, provisions: map[string]Provision{}, changes: map[string]Change{}, tasks: map[string]Task{}, confirmations: map[string]coreconfirmation.Confirmation{}, reservations: map[string]Reservation{}, replays: map[string]memoryReplay{}, provisionLeases: map[string]memoryProvisionLease{}}
+}
+
+func (r *MemoryRepository) AcquireProvisionMutation(ctx context.Context, provisionID string) (ProvisionMutationLease, error) {
+	if r == nil || !validUUID(provisionID) {
+		return nil, ErrInvalid
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.provisions[provisionID]; !ok {
+		return nil, ErrNotFound
+	}
+	if r.provisionLeases == nil {
+		r.provisionLeases = map[string]memoryProvisionLease{}
+	}
+	if existing, ok := r.provisionLeases[provisionID]; ok && (existing.state == "uncertain" || existing.expiresAt.After(now)) {
+		return nil, ErrConflict
+	}
+	token := uuid.NewString()
+	lease := memoryProvisionLease{token: token, epoch: 1, expiresAt: now.Add(memoryProvisionMutationLeaseDuration), state: "active"}
+	if existing, ok := r.provisionLeases[provisionID]; ok {
+		lease.epoch = existing.epoch + 1
+	}
+	r.provisionLeases[provisionID] = lease
+	return &memoryProvisionMutationLease{repo: r, provisionID: provisionID, token: token, epoch: lease.epoch}, nil
+}
+
+func (r *MemoryRepository) ResolveProvisionMutation(ctx context.Context, provisionID, operationID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	lease, ok := r.provisionLeases[provisionID]
+	if !ok || lease.state != "uncertain" || lease.operationID != operationID {
+		return ErrConflict
+	}
+	delete(r.provisionLeases, provisionID)
+	return nil
+}
+
+func (r *MemoryRepository) ClaimProvisionMutation(ctx context.Context, provisionID, operationID string) (ProvisionMutationLease, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	lease, ok := r.provisionLeases[provisionID]
+	if !ok || lease.operationID != operationID || (lease.state != "uncertain" && !(lease.state == "active" && !lease.expiresAt.After(time.Now().UTC()))) {
+		return nil, ErrConflict
+	}
+	lease.token = uuid.NewString()
+	lease.epoch++
+	lease.state = "active"
+	lease.expiresAt = time.Now().UTC().Add(memoryProvisionMutationLeaseDuration)
+	r.provisionLeases[provisionID] = lease
+	return &memoryProvisionMutationLease{repo: r, provisionID: provisionID, token: lease.token, epoch: lease.epoch}, nil
+}
+
+func (l *memoryProvisionMutationLease) Renew(ctx context.Context) error {
+	return l.withLease(ctx, true)
+}
+
+func (l *memoryProvisionMutationLease) Token() string {
+	if l == nil {
+		return ""
+	}
+	return l.token
+}
+func (l *memoryProvisionMutationLease) Epoch() int64 {
+	if l == nil {
+		return 0
+	}
+	return l.epoch
+}
+
+func (l *memoryProvisionMutationLease) BindOperation(ctx context.Context, operationID string) error {
+	if l == nil || l.repo == nil || operationID == "" {
+		return ErrInvalid
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.repo.mu.Lock()
+	defer l.repo.mu.Unlock()
+	current, ok := l.repo.provisionLeases[l.provisionID]
+	if !ok || current.token != l.token || current.epoch != l.epoch || current.state != "active" || !current.expiresAt.After(time.Now().UTC()) {
+		return ErrConflict
+	}
+	if current.operationID != "" && current.operationID != operationID {
+		return ErrConflict
+	}
+	current.operationID = operationID
+	l.repo.provisionLeases[l.provisionID] = current
+	return nil
+}
+
+func (l *memoryProvisionMutationLease) Assert(ctx context.Context) error {
+	return l.withLease(ctx, false)
+}
+
+func (l *memoryProvisionMutationLease) withLease(ctx context.Context, renew bool) error {
+	if l == nil || l.repo == nil {
+		return ErrInvalid
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.released {
+		return ErrConflict
+	}
+	now := time.Now().UTC()
+	l.repo.mu.Lock()
+	defer l.repo.mu.Unlock()
+	current, ok := l.repo.provisionLeases[l.provisionID]
+	if !ok || current.token != l.token || current.epoch != l.epoch || !current.expiresAt.After(now) {
+		return ErrConflict
+	}
+	if renew {
+		current.expiresAt = now.Add(memoryProvisionMutationLeaseDuration)
+		l.repo.provisionLeases[l.provisionID] = current
+	}
+	return nil
+}
+
+func (l *memoryProvisionMutationLease) MarkUncertain(ctx context.Context, operationID string) error {
+	if l == nil || l.repo == nil || operationID == "" {
+		return ErrInvalid
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.repo.mu.Lock()
+	defer l.repo.mu.Unlock()
+	current, ok := l.repo.provisionLeases[l.provisionID]
+	if !ok || current.token != l.token || current.epoch != l.epoch || current.state != "active" {
+		return ErrConflict
+	}
+	current.state = "uncertain"
+	current.operationID = operationID
+	current.expiresAt = time.Now().UTC().Add(24 * time.Hour)
+	l.repo.provisionLeases[l.provisionID] = current
+	return nil
+}
+
+func (l *memoryProvisionMutationLease) Release(ctx context.Context) error {
+	if l == nil || l.repo == nil {
+		return ErrInvalid
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.released {
+		return nil
+	}
+	l.repo.mu.Lock()
+	defer l.repo.mu.Unlock()
+	current, ok := l.repo.provisionLeases[l.provisionID]
+	if ok && current.token == l.token && current.epoch == l.epoch && current.state == "active" {
+		delete(l.repo.provisionLeases, l.provisionID)
+		l.released = true
+		return nil
+	}
+	return ErrConflict
 }
 
 func (r *MemoryRepository) CreateProvision(_ context.Context, p Provision) (Provision, error) {

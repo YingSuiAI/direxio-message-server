@@ -277,7 +277,7 @@ func (s *PostgresWorkloadStore) ListEvents(c context.Context, id string, after u
 	return out, rows.Err()
 }
 func (s *PostgresWorkloadStore) RequestOperation(c context.Context, in workload.RequestCommand) (workload.RequestResult, error) {
-	if s == nil || s.store == nil || s.store.db == nil || !workload.ValidUUID(in.PlanID) || !workload.ValidUUID(in.IdempotencyKey) || (in.WorkloadID != "" && !workload.ValidUUID(in.WorkloadID)) || (in.Kind != workload.OperationApply && in.Kind != workload.OperationDestroy) {
+	if s == nil || s.store == nil || s.store.db == nil || !workload.ValidUUID(in.PlanID) || !workload.ValidUUID(in.IdempotencyKey) || (in.WorkloadID != "" && !workload.ValidUUID(in.WorkloadID)) || (in.WorkloadID == "") != (in.ExpectedWorkloadRevision == 0) || (in.Kind != workload.OperationApply && in.Kind != workload.OperationDestroy) {
 		return workload.RequestResult{}, workload.ErrInvalid
 	}
 	tx, err := s.store.db.BeginTx(c, nil)
@@ -312,6 +312,9 @@ func (s *PostgresWorkloadStore) RequestOperation(c context.Context, in workload.
 	if json.Unmarshal(planRaw, &p) != nil {
 		return workload.RequestResult{}, workload.ErrInvalid
 	}
+	if p.Validate() != nil {
+		return workload.RequestResult{}, workload.ErrInvalid
+	}
 	wid := in.WorkloadID
 	if wid == "" {
 		wid = uuid.NewString()
@@ -319,10 +322,39 @@ func (s *PostgresWorkloadStore) RequestOperation(c context.Context, in workload.
 	if in.Kind == workload.OperationDestroy && in.WorkloadID == "" {
 		return workload.RequestResult{}, workload.ErrInvalid
 	}
+	if in.WorkloadID != "" {
+		var existing struct {
+			revision                              uint64
+			state, planID, planDigest, targetKind string
+		}
+		if err = tx.QueryRowContext(c, `SELECT revision,state,plan_id::text,plan_digest,target_kind FROM core_workloads WHERE owner_id=$1 AND workload_id=$2 FOR UPDATE`, s.ownerID, wid).Scan(&existing.revision, &existing.state, &existing.planID, &existing.planDigest, &existing.targetKind); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return workload.RequestResult{}, workload.ErrNotFound
+			}
+			return workload.RequestResult{}, err
+		}
+		if existing.revision != in.ExpectedWorkloadRevision {
+			return workload.RequestResult{}, workload.ErrRevisionConflict
+		}
+		if in.Kind == workload.OperationDestroy {
+			if existing.state != "ready" || existing.planID != p.ID || existing.planDigest != p.Digest || existing.targetKind != string(p.TargetKind) {
+				return workload.RequestResult{}, workload.ErrConflict
+			}
+		} else if existing.state != "destroyed" && existing.state != "ready" && existing.state != "failed" {
+			return workload.RequestResult{}, workload.ErrConflict
+		}
+	}
+	expectedWorkloadRevision := in.ExpectedWorkloadRevision
+	if expectedWorkloadRevision == 0 {
+		expectedWorkloadRevision = 1
+	}
 	if in.ExpiresAt.IsZero() {
-		in.ExpiresAt = time.Now().UTC().Add(24 * time.Hour)
+		in.ExpiresAt = p.ExpiresAt.UTC()
 	}
 	now := time.Now().UTC()
+	if !p.ExpiresAt.After(now) || !in.ExpiresAt.After(now) || in.ExpiresAt.After(p.ExpiresAt.UTC()) {
+		return workload.RequestResult{}, workload.ErrConflict
+	}
 	opID, taskID, confID := uuid.NewString(), uuid.NewString(), uuid.NewString()
 	binding := workload.BindingForOperation(p, wid, in.Kind)
 	binding.OwnerID = s.ownerID
@@ -330,7 +362,7 @@ func (s *PostgresWorkloadStore) RequestOperation(c context.Context, in workload.
 	if err != nil {
 		return workload.RequestResult{}, workload.ErrInvalid
 	}
-	payload := coretask.WorkloadTaskPayload{WorkloadID: wid, PlanID: p.ID, OperationID: opID, PlanRevision: p.Revision, PlanDigest: p.Digest, TargetKind: string(p.TargetKind), ConfirmationID: confID, ExecutionSnapshot: planRaw}
+	payload := coretask.WorkloadTaskPayload{WorkloadID: wid, ExpectedWorkloadRevision: expectedWorkloadRevision, PlanID: p.ID, OperationID: opID, PlanRevision: p.Revision, PlanDigest: p.Digest, TargetKind: string(p.TargetKind), ConfirmationID: confID, ExecutionSnapshot: planRaw}
 	spec, _ := (coretask.TaskSpec{Kind: coretask.TaskKindWorkload, Payload: coretask.TaskPayload{Workload: &payload}, Goal: "workload " + string(in.Kind), IdempotencyKey: uuid.NewString(), AvailableAt: now}).Normalize()
 	specRaw, _ := json.Marshal(spec)
 	bindingRaw, _ := json.Marshal(binding)
@@ -343,7 +375,7 @@ func (s *PostgresWorkloadStore) RequestOperation(c context.Context, in workload.
 	if _, err = tx.ExecContext(c, `INSERT INTO agent_confirmations(confirmation_id,owner_id,operation_domain,target_id,target_revision,binding_digest,binding_json,task_id,state,revision,expires_at,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'pending',1,$9,$10,$10)`, confID, s.ownerID, binding.OperationDomain, wid, p.Revision, binding.Digest, bindingRaw, taskID, in.ExpiresAt, now); err != nil {
 		return workload.RequestResult{}, mapWorkloadError(err)
 	}
-	if _, err = tx.ExecContext(c, `INSERT INTO core_workload_operations(operation_id,owner_id,workload_id,plan_id,operation,plan_revision,plan_digest,target_kind,task_id,confirmation_id,status,revision,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'waiting_user',1,$11,$11)`, opID, s.ownerID, wid, p.ID, in.Kind, p.Revision, p.Digest, p.TargetKind, taskID, confID, now); err != nil {
+	if _, err = tx.ExecContext(c, `INSERT INTO core_workload_operations(operation_id,owner_id,workload_id,expected_workload_revision,plan_id,operation,plan_revision,plan_digest,target_kind,task_id,confirmation_id,status,revision,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'waiting_user',1,$12,$12)`, opID, s.ownerID, wid, expectedWorkloadRevision, p.ID, in.Kind, p.Revision, p.Digest, p.TargetKind, taskID, confID, now); err != nil {
 		return workload.RequestResult{}, mapWorkloadError(err)
 	}
 	if _, err = tx.ExecContext(c, `INSERT INTO core_workload_event_counters(owner_id,operation_id,next_sequence) VALUES($1,$2,2)`, s.ownerID, opID); err != nil {
@@ -352,7 +384,7 @@ func (s *PostgresWorkloadStore) RequestOperation(c context.Context, in workload.
 	if err = insertWorkloadEventTx(c, tx, s.ownerID, opID, 1, "requested", "waiting_user", "waiting for owner confirmation", nil, now); err != nil {
 		return workload.RequestResult{}, mapWorkloadError(err)
 	}
-	preO := workload.Operation{ID: opID, WorkloadID: wid, PlanID: p.ID, Kind: in.Kind, PlanRevision: p.Revision, PlanDigest: p.Digest, TargetKind: p.TargetKind, TaskID: taskID, ConfirmationID: confID, Status: workload.OperationWaitingUser, Revision: 1, CreatedAt: now, UpdatedAt: now, DispatchState: "prepared"}
+	preO := workload.Operation{ID: opID, WorkloadID: wid, ExpectedWorkloadRevision: expectedWorkloadRevision, PlanID: p.ID, Kind: in.Kind, PlanRevision: p.Revision, PlanDigest: p.Digest, TargetKind: p.TargetKind, TaskID: taskID, ConfirmationID: confID, Status: workload.OperationWaitingUser, Revision: 1, CreatedAt: now, UpdatedAt: now, DispatchState: "prepared"}
 	preT := coretask.Task{OwnerID: s.ownerID, ID: taskID, Spec: spec, Status: coretask.StatusWaitingUser, Attempt: 1, Revision: 1, CreatedAt: now, UpdatedAt: now, AvailableAt: now}
 	preC := coreconfirmation.Confirmation{ConfirmationID: confID, OwnerID: s.ownerID, TaskID: taskID, State: coreconfirmation.StatePending, Revision: 1, CreatedAt: now, UpdatedAt: now, ExpiresAt: in.ExpiresAt}
 	preOut, _ := json.Marshal(workload.RequestResult{Operation: preO, Task: preT, Confirmation: preC})
@@ -445,6 +477,39 @@ func (s *PostgresWorkloadStore) Consume(c context.Context, id, cid, digest strin
 		return workload.Operation{}, coretask.Task{}, err
 	}
 	defer tx.Rollback()
+	var planExpiresAt time.Time
+	if err = tx.QueryRowContext(c, `SELECT p.expires_at FROM core_workload_operations o JOIN core_workload_plans p ON p.owner_id=o.owner_id AND p.plan_id=o.plan_id WHERE o.owner_id=$1 AND o.operation_id=$2 FOR SHARE`, s.ownerID, id).Scan(&planExpiresAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return workload.Operation{}, coretask.Task{}, workload.ErrNotFound
+		}
+		return workload.Operation{}, coretask.Task{}, err
+	}
+	now := time.Now().UTC()
+	if !planExpiresAt.After(now) {
+		return workload.Operation{}, coretask.Task{}, workload.ErrConflict
+	}
+	var workloadID string
+	var expectedWorkloadRevision, operationRevision int64
+	var taskID, storedConfirmationID string
+	if err = tx.QueryRowContext(c, `SELECT workload_id::text,expected_workload_revision,task_id::text,confirmation_id::text,revision FROM core_workload_operations WHERE owner_id=$1 AND operation_id=$2 FOR UPDATE`, s.ownerID, id).Scan(&workloadID, &expectedWorkloadRevision, &taskID, &storedConfirmationID, &operationRevision); err != nil {
+		return workload.Operation{}, coretask.Task{}, workload.ErrRevisionConflict
+	}
+	if storedConfirmationID != cid || !workload.ValidUUID(taskID) {
+		return workload.Operation{}, coretask.Task{}, workload.ErrRevisionConflict
+	}
+	var currentWorkloadRevision int64
+	if err = tx.QueryRowContext(c, `SELECT revision FROM core_workloads WHERE owner_id=$1 AND workload_id=$2 FOR UPDATE`, s.ownerID, workloadID).Scan(&currentWorkloadRevision); err != nil {
+		return workload.Operation{}, coretask.Task{}, workload.ErrRevisionConflict
+	}
+	if expectedWorkloadRevision < 1 || currentWorkloadRevision != expectedWorkloadRevision {
+		if err = terminalizeWorkloadRevisionConflictTx(c, tx, s.ownerID, id, cid, taskID, operationRevision, "workload revision changed before dispatch"); err != nil {
+			return workload.Operation{}, coretask.Task{}, err
+		}
+		if err = tx.Commit(); err != nil {
+			return workload.Operation{}, coretask.Task{}, err
+		}
+		return workload.Operation{}, coretask.Task{}, workload.ErrRevisionConflict
+	}
 	res, err := tx.ExecContext(c, `UPDATE core_workload_operations SET status='running',dispatch_state='dispatched',dispatch_attempt=dispatch_attempt+1,dispatch_epoch=dispatch_epoch+1,dispatch_claim=$1,dispatch_lease_until=$2,revision=revision+1,updated_at=$2 WHERE owner_id=$3 AND operation_id=$4 AND confirmation_id=$5 AND plan_digest=$6 AND revision=$7 AND status='waiting_user'`, claim, until, s.ownerID, id, cid, digest, rev)
 	if err != nil {
 		return workload.Operation{}, coretask.Task{}, err
@@ -453,8 +518,12 @@ func (s *PostgresWorkloadStore) Consume(c context.Context, id, cid, digest strin
 	if n != 1 {
 		return workload.Operation{}, coretask.Task{}, workload.ErrRevisionConflict
 	}
-	if _, err = tx.ExecContext(c, `UPDATE agent_confirmations SET state='consumed',revision=revision+1,updated_at=$1 WHERE owner_id=$2 AND confirmation_id=$3 AND state='confirmed' AND expires_at>$1`, until, s.ownerID, cid); err != nil {
+	confirmationUpdate, err := tx.ExecContext(c, `UPDATE agent_confirmations SET state='consumed',revision=revision+1,updated_at=$1 WHERE owner_id=$2 AND confirmation_id=$3 AND state='confirmed' AND expires_at>$1 AND expires_at<=$4`, now, s.ownerID, cid, planExpiresAt)
+	if err != nil {
 		return workload.Operation{}, coretask.Task{}, err
+	}
+	if changed, _ := confirmationUpdate.RowsAffected(); changed != 1 {
+		return workload.Operation{}, coretask.Task{}, workload.ErrRevisionConflict
 	}
 	if _, err = tx.ExecContext(c, `UPDATE agent_tasks SET status='running',revision=revision+1,lease_holder='workload-handler',lease_epoch=lease_epoch+1,lease_expires_at=$1,updated_at=$1 WHERE owner_id=$2 AND task_id=(SELECT task_id FROM core_workload_operations WHERE operation_id=$3)`, until, s.ownerID, id); err != nil {
 		return workload.Operation{}, coretask.Task{}, err
@@ -492,6 +561,127 @@ func (s *PostgresWorkloadStore) CompleteDispatch(c context.Context, id, tid, cla
 	return s.completeDispatch(c, id, tid, claim, epoch, code, rb, summary, nil)
 }
 
+// ReconcileUncertain finalizes an already-fenced provider mutation using only
+// readback. It deliberately does not touch agent_tasks or confirmations: both
+// were terminalized when the unknown side effect was recorded.
+func (s *PostgresWorkloadStore) ReconcileUncertain(c context.Context, id, code string, rb workload.Readback, summary string) (workload.Operation, error) {
+	if !workload.ValidUUID(id) {
+		return workload.Operation{}, workload.ErrInvalid
+	}
+	now := time.Now().UTC()
+	safeCode, safeSummary := workload.SafeFailure(code, summary)
+	rb = workload.SanitizeReadback(rb)
+	fingerprint := workload.CompletionFingerprint(safeCode, rb)
+	raw, _ := json.Marshal(rb)
+	tx, err := s.store.db.BeginTx(c, nil)
+	if err != nil {
+		return workload.Operation{}, err
+	}
+	defer tx.Rollback()
+	var status, dispatchState, workloadID, planID, operation string
+	var currentFingerprint string
+	if err = tx.QueryRowContext(c, `SELECT status,dispatch_state,workload_id::text,plan_id::text,operation,completion_fingerprint FROM core_workload_operations WHERE owner_id=$1 AND operation_id=$2 FOR UPDATE`, s.ownerID, id).Scan(&status, &dispatchState, &workloadID, &planID, &operation, &currentFingerprint); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return workload.Operation{}, workload.ErrNotFound
+		}
+		return workload.Operation{}, err
+	}
+	if status != "uncertain" || dispatchState != "uncertain" {
+		if err = tx.Commit(); err != nil {
+			return workload.Operation{}, err
+		}
+		return s.loadOperation(c, id)
+	}
+	if currentFingerprint != "" && currentFingerprint == fingerprint {
+		if err = tx.Commit(); err != nil {
+			return workload.Operation{}, err
+		}
+		return s.loadOperation(c, id)
+	}
+	if leaseRows, queryErr := tx.QueryContext(c, `SELECT l.provision_id::text,l.token::text,l.epoch,p.plan_id::text FROM core_aws_ec2_provision_mutation_leases l JOIN core_aws_ec2_provisions p ON p.owner_id=l.owner_id AND p.provision_id=l.provision_id WHERE l.owner_id=$1 AND l.operation_id=$2 FOR UPDATE OF l`, s.ownerID, id); queryErr == nil {
+		var boundLease struct {
+			provisionID, token, planID string
+			epoch                      int64
+		}
+		leaseCount := 0
+		for leaseRows.Next() {
+			leaseCount++
+			if leaseCount > 1 {
+				_ = leaseRows.Close()
+				return workload.Operation{}, workload.ErrRevisionConflict
+			}
+			var provisionID, token string
+			var epoch int64
+			var leasePlanID string
+			if err = leaseRows.Scan(&provisionID, &token, &epoch, &leasePlanID); err != nil {
+				_ = leaseRows.Close()
+				return workload.Operation{}, err
+			}
+			boundLease.provisionID, boundLease.token, boundLease.epoch, boundLease.planID = provisionID, token, epoch, leasePlanID
+		}
+		if err = leaseRows.Err(); err != nil {
+			_ = leaseRows.Close()
+			return workload.Operation{}, err
+		}
+		if err = leaseRows.Close(); err != nil {
+			return workload.Operation{}, err
+		}
+		if leaseCount == 1 {
+			if boundLease.planID != planID {
+				return workload.Operation{}, workload.ErrRevisionConflict
+			}
+			if safeCode != "provider_uncertain" {
+				if _, err = tx.ExecContext(c, `UPDATE core_aws_ec2_provision_mutation_leases SET token=NULL,expires_at=NULL,state='active',operation_id=NULL,updated_at=$1 WHERE owner_id=$2 AND provision_id=$3 AND operation_id=$4 AND epoch=$5`, now, s.ownerID, boundLease.provisionID, id, boundLease.epoch); err != nil {
+					return workload.Operation{}, err
+				}
+			}
+		}
+	} else {
+		return workload.Operation{}, queryErr
+	}
+	newStatus, newDispatch := "uncertain", "uncertain"
+	if safeCode == "" {
+		newStatus, newDispatch = "succeeded", "terminal"
+	} else if safeCode != "provider_uncertain" {
+		newStatus, newDispatch = "failed", "terminal"
+	}
+	if _, err = tx.ExecContext(c, `UPDATE core_workload_operations SET status=$1,dispatch_state=$2,failure_code=$3,failure_summary=$4,completion_fingerprint=$5,completion_result_json=$6,dispatch_lease_until=NULL,revision=revision+1,updated_at=$7 WHERE owner_id=$8 AND operation_id=$9 AND status='uncertain' AND dispatch_state='uncertain'`, newStatus, newDispatch, safeCode, safeSummary, fingerprint, raw, now, s.ownerID, id); err != nil {
+		return workload.Operation{}, err
+	}
+	workloadState := "uncertain"
+	if safeCode == "" {
+		workloadState = "ready"
+		if operation == string(workload.OperationDestroy) {
+			workloadState = "destroyed"
+		}
+	} else if safeCode != "provider_uncertain" {
+		workloadState = "failed"
+	}
+	if _, err = tx.ExecContext(c, `UPDATE core_workloads SET state=$1,actual_snapshot_json=$2,revision=revision+1,updated_at=$3 WHERE owner_id=$4 AND workload_id=$5`, workloadState, raw, now, s.ownerID, workloadID); err != nil {
+		return workload.Operation{}, err
+	}
+	if event, ok := workload.ProviderResultEventFromContext(c); ok {
+		var seq uint64
+		if err = tx.QueryRowContext(c, `INSERT INTO core_workload_event_counters(owner_id,operation_id,next_sequence) VALUES($1,$2,2) ON CONFLICT(owner_id,operation_id) DO UPDATE SET next_sequence=core_workload_event_counters.next_sequence+1 RETURNING next_sequence-1`, s.ownerID, id).Scan(&seq); err != nil {
+			return workload.Operation{}, err
+		}
+		if err = insertWorkloadEventTx(c, tx, s.ownerID, id, seq, event.Kind, string(event.Status), workload.SafeProviderResultEventMessage(event), event.Readback, now); err != nil {
+			return workload.Operation{}, err
+		}
+	}
+	var seq uint64
+	if err = tx.QueryRowContext(c, `INSERT INTO core_workload_event_counters(owner_id,operation_id,next_sequence) VALUES($1,$2,2) ON CONFLICT(owner_id,operation_id) DO UPDATE SET next_sequence=core_workload_event_counters.next_sequence+1 RETURNING next_sequence-1`, s.ownerID, id).Scan(&seq); err != nil {
+		return workload.Operation{}, err
+	}
+	if err = insertWorkloadEventTx(c, tx, s.ownerID, id, seq, "reconciled", newStatus, safeSummary, raw, now); err != nil {
+		return workload.Operation{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return workload.Operation{}, err
+	}
+	return s.loadOperation(c, id)
+}
+
 func (s *PostgresWorkloadStore) completeDispatch(c context.Context, id, tid, claim string, epoch uint64, code string, rb workload.Readback, summary string, fence *workload.TaskFence) (workload.Operation, coretask.Task, error) {
 	if !workload.ValidUUID(id) || !workload.ValidUUID(tid) || claim == "" {
 		return workload.Operation{}, coretask.Task{}, workload.ErrInvalid
@@ -504,6 +694,10 @@ func (s *PostgresWorkloadStore) completeDispatch(c context.Context, id, tid, cla
 	safeCode, safeSummary := workload.SafeFailure(code, summary)
 	if safeCode == "provider_uncertain" {
 		status = "uncertain"
+	}
+	dispatchState := "completed"
+	if status == "uncertain" {
+		dispatchState = "uncertain"
 	}
 	rb = workload.SanitizeReadback(rb)
 	fingerprint := workload.CompletionFingerprint(safeCode, rb)
@@ -530,8 +724,47 @@ func (s *PostgresWorkloadStore) completeDispatch(c context.Context, id, tid, cla
 			return workload.Operation{}, coretask.Task{}, workload.ErrRevisionConflict
 		}
 	}
+	if mutationFence, ok := workload.MutationLeaseFenceFromContext(c); ok {
+		if mutationFence.OwnerID != s.ownerID || mutationFence.Epoch < 1 {
+			return workload.Operation{}, coretask.Task{}, workload.ErrRevisionConflict
+		}
+		var leaseToken string
+		var leaseEpoch int64
+		var leaseExpiry time.Time
+		if err = tx.QueryRowContext(c, `SELECT token::text,epoch,expires_at FROM core_aws_ec2_provision_mutation_leases WHERE owner_id=$1 AND provision_id=$2 FOR UPDATE`, mutationFence.OwnerID, mutationFence.ProvisionID).Scan(&leaseToken, &leaseEpoch, &leaseExpiry); err != nil {
+			return workload.Operation{}, coretask.Task{}, workload.ErrRevisionConflict
+		}
+		if leaseToken != mutationFence.Token || leaseEpoch != mutationFence.Epoch || !leaseExpiry.After(now) {
+			return workload.Operation{}, coretask.Task{}, workload.ErrRevisionConflict
+		}
+		if mutationFence.OperationID == "" || mutationFence.OperationID != id {
+			return workload.Operation{}, coretask.Task{}, workload.ErrRevisionConflict
+		}
+		if safeCode == "provider_uncertain" {
+			if res, updateErr := tx.ExecContext(c, `UPDATE core_aws_ec2_provision_mutation_leases SET state='uncertain',operation_id=$1,expires_at=$2,updated_at=$3 WHERE owner_id=$4 AND provision_id=$5 AND token=$6 AND epoch=$7`, mutationFence.OperationID, now.Add(24*time.Hour), now, mutationFence.OwnerID, mutationFence.ProvisionID, mutationFence.Token, mutationFence.Epoch); updateErr != nil {
+				return workload.Operation{}, coretask.Task{}, updateErr
+			} else if changed, _ := res.RowsAffected(); changed != 1 {
+				return workload.Operation{}, coretask.Task{}, workload.ErrRevisionConflict
+			}
+		} else {
+			if res, updateErr := tx.ExecContext(c, `UPDATE core_aws_ec2_provision_mutation_leases SET token=NULL,expires_at=NULL,state='active',operation_id=NULL,updated_at=$1 WHERE owner_id=$2 AND provision_id=$3 AND token=$4 AND epoch=$5 AND state IN ('active','uncertain')`, now, mutationFence.OwnerID, mutationFence.ProvisionID, mutationFence.Token, mutationFence.Epoch); updateErr != nil {
+				return workload.Operation{}, coretask.Task{}, updateErr
+			} else if changed, _ := res.RowsAffected(); changed != 1 {
+				return workload.Operation{}, coretask.Task{}, workload.ErrRevisionConflict
+			}
+		}
+	}
+	if resultEvent, ok := workload.ProviderResultEventFromContext(c); ok {
+		var eventSeq uint64
+		if err = tx.QueryRowContext(c, `INSERT INTO core_workload_event_counters(owner_id,operation_id,next_sequence) VALUES($1,$2,2) ON CONFLICT(owner_id,operation_id) DO UPDATE SET next_sequence=core_workload_event_counters.next_sequence+1 RETURNING next_sequence-1`, s.ownerID, id).Scan(&eventSeq); err != nil {
+			return workload.Operation{}, coretask.Task{}, err
+		}
+		if err = insertWorkloadEventTx(c, tx, s.ownerID, id, eventSeq, resultEvent.Kind, string(resultEvent.Status), workload.SafeProviderResultEventMessage(resultEvent), resultEvent.Readback, now); err != nil {
+			return workload.Operation{}, coretask.Task{}, err
+		}
+	}
 
-	res, err := tx.ExecContext(c, `UPDATE core_workload_operations SET status=$1,revision=revision+1,failure_code=$2,failure_summary=$3,completion_fingerprint=$4,completion_result_json=$5,dispatch_state='completed',updated_at=$6 WHERE owner_id=$7 AND operation_id=$8 AND task_id=$9 AND dispatch_claim=$10 AND dispatch_epoch=$11 AND status='running'`, status, safeCode, safeSummary, fingerprint, raw, now, s.ownerID, id, tid, claim, epoch)
+	res, err := tx.ExecContext(c, `UPDATE core_workload_operations SET status=$1,revision=revision+1,failure_code=$2,failure_summary=$3,completion_fingerprint=$4,completion_result_json=$5,dispatch_state=$6,updated_at=$7 WHERE owner_id=$8 AND operation_id=$9 AND task_id=$10 AND dispatch_claim=$11 AND dispatch_epoch=$12 AND status='running'`, status, safeCode, safeSummary, fingerprint, raw, dispatchState, now, s.ownerID, id, tid, claim, epoch)
 	if err != nil {
 		return workload.Operation{}, coretask.Task{}, err
 	}
@@ -570,6 +803,10 @@ func (s *PostgresWorkloadStore) completeDispatch(c context.Context, id, tid, cla
 			state = "destroyed"
 		}
 		if _, err = tx.ExecContext(c, `UPDATE core_workloads SET state=$1,actual_snapshot_json=$2,revision=revision+1,updated_at=$3 WHERE owner_id=$4 AND workload_id=(SELECT workload_id FROM core_workload_operations WHERE owner_id=$4 AND operation_id=$5)`, state, raw, now, s.ownerID, id); err != nil {
+			return workload.Operation{}, coretask.Task{}, err
+		}
+	} else if status == "uncertain" {
+		if _, err = tx.ExecContext(c, `UPDATE core_workloads SET state='uncertain',actual_snapshot_json=$1,revision=revision+1,updated_at=$2 WHERE owner_id=$3 AND workload_id=(SELECT workload_id FROM core_workload_operations WHERE owner_id=$3 AND operation_id=$4)`, raw, now, s.ownerID, id); err != nil {
 			return workload.Operation{}, coretask.Task{}, err
 		}
 	}
@@ -663,6 +900,32 @@ func (s *PostgresWorkloadStore) ConsumeFenced(c context.Context, id, cid, digest
 	if taskStatus != "running" || taskRevision < int64(fence.Revision) || taskAttempt != int(fence.Attempt) || taskEpoch != int64(fence.LeaseEpoch) || taskHolder != fence.Holder || taskExpiry == nil || !taskExpiry.After(now) {
 		return workload.Operation{}, coretask.Task{}, workload.ErrRevisionConflict
 	}
+	var planExpiresAt time.Time
+	if err = tx.QueryRowContext(c, `SELECT p.expires_at FROM core_workload_operations o JOIN core_workload_plans p ON p.owner_id=o.owner_id AND p.plan_id=o.plan_id WHERE o.owner_id=$1 AND o.operation_id=$2 FOR SHARE`, s.ownerID, id).Scan(&planExpiresAt); err != nil {
+		return workload.Operation{}, coretask.Task{}, workload.ErrRevisionConflict
+	}
+	if !planExpiresAt.After(now) {
+		return workload.Operation{}, coretask.Task{}, workload.ErrConflict
+	}
+	var workloadID string
+	var expectedWorkloadRevision, operationRevision int64
+	var operationTaskID string
+	if err = tx.QueryRowContext(c, `SELECT workload_id::text,expected_workload_revision,task_id::text,revision FROM core_workload_operations WHERE owner_id=$1 AND operation_id=$2 FOR UPDATE`, s.ownerID, id).Scan(&workloadID, &expectedWorkloadRevision, &operationTaskID, &operationRevision); err != nil {
+		return workload.Operation{}, coretask.Task{}, workload.ErrRevisionConflict
+	}
+	var currentWorkloadRevision int64
+	if err = tx.QueryRowContext(c, `SELECT revision FROM core_workloads WHERE owner_id=$1 AND workload_id=$2 FOR UPDATE`, s.ownerID, workloadID).Scan(&currentWorkloadRevision); err != nil {
+		return workload.Operation{}, coretask.Task{}, workload.ErrRevisionConflict
+	}
+	if expectedWorkloadRevision < 1 || currentWorkloadRevision != expectedWorkloadRevision {
+		if err = terminalizeWorkloadRevisionConflictTx(c, tx, s.ownerID, id, cid, operationTaskID, operationRevision, "workload revision changed before dispatch"); err != nil {
+			return workload.Operation{}, coretask.Task{}, err
+		}
+		if err = tx.Commit(); err != nil {
+			return workload.Operation{}, coretask.Task{}, err
+		}
+		return workload.Operation{}, coretask.Task{}, workload.ErrRevisionConflict
+	}
 	dispatchClaim := uuid.NewString()
 	res, err := tx.ExecContext(c, `UPDATE core_workload_operations SET status='running',dispatch_state='dispatched',dispatch_attempt=dispatch_attempt+1,dispatch_epoch=$1,dispatch_claim=$2,dispatch_lease_until=$3,revision=revision+1,updated_at=$4 WHERE owner_id=$5 AND operation_id=$6 AND task_id=$7 AND confirmation_id=$8 AND plan_digest=$9 AND revision=$10 AND status='waiting_user' AND dispatch_state='prepared' AND dispatch_claim IS NULL`, fence.LeaseEpoch, dispatchClaim, taskExpiry.UTC(), now, s.ownerID, id, fence.TaskID, cid, digest, rev)
 	if err != nil {
@@ -676,7 +939,7 @@ func (s *PostgresWorkloadStore) ConsumeFenced(c context.Context, id, cid, digest
 	if err = tx.QueryRowContext(c, `SELECT revision FROM agent_confirmations WHERE owner_id=$1 AND confirmation_id=$2 FOR UPDATE`, s.ownerID, cid).Scan(&confRev); err != nil {
 		return workload.Operation{}, coretask.Task{}, err
 	}
-	res, err = tx.ExecContext(c, `UPDATE agent_confirmations SET state='consumed',revision=revision+1,reservation_json=jsonb_build_object('task_id',$1,'attempt',$2,'lease_epoch',$3,'task_revision',$4,'active',true),updated_at=$5 WHERE owner_id=$6 AND confirmation_id=$7 AND task_id=$1 AND state='confirmed' AND revision=$8 AND expires_at>$5`, fence.TaskID, fence.Attempt, fence.LeaseEpoch, taskRevision, now, s.ownerID, cid, confRev)
+	res, err = tx.ExecContext(c, `UPDATE agent_confirmations SET state='consumed',revision=revision+1,reservation_json=jsonb_build_object('task_id',$1,'attempt',$2,'lease_epoch',$3,'task_revision',$4,'active',true),updated_at=$5 WHERE owner_id=$6 AND confirmation_id=$7 AND task_id=$1 AND state='confirmed' AND revision=$8 AND expires_at>$5 AND expires_at<=$9`, fence.TaskID, fence.Attempt, fence.LeaseEpoch, taskRevision, now, s.ownerID, cid, confRev, planExpiresAt)
 	if err != nil {
 		return workload.Operation{}, coretask.Task{}, err
 	}
@@ -694,6 +957,38 @@ func (s *PostgresWorkloadStore) ConsumeFenced(c context.Context, id, cid, digest
 	t, err := NewDatabaseTaskStore(s.store.db).Get(c, s.ownerID, o.TaskID)
 	return o, t, err
 }
+
+func terminalizeWorkloadRevisionConflictTx(ctx context.Context, tx *sql.Tx, ownerID, operationID, confirmationID, taskID string, operationRevision int64, summary string) error {
+	const code = "workload_revision_conflict"
+	now := time.Now().UTC()
+	result, err := tx.ExecContext(ctx, `UPDATE core_workload_operations SET status='failed',dispatch_state='terminal',failure_code=$1,failure_summary=$2,revision=revision+1,updated_at=$3 WHERE owner_id=$4 AND operation_id=$5 AND confirmation_id=$6 AND task_id=$7 AND revision=$8 AND status='waiting_user' AND dispatch_state='prepared'`, code, summary, now, ownerID, operationID, confirmationID, taskID, operationRevision)
+	if err != nil {
+		return err
+	}
+	if n, _ := result.RowsAffected(); n != 1 {
+		return workload.ErrRevisionConflict
+	}
+	result, err = tx.ExecContext(ctx, `UPDATE agent_confirmations SET state='rejected',terminal_reason=$1,revision=revision+1,updated_at=$2 WHERE owner_id=$3 AND confirmation_id=$4 AND task_id=$5 AND state='confirmed'`, code, now, ownerID, confirmationID, taskID)
+	if err != nil {
+		return err
+	}
+	if n, _ := result.RowsAffected(); n != 1 {
+		return workload.ErrRevisionConflict
+	}
+	result, err = tx.ExecContext(ctx, `UPDATE agent_tasks SET status='canceled',failure_code=$1,failure_summary=$2,revision=revision+1,updated_at=$3 WHERE owner_id=$4 AND task_id=$5 AND task_id=(SELECT task_id FROM core_workload_operations WHERE owner_id=$4 AND operation_id=$6) AND status='waiting_user'`, code, summary, now, ownerID, taskID, operationID)
+	if err != nil {
+		return err
+	}
+	if n, _ := result.RowsAffected(); n != 1 {
+		return workload.ErrRevisionConflict
+	}
+	var sequence uint64
+	if err = tx.QueryRowContext(ctx, `INSERT INTO core_workload_event_counters(owner_id,operation_id,next_sequence) VALUES($1,$2,2) ON CONFLICT(owner_id,operation_id) DO UPDATE SET next_sequence=core_workload_event_counters.next_sequence+1 RETURNING next_sequence-1`, ownerID, operationID).Scan(&sequence); err != nil {
+		return err
+	}
+	return insertWorkloadEventTx(ctx, tx, ownerID, operationID, sequence, "terminal", "failed", summary, nil, now)
+}
+
 func (s *PostgresWorkloadStore) CompleteDispatchFenced(c context.Context, id, tid, claim string, epoch uint64, code string, rb workload.Readback, summary string, fence workload.TaskFence) (workload.Operation, coretask.Task, error) {
 	if !fence.Valid(time.Time{}) || fence.TaskID != tid || fence.LeaseEpoch != epoch {
 		return workload.Operation{}, coretask.Task{}, workload.ErrRevisionConflict
@@ -748,6 +1043,12 @@ func (s *PostgresWorkloadStore) RecoverClaimFenced(c context.Context, id, claim 
 	var oldLease sql.NullTime
 	if err = tx.QueryRowContext(c, `SELECT status,dispatch_state,task_id::text,confirmation_id::text,revision,dispatch_epoch,dispatch_claim,dispatch_lease_until FROM core_workload_operations WHERE owner_id=$1 AND operation_id=$2 FOR UPDATE`, s.ownerID, id).Scan(&opStatus, &dispatchState, &taskID, &confID, &opRev, &opEpoch, &oldClaim, &oldLease); err != nil {
 		return workload.Operation{}, workload.ErrNotFound
+	}
+	if claim != "" && oldClaim.Valid && claim == oldClaim.String && dispatchState == "uncertain" && oldLease.Valid && oldLease.Time.After(now) {
+		if err = tx.Commit(); err != nil {
+			return workload.Operation{}, err
+		}
+		return s.GetOperation(c, id)
 	}
 	if opStatus != "running" || (dispatchState != "dispatched" && dispatchState != "uncertain") || taskID != fence.TaskID ||
 		opEpoch >= int64(fence.LeaseEpoch) || !oldClaim.Valid || strings.TrimSpace(oldClaim.String) == "" {
@@ -817,6 +1118,13 @@ func (s *PostgresWorkloadStore) RecoverClaimFenced(c context.Context, id, claim 
 			return workload.Operation{}, rowsErr
 		}
 		return workload.Operation{}, workload.ErrRevisionConflict
+	}
+	var eventSequence uint64
+	if err = tx.QueryRowContext(c, `INSERT INTO core_workload_event_counters(owner_id,operation_id,next_sequence) VALUES($1,$2,2) ON CONFLICT(owner_id,operation_id) DO UPDATE SET next_sequence=core_workload_event_counters.next_sequence+1 RETURNING next_sequence-1`, s.ownerID, id).Scan(&eventSequence); err != nil {
+		return workload.Operation{}, err
+	}
+	if err = insertWorkloadEventTx(c, tx, s.ownerID, id, eventSequence, "recovery_claim", "running", "read-only recovery claimed dispatch fence", nil, now); err != nil {
+		return workload.Operation{}, err
 	}
 	if err = tx.Commit(); err != nil {
 		return workload.Operation{}, err
@@ -888,7 +1196,7 @@ CREATE TABLE IF NOT EXISTS core_workloads (workload_id uuid NOT NULL, owner_id t
  target_kind text NOT NULL CHECK (target_kind IN ('AWS_EC2_SSM','AWS_ECS')), actual_snapshot_json jsonb NOT NULL DEFAULT '{}'::jsonb,
  state text NOT NULL CHECK (state IN ('pending','ready','failed','destroyed','uncertain')), updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
  PRIMARY KEY(owner_id,workload_id), FOREIGN KEY(owner_id,plan_id) REFERENCES core_workload_plans(owner_id,plan_id) ON DELETE RESTRICT);
-CREATE TABLE IF NOT EXISTS core_workload_operations (operation_id uuid PRIMARY KEY, owner_id text NOT NULL, workload_id uuid NOT NULL,
+CREATE TABLE IF NOT EXISTS core_workload_operations (operation_id uuid PRIMARY KEY, owner_id text NOT NULL, workload_id uuid NOT NULL, expected_workload_revision bigint NOT NULL DEFAULT 1 CHECK (expected_workload_revision > 0),
  plan_id uuid NOT NULL, operation text NOT NULL CHECK (operation IN ('apply','destroy')),
  plan_revision bigint NOT NULL CHECK (plan_revision > 0), plan_digest text NOT NULL, target_kind text NOT NULL CHECK (target_kind IN ('AWS_EC2_SSM','AWS_ECS')),
  task_id uuid NOT NULL, confirmation_id uuid NOT NULL, status text NOT NULL, revision bigint NOT NULL DEFAULT 1,
@@ -917,7 +1225,7 @@ func (s *PostgresWorkloadStore) loadOperation(c context.Context, id string) (wor
 	var o workload.Operation
 	var claim sql.NullString
 	var lease sql.NullTime
-	err := s.store.db.QueryRowContext(c, `SELECT operation_id::text,workload_id::text,plan_id::text,operation,plan_revision,plan_digest,target_kind,task_id::text,confirmation_id::text,status,revision,failure_code,failure_summary,created_at,updated_at,dispatch_state,dispatch_attempt,dispatch_epoch,dispatch_claim,dispatch_lease_until,completion_fingerprint FROM core_workload_operations WHERE owner_id=$1 AND operation_id=$2`, s.ownerID, id).Scan(&o.ID, &o.WorkloadID, &o.PlanID, &o.Kind, &o.PlanRevision, &o.PlanDigest, &o.TargetKind, &o.TaskID, &o.ConfirmationID, &o.Status, &o.Revision, &o.FailureCode, &o.FailureSummary, &o.CreatedAt, &o.UpdatedAt, &o.DispatchState, &o.DispatchAttempt, &o.DispatchEpoch, &claim, &lease, &o.CompletionFingerprint)
+	err := s.store.db.QueryRowContext(c, `SELECT operation_id::text,workload_id::text,expected_workload_revision,plan_id::text,operation,plan_revision,plan_digest,target_kind,task_id::text,confirmation_id::text,status,revision,failure_code,failure_summary,created_at,updated_at,dispatch_state,dispatch_attempt,dispatch_epoch,dispatch_claim,dispatch_lease_until,completion_fingerprint FROM core_workload_operations WHERE owner_id=$1 AND operation_id=$2`, s.ownerID, id).Scan(&o.ID, &o.WorkloadID, &o.ExpectedWorkloadRevision, &o.PlanID, &o.Kind, &o.PlanRevision, &o.PlanDigest, &o.TargetKind, &o.TaskID, &o.ConfirmationID, &o.Status, &o.Revision, &o.FailureCode, &o.FailureSummary, &o.CreatedAt, &o.UpdatedAt, &o.DispatchState, &o.DispatchAttempt, &o.DispatchEpoch, &claim, &lease, &o.CompletionFingerprint)
 	if errors.Is(err, sql.ErrNoRows) {
 		return o, workload.ErrNotFound
 	}

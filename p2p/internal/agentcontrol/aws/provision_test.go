@@ -63,6 +63,145 @@ func TestProvisionIsPinnedAndChangeLinkIsExclusive(t *testing.T) {
 	}
 }
 
+func TestProvisionMutationLeaseIsBusyNonBlockingAndFenced(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMemoryRepository()
+	s := NewService(repo, &testConfirm{}, testTasks{}, nil, NewFakeProvider(), time.Now)
+	credential, err := saveVerifiedCredential(t, s, repo, CredentialInput{Name: "lease", Region: "us-east-1", AccessKeyID: "a", SecretAccessKey: "b", IdempotencyKey: uuid.NewString()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fullCredential, err := repo.GetCredential(ctx, credential.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fullCredential.VerifiedRevision != fullCredential.Revision {
+		fullCredential, err = repo.RecordCredentialIdentity(ctx, credential.ID, credential.Revision, Identity{AccountID: "123456789012", UserARN: "arn:aws:iam::123456789012:user/test"})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	credential = fullCredential.View()
+	planView, err := s.CreatePlan(ctx, PlanInput{CredentialID: credential.ID, StackName: "lease-stack", Operation: OperationCreate, Template: []byte(`{"Resources":{}}`), Tags: map[string]string{"service": EC2ServiceProfile, "owner": OwnerBindingDigest("owner")}, IdempotencyKey: uuid.NewString()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := repo.GetPlan(ctx, planView.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := provisionFromPlan(plan, uuid.NewString())
+	if _, err = repo.CreateProvision(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	first, err := s.AcquireProvisionMutation(ctx, p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.AcquireProvisionMutation(ctx, p.ID); err != ErrConflict {
+		t.Fatalf("active lease should fail busy without blocking: %v", err)
+	}
+	if err := first.Renew(ctx); err != nil {
+		t.Fatalf("active lease renew = %v", err)
+	}
+	if err := first.Assert(ctx); err != nil {
+		t.Fatalf("active lease assert = %v", err)
+	}
+	assertCtx, cancelAssert := context.WithCancel(ctx)
+	cancelAssert()
+	if err := first.Assert(assertCtx); err != context.Canceled {
+		t.Fatalf("canceled assert = %v, want context canceled", err)
+	}
+	if _, err = s.RequestChange(ctx, RequestChangeInput{PlanID: plan.ID, ProvisionID: p.ID, ExpectedProvisionRevision: p.Revision, IdempotencyKey: uuid.NewString()}); err != ErrConflict {
+		t.Fatalf("request-change must honor active GeoLibre lease: %v", err)
+	}
+	// An expired holder can be taken over. Its stale release must not clear the
+	// newer epoch, so request-change remains fenced until the new holder exits.
+	repo.mu.Lock()
+	lease := repo.provisionLeases[p.ID]
+	lease.expiresAt = time.Now().Add(-time.Minute)
+	repo.provisionLeases[p.ID] = lease
+	repo.mu.Unlock()
+	second, err := s.AcquireProvisionMutation(ctx, p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Release(ctx); err != ErrConflict {
+		t.Fatalf("stale holder release = %v, want conflict", err)
+	}
+	if err := first.Assert(ctx); err != ErrConflict {
+		t.Fatalf("stale holder assert = %v, want conflict", err)
+	}
+	if _, err = s.RequestChange(ctx, RequestChangeInput{PlanID: plan.ID, ProvisionID: p.ID, ExpectedProvisionRevision: p.Revision, IdempotencyKey: uuid.NewString()}); err != ErrConflict {
+		t.Fatalf("stale release cleared replacement lease: %v", err)
+	}
+	if err := second.Release(ctx); err != nil {
+		t.Fatal(err)
+	}
+	third, err := s.AcquireProvisionMutation(ctx, p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operationID := uuid.NewString()
+	if binder, ok := third.(ProvisionMutationOperationBinder); !ok {
+		t.Fatal("memory lease does not support operation binding")
+	} else if err := binder.BindOperation(ctx, operationID); err != nil {
+		t.Fatal(err)
+	}
+	repo.mu.Lock()
+	activeLease := repo.provisionLeases[p.ID]
+	activeLease.expiresAt = time.Now().Add(-time.Hour)
+	repo.provisionLeases[p.ID] = activeLease
+	repo.mu.Unlock()
+	claimedActive, err := s.ClaimProvisionMutation(ctx, p.ID, operationID)
+	if err != nil {
+		t.Fatalf("expired active lease claim = %v", err)
+	}
+	if err := claimedActive.MarkUncertain(ctx, operationID); err != nil {
+		t.Fatal(err)
+	}
+	repo.mu.Lock()
+	uncertainLease := repo.provisionLeases[p.ID]
+	uncertainLease.expiresAt = time.Now().Add(-time.Hour)
+	repo.provisionLeases[p.ID] = uncertainLease
+	repo.mu.Unlock()
+	if _, err = s.AcquireProvisionMutation(ctx, p.ID); err != ErrConflict {
+		t.Fatalf("unresolved expired lease should block takeover: %v", err)
+	}
+	type claimResult struct {
+		lease ProvisionMutationLease
+		err   error
+	}
+	claimResults := make(chan claimResult, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			claimLease, claimErr := s.ClaimProvisionMutation(ctx, p.ID, operationID)
+			claimResults <- claimResult{lease: claimLease, err: claimErr}
+		}()
+	}
+	claimSuccesses := 0
+	var claimed ProvisionMutationLease
+	for i := 0; i < 2; i++ {
+		result := <-claimResults
+		if result.err == nil {
+			claimSuccesses++
+			claimed = result.lease
+		}
+	}
+	if claimSuccesses != 1 {
+		t.Fatalf("concurrent uncertain claims succeeded %d times, want one", claimSuccesses)
+	}
+	if err := claimed.MarkUncertain(ctx, operationID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ResolveProvisionMutation(ctx, p.ID, uncertainLease.operationID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.RequestChange(ctx, RequestChangeInput{PlanID: plan.ID, ProvisionID: p.ID, ExpectedProvisionRevision: p.Revision, IdempotencyKey: uuid.NewString()}); err != nil {
+		t.Fatalf("released lease should permit request-change: %v", err)
+	}
+}
+
 func TestProvisionReadbackRejectsUnknownOrIncompleteOutputs(t *testing.T) {
 	if _, err := ProvisionReadbackFromStack(StackOutputs{"Other": "secret"}, time.Now()); err != ErrInvalid {
 		t.Fatalf("unknown output must not persist: %v", err)

@@ -80,6 +80,9 @@ func (m *MemoryChangeCoordinator) RequestChange(ctx context.Context, in RequestC
 		if !found || (in.ExpectedProvisionRevision > 0 && provision.Revision != in.ExpectedProvisionRevision) || provision.State == "destroyed" || provision.ActiveChangeID != "" || !ProvisionPlanMatches(provision, p) {
 			return ChangeRequestResult{}, ErrRevisionConflict
 		}
+		if lease, ok := m.repo.provisionLeases[in.ProvisionID]; ok && lease.expiresAt.After(m.now().UTC()) {
+			return ChangeRequestResult{}, ErrConflict
+		}
 	}
 	cred, ok := m.repo.credentialHistory[p.CredentialID][p.CredentialRevision]
 	if !ok {

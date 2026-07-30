@@ -2,6 +2,41 @@ package aws
 
 import "context"
 
+// ProvisionMutationLocker acquires a bounded, owner/provision-scoped durable
+// lease for a GeoLibre provider mutation. Acquisition is non-blocking: a live
+// holder returns ErrConflict, and takeover is possible after expiry. The
+// release must be called even when the worker context is canceled.
+type ProvisionMutationLocker interface {
+	AcquireProvisionMutation(context.Context, string) (ProvisionMutationLease, error)
+}
+
+type ProvisionMutationReclaimer interface {
+	ClaimProvisionMutation(context.Context, string, string) (ProvisionMutationLease, error)
+}
+
+type ProvisionMutationLeaseIdentity interface {
+	Token() string
+	Epoch() int64
+}
+
+// ProvisionMutationOperationBinder associates the durable provider lease with
+// the operation before an external side effect starts. This lets a restarted
+// worker reclaim an expired active lease without ever stealing an unrelated
+// mutation.
+type ProvisionMutationOperationBinder interface {
+	BindOperation(context.Context, string) error
+}
+
+// ProvisionMutationLease is an owner/provision-scoped durable fencing handle.
+// Every operation is a token+epoch CAS; a stale holder cannot renew, assert,
+// or release a lease taken over after expiry.
+type ProvisionMutationLease interface {
+	Renew(context.Context) error
+	Assert(context.Context) error
+	MarkUncertain(context.Context, string) error
+	Release(context.Context) error
+}
+
 // Repository is the persistence boundary for AWS profiles, immutable plans
 // and change records. Implementations must serialize mutations and replay
 // identical idempotency keys without exposing credential bytes.

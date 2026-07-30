@@ -43,14 +43,15 @@ const (
 // operation.  It deliberately contains identifiers and digests only; provider
 // credentials and secret values remain behind their typed provider boundary.
 type WorkloadTaskPayload struct {
-	WorkloadID        string          `json:"workload_id"`
-	PlanID            string          `json:"plan_id"`
-	OperationID       string          `json:"operation_id"`
-	PlanRevision      uint64          `json:"plan_revision"`
-	PlanDigest        string          `json:"plan_digest"`
-	TargetKind        string          `json:"target_kind"`
-	ConfirmationID    string          `json:"confirmation_id"`
-	ExecutionSnapshot json.RawMessage `json:"execution_snapshot,omitempty"`
+	WorkloadID               string          `json:"workload_id"`
+	ExpectedWorkloadRevision uint64          `json:"expected_workload_revision"`
+	PlanID                   string          `json:"plan_id"`
+	OperationID              string          `json:"operation_id"`
+	PlanRevision             uint64          `json:"plan_revision"`
+	PlanDigest               string          `json:"plan_digest"`
+	TargetKind               string          `json:"target_kind"`
+	ConfirmationID           string          `json:"confirmation_id"`
+	ExecutionSnapshot        json.RawMessage `json:"execution_snapshot,omitempty"`
 }
 
 type ExtensionOperation string
