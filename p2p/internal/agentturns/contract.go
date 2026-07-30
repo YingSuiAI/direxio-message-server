@@ -114,6 +114,22 @@ type Request struct {
 	AfterSeq             int64
 }
 
+// WithIssuedAt carries the persisted durable-turn creation timestamp into the
+// execution context. Retries must use this server-owned timestamp rather than
+// wall-clock issuance at the time of the retry.
+func WithIssuedAt(ctx context.Context, at time.Time) context.Context {
+	return context.WithValue(ctx, issuedAtContextKey{}, at.UTC())
+}
+
+// IssuedAt returns the persisted durable-turn creation timestamp, if the
+// coordinator attached one to the runtime context.
+func IssuedAt(ctx context.Context) (time.Time, bool) {
+	at, ok := ctx.Value(issuedAtContextKey{}).(time.Time)
+	return at, ok && !at.IsZero()
+}
+
+type issuedAtContextKey struct{}
+
 func (r Request) WithAfterSeq(after int64) Request {
 	r.AfterSeq = after
 	return r

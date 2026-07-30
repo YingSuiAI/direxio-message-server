@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/agentmemory"
+	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentturns"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -184,6 +185,13 @@ func WithRequestContextIntent(ctx context.Context, owner, conversation, intent, 
 func RequestIntent(ctx context.Context) string {
 	value, _ := ctx.Value(requestIntentKey).(string)
 	return strings.TrimSpace(value)
+}
+
+// RequestIssuedAt exposes the server-persisted durable turn creation time to
+// built-in tools. A missing value means this is not a durable turn and any
+// operation requiring replay-stable issuance must fail closed.
+func RequestIssuedAt(ctx context.Context) (time.Time, bool) {
+	return agentturns.IssuedAt(ctx)
 }
 func (r *Runtime) withRequestContext(ctx context.Context, params map[string]any) context.Context {
 	owner := ""

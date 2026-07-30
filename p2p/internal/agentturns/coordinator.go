@@ -245,7 +245,7 @@ func (c *Coordinator) runJob(job *turnJob) {
 	if !changed {
 		return
 	}
-	executionCtx, cancel := context.WithCancel(context.Background())
+	executionCtx, cancel := context.WithCancel(WithIssuedAt(context.Background(), turn.CreatedAt))
 	job.live.mu.Lock()
 	job.live.cancel = cancel
 	job.live.mu.Unlock()

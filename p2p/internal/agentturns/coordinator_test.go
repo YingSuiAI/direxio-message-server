@@ -22,8 +22,14 @@ func TestCoordinatorDurableLifecycleAndReplay(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	var executions atomic.Int32
+	var issuedAt time.Time
 	run := func(ctx context.Context, emit func(agentturns.RuntimeEvent) error) error {
 		executions.Add(1)
+		var ok bool
+		issuedAt, ok = agentturns.IssuedAt(ctx)
+		if !ok {
+			t.Error("runner did not receive persisted issued_at")
+		}
 		close(started)
 		<-release
 		if err := emit(agentturns.RuntimeEvent{Event: "delta", Data: map[string]any{"text": "hello"}}); err != nil {
@@ -63,6 +69,13 @@ func TestCoordinatorDurableLifecycleAndReplay(t *testing.T) {
 	}
 	close(release)
 	waitTurnState(t, store, "owner-a", "turn-1", agentturns.StateSucceeded)
+	persisted, ok, err := store.GetAgentTurn(context.Background(), "owner-a", "turn-1")
+	if err != nil || !ok {
+		t.Fatalf("persisted turn = (%#v, %v, %v)", persisted, ok, err)
+	}
+	if issuedAt.IsZero() || !issuedAt.Equal(persisted.CreatedAt) {
+		t.Fatalf("runner issued_at = %s, persisted CreatedAt = %s", issuedAt, persisted.CreatedAt)
+	}
 
 	replayed := collectTerminalStream(t, coordinator, request("owner-a", "turn-1", "conversation-a", "hello"), run, 0)
 	if executions.Load() != 1 {
@@ -70,6 +83,9 @@ func TestCoordinatorDurableLifecycleAndReplay(t *testing.T) {
 	}
 	assertEventSequence(t, replayed, []string{"accepted", "delta", "done"})
 	for _, event := range replayed {
+		if event.Kind == agentturns.EventAccepted && !event.Turn.CreatedAt.Equal(persisted.CreatedAt) {
+			t.Fatalf("replayed event CreatedAt = %s, want %s", event.Turn.CreatedAt, persisted.CreatedAt)
+		}
 		if event.Kind == agentturns.EventRuntime && (event.TurnID != "turn-1" || event.ConversationID != "conversation-a" || event.Seq <= 0) {
 			t.Fatalf("replayed event metadata = %#v", event)
 		}
