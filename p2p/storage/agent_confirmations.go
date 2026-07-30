@@ -444,7 +444,7 @@ func (s *DatabaseConfirmationStore) Reject(ctx context.Context, c confirmation.R
 			return confirmation.Confirmation{}, e
 		}
 	}
-	if _, e = tx.ExecContext(ctx, `INSERT INTO agent_task_events(owner_id,task_id,sequence,event_type,status,payload_json,occurred_at) SELECT owner_id,task_id,progress_sequence,'confirmation_rejected','canceled',jsonb_build_object('reason',$2),$3 FROM agent_tasks WHERE task_id=$1 AND owner_id=$4`, taskID, c.Reason, at, c.OwnerID); e != nil {
+	if _, e = tx.ExecContext(ctx, `INSERT INTO agent_task_events(owner_id,task_id,sequence,event_type,status,payload_json,occurred_at) SELECT owner_id,task_id,progress_sequence,'confirmation_rejected','canceled',jsonb_build_object('reason',$2::text),$3 FROM agent_tasks WHERE task_id=$1 AND owner_id=$4`, taskID, c.Reason, at, c.OwnerID); e != nil {
 		return confirmation.Confirmation{}, e
 	}
 	out, e := getConfirmationTx(ctx, tx, c.OwnerID, c.ID)
@@ -521,7 +521,7 @@ func (s *DatabaseConfirmationStore) Consume(ctx context.Context, c confirmation.
 		}
 		return expired, confirmation.ErrExpired
 	}
-	r, e := tx.ExecContext(ctx, `UPDATE agent_confirmations SET state='consumed',reservation_json=jsonb_build_object('task_id',$1,'attempt',$2,'lease_epoch',$3,'task_revision',$4),revision=revision+1,updated_at=$5 WHERE confirmation_id=$6 AND owner_id=$7 AND state='confirmed' AND revision=$8`, c.TaskID, c.Attempt, c.LeaseEpoch, c.ExpectedTaskRevision, at, c.ID, c.OwnerID, c.ExpectedRevision)
+	r, e := tx.ExecContext(ctx, `UPDATE agent_confirmations SET state='consumed',reservation_json=jsonb_build_object('task_id',$1::uuid,'attempt',$2::integer,'lease_epoch',$3::bigint,'task_revision',$4::bigint),revision=revision+1,updated_at=$5 WHERE confirmation_id=$6 AND owner_id=$7 AND state='confirmed' AND revision=$8`, c.TaskID, c.Attempt, c.LeaseEpoch, c.ExpectedTaskRevision, at, c.ID, c.OwnerID, c.ExpectedRevision)
 	if e != nil {
 		return confirmation.Confirmation{}, e
 	}
@@ -658,7 +658,7 @@ func expireConfirmationAndTaskTx(ctx context.Context, tx *sql.Tx, stored confirm
 		}
 	}
 	if taskIsMutable {
-		if _, err = tx.ExecContext(ctx, `INSERT INTO agent_task_events(owner_id,task_id,sequence,event_type,status,payload_json,occurred_at) SELECT owner_id,task_id,progress_sequence,$1,'failed',jsonb_build_object('reason',$1),$2 FROM agent_tasks WHERE task_id=$3 AND owner_id=$4`, reason, at.UTC(), stored.TaskID, stored.OwnerID); err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO agent_task_events(owner_id,task_id,sequence,event_type,status,payload_json,occurred_at) SELECT owner_id,task_id,progress_sequence,$1::text,'failed',jsonb_build_object('reason',$1::text),$2 FROM agent_tasks WHERE task_id=$3 AND owner_id=$4`, reason, at.UTC(), stored.TaskID, stored.OwnerID); err != nil {
 			return err
 		}
 	}

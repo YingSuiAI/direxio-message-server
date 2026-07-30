@@ -1742,7 +1742,7 @@ func (r *PostgresAWSRepository) ConsumeChange(ctx context.Context, cmd agentaws.
 	if n != 1 {
 		return agentaws.Reservation{}, agentaws.ErrRevisionConflict
 	}
-	res, err = tx.ExecContext(ctx, `UPDATE agent_confirmations SET state='consumed',revision=revision+1,reservation_json=jsonb_build_object('task_id',$1,'attempt',$2,'lease_epoch',$3,'task_revision',$4,'active',true),updated_at=$5 WHERE owner_id=$6 AND confirmation_id=$7 AND revision=$8 AND state='confirmed' AND expires_at>$5`, cmd.TaskID, cmd.Attempt, cmd.LeaseEpoch, cmd.ExpectedTaskRevision, now, r.ownerID, cmd.ConfirmationID, cmd.ExpectedConfirmationRevision)
+	res, err = tx.ExecContext(ctx, `UPDATE agent_confirmations SET state='consumed',revision=revision+1,reservation_json=jsonb_build_object('task_id',$1::uuid,'attempt',$2::integer,'lease_epoch',$3::bigint,'task_revision',$4::bigint,'active',true),updated_at=$5 WHERE owner_id=$6 AND confirmation_id=$7 AND revision=$8 AND state='confirmed' AND expires_at>$5`, cmd.TaskID, cmd.Attempt, cmd.LeaseEpoch, cmd.ExpectedTaskRevision, now, r.ownerID, cmd.ConfirmationID, cmd.ExpectedConfirmationRevision)
 	if err != nil {
 		return agentaws.Reservation{}, err
 	}

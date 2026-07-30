@@ -953,7 +953,7 @@ func (s *PostgresWorkloadStore) ConsumeFenced(c context.Context, id, cid, digest
 	if err = tx.QueryRowContext(c, `SELECT revision FROM agent_confirmations WHERE owner_id=$1 AND confirmation_id=$2 FOR UPDATE`, s.ownerID, cid).Scan(&confRev); err != nil {
 		return workload.Operation{}, coretask.Task{}, err
 	}
-	res, err = tx.ExecContext(c, `UPDATE agent_confirmations SET state='consumed',revision=revision+1,reservation_json=jsonb_build_object('task_id',$1,'attempt',$2,'lease_epoch',$3,'task_revision',$4,'active',true),updated_at=$5 WHERE owner_id=$6 AND confirmation_id=$7 AND task_id=$1 AND state='confirmed' AND revision=$8 AND expires_at>$5 AND expires_at<=$9`, fence.TaskID, fence.Attempt, fence.LeaseEpoch, taskRevision, now, s.ownerID, cid, confRev, planExpiresAt)
+	res, err = tx.ExecContext(c, `UPDATE agent_confirmations SET state='consumed',revision=revision+1,reservation_json=jsonb_build_object('task_id',$1::uuid,'attempt',$2::integer,'lease_epoch',$3::bigint,'task_revision',$4::bigint,'active',true),updated_at=$5 WHERE owner_id=$6 AND confirmation_id=$7 AND task_id=$1 AND state='confirmed' AND revision=$8 AND expires_at>$5 AND expires_at<=$9`, fence.TaskID, fence.Attempt, fence.LeaseEpoch, taskRevision, now, s.ownerID, cid, confRev, planExpiresAt)
 	if err != nil {
 		return workload.Operation{}, coretask.Task{}, err
 	}

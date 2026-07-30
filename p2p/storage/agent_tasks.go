@@ -453,7 +453,7 @@ func (s *DatabaseTaskStore) transition(ctx context.Context, c task.Fence, status
 	if e = terminalizeConfirmationsTx(ctx, tx, c.TaskID, code, at); e != nil {
 		return task.Task{}, e
 	}
-	if _, e = tx.ExecContext(ctx, `INSERT INTO agent_task_events(owner_id,task_id,sequence,event_type,status,payload_json,occurred_at) SELECT owner_id,task_id,progress_sequence,$2,$3,jsonb_build_object('code',$4),$5 FROM agent_tasks WHERE task_id=$1`, c.TaskID, string(status), string(status), code, at); e != nil {
+	if _, e = tx.ExecContext(ctx, `INSERT INTO agent_task_events(owner_id,task_id,sequence,event_type,status,payload_json,occurred_at) SELECT owner_id,task_id,progress_sequence,$2::text,$3::text,jsonb_build_object('code',$4::text),$5 FROM agent_tasks WHERE task_id=$1`, c.TaskID, string(status), string(status), code, at); e != nil {
 		return task.Task{}, e
 	}
 	if e = tx.Commit(); e != nil {
@@ -493,7 +493,7 @@ func (s *DatabaseTaskStore) WaitUser(ctx context.Context, c task.WaitUserCommand
 	if _, e = tx.ExecContext(ctx, `UPDATE agent_task_runtime_concurrency SET running_count=GREATEST(0,running_count-1),revision=revision+1,updated_at=$1 WHERE singleton=true`, c.At.UTC()); e != nil {
 		return e
 	}
-	if _, e = tx.ExecContext(ctx, `INSERT INTO agent_task_events(owner_id,task_id,sequence,event_type,status,payload_json,occurred_at) SELECT owner_id,task_id,progress_sequence,'waiting_user','waiting_user',jsonb_build_object('reason',$2),$3 FROM agent_tasks WHERE task_id=$1`, c.TaskID, c.Reason, c.At.UTC()); e != nil {
+	if _, e = tx.ExecContext(ctx, `INSERT INTO agent_task_events(owner_id,task_id,sequence,event_type,status,payload_json,occurred_at) SELECT owner_id,task_id,progress_sequence,'waiting_user','waiting_user',jsonb_build_object('reason',$2::text),$3 FROM agent_tasks WHERE task_id=$1`, c.TaskID, c.Reason, c.At.UTC()); e != nil {
 		return e
 	}
 	return tx.Commit()
@@ -657,7 +657,7 @@ WHERE task_id=$3 AND owner_id=$4 AND revision=$5 AND status=$6`, c.Reason, c.At.
 	if e = terminalizeConfirmationsTx(ctx, tx, c.TaskID, "canceled", c.At.UTC()); e != nil {
 		return task.Task{}, e
 	}
-	result, e = tx.ExecContext(ctx, `INSERT INTO agent_task_events(owner_id,task_id,sequence,event_type,status,payload_json,occurred_at) SELECT owner_id,task_id,progress_sequence,'canceled','canceled',jsonb_build_object('reason',$2),$3 FROM agent_tasks WHERE task_id=$1 AND owner_id=$4`, c.TaskID, c.Reason, c.At.UTC(), c.OwnerID)
+	result, e = tx.ExecContext(ctx, `INSERT INTO agent_task_events(owner_id,task_id,sequence,event_type,status,payload_json,occurred_at) SELECT owner_id,task_id,progress_sequence,'canceled','canceled',jsonb_build_object('reason',$2::text),$3 FROM agent_tasks WHERE task_id=$1 AND owner_id=$4`, c.TaskID, c.Reason, c.At.UTC(), c.OwnerID)
 	if e != nil {
 		return task.Task{}, e
 	}
@@ -912,7 +912,7 @@ func (s *DatabaseTaskStore) RetryTask(ctx context.Context, c task.RetryCommand) 
 	if count, _ := result.RowsAffected(); count != 1 {
 		return task.Task{}, task.ErrConflict
 	}
-	result, e = tx.ExecContext(ctx, `INSERT INTO agent_task_events(owner_id,task_id,sequence,event_type,status,payload_json,occurred_at) VALUES($1,$2,1,'created','queued',jsonb_build_object('retry_of_task_id',$3),$4)`, owner, next.ID, original.ID, c.At.UTC())
+	result, e = tx.ExecContext(ctx, `INSERT INTO agent_task_events(owner_id,task_id,sequence,event_type,status,payload_json,occurred_at) VALUES($1,$2,1,'created','queued',jsonb_build_object('retry_of_task_id',$3::uuid),$4)`, owner, next.ID, original.ID, c.At.UTC())
 	if e != nil {
 		return task.Task{}, e
 	}
