@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/hex"
@@ -172,9 +173,71 @@ func (s *PostgresWorkloadStore) GetWorkload(c context.Context, id string) (workl
 	if err != nil {
 		return workload.Workload{}, err
 	}
-	_ = json.Unmarshal(actual, &w.Actual)
+	normalized, normalizeErr := normalizePersistedWorkloadActual(actual, w)
+	if normalizeErr != nil {
+		return workload.Workload{}, normalizeErr
+	}
+	w.Actual = normalized
 	w.Identity = w.Actual.Identity
 	return w, nil
+}
+
+// normalizeWorkloadActual accepts both the current actual snapshot shape and
+// the historical provider readback shape stored in actual_snapshot_json. The
+// workload row owns immutable identity/revision metadata; payload values are
+// retained when present so the action projection can detect mismatches rather
+// than silently rewriting corrupt durable state.
+func normalizePersistedWorkloadActual(raw []byte, parent workload.Workload) (workload.ActualSnapshot, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("{}")) || bytes.Equal(trimmed, []byte("null")) {
+		return workload.ActualSnapshot{}, nil
+	}
+	var actual workload.ActualSnapshot
+	if err := json.Unmarshal(trimmed, &actual); err != nil {
+		return workload.ActualSnapshot{}, workload.ErrInvalid
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &fields); err != nil {
+		return workload.ActualSnapshot{}, workload.ErrInvalid
+	}
+	var readback struct {
+		TargetKind      workload.TargetKind     `json:"target_kind"`
+		WorkloadID      string                  `json:"workload_id"`
+		State           string                  `json:"state"`
+		Identity        workload.TargetIdentity `json:"identity"`
+		ProviderVersion string                  `json:"provider_version"`
+		Digest          string                  `json:"digest"`
+		At              time.Time               `json:"at"`
+	}
+	if err := json.Unmarshal(trimmed, &readback); err != nil {
+		return workload.ActualSnapshot{}, workload.ErrInvalid
+	}
+	_, hasDigest := fields["digest"]
+	_, hasAt := fields["at"]
+	_, hasTargetKind := fields["target_kind"]
+	_, hasRevision := fields["revision"]
+	_, hasAppliedPlanID := fields["applied_plan_id"]
+	_, hasAppliedPlanDigest := fields["applied_plan_digest"]
+	_, hasReadbackDigest := fields["readback_digest"]
+	_, hasObservedAt := fields["observed_at"]
+	_, hasUpdatedAt := fields["updated_at"]
+	legacyReadback := hasDigest && hasAt && hasTargetKind && readback.TargetKind == parent.TargetKind &&
+		(readback.TargetKind == workload.TargetAWSEC2SSM || readback.TargetKind == workload.TargetAWSECS) &&
+		!hasRevision && !hasAppliedPlanID && !hasAppliedPlanDigest && !hasReadbackDigest && !hasObservedAt && !hasUpdatedAt
+	if legacyReadback {
+		actual.ReadbackDigest = readback.Digest
+		actual.ObservedAt = readback.At
+	}
+	if actual.WorkloadID == "" && actual.State == "" && actual.Identity == (workload.TargetIdentity{}) && actual.ProviderVersion == "" && actual.ReadbackDigest == "" && actual.ObservedAt.IsZero() {
+		return workload.ActualSnapshot{}, workload.ErrInvalid
+	}
+	if legacyReadback {
+		actual.Revision = parent.Revision
+		actual.AppliedPlanID = parent.PlanID
+		actual.AppliedPlanDigest = parent.PlanDigest
+		actual.UpdatedAt = parent.UpdatedAt
+	}
+	return actual, nil
 }
 func (s *PostgresWorkloadStore) ListWorkloads(c context.Context, n int, k string) ([]workload.Workload, string, error) {
 	k = strings.TrimSpace(k)

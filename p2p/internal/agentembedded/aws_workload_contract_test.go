@@ -135,6 +135,158 @@ func (p *noCallWorkloadProvider) Read(context.Context, coreworkload.Plan, corewo
 	return coreworkload.Readback{}, nil
 }
 
+type actualWorkloadOverrideStore struct {
+	coreworkload.Store
+	coreworkload.FencedStore
+	workload coreworkload.Workload
+}
+
+func (s *actualWorkloadOverrideStore) GetWorkload(context.Context, string) (coreworkload.Workload, error) {
+	return s.workload, nil
+}
+
+func newWorkloadActualActionPort(t *testing.T, store coreworkload.Store) (ActionPort, *noCallWorkloadProvider) {
+	t.Helper()
+	provider := &noCallWorkloadProvider{}
+	registry, err := coreworkload.NewProviderRegistry(map[coreworkload.TargetKind]coreworkload.Provider{
+		coreworkload.TargetAWSEC2SSM: provider,
+		coreworkload.TargetAWSECS:    provider,
+	})
+	if err != nil {
+		t.Fatalf("new provider registry: %v", err)
+	}
+	handler, err := coreworkload.NewHandler(store, registry)
+	if err != nil {
+		t.Fatalf("new workload handler: %v", err)
+	}
+	service, err := coreworkload.NewService(store, time.Now)
+	if err != nil {
+		t.Fatalf("new workload service: %v", err)
+	}
+	port, err := NewWorkloadActionPort(func(string) (*coreworkload.Service, *coreworkload.Handler, error) {
+		return service, handler, nil
+	})
+	if err != nil {
+		t.Fatalf("new workload action port: %v", err)
+	}
+	return port, provider
+}
+
+func workloadActualActionPlan(t *testing.T, service *coreworkload.Service) coreworkload.Plan {
+	t.Helper()
+	now := time.Now().UTC()
+	plan, err := service.CreatePlan(context.Background(), coreworkload.PlanInput{
+		Summary:         "actual action test",
+		Artifact:        "artifact",
+		Source:          "test",
+		TargetKind:      coreworkload.TargetAWSEC2SSM,
+		SecretGrantRefs: []coreworkload.SecretGrantRef{{ReferenceID: "11111111-1111-4111-8111-111111111111", Purpose: coreconfirmation.SecretPurposeAWSCredential, Revision: 1, BindingDigest: coreconfirmation.Digest(strings.Repeat("a", 64))}},
+		Target: coreworkload.TargetSettings{
+			Identity:           coreworkload.TargetIdentity{Kind: coreworkload.TargetAWSEC2SSM, AccountID: "123456789012", Region: "us-east-1", InstanceID: "i-0123456789abcdef0", Endpoint: "http://203.0.113.10"},
+			Region:             "us-east-1",
+			AccountID:          "123456789012",
+			InstanceID:         "i-0123456789abcdef0",
+			EC2DocumentVersion: "1",
+			EC2SystemdService:  "dirextalk.service",
+			RequiredInstanceTags: map[string]string{
+				"managed": "true",
+			},
+		},
+		ExpiresAt:      now.Add(time.Hour),
+		IdempotencyKey: "22222222-2222-4222-8222-222222222222",
+	})
+	if err != nil {
+		t.Fatalf("create action test plan: %v", err)
+	}
+	return plan
+}
+
+func TestWorkloadActualGetPreDispatchReturnsNotFoundWithoutMutation(t *testing.T) {
+	store := coreworkload.NewMemoryStore(time.Now)
+	port, provider := newWorkloadActualActionPort(t, store)
+	service, err := coreworkload.NewService(store, time.Now)
+	if err != nil {
+		t.Fatalf("new workload service: %v", err)
+	}
+	plan := workloadActualActionPlan(t, service)
+	result, apiErr := port.Handle(context.Background(), "owner", "agent.core.workloads.apply", map[string]any{
+		"plan_id": plan.ID, "idempotency_key": "33333333-3333-4333-8333-333333333333",
+	})
+	if apiErr != nil {
+		t.Fatalf("apply request: %#v", apiErr)
+	}
+	operation := result.(map[string]any)["operation"].(map[string]any)
+	workloadID := operation["workload_id"].(string)
+	before, err := service.GetWorkload(context.Background(), workloadID)
+	if err != nil {
+		t.Fatalf("read pending workload: %v", err)
+	}
+	result, apiErr = port.Handle(context.Background(), "owner", "agent.core.workloads.actual.get", map[string]any{"workload_id": workloadID})
+	if result != nil || apiErr == nil || apiErr.Status != http.StatusNotFound || apiErr.Code != "workload_not_found" {
+		t.Fatalf("pre-dispatch actual = %#v, %#v", result, apiErr)
+	}
+	after, err := service.GetWorkload(context.Background(), workloadID)
+	if err != nil {
+		t.Fatalf("read pending workload after actual get: %v", err)
+	}
+	if before != after {
+		t.Fatalf("actual get mutated pending workload: before=%+v after=%+v", before, after)
+	}
+	if provider.calls != 0 {
+		t.Fatalf("actual get dispatched provider %d times", provider.calls)
+	}
+}
+
+func TestWorkloadActualGetProjectsValidActual(t *testing.T) {
+	const workloadID = "33333333-3333-4333-8333-333333333333"
+	const planID = "44444444-4444-4444-8444-444444444444"
+	now := time.Now().UTC()
+	digest := strings.Repeat("b", 64)
+	actual := coreworkload.ActualSnapshot{
+		WorkloadID: workloadID, Revision: 2, State: "ready",
+		Identity:      coreworkload.TargetIdentity{Kind: coreworkload.TargetAWSEC2SSM, AccountID: "123456789012", Region: "us-east-1", InstanceID: "i-0123456789abcdef0"},
+		AppliedPlanID: planID, AppliedPlanDigest: digest, ReadbackDigest: strings.Repeat("c", 64), ProviderVersion: "ssm-v1", ObservedAt: now, UpdatedAt: now,
+	}
+	store := &actualWorkloadOverrideStore{Store: coreworkload.NewMemoryStore(time.Now), workload: coreworkload.Workload{ID: workloadID, Revision: 2, PlanID: planID, PlanDigest: digest, TargetKind: coreworkload.TargetAWSEC2SSM, State: "ready", Actual: actual}}
+	port, _ := newWorkloadActualActionPort(t, store)
+	result, apiErr := port.Handle(context.Background(), "owner", "agent.core.workloads.actual.get", map[string]any{"workload_id": workloadID})
+	if apiErr != nil {
+		t.Fatalf("valid actual: %#v", apiErr)
+	}
+	projected := result.(map[string]any)["workload"].(map[string]any)
+	if projected["workload_id"] != workloadID || projected["revision"] != uint64(2) || projected["state"] != "ready" || projected["applied_plan_id"] != planID {
+		t.Fatalf("valid actual projection = %#v", projected)
+	}
+}
+
+func TestWorkloadActualGetRejectsRowSnapshotMismatch(t *testing.T) {
+	const workloadID = "66666666-6666-4666-8666-666666666666"
+	const planID = "77777777-7777-4777-8777-777777777777"
+	digest := strings.Repeat("d", 64)
+	now := time.Now().UTC()
+	actual := coreworkload.ActualSnapshot{
+		WorkloadID: workloadID, Revision: 3, State: "ready",
+		Identity:      coreworkload.TargetIdentity{Kind: coreworkload.TargetAWSECS, AccountID: "123456789012", Region: "us-east-1", Cluster: "cluster", Service: "service", TaskDefinitionRevision: "1"},
+		AppliedPlanID: planID, AppliedPlanDigest: digest, ReadbackDigest: strings.Repeat("e", 64), ProviderVersion: "ecs-v1", ObservedAt: now, UpdatedAt: now,
+	}
+	store := &actualWorkloadOverrideStore{Store: coreworkload.NewMemoryStore(time.Now), workload: coreworkload.Workload{ID: workloadID, Revision: 2, PlanID: planID, PlanDigest: digest, TargetKind: coreworkload.TargetAWSECS, State: "ready", Actual: actual}}
+	port, _ := newWorkloadActualActionPort(t, store)
+	result, apiErr := port.Handle(context.Background(), "owner", "agent.core.workloads.actual.get", map[string]any{"workload_id": workloadID})
+	if result != nil || apiErr == nil || apiErr.Status == http.StatusNotFound {
+		t.Fatalf("row/snapshot mismatch = %#v, %#v", result, apiErr)
+	}
+}
+
+func TestWorkloadActualGetRejectsPartialActualAsInvalid(t *testing.T) {
+	const workloadID = "55555555-5555-4555-8555-555555555555"
+	store := &actualWorkloadOverrideStore{Store: coreworkload.NewMemoryStore(time.Now), workload: coreworkload.Workload{ID: workloadID, Revision: 1, State: "pending", Actual: coreworkload.ActualSnapshot{WorkloadID: workloadID, Revision: 1}}}
+	port, _ := newWorkloadActualActionPort(t, store)
+	result, apiErr := port.Handle(context.Background(), "owner", "agent.core.workloads.actual.get", map[string]any{"workload_id": workloadID})
+	if result != nil || apiErr == nil || apiErr.Status == http.StatusNotFound {
+		t.Fatalf("partial actual = %#v, %#v", result, apiErr)
+	}
+}
+
 func TestWorkloadPlanRejectsRawEC2SSMBeforePersistenceOrProviderCall(t *testing.T) {
 	store := coreworkload.NewMemoryStore(time.Now)
 	service, err := coreworkload.NewService(store, time.Now)

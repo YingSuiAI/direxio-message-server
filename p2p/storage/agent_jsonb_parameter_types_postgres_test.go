@@ -333,8 +333,15 @@ func TestPostgresWorkloadConsumeFencedPersistsTypedReservation(t *testing.T) {
 	if err = store.DB().QueryRowContext(ctx, `SELECT jsonb_typeof(reservation_json->'active'),jsonb_typeof(reservation_json->'task_id'),jsonb_typeof(reservation_json->'attempt'),jsonb_typeof(reservation_json->'lease_epoch'),jsonb_typeof(reservation_json->'task_revision') FROM agent_confirmations WHERE confirmation_id=$1`, confirmationID).Scan(&activeType, &taskType, &attemptType, &epochType, &revisionType); err != nil || activeType != "boolean" || taskType != "string" || attemptType != "number" || epochType != "number" || revisionType != "number" {
 		t.Fatalf("ConsumeFenced reservation JSONB = %q/%q/%q/%q/%q err=%v", activeType, taskType, attemptType, epochType, revisionType, err)
 	}
-	if _, _, err := repo.CompleteDispatch(ctx, operationID, taskID, out.DispatchClaim, out.DispatchEpoch, "", workload.Readback{TargetKind: workload.TargetAWSEC2SSM, WorkloadID: workloadID, State: "ready", Digest: digest, At: now}, "completed"); err != nil {
+	if _, _, err := repo.CompleteDispatch(ctx, operationID, taskID, out.DispatchClaim, out.DispatchEpoch, "", workload.Readback{TargetKind: workload.TargetAWSEC2SSM, WorkloadID: workloadID, State: "ready", Identity: workload.TargetIdentity{Kind: workload.TargetAWSEC2SSM, AccountID: "123456789012", Region: "us-east-1", InstanceID: "i-0123456789abcdef0"}, ProviderVersion: "aws-ssm-v1", Digest: digest, At: now}, "completed"); err != nil {
 		t.Fatalf("CompleteDispatch = %v", err)
+	}
+	gotWorkload, err := repo.GetWorkload(ctx, workloadID)
+	if err != nil {
+		t.Fatalf("GetWorkload after CompleteDispatch = %v", err)
+	}
+	if gotWorkload.Actual.WorkloadID != workloadID || gotWorkload.Actual.Revision != 2 || gotWorkload.Actual.State != "ready" || gotWorkload.Actual.AppliedPlanID != planID || gotWorkload.Actual.AppliedPlanDigest != digest || gotWorkload.Actual.ReadbackDigest == "" || gotWorkload.Actual.ProviderVersion != "aws-ssm-v1" || gotWorkload.Actual.ObservedAt.IsZero() || gotWorkload.Actual.UpdatedAt.IsZero() {
+		t.Fatalf("normalized durable actual = %+v", gotWorkload.Actual)
 	}
 	var released []byte
 	if err = store.DB().QueryRowContext(ctx, `SELECT reservation_json FROM agent_confirmations WHERE confirmation_id=$1`, confirmationID).Scan(&released); err != nil {

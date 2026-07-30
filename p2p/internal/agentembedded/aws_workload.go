@@ -691,7 +691,11 @@ func (p workloadActionPort) Handle(ctx context.Context, owner, action string, pa
 		if err != nil {
 			return nil, workloadError(err)
 		}
-		return map[string]any{"workload": workloadActualMap(v.Actual)}, nil
+		actual, err := workloadActualProjection(v, v.Actual)
+		if err != nil {
+			return nil, workloadError(err)
+		}
+		return map[string]any{"workload": actual}, nil
 	default:
 		return nil, actionbase.CodedError(http.StatusNotFound, "agent_action_not_found", "unsupported workload action")
 	}
@@ -1068,6 +1072,20 @@ func workloadActualPointerMap(v *coreworkload.ActualSnapshot) any {
 		return nil
 	}
 	return workloadActualMap(*v)
+}
+func workloadActualProjection(parent coreworkload.Workload, v coreworkload.ActualSnapshot) (map[string]any, error) {
+	if v == (coreworkload.ActualSnapshot{}) {
+		return nil, coreworkload.ErrNotFound
+	}
+	if !coreworkload.ValidUUID(v.WorkloadID) || v.Revision == 0 || (v.State != "ready" && v.State != "destroyed") ||
+		v.Identity.Kind == "" || v.Identity.Validate(parent.TargetKind) != nil || !coreworkload.ValidUUID(v.AppliedPlanID) ||
+		!coreworkload.ValidDigest(v.AppliedPlanDigest) || !coreworkload.ValidDigest(v.ReadbackDigest) ||
+		strings.TrimSpace(v.ProviderVersion) == "" || v.ObservedAt.IsZero() || v.UpdatedAt.IsZero() ||
+		v.WorkloadID != parent.ID || v.Revision != parent.Revision || v.State != parent.State ||
+		v.AppliedPlanID != parent.PlanID || v.AppliedPlanDigest != parent.PlanDigest {
+		return nil, coreworkload.ErrInvalid
+	}
+	return workloadActualMap(v), nil
 }
 func workloadActualMap(v coreworkload.ActualSnapshot) map[string]any {
 	return map[string]any{
