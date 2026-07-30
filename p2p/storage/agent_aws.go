@@ -82,6 +82,9 @@ func (r *PostgresAWSRepository) CreateProvision(ctx context.Context, p agentaws.
 	if err != nil {
 		return agentaws.Provision{}, err
 	}
+	if _, err = ensureCoreDeploymentTx(ctx, tx, r.ownerID, p.ID, p); err != nil {
+		return agentaws.Provision{}, err
+	}
 	if err = tx.Commit(); err != nil {
 		return agentaws.Provision{}, err
 	}
@@ -113,6 +116,9 @@ func (r *PostgresAWSRepository) CreateEC2Provision(ctx context.Context, plan age
 		if json.Unmarshal(priorRaw, &replay) != nil {
 			return agentaws.Plan{}, agentaws.Provision{}, agentaws.ErrConflict
 		}
+		if _, err = ensureCoreDeploymentTx(ctx, tx, r.ownerID, replay.Provision.ID, replay.Provision); err != nil {
+			return agentaws.Plan{}, agentaws.Provision{}, err
+		}
 		return replay.Plan, replay.Provision, tx.Commit()
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return agentaws.Plan{}, agentaws.Provision{}, err
@@ -135,6 +141,9 @@ func (r *PostgresAWSRepository) CreateEC2Provision(ctx context.Context, plan age
 	}
 	if _, err = tx.ExecContext(ctx, `INSERT INTO core_aws_ec2_provisions(owner_id,provision_id,plan_id,credential_id,credential_revision,region,stack_name,profile,owner_digest,plan_revision,template_sha256,plan_digest,state,revision,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$15)`, r.ownerID, p.ID, p.PlanID, p.CredentialID, p.CredentialRevision, p.Region, p.StackName, p.Profile, p.OwnerDigest, p.PlanRevision, p.TemplateSHA256, p.PlanDigest, p.State, p.Revision, p.CreatedAt); err != nil {
 		return agentaws.Plan{}, agentaws.Provision{}, mapAWSError(err)
+	}
+	if _, err = ensureCoreDeploymentTx(ctx, tx, r.ownerID, p.ID, p); err != nil {
+		return agentaws.Plan{}, agentaws.Provision{}, err
 	}
 	raw, _ := json.Marshal(struct {
 		Plan      agentaws.Plan

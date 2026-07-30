@@ -29,8 +29,9 @@ type deploymentEventRow struct {
 }
 
 type deploymentPageCursor struct {
-	UpdatedAt  time.Time `json:"updated_at"`
-	WorkloadID string    `json:"workload_id"`
+	UpdatedAt    time.Time `json:"updated_at"`
+	WorkloadID   string    `json:"workload_id"`
+	DeploymentID string    `json:"deployment_id,omitempty"`
 }
 
 func encodeDeploymentPageToken(updated time.Time, workload string) string {
@@ -567,7 +568,10 @@ func persistDeploymentEventTx(ctx context.Context, tx *sql.Tx, owner, workload, 
 		return fmt.Errorf("deployment event linkage conflict")
 	}
 	var publicSequence int64
-	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(COALESCE(public_sequence,sequence)),0)+1 FROM p2p_agent_deployment_events WHERE owner_id=$1 AND workload_id=$2`, owner, workload).Scan(&publicSequence); err != nil {
+	if err := tx.QueryRowContext(ctx, `INSERT INTO p2p_agent_deployment_event_cursors(owner_id,workload_id,last_sequence,updated_at)
+		VALUES($1,$2,1,NOW()) ON CONFLICT(owner_id,workload_id) DO UPDATE
+		SET last_sequence=p2p_agent_deployment_event_cursors.last_sequence+1,updated_at=NOW()
+		RETURNING last_sequence`, owner, workload).Scan(&publicSequence); err != nil {
 		return err
 	}
 	persisted := sanitizedDeploymentEvent(owner, workload, event, publicSequence)

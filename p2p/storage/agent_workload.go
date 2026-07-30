@@ -369,6 +369,12 @@ func (s *PostgresWorkloadStore) RequestOperation(c context.Context, in workload.
 	if _, err = tx.ExecContext(c, `INSERT INTO core_workloads(workload_id,owner_id,revision,plan_id,plan_digest,target_kind,state,actual_snapshot_json,updated_at) VALUES($1,$2,1,$3,$4,$5,'pending','{}',$6) ON CONFLICT(owner_id,workload_id) DO NOTHING`, wid, s.ownerID, p.ID, p.Digest, p.TargetKind, now); err != nil {
 		return workload.RequestResult{}, mapWorkloadError(err)
 	}
+	// GeoLibre plans carry a persisted, typed provision identity. Bind that
+	// immutable owner/provision pair before any task, confirmation or event is
+	// visible; the helper performs the workload_id CAS in this transaction.
+	if _, err = linkWorkloadDeploymentTx(c, tx, s.ownerID, wid, p); err != nil {
+		return workload.RequestResult{}, mapWorkloadError(err)
+	}
 	if _, err = tx.ExecContext(c, `INSERT INTO agent_tasks(task_id,owner_id,spec_json,status,attempt,revision,available_at,created_at,updated_at) VALUES($1,$2,$3,'waiting_user',1,1,$4,$4,$4)`, taskID, s.ownerID, specRaw, now); err != nil {
 		return workload.RequestResult{}, mapWorkloadError(err)
 	}

@@ -1400,6 +1400,150 @@ func (s *DatabaseStore) migrate(ctx context.Context) error {
 			`UPDATE core_workload_operations o SET expected_workload_revision=w.revision FROM core_workloads w WHERE w.owner_id=o.owner_id AND w.workload_id=o.workload_id AND o.expected_workload_revision=1 AND w.revision<>1`,
 		})
 	}})
+	m.AddMigrations(sqlutil.Migration{Version: "p2p: unified deployment ledger v106", Up: func(ctx context.Context, txn *sql.Tx) error {
+		if err := execMigrationStatements(ctx, txn, []string{
+			`CREATE TABLE IF NOT EXISTS core_deployments (
+				owner_id TEXT NOT NULL,
+				deployment_id UUID NOT NULL,
+				provision_id UUID,
+				workload_id UUID,
+				state TEXT NOT NULL DEFAULT 'pending',
+				target_kind TEXT NOT NULL DEFAULT '',
+				revision BIGINT NOT NULL DEFAULT 1 CHECK (revision > 0),
+				object_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+				operation_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+				actual_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+				quote_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+				updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+				PRIMARY KEY(owner_id,deployment_id),
+				FOREIGN KEY(owner_id,provision_id) REFERENCES core_aws_ec2_provisions(owner_id,provision_id) ON DELETE RESTRICT,
+				FOREIGN KEY(owner_id,workload_id) REFERENCES core_workloads(owner_id,workload_id) ON DELETE RESTRICT
+			)`,
+			`CREATE UNIQUE INDEX IF NOT EXISTS core_deployments_owner_provision_uidx ON core_deployments(owner_id,provision_id) WHERE provision_id IS NOT NULL`,
+			`CREATE UNIQUE INDEX IF NOT EXISTS core_deployments_owner_workload_uidx ON core_deployments(owner_id,workload_id) WHERE workload_id IS NOT NULL`,
+			`CREATE INDEX IF NOT EXISTS core_deployments_owner_updated_idx ON core_deployments(owner_id,updated_at DESC,deployment_id DESC)`,
+			`CREATE TABLE IF NOT EXISTS core_deployment_event_counters (
+				owner_id TEXT NOT NULL,
+				deployment_id UUID NOT NULL,
+				next_sequence BIGINT NOT NULL DEFAULT 1 CHECK (next_sequence > 0),
+				PRIMARY KEY(owner_id,deployment_id),
+				FOREIGN KEY(owner_id,deployment_id) REFERENCES core_deployments(owner_id,deployment_id) ON DELETE CASCADE
+			)`,
+			`CREATE TABLE IF NOT EXISTS core_deployment_events (
+				owner_id TEXT NOT NULL,
+				deployment_id UUID NOT NULL,
+				event_id UUID NOT NULL,
+				sequence BIGINT NOT NULL CHECK (sequence > 0),
+				source_kind TEXT NOT NULL CHECK (source_kind IN ('provision','workload')),
+				source_id UUID NOT NULL,
+				source_sequence BIGINT NOT NULL CHECK (source_sequence > 0),
+				event_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+				PRIMARY KEY(owner_id,deployment_id,sequence),
+				UNIQUE(owner_id,deployment_id,source_kind,source_id,source_sequence),
+				FOREIGN KEY(owner_id,deployment_id) REFERENCES core_deployments(owner_id,deployment_id) ON DELETE CASCADE
+			)`,
+			`CREATE INDEX IF NOT EXISTS core_deployment_events_owner_source_idx ON core_deployment_events(owner_id,source_kind,source_id,source_sequence)`,
+		}); err != nil {
+			return err
+		}
+		// Reconstruct only mappings whose immutable typed identities prove the
+		// relation. Legacy Message Server ledger rows without a provision id are
+		// intentionally not imported into this deployment namespace.
+		if err := execMigrationStatements(ctx, txn, []string{
+			`INSERT INTO core_deployments(owner_id,deployment_id,provision_id,state,target_kind,revision,object_json,created_at,updated_at)
+			 SELECT p.owner_id,md5('dirextalk:deployment:v1:'||p.owner_id||':'||p.provision_id::text)::uuid,p.provision_id,p.state,'AWS_EC2',p.revision,
+			 jsonb_build_object('deployment_id',md5('dirextalk:deployment:v1:'||p.owner_id||':'||p.provision_id::text)::uuid,'provision_id',p.provision_id,'plan_id',p.plan_id,'plan_digest',p.plan_digest,'target_kind','AWS_EC2','status',p.state,'revision',p.revision),p.created_at,p.updated_at
+			 FROM core_aws_ec2_provisions p ON CONFLICT DO NOTHING`,
+			`UPDATE core_deployments d SET workload_id=w.workload_id,state='pending',target_kind=w.target_kind,revision=d.revision+1,object_json=jsonb_set(jsonb_set(d.object_json,'{workload_id}',to_jsonb(w.workload_id::text),true),'{target_kind}',to_jsonb(w.target_kind::text),true),updated_at=GREATEST(d.updated_at,w.updated_at)
+			 FROM core_workloads w JOIN core_workload_plans p ON p.owner_id=w.owner_id AND p.plan_id=w.plan_id
+			 JOIN core_aws_ec2_provisions ap ON ap.owner_id=w.owner_id AND ap.provision_id::text=(p.plan_json->'target'->'labels'->>'dirextalk:provision-id')
+			 JOIN p2p_agent_secrets sec ON sec.owner_id=ap.owner_id AND sec.entity_id=ap.credential_id::text AND sec.reference=ap.credential_id::text AND sec.secret_revision=ap.credential_revision AND sec.secret_domain='aws' AND sec.purpose='credential'
+			 WHERE d.owner_id=w.owner_id AND d.provision_id=ap.provision_id AND d.workload_id IS NULL
+			 AND p.plan_json->'target'->'required_instance_tags'->>'dirextalk:plan-id'=ap.plan_id::text
+			 AND p.plan_json->'target'->'labels'->>'dirextalk:provision-revision'=ap.revision::text
+			 AND p.plan_json->'target'->>'region'=ap.region
+			 AND p.plan_json->'target'->'required_instance_tags'->>'owner'=ap.owner_digest
+			 AND jsonb_array_length(COALESCE(p.plan_json->'secret_grant_refs','[]'::jsonb))=1
+			 AND p.plan_json->'secret_grant_refs'->0->>'reference_id'=ap.credential_id::text
+			 AND p.plan_json->'secret_grant_refs'->0->>'purpose'='aws_credential'
+			 AND (p.plan_json->'secret_grant_refs'->0->>'secret_revision')::bigint=ap.credential_revision
+			 AND p.plan_json->'secret_grant_refs'->0->>'binding_digest'=encode(sec.binding_digest,'hex')`,
+			`WITH source_events AS (
+			 SELECT d.owner_id,d.deployment_id,e.event_id,e.provision_id AS source_id,e.change_id::text,e.sequence AS source_sequence,'provision'::text AS source_kind,e.kind,''::text AS status,''::text AS operation,''::text AS message,NULL::jsonb AS readback_json,e.at
+			 FROM core_aws_ec2_provision_events e JOIN core_deployments d ON d.owner_id=e.owner_id AND d.provision_id=e.provision_id
+			 UNION ALL
+			 SELECT d.owner_id,d.deployment_id,md5(d.owner_id||':workload:'||e.operation_id::text||':'||e.sequence::text)::uuid,e.operation_id,NULL::text,e.sequence,'workload'::text,e.kind,e.status,o.operation,COALESCE(e.message,''),e.readback_json,e.at
+			 FROM core_workload_events e JOIN core_deployments d ON d.owner_id=e.owner_id AND d.workload_id=e.workload_id JOIN core_workload_operations o ON o.owner_id=e.owner_id AND o.operation_id=e.operation_id
+			 UNION ALL
+			 SELECT d.owner_id,d.deployment_id,md5(d.owner_id||':legacy:'||e.operation_id||':'||e.sequence::text)::uuid,md5(d.owner_id||':legacy:'||e.operation_id)::uuid,NULL::text,e.sequence,'workload'::text,COALESCE(e.event_json->>'type','legacy'),COALESCE(e.event_json->>'status',''),COALESCE(e.event_json->>'operation',''),'',NULL::jsonb,e.created_at
+			 FROM p2p_agent_deployment_events e JOIN core_deployments d ON d.owner_id=e.owner_id AND d.workload_id::text=e.workload_id
+			 WHERE e.operation_id<>'' AND NOT EXISTS (SELECT 1 FROM core_workload_events ce WHERE ce.owner_id=d.owner_id AND ce.workload_id=d.workload_id)
+			), ranked AS (
+			 SELECT s.*,row_number() OVER (PARTITION BY owner_id,deployment_id ORDER BY at,source_kind,source_id,source_sequence) AS public_sequence
+			 FROM source_events s
+			)
+			INSERT INTO core_deployment_events(owner_id,deployment_id,event_id,sequence,source_kind,source_id,source_sequence,event_json,created_at)
+			 SELECT owner_id,deployment_id,event_id,public_sequence,source_kind,source_id,source_sequence,jsonb_build_object('kind',kind,'status',status,'operation',operation,'message',message,'change_id',COALESCE(change_id,''),'actual',jsonb_build_object('state',readback_json->>'state','applied_plan_id',readback_json->>'applied_plan_id','applied_plan_digest',readback_json->>'applied_plan_digest','readback_digest',readback_json->>'readback_digest'),'at',at),at FROM ranked
+			 ON CONFLICT DO NOTHING`,
+			`INSERT INTO core_deployment_event_counters(owner_id,deployment_id,next_sequence)
+			 SELECT owner_id,deployment_id,COUNT(*)+1 FROM core_deployment_events GROUP BY owner_id,deployment_id
+			 ON CONFLICT(owner_id,deployment_id) DO UPDATE SET next_sequence=GREATEST(core_deployment_event_counters.next_sequence,EXCLUDED.next_sequence)`,
+			`WITH latest AS (SELECT DISTINCT ON (owner_id,deployment_id) owner_id,deployment_id,event_json->>'status' AS status,event_json->>'operation' AS operation,created_at FROM core_deployment_events WHERE event_json->>'status' IN ('succeeded','completed','failed','uncertain','destroyed') ORDER BY owner_id,deployment_id,sequence DESC)
+			 UPDATE core_deployments d SET state=CASE WHEN l.status IN ('succeeded','completed') AND l.operation='destroy' THEN 'destroyed' WHEN l.status IN ('succeeded','completed') THEN 'ready' WHEN l.status='failed' THEN 'failed' WHEN l.status='uncertain' THEN 'uncertain' WHEN l.status='destroyed' THEN 'destroyed' ELSE d.state END,revision=d.revision+1,object_json=jsonb_set(d.object_json,'{status}',to_jsonb(CASE WHEN l.status IN ('succeeded','completed') AND l.operation='destroy' THEN 'destroyed' WHEN l.status IN ('succeeded','completed') THEN 'succeeded' WHEN l.status='failed' THEN 'failed' WHEN l.status='uncertain' THEN 'uncertain' WHEN l.status='destroyed' THEN 'destroyed' ELSE d.object_json->>'status' END),true),updated_at=GREATEST(d.updated_at,l.created_at)
+			 FROM latest l WHERE d.owner_id=l.owner_id AND d.deployment_id=l.deployment_id AND l.status IN ('succeeded','completed','failed','uncertain','destroyed')`,
+		}); err != nil {
+			return err
+		}
+		// Source events are fanned out in their original transaction. The
+		// deployment counter row is the serialization point; the source tuple
+		// unique key makes retries/replayed provider responses idempotent.
+		if err := execMigrationStatements(ctx, txn, []string{
+			`CREATE OR REPLACE FUNCTION core_fanout_workload_event() RETURNS trigger LANGUAGE plpgsql AS $$
+			DECLARE d UUID; seq BIGINT; payload JSONB; op_kind TEXT; public_state TEXT;
+			BEGIN
+				SELECT deployment_id INTO d FROM core_deployments WHERE owner_id=NEW.owner_id AND workload_id=NEW.workload_id FOR UPDATE;
+				IF d IS NULL THEN RETURN NEW; END IF;
+				IF EXISTS (SELECT 1 FROM core_deployment_events WHERE owner_id=NEW.owner_id AND deployment_id=d AND source_kind='workload' AND source_id=NEW.operation_id AND source_sequence=NEW.sequence) THEN RETURN NEW; END IF;
+				INSERT INTO core_deployment_event_counters(owner_id,deployment_id,next_sequence) VALUES(NEW.owner_id,d,2)
+				ON CONFLICT(owner_id,deployment_id) DO UPDATE SET next_sequence=core_deployment_event_counters.next_sequence+1
+				RETURNING next_sequence-1 INTO seq;
+				payload := jsonb_build_object('kind',NEW.kind,'status',NEW.status,'message',COALESCE(NEW.message,''),'actual',jsonb_build_object('state',NEW.readback_json->>'state','applied_plan_id',NEW.readback_json->>'applied_plan_id','applied_plan_digest',NEW.readback_json->>'applied_plan_digest','readback_digest',NEW.readback_json->>'readback_digest','provider_version',NEW.readback_json->>'provider_version','observed_at',NEW.readback_json->>'observed_at'),'at',NEW.at);
+				INSERT INTO core_deployment_events(owner_id,deployment_id,event_id,sequence,source_kind,source_id,source_sequence,event_json,created_at)
+				VALUES(NEW.owner_id,d,md5(NEW.owner_id || ':workload:' || NEW.operation_id::text || ':' || NEW.sequence::text)::uuid,seq,'workload',NEW.operation_id,NEW.sequence,payload,NEW.at)
+				ON CONFLICT(owner_id,deployment_id,source_kind,source_id,source_sequence) DO NOTHING;
+				SELECT operation INTO op_kind FROM core_workload_operations WHERE owner_id=NEW.owner_id AND operation_id=NEW.operation_id;
+				public_state := CASE WHEN NEW.status IN ('succeeded','completed') AND op_kind='destroy' THEN 'destroyed' WHEN NEW.status IN ('succeeded','completed') THEN 'ready' WHEN NEW.status IN ('failed','uncertain','canceled','expired','rejected') THEN NEW.status WHEN NEW.status IN ('running','dispatched') THEN 'running' ELSE NULL END;
+				UPDATE core_deployments SET state=COALESCE(public_state,state),revision=revision+1,object_json=CASE WHEN public_state IS NULL THEN object_json ELSE jsonb_set(object_json,'{status}',to_jsonb(CASE WHEN public_state='ready' THEN 'succeeded' ELSE public_state END),true) END,actual_json=CASE WHEN NEW.readback_json IS NULL OR NEW.readback_json='null'::jsonb THEN actual_json ELSE NEW.readback_json END,updated_at=NEW.at WHERE owner_id=NEW.owner_id AND deployment_id=d;
+				RETURN NEW;
+			END $$`,
+			`CREATE OR REPLACE FUNCTION core_fanout_provision_event() RETURNS trigger LANGUAGE plpgsql AS $$
+			DECLARE d UUID; seq BIGINT; payload JSONB; current_state TEXT;
+			BEGIN
+				SELECT deployment_id INTO d FROM core_deployments WHERE owner_id=NEW.owner_id AND provision_id=NEW.provision_id FOR UPDATE;
+				IF d IS NULL THEN RETURN NEW; END IF;
+				IF EXISTS (SELECT 1 FROM core_deployment_events WHERE owner_id=NEW.owner_id AND deployment_id=d AND source_kind='provision' AND source_id=NEW.provision_id AND source_sequence=NEW.sequence) THEN RETURN NEW; END IF;
+				INSERT INTO core_deployment_event_counters(owner_id,deployment_id,next_sequence) VALUES(NEW.owner_id,d,2)
+				ON CONFLICT(owner_id,deployment_id) DO UPDATE SET next_sequence=core_deployment_event_counters.next_sequence+1
+				RETURNING next_sequence-1 INTO seq;
+				SELECT state INTO current_state FROM core_aws_ec2_provisions WHERE owner_id=NEW.owner_id AND provision_id=NEW.provision_id;
+				payload := jsonb_build_object('kind',NEW.kind,'status',COALESCE(current_state,''),'change_id',COALESCE(NEW.change_id::text,''),'at',NEW.at);
+				INSERT INTO core_deployment_events(owner_id,deployment_id,event_id,sequence,source_kind,source_id,source_sequence,event_json,created_at)
+				VALUES(NEW.owner_id,d,md5(NEW.owner_id || ':provision:' || NEW.provision_id::text || ':' || NEW.sequence::text)::uuid,seq,'provision',NEW.provision_id,NEW.sequence,payload,NEW.at)
+				ON CONFLICT(owner_id,deployment_id,source_kind,source_id,source_sequence) DO NOTHING;
+				UPDATE core_deployments SET state=COALESCE(NULLIF(current_state,''),state),revision=revision+1,object_json=jsonb_set(object_json,'{status}',to_jsonb(COALESCE(NULLIF(current_state,''),state)),true),updated_at=NEW.at WHERE owner_id=NEW.owner_id AND deployment_id=d;
+				RETURN NEW;
+			END $$`,
+			`DROP TRIGGER IF EXISTS core_workload_event_deployment_fanout ON core_workload_events`,
+			`CREATE TRIGGER core_workload_event_deployment_fanout AFTER INSERT ON core_workload_events FOR EACH ROW EXECUTE FUNCTION core_fanout_workload_event()`,
+			`DROP TRIGGER IF EXISTS core_provision_event_deployment_fanout ON core_aws_ec2_provision_events`,
+			`CREATE TRIGGER core_provision_event_deployment_fanout AFTER INSERT ON core_aws_ec2_provision_events FOR EACH ROW EXECUTE FUNCTION core_fanout_provision_event()`,
+		}); err != nil {
+			return err
+		}
+		return nil
+	}})
 	return m.Up(ctx)
 }
 
