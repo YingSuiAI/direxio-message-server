@@ -95,6 +95,26 @@ func TestPlanPinsCredentialRevisionAndDeleteTombstonesCurrentProjection(t *testi
 	}
 }
 
+func TestMemoryCredentialListDefaultPageAndCursor(t *testing.T) {
+	ctx := context.Background()
+	r := NewMemoryRepository()
+	for i := 0; i < 26; i++ {
+		id := uuid.NewString()
+		c := RehydrateCredentials(id, fmt.Sprintf("credential-%02d", i), "us-east-1", "", "", []byte("access"), []byte("secret"), nil, 0, 1, time.Unix(int64(i), 0).UTC(), time.Unix(int64(i), 0).UTC())
+		if _, err := r.CreateCredential(ctx, c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first, err := r.ListCredentials(ctx, 0, "")
+	if err != nil || len(first.Items) != 25 || first.NextPageToken == "" {
+		t.Fatalf("default credential page = %#v, err=%v", first, err)
+	}
+	second, err := r.ListCredentials(ctx, 0, first.NextPageToken)
+	if err != nil || len(second.Items) != 1 || second.NextPageToken != "" {
+		t.Fatalf("cursor credential page = %#v, err=%v", second, err)
+	}
+}
+
 func mustPlan(t *testing.T, r *MemoryRepository, id string) Plan {
 	t.Helper()
 	p, err := r.GetPlan(context.Background(), id)

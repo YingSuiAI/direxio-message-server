@@ -364,7 +364,11 @@ func awsCredentialInput(p map[string]any, update bool) (coreaws.CredentialInput,
 }
 
 func credentialViewMap(v coreaws.CredentialView) map[string]any {
-	return map[string]any{"credential_id": v.ID, "name": v.Name, "region": v.Region, "account_id": v.AccountID, "user_arn": v.UserARN, "has_access_key": v.HasAccessKey, "has_secret_key": v.HasSecretKey, "has_session_token": v.HasSessionToken, "revision": v.Revision, "created_at": v.CreatedAt.UTC().Format(time.RFC3339Nano), "updated_at": v.UpdatedAt.UTC().Format(time.RFC3339Nano)}
+	out := map[string]any{"credential_id": v.ID, "name": v.Name, "region": v.Region, "account_id": v.AccountID, "user_arn": v.UserARN, "access_key_configured": v.AccessKeyConfigured, "secret_access_key_configured": v.SecretAccessKeyConfigured, "session_token_configured": v.SessionTokenConfigured, "has_access_key": v.AccessKeyConfigured, "has_secret_key": v.SecretAccessKeyConfigured, "has_session_token": v.SessionTokenConfigured, "revision": v.Revision, "verified_revision": v.VerifiedRevision, "created_at": v.CreatedAt.UTC().Format(time.RFC3339Nano), "updated_at": v.UpdatedAt.UTC().Format(time.RFC3339Nano)}
+	if v.VerifiedRevision == v.Revision && v.VerifiedRevision > 0 {
+		out["tested_at"] = v.UpdatedAt.UTC().Format(time.RFC3339Nano)
+	}
+	return out
 }
 func planViewMap(v coreaws.PlanView) map[string]any {
 	return map[string]any{"plan_id": v.ID, "credential_id": v.CredentialID, "credential_revision": v.CredentialRevision, "region": v.Region, "stack_name": v.StackName, "operation": string(v.Operation), "template_sha256": v.TemplateSHA256, "parameters": v.Parameters, "tags": v.Tags, "capabilities": v.Capabilities, "revision": v.Revision, "created_at": v.CreatedAt.UTC().Format(time.RFC3339Nano)}

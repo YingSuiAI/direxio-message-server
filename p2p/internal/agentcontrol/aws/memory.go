@@ -574,6 +574,9 @@ func (r *MemoryRepository) ListCredentials(_ context.Context, size int, token st
 	if size < 0 || size > 100 {
 		return CredentialPage{}, ErrInvalid
 	}
+	if size == 0 {
+		size = 25
+	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	ids := make([]string, 0, len(r.credentials))

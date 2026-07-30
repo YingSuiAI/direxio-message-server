@@ -68,6 +68,12 @@ func (s *Service) GetCredential(ctx context.Context, id string) (CredentialView,
 	}
 	return c.View(), nil
 }
+func (s *Service) GetCredentialRevision(ctx context.Context, id string, revision int64) (Credentials, error) {
+	if s == nil || s.repo == nil || !validUUID(id) || revision < 1 {
+		return Credentials{}, ErrInvalid
+	}
+	return s.repo.GetCredentialRevision(ctx, id, revision)
+}
 func (s *Service) ListCredentials(ctx context.Context, size int, token string) (CredentialPage, error) {
 	return s.repo.ListCredentials(ctx, size, token)
 }

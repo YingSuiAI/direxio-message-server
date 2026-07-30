@@ -115,6 +115,9 @@ func VerifyAgentSecretDatabase(ctx context.Context, db *sql.DB, options AgentSec
 	if err := verifyGenericSecretRows(ctx, db, enveloper); err != nil {
 		return ErrAgentSecretRotation
 	}
+	if err := verifyAWSCredentialSecretRows(ctx, db, enveloper); err != nil {
+		return ErrAgentSecretRotation
+	}
 	if err := verifyCurrentModelSecretRows(ctx, db, enveloper, legacyKey); err != nil {
 		return ErrAgentSecretRotation
 	}
@@ -763,6 +766,84 @@ func verifyGenericSecretRows(ctx context.Context, db *sql.DB, enveloper *AgentSe
 		}
 	}
 	return rows.Err()
+}
+
+// verifyAWSCredentialSecretRows enforces the canonical one-row mapping used
+// by the AWS credential repository. Generic secret verification alone would
+// decrypt duplicate/sibling rows without detecting that they can shadow one
+// another during reads.
+func verifyAWSCredentialSecretRows(ctx context.Context, db *sql.DB, enveloper *AgentSecretEnveloper) error {
+	var orphan int
+	err := db.QueryRowContext(ctx, `SELECT 1 FROM p2p_agent_secrets s WHERE s.secret_domain='aws' AND s.purpose='credential' AND NOT EXISTS (SELECT 1 FROM core_aws_credentials c WHERE c.owner_id=s.owner_id AND c.credential_id::text=s.entity_id AND c.revision=s.secret_revision) LIMIT 1`).Scan(&orphan)
+	if err == nil {
+		return ErrAgentSecretRotation
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	rows, err := db.QueryContext(ctx, `SELECT owner_id,credential_id::text,revision FROM core_aws_credentials ORDER BY owner_id,credential_id,revision`)
+	if err != nil {
+		return err
+	}
+	type credentialRef struct {
+		owner, id string
+		revision  int64
+	}
+	refs := make([]credentialRef, 0)
+	for rows.Next() {
+		var ref credentialRef
+		if err := rows.Scan(&ref.owner, &ref.id, &ref.revision); err != nil {
+			rows.Close()
+			return err
+		}
+		refs = append(refs, ref)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, ref := range refs {
+		secretRows, err := db.QueryContext(ctx, `SELECT reference,binding_digest,envelope_version,aad_version,key_id,nonce,ciphertext FROM p2p_agent_secrets WHERE owner_id=$1 AND entity_id=$2 AND secret_domain='aws' AND purpose='credential' AND secret_revision=$3 ORDER BY created_at,key_id`, ref.owner, ref.id, ref.revision)
+		if err != nil {
+			return err
+		}
+		var secret credentialSecretRow
+		count := 0
+		for secretRows.Next() {
+			var candidate credentialSecretRow
+			if err := secretRows.Scan(&candidate.reference, &candidate.bindingDigest, &candidate.envelopeVersion, &candidate.aadVersion, &candidate.key, &candidate.nonce, &candidate.ciphertext); err != nil {
+				secretRows.Close()
+				return err
+			}
+			count++
+			if count == 1 {
+				secret = candidate
+			}
+		}
+		if err := secretRows.Err(); err != nil {
+			secretRows.Close()
+			return err
+		}
+		if err := secretRows.Close(); err != nil {
+			return err
+		}
+		if count != 1 || validateCredentialSecretRow(ref.owner, ref.id, ref.revision, secret.reference, secret.bindingDigest, secret.envelopeVersion, secret.aadVersion) != nil {
+			return ErrAgentSecretRotation
+		}
+		plain, err := enveloper.Open(credentialBinding(ref.owner, ref.id, ref.revision), AgentSecretEnvelope{KeyID: secret.key, Nonce: secret.nonce, Ciphertext: secret.ciphertext})
+		if err != nil {
+			return err
+		}
+		_, decodeErr := decodeCredentialSecretPayload(plain)
+		clear(plain)
+		if decodeErr != nil {
+			return decodeErr
+		}
+	}
+	return nil
 }
 
 func verifyCurrentModelSecretRows(ctx context.Context, db *sql.DB, enveloper *AgentSecretEnveloper, legacyKey []byte) error {

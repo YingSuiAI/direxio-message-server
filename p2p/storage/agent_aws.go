@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -8,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -758,10 +760,11 @@ func (r *PostgresAWSRepository) getCredential(c context.Context, id string, revi
 	if r == nil || r.store == nil || r.store.db == nil || strings.TrimSpace(id) == "" {
 		return agentaws.Credentials{}, agentaws.ErrInvalid
 	}
+	if r.enveloper == nil {
+		return agentaws.Credentials{}, ErrAgentSecretKeyringUnavailable
+	}
 	var v agentaws.Credentials
-	var key string
-	var nonce, ciphertext []byte
-	query := `SELECT c.credential_id::text,c.name,c.region,c.account_id,c.user_arn,c.verified_revision,c.revision,c.created_at,c.updated_at,s.key_id,s.nonce,s.ciphertext FROM core_aws_credentials c JOIN p2p_agent_secrets s ON s.owner_id=c.owner_id AND s.entity_id=c.credential_id::text AND s.secret_revision=c.revision AND s.secret_domain='aws' AND s.purpose='credential' WHERE c.owner_id=$1 AND c.credential_id=$2`
+	query := `SELECT c.credential_id::text,c.name,c.region,c.account_id,c.user_arn,c.verified_revision,c.revision,c.created_at,c.updated_at FROM core_aws_credentials c WHERE c.owner_id=$1 AND c.credential_id=$2`
 	args := []any{r.ownerID, id}
 	if exact {
 		query += ` AND c.revision=$3`
@@ -769,55 +772,141 @@ func (r *PostgresAWSRepository) getCredential(c context.Context, id string, revi
 	} else {
 		query += ` AND EXISTS(SELECT 1 FROM core_aws_credential_current cur WHERE cur.owner_id=c.owner_id AND cur.credential_id=c.credential_id AND cur.revision=c.revision AND cur.deleted_at IS NULL)`
 	}
-	err := r.store.db.QueryRowContext(c, query, args...).Scan(&v.ID, &v.Name, &v.Region, &v.AccountID, &v.UserARN, &v.VerifiedRevision, &v.Revision, &v.CreatedAt, &v.UpdatedAt, &key, &nonce, &ciphertext)
+	err := r.store.db.QueryRowContext(c, query, args...).Scan(&v.ID, &v.Name, &v.Region, &v.AccountID, &v.UserARN, &v.VerifiedRevision, &v.Revision, &v.CreatedAt, &v.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return agentaws.Credentials{}, agentaws.ErrNotFound
 	}
 	if err != nil {
 		return agentaws.Credentials{}, err
 	}
-	if r.enveloper == nil {
-		return v, nil
+	secret, err := r.loadCredentialSecret(c, v.ID, v.Revision)
+	if err != nil {
+		return agentaws.Credentials{}, err
 	}
-	plain, err := r.enveloper.Open(credentialBinding(r.ownerID, v.ID, v.Revision), AgentSecretEnvelope{KeyID: key, Nonce: nonce, Ciphertext: ciphertext})
+	plain, err := r.enveloper.Open(credentialBinding(r.ownerID, v.ID, v.Revision), AgentSecretEnvelope{KeyID: secret.key, Nonce: secret.nonce, Ciphertext: secret.ciphertext})
 	if err != nil {
 		return agentaws.Credentials{}, err
 	}
 	defer clearBytes(plain)
-	if len(plain) < 2 {
-		return agentaws.Credentials{}, agentaws.ErrInvalid
-	}
-	// Secret payload is length-delimited to avoid ambiguity between optional
-	// session tokens and the required access/secret pair.
-	var payload struct{ Access, Secret, Session string }
-	if json.Unmarshal(plain, &payload) != nil {
+	payload, err := decodeCredentialSecretPayload(plain)
+	if err != nil {
 		return agentaws.Credentials{}, agentaws.ErrInvalid
 	}
 	return agentaws.RehydrateCredentials(v.ID, v.Name, v.Region, v.AccountID, v.UserARN, []byte(payload.Access), []byte(payload.Secret), []byte(payload.Session), v.VerifiedRevision, v.Revision, v.CreatedAt, v.UpdatedAt), nil
 }
+
+type credentialSecretRow struct {
+	reference       string
+	bindingDigest   []byte
+	envelopeVersion int64
+	aadVersion      int64
+	key             string
+	nonce           []byte
+	ciphertext      []byte
+}
+
+type credentialSecretPayload struct {
+	Access, Secret, Session string
+}
+
+func decodeCredentialSecretPayload(plain []byte) (credentialSecretPayload, error) {
+	if len(plain) < 2 {
+		return credentialSecretPayload{}, ErrAgentSecretEnvelopeInvalid
+	}
+	var payload credentialSecretPayload
+	decoder := json.NewDecoder(bytes.NewReader(plain))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&payload); err != nil {
+		return credentialSecretPayload{}, ErrAgentSecretEnvelopeInvalid
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return credentialSecretPayload{}, ErrAgentSecretEnvelopeInvalid
+	}
+	if strings.TrimSpace(payload.Access) == "" || strings.TrimSpace(payload.Secret) == "" {
+		return credentialSecretPayload{}, ErrAgentSecretEnvelopeInvalid
+	}
+	return payload, nil
+}
+
+func (r *PostgresAWSRepository) loadCredentialSecret(c context.Context, id string, revision int64) (credentialSecretRow, error) {
+	if r == nil || r.store == nil || r.store.db == nil || strings.TrimSpace(id) == "" || revision < 1 {
+		return credentialSecretRow{}, ErrAgentSecretEnvelopeInvalid
+	}
+	rows, err := r.store.db.QueryContext(c, `SELECT reference,binding_digest,envelope_version,aad_version,key_id,nonce,ciphertext FROM p2p_agent_secrets WHERE owner_id=$1 AND entity_id=$2 AND secret_domain='aws' AND purpose='credential' AND secret_revision=$3 ORDER BY created_at,key_id`, r.ownerID, id, revision)
+	if err != nil {
+		return credentialSecretRow{}, err
+	}
+	defer rows.Close()
+	var out credentialSecretRow
+	count := 0
+	for rows.Next() {
+		var row credentialSecretRow
+		if err := rows.Scan(&row.reference, &row.bindingDigest, &row.envelopeVersion, &row.aadVersion, &row.key, &row.nonce, &row.ciphertext); err != nil {
+			return credentialSecretRow{}, ErrAgentSecretEnvelopeInvalid
+		}
+		count++
+		if count == 1 {
+			out = row
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return credentialSecretRow{}, err
+	}
+	if count != 1 || validateCredentialSecretRow(r.ownerID, id, revision, out.reference, out.bindingDigest, out.envelopeVersion, out.aadVersion) != nil {
+		return credentialSecretRow{}, ErrAgentSecretEnvelopeInvalid
+	}
+	return out, nil
+}
+
+func validateCredentialSecretRow(owner, id string, revision int64, reference string, bindingDigest []byte, envelopeVersion, aadVersion int64) error {
+	expected := credentialBinding(owner, id, revision)
+	if reference != id || !bytes.Equal(bindingDigest, expected.BindingDigest[:]) || envelopeVersion != 1 || aadVersion != 1 {
+		return ErrAgentSecretEnvelopeInvalid
+	}
+	return nil
+}
+
 func (r *PostgresAWSRepository) ListCredentials(c context.Context, n int, k string) (agentaws.CredentialPage, error) {
 	k = strings.TrimSpace(k)
 	if n < 0 || n > 100 || r == nil || r.store == nil || r.store.db == nil || (k != "" && !validAWSUUID(k)) {
 		return agentaws.CredentialPage{}, agentaws.ErrInvalid
 	}
-	rows, err := r.store.db.QueryContext(c, `SELECT c.credential_id::text,c.name,c.region,c.account_id,c.user_arn,c.revision,c.created_at,c.updated_at,EXISTS(SELECT 1 FROM p2p_agent_secrets s WHERE s.owner_id=c.owner_id AND s.entity_id=c.credential_id::text AND s.secret_domain='aws' AND s.purpose='credential' AND s.secret_revision=c.revision) FROM core_aws_credentials c JOIN core_aws_credential_current cur ON cur.owner_id=c.owner_id AND cur.credential_id=c.credential_id AND cur.revision=c.revision AND cur.deleted_at IS NULL WHERE c.owner_id=$1 AND c.credential_id>COALESCE(NULLIF($2,'')::uuid,'00000000-0000-0000-0000-000000000000'::uuid) ORDER BY c.credential_id LIMIT $3`, r.ownerID, k, n+1)
+	if n == 0 {
+		n = 25
+	}
+	rows, err := r.store.db.QueryContext(c, `SELECT c.credential_id::text,c.name,c.region,c.account_id,c.user_arn,c.revision,c.verified_revision,c.created_at,c.updated_at FROM core_aws_credentials c JOIN core_aws_credential_current cur ON cur.owner_id=c.owner_id AND cur.credential_id=c.credential_id AND cur.revision=c.revision AND cur.deleted_at IS NULL WHERE c.owner_id=$1 AND c.credential_id>COALESCE(NULLIF($2,'')::uuid,'00000000-0000-0000-0000-000000000000'::uuid) ORDER BY c.credential_id LIMIT $3`, r.ownerID, k, n+1)
 	if err != nil {
 		return agentaws.CredentialPage{}, err
 	}
 	defer rows.Close()
-	out := agentaws.CredentialPage{}
+	credentials := make([]agentaws.CredentialView, 0, n+1)
 	for rows.Next() {
 		var v agentaws.CredentialView
-		var configured bool
-		if err := rows.Scan(&v.ID, &v.Name, &v.Region, &v.AccountID, &v.UserARN, &v.Revision, &v.CreatedAt, &v.UpdatedAt, &configured); err != nil {
-			return out, err
+		if err := rows.Scan(&v.ID, &v.Name, &v.Region, &v.AccountID, &v.UserARN, &v.Revision, &v.VerifiedRevision, &v.CreatedAt, &v.UpdatedAt); err != nil {
+			return agentaws.CredentialPage{}, err
 		}
-		v.HasAccessKey = configured
-		v.HasSecretKey = configured
-		out.Items = append(out.Items, v)
+		credentials = append(credentials, v)
 	}
 	if err := rows.Err(); err != nil {
-		return out, err
+		return agentaws.CredentialPage{}, err
+	}
+	if err := rows.Close(); err != nil {
+		return agentaws.CredentialPage{}, err
+	}
+	out := agentaws.CredentialPage{}
+	for _, v := range credentials {
+		secret, err := r.loadCredentialSecret(c, v.ID, v.Revision)
+		if err != nil {
+			return agentaws.CredentialPage{}, err
+		}
+		access, configuredSecret, session, configErr := credentialEnvelopeConfigured(r.enveloper, r.ownerID, v.ID, v.Revision, secret.key, secret.nonce, secret.ciphertext)
+		if configErr != nil {
+			return agentaws.CredentialPage{}, configErr
+		}
+		v.AccessKeyConfigured, v.SecretAccessKeyConfigured, v.SessionTokenConfigured = access, configuredSecret, session
+		v.HasAccessKey, v.HasSecretKey, v.HasSessionToken = access, configuredSecret, session
+		out.Items = append(out.Items, v)
 	}
 	if len(out.Items) > n {
 		out.NextPageToken = out.Items[n-1].ID
@@ -832,6 +921,25 @@ func (r *PostgresAWSRepository) UpdateCredential(c context.Context, v agentaws.C
 	// A credential update is an immutable new revision; old envelopes remain
 	// addressable for pinned plans and are never overwritten.
 	return r.createCredentialRevision(c, v, rev)
+}
+
+func credentialEnvelopeConfigured(enveloper *AgentSecretEnveloper, owner, id string, revision int64, key string, nonce, ciphertext []byte) (bool, bool, bool, error) {
+	if enveloper == nil {
+		return false, false, false, ErrAgentSecretKeyringUnavailable
+	}
+	if key == "" || len(nonce) == 0 || len(ciphertext) == 0 {
+		return false, false, false, ErrAgentSecretEnvelopeInvalid
+	}
+	plain, err := enveloper.Open(credentialBinding(owner, id, revision), AgentSecretEnvelope{KeyID: key, Nonce: nonce, Ciphertext: ciphertext})
+	if err != nil {
+		return false, false, false, err
+	}
+	defer clearBytes(plain)
+	payload, err := decodeCredentialSecretPayload(plain)
+	if err != nil {
+		return false, false, false, err
+	}
+	return payload.Access != "", payload.Secret != "", payload.Session != "", nil
 }
 func (r *PostgresAWSRepository) DeleteCredential(c context.Context, id string, rev int64) error {
 	if r == nil || r.store == nil || r.store.db == nil || strings.TrimSpace(id) == "" || rev < 1 {

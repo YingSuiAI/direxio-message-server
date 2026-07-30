@@ -117,14 +117,20 @@ func (c Credentials) MarshalJSON() ([]byte, error) {
 
 // CredentialView is safe for ordinary read/list responses.
 type CredentialView struct {
-	ID, Name, Region, AccountID, UserARN        string
-	HasAccessKey, HasSecretKey, HasSessionToken bool
-	Revision                                    int64
-	CreatedAt, UpdatedAt                        time.Time
+	ID, Name, Region, AccountID, UserARN string
+	// Deprecated compatibility booleans; transport projections use the
+	// explicitly named *Configured fields below.
+	HasAccessKey, HasSecretKey, HasSessionToken                            bool
+	AccessKeyConfigured, SecretAccessKeyConfigured, SessionTokenConfigured bool
+	Revision, VerifiedRevision                                             int64
+	CreatedAt, UpdatedAt                                                   time.Time
 }
 
 func (c Credentials) View() CredentialView {
-	return CredentialView{ID: c.ID, Name: c.Name, Region: c.Region, AccountID: c.AccountID, UserARN: c.UserARN, HasAccessKey: c.private != nil && c.private.accessKeyID != "", HasSecretKey: c.private != nil && c.private.secretAccessKey != "", HasSessionToken: c.private != nil && c.private.sessionToken != "", Revision: c.Revision, CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt}
+	access := c.private != nil && c.private.accessKeyID != ""
+	secret := c.private != nil && c.private.secretAccessKey != ""
+	session := c.private != nil && c.private.sessionToken != ""
+	return CredentialView{ID: c.ID, Name: c.Name, Region: c.Region, AccountID: c.AccountID, UserARN: c.UserARN, HasAccessKey: access, HasSecretKey: secret, HasSessionToken: session, AccessKeyConfigured: access, SecretAccessKeyConfigured: secret, SessionTokenConfigured: session, Revision: c.Revision, VerifiedRevision: c.VerifiedRevision, CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt}
 }
 
 // StoredSecretBytes is restricted to persistence adapters inside Agent.
