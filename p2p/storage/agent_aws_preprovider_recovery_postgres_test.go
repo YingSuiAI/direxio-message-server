@@ -161,14 +161,14 @@ func TestPostgresRetryProvisionRearmsExactPreProviderOrphanAndReplays(t *testing
 func TestPostgresAWSPreProviderFailureCompletesAllFencesAtomically(t *testing.T) {
 	store, repo, fx := newPreProviderPostgresFixture(t)
 	now := time.Now().UTC()
-	reservation, err := json.Marshal(map[string]any{"confirmation_id": fx.confirmationID, "task_id": fx.taskID, "attempt": 1, "lease_epoch": 4, "task_revision": 7, "active": true})
+	initialReservation, err := json.Marshal(map[string]any{"confirmation_id": fx.confirmationID, "task_id": fx.taskID, "attempt": 1, "lease_epoch": 4, "task_revision": 7, "active": true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err = store.DB().ExecContext(fx.ctx, `UPDATE agent_tasks SET status='running',lease_holder='worker',lease_expires_at=$1,failure_code='',failure_summary='' WHERE owner_id=$2 AND task_id=$3`, now.Add(time.Hour), fx.owner, fx.taskID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = store.DB().ExecContext(fx.ctx, `UPDATE agent_confirmations SET state='consumed',revision=4,reservation_json=$1::jsonb,terminal_reason='' WHERE owner_id=$2 AND confirmation_id=$3`, reservation, fx.owner, fx.confirmationID); err != nil {
+	if _, err = store.DB().ExecContext(fx.ctx, `UPDATE agent_confirmations SET state='consumed',revision=4,reservation_json=$1::jsonb,terminal_reason='' WHERE owner_id=$2 AND confirmation_id=$3`, initialReservation, fx.owner, fx.confirmationID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = store.DB().ExecContext(fx.ctx, `UPDATE core_aws_changes SET status='running',stage='change_set_creating',revision=2,provider_request_digest=$1 WHERE owner_id=$2 AND change_id=$3`, agentaws.ProviderRequestDigest(fx.plan, fx.confirmationID), fx.owner, fx.changeID); err != nil {
@@ -196,12 +196,12 @@ func TestPostgresAWSPreProviderFailureCompletesAllFencesAtomically(t *testing.T)
 	}
 	var taskStatus, leaseHolder, changeStatus, changeStage, confirmationState string
 	var leaseExpires *time.Time
-	var active bool
-	if err = store.DB().QueryRowContext(fx.ctx, `SELECT t.status,t.lease_holder,t.lease_expires_at,ch.status,ch.stage,c.state,COALESCE((c.reservation_json->>'active')::boolean,false) FROM agent_tasks t JOIN core_aws_changes ch ON ch.owner_id=t.owner_id AND ch.task_id=t.task_id JOIN agent_confirmations c ON c.owner_id=t.owner_id AND c.task_id=t.task_id WHERE t.owner_id=$1 AND t.task_id=$2`, fx.owner, fx.taskID).Scan(&taskStatus, &leaseHolder, &leaseExpires, &changeStatus, &changeStage, &confirmationState, &active); err != nil {
+	var reservation []byte
+	if err = store.DB().QueryRowContext(fx.ctx, `SELECT t.status,t.lease_holder,t.lease_expires_at,ch.status,ch.stage,c.state,c.reservation_json FROM agent_tasks t JOIN core_aws_changes ch ON ch.owner_id=t.owner_id AND ch.task_id=t.task_id JOIN agent_confirmations c ON c.owner_id=t.owner_id AND c.task_id=t.task_id WHERE t.owner_id=$1 AND t.task_id=$2`, fx.owner, fx.taskID).Scan(&taskStatus, &leaseHolder, &leaseExpires, &changeStatus, &changeStage, &confirmationState, &reservation); err != nil {
 		t.Fatal(err)
 	}
-	if taskStatus != "failed" || leaseHolder != "" || leaseExpires != nil || changeStatus != "failed" || changeStage != "failed" || confirmationState != "consumed" || active {
-		t.Fatalf("terminal fence state = task %q/%q change %q/%q confirmation %q active=%v", taskStatus, leaseHolder, changeStatus, changeStage, confirmationState, active)
+	if taskStatus != "failed" || leaseHolder != "" || leaseExpires != nil || changeStatus != "failed" || changeStage != "failed" || confirmationState != "consumed" || reservation != nil {
+		t.Fatalf("terminal fence state = task %q/%q change %q/%q confirmation %q reservation=%s", taskStatus, leaseHolder, changeStatus, changeStage, confirmationState, reservation)
 	}
 	var provisionState, activeChange, createChange string
 	if err = store.DB().QueryRowContext(fx.ctx, `SELECT state,COALESCE(active_change_id::text,''),COALESCE(create_change_id::text,'') FROM core_aws_ec2_provisions WHERE owner_id=$1 AND provision_id=$2`, fx.owner, fx.provisionID).Scan(&provisionState, &activeChange, &createChange); err != nil {
@@ -235,6 +235,95 @@ func TestPostgresAWSPreProviderFailureCompletesAllFencesAtomically(t *testing.T)
 	rearmed, err := repo.RetryProvision(fx.ctx, fx.provisionID, 3, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
 	if err != nil || rearmed.State != "planned" || rearmed.ActiveChangeID != "" || rearmed.Revision != 4 {
 		t.Fatalf("RetryProvision after atomic completion = %+v err=%v", rearmed, err)
+	}
+	service := agentaws.NewServiceWithCoordinator(repo, repo, nil, nil, nil, nil, nil)
+	fresh, err := service.RequestEC2Create(fx.ctx, fx.provisionID, rearmed.Revision, "cccccccc-cccc-4ccc-8ccc-cccccccccccd", fx.owner)
+	if err != nil || fresh.Confirmation.ConfirmationID == fx.confirmationID || fresh.Change.ConfirmationID == fx.confirmationID {
+		t.Fatalf("fresh confirmation after terminal release = %+v err=%v", fresh, err)
+	}
+}
+
+func TestPostgresV109ReleasesOnlyTerminalConsumedReservations(t *testing.T) {
+	store, _, fx := newPreProviderPostgresFixture(t)
+	reservation := []byte(`{"task_id":"` + fx.taskID + `","attempt":1,"lease_epoch":4,"task_revision":7,"active":false}`)
+	if _, err := store.DB().ExecContext(fx.ctx, `UPDATE agent_confirmations SET state='consumed',revision=4,reservation_json=$1::jsonb,terminal_reason='' WHERE owner_id=$2 AND confirmation_id=$3`, reservation, fx.owner, fx.confirmationID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB().ExecContext(fx.ctx, `UPDATE core_aws_changes SET status='failed',stage='failed' WHERE owner_id=$1 AND change_id=$2`, fx.owner, fx.changeID); err != nil {
+		t.Fatal(err)
+	}
+	var eligible int
+	if err := store.DB().QueryRowContext(fx.ctx, `SELECT count(*) FROM agent_confirmations c JOIN core_aws_changes ch ON c.owner_id=ch.owner_id AND c.confirmation_id=ch.confirmation_id AND c.task_id=ch.task_id JOIN agent_tasks t ON t.owner_id=ch.owner_id AND t.task_id=ch.task_id WHERE c.owner_id=$1 AND c.confirmation_id=$2 AND c.state='consumed' AND c.reservation_json ? 'active' AND (c.reservation_json->>'active')::boolean=false AND ch.status IN ('succeeded','failed','canceled') AND ch.stage IN ('succeeded','failed','canceled') AND t.status IN ('succeeded','failed','canceled')`, fx.owner, fx.confirmationID).Scan(&eligible); err != nil || eligible != 1 {
+		t.Fatalf("v109 fixture eligible=%d err=%v", eligible, err)
+	}
+	if _, err := store.DB().ExecContext(fx.ctx, `DELETE FROM db_migrations WHERE version=$1`, "p2p: release terminal confirmation reservations v109"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Migrate(fx.ctx); err != nil {
+		t.Fatal(err)
+	}
+	var released []byte
+	if err := store.DB().QueryRowContext(fx.ctx, `SELECT reservation_json FROM agent_confirmations WHERE owner_id=$1 AND confirmation_id=$2`, fx.owner, fx.confirmationID).Scan(&released); err != nil {
+		t.Fatal(err)
+	}
+	if released != nil {
+		t.Fatalf("v109 left terminal reservation envelope: %s", released)
+	}
+}
+
+func TestPostgresAWSUncertainCompletionRetainsReservationFence(t *testing.T) {
+	store, repo, fx := newPreProviderPostgresFixture(t)
+	now := time.Now().UTC()
+	reservation, err := json.Marshal(map[string]any{"confirmation_id": fx.confirmationID, "task_id": fx.taskID, "attempt": 1, "lease_epoch": 4, "task_revision": 7, "active": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.DB().ExecContext(fx.ctx, `UPDATE agent_tasks SET status='running',lease_holder='worker',lease_expires_at=$1,failure_code='',failure_summary='' WHERE owner_id=$2 AND task_id=$3`, now.Add(time.Hour), fx.owner, fx.taskID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.DB().ExecContext(fx.ctx, `UPDATE agent_confirmations SET state='consumed',revision=4,reservation_json=$1::jsonb,terminal_reason='' WHERE owner_id=$2 AND confirmation_id=$3`, reservation, fx.owner, fx.confirmationID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.DB().ExecContext(fx.ctx, `UPDATE core_aws_changes SET status='running',stage='reconciling',revision=2 WHERE owner_id=$1 AND change_id=$2`, fx.owner, fx.changeID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.DB().ExecContext(fx.ctx, `INSERT INTO agent_task_runtime_concurrency(singleton,running_count,max_concurrent,revision,updated_at) VALUES(true,1,4,1,$1) ON CONFLICT(singleton) DO UPDATE SET running_count=1,max_concurrent=4,updated_at=$1`, now); err != nil {
+		t.Fatal(err)
+	}
+	completion := agentaws.CompleteChangeCommand{ChangeID: fx.changeID, ConfirmationID: fx.confirmationID, TaskID: fx.taskID, Attempt: 1, LeaseEpoch: 4, ExpectedTaskRevision: 7, ExpectedChangeRevision: 2, ExpectedConfirmationRevision: 4, Status: agentaws.ChangeCanceled, ErrorCode: "canceled_after_dispatch", ErrorSummary: "provider response lost", OperationKey: "cccccccc-cccc-4ccc-8ccc-cccccccccccc"}
+	if completed, completeErr := repo.CompleteChange(fx.ctx, completion); completeErr != nil || completed.Stage != agentaws.StageReconciliationRequired {
+		t.Fatalf("uncertain completion = %+v err=%v", completed, completeErr)
+	}
+	var retained []byte
+	if err = store.DB().QueryRowContext(fx.ctx, `SELECT reservation_json FROM agent_confirmations WHERE owner_id=$1 AND confirmation_id=$2`, fx.owner, fx.confirmationID).Scan(&retained); err != nil {
+		t.Fatal(err)
+	}
+	if len(retained) == 0 || !strings.Contains(string(retained), `"active": false`) {
+		t.Fatalf("uncertain completion lost reservation fence: %s", retained)
+	}
+}
+
+func TestPostgresV109PreservesAWSReconciliationReservation(t *testing.T) {
+	store, _, fx := newPreProviderPostgresFixture(t)
+	reservation := []byte(`{"task_id":"` + fx.taskID + `","attempt":1,"lease_epoch":4,"task_revision":7,"active":false}`)
+	if _, err := store.DB().ExecContext(fx.ctx, `UPDATE agent_confirmations SET state='consumed',revision=4,reservation_json=$1::jsonb,terminal_reason='' WHERE owner_id=$2 AND confirmation_id=$3`, reservation, fx.owner, fx.confirmationID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB().ExecContext(fx.ctx, `UPDATE core_aws_changes SET status='canceled',stage='reconciliation_required' WHERE owner_id=$1 AND change_id=$2`, fx.owner, fx.changeID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB().ExecContext(fx.ctx, `DELETE FROM db_migrations WHERE version=$1`, "p2p: release terminal confirmation reservations v109"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Migrate(fx.ctx); err != nil {
+		t.Fatal(err)
+	}
+	var retained []byte
+	if err := store.DB().QueryRowContext(fx.ctx, `SELECT reservation_json FROM agent_confirmations WHERE owner_id=$1 AND confirmation_id=$2`, fx.owner, fx.confirmationID).Scan(&retained); err != nil {
+		t.Fatal(err)
+	}
+	if len(retained) == 0 {
+		t.Fatal("v109 incorrectly released reconciliation reservation")
 	}
 }
 

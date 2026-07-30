@@ -711,7 +711,7 @@ func (r *PostgresAWSRepository) RequestChange(ctx context.Context, in agentaws.R
 		return agentaws.ChangeRequestResult{}, err
 	}
 	if _, err = tx.ExecContext(ctx, `INSERT INTO agent_confirmations(confirmation_id,owner_id,operation_domain,target_id,target_revision,binding_digest,binding_json,task_id,state,revision,expires_at,created_at,updated_at) VALUES($1,$2,'aws',$3,$4,$5,$6,$7,'pending',1,$8,$9,$9)`, confID, r.ownerID, p.ID, p.Revision, b.Digest, bRaw, taskID, now.Add(24*time.Hour), now); err != nil {
-		return agentaws.ChangeRequestResult{}, err
+		return agentaws.ChangeRequestResult{}, mapAWSError(err)
 	}
 	v := agentaws.Change{ID: changeID, PlanID: p.ID, CredentialID: p.CredentialID, ProvisionID: in.ProvisionID, TaskID: taskID, ConfirmationID: confID, Operation: p.Operation, Status: agentaws.ChangeWaitingUser, Stage: agentaws.StageRequested, Revision: 1, ProviderToken: confID, ProviderRequestDigest: agentaws.ProviderRequestDigest(p, confID), CreatedAt: now, UpdatedAt: now}
 	if _, err = tx.ExecContext(ctx, `INSERT INTO core_aws_changes(owner_id,change_id,plan_id,credential_id,credential_revision,provision_id,task_id,confirmation_id,operation,status,stage,provider_token,provider_request_digest,revision,created_at,updated_at) VALUES($1,$2,$3,$4,(SELECT credential_revision FROM core_aws_plans WHERE owner_id=$1 AND plan_id=$3),NULLIF($5,'')::uuid,$6,$7,$8,$9,$10,$11,$12,1,$13,$13)`, r.ownerID, v.ID, v.PlanID, v.CredentialID, v.ProvisionID, v.TaskID, v.ConfirmationID, v.Operation, v.Status, v.Stage, v.ProviderToken, v.ProviderRequestDigest, now); err != nil {
@@ -2093,7 +2093,14 @@ func (r *PostgresAWSRepository) CompleteChange(ctx context.Context, cmd agentaws
 	if _, err = tx.ExecContext(ctx, `INSERT INTO agent_task_events(owner_id,task_id,sequence,event_type,status,payload_json,occurred_at) VALUES($1,$2,$3,'aws_change_completed',$4,$5,$6)`, r.ownerID, cmd.TaskID, seq, taskStatus, []byte(`{}`), now); err != nil {
 		return agentaws.Change{}, err
 	}
-	res, err = tx.ExecContext(ctx, `UPDATE agent_confirmations SET reservation_json=jsonb_set(reservation_json,'{active}','false'),revision=revision+1,updated_at=$1 WHERE owner_id=$2 AND confirmation_id=$3 AND revision=$4 AND state='consumed'`, now, r.ownerID, cmd.ConfirmationID, confirmationRevision)
+	// A canceled provider request that was already dispatched is unresolved:
+	// retain its inactive envelope so the live-target index fences retries until
+	// reconciliation. All proven terminal outcomes release the reservation.
+	confirmationReservationSQL := `UPDATE agent_confirmations SET reservation_json=NULL,revision=revision+1,updated_at=$1 WHERE owner_id=$2 AND confirmation_id=$3 AND revision=$4 AND state='consumed'`
+	if cmd.Status == agentaws.ChangeCanceled && changeStage == agentaws.StageReconciling {
+		confirmationReservationSQL = `UPDATE agent_confirmations SET reservation_json=jsonb_set(reservation_json,'{active}','false'),revision=revision+1,updated_at=$1 WHERE owner_id=$2 AND confirmation_id=$3 AND revision=$4 AND state='consumed'`
+	}
+	res, err = tx.ExecContext(ctx, confirmationReservationSQL, now, r.ownerID, cmd.ConfirmationID, confirmationRevision)
 	if err != nil {
 		return agentaws.Change{}, err
 	}

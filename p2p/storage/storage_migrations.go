@@ -1633,6 +1633,49 @@ func (s *DatabaseStore) migrate(ctx context.Context) error {
 			END $$`,
 		})
 	}})
+	// v109 repairs only reservations whose linked AWS/workload execution is
+	// durably terminal.  Older completion code retained an inactive JSON
+	// envelope; because the live-target index keys any non-NULL consumed
+	// reservation, those rows could block a subsequent retry.  Pending,
+	// confirmed, running, and uncertain/reconciling executions are deliberately
+	// excluded so their uniqueness fence remains intact.
+	m.AddMigrations(sqlutil.Migration{Version: "p2p: release terminal confirmation reservations v109", Up: func(ctx context.Context, txn *sql.Tx) error {
+		return execMigrationStatements(ctx, txn, []string{
+			`UPDATE agent_confirmations c
+			 SET reservation_json=NULL,revision=c.revision+1,updated_at=clock_timestamp()
+			 FROM core_aws_changes ch
+			 JOIN agent_tasks t ON t.owner_id=ch.owner_id AND t.task_id=ch.task_id
+			 WHERE c.owner_id=ch.owner_id AND c.confirmation_id=ch.confirmation_id AND c.task_id=ch.task_id
+			   AND c.state='consumed' AND c.reservation_json IS NOT NULL
+			   AND c.reservation_json ? 'active'
+			   AND jsonb_typeof(c.reservation_json->'active')='boolean'
+			   AND (c.reservation_json->>'active')::boolean=false
+			   AND ch.status IN ('succeeded','failed','canceled')
+			   AND ch.stage IN ('succeeded','failed','canceled')
+			   AND t.status IN ('succeeded','failed','canceled')
+			   AND NOT EXISTS (
+				 SELECT 1 FROM core_aws_changes live
+				 WHERE live.owner_id=ch.owner_id AND live.confirmation_id=ch.confirmation_id
+				   AND live.status IN ('waiting_user','running')
+			   )`,
+			`UPDATE agent_confirmations c
+			 SET reservation_json=NULL,revision=c.revision+1,updated_at=clock_timestamp()
+			 FROM core_workload_operations o
+			 JOIN agent_tasks t ON t.owner_id=o.owner_id AND t.task_id=o.task_id
+			 WHERE c.owner_id=o.owner_id AND c.confirmation_id=o.confirmation_id AND c.task_id=o.task_id
+			   AND c.state='consumed' AND c.reservation_json IS NOT NULL
+			   AND c.reservation_json ? 'active'
+			   AND jsonb_typeof(c.reservation_json->'active')='boolean'
+			   AND (c.reservation_json->>'active')::boolean=false
+			   AND o.status IN ('succeeded','failed') AND o.dispatch_state='terminal'
+			   AND t.status IN ('succeeded','failed','canceled')
+			   AND NOT EXISTS (
+				 SELECT 1 FROM core_workload_operations live
+				 WHERE live.owner_id=o.owner_id AND live.confirmation_id=o.confirmation_id
+				   AND live.status IN ('waiting_user','running')
+			   )`,
+		})
+	}})
 	return m.Up(ctx)
 }
 

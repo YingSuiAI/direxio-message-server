@@ -122,6 +122,12 @@ func TestDatabasePublicDeploymentUUIDMigrationIsCanonicalAndRegisteredOnce(t *te
 	if registrations != 1 {
 		t.Fatalf("v108 migration registrations = %d, want 1", registrations)
 	}
+	if err := store.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM db_migrations WHERE version='p2p: release terminal confirmation reservations v109'`).Scan(&registrations); err != nil {
+		t.Fatal(err)
+	}
+	if registrations != 1 {
+		t.Fatalf("v109 migration registrations = %d, want 1", registrations)
+	}
 	const owner = "@migration-owner:example.test"
 	const legacyDeployment = "00000000-0000-f000-f000-000000000001"
 	const publicDeployment = "00000000-0000-3000-b000-000000000001"

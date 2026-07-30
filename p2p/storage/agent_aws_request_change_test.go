@@ -134,6 +134,36 @@ func TestPostgresRequestChangePersistsCanonicalBindingFromMetadata(t *testing.T)
 	}
 }
 
+func TestPostgresRequestChangeMapsLiveTargetDuplicateToConflict(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo, err := NewAgentAWSRepository(NewUnmigratedDatabaseStore(db, sqlutil.NewDummyWriter()), testAWSOwnerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(100, 0).UTC()
+	plan, params, tags, caps := requestPlanRow(now)
+	expectRequestPlanReads(mock, plan, params, tags, caps, now)
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT request_hash,response_json FROM core_aws_replays")).WillReturnError(sql.ErrNoRows)
+	expectLockedRequestPlan(mock, plan, params, tags, caps)
+	expectRequestCredentialMetadata(mock, plan, now)
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO agent_tasks")).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO agent_confirmations")).WillReturnError(errors.New("pq: duplicate key value violates unique constraint agent_confirmations_live_target_idx"))
+	mock.ExpectRollback()
+	_, err = repo.RequestChange(t.Context(), agentaws.RequestChangeInput{PlanID: plan.ID, IdempotencyKey: "66666666-6666-4666-8666-666666666666"})
+	if !errors.Is(err, agentaws.ErrConflict) {
+		t.Fatalf("live target duplicate error = %v, want agentaws.ErrConflict", err)
+	}
+	if err = mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestPostgresRequestChangeRejectsUnverifiedHistoricalCredential(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

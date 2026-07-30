@@ -837,7 +837,13 @@ func (s *PostgresWorkloadStore) completeDispatch(c context.Context, id, tid, cla
 	if confirmationState != "consumed" || json.Unmarshal(reservationRaw, &reservation) != nil || !reservation.Active || reservation.TaskID != tid || reservation.Attempt != uint32(taskAttempt) || reservation.Epoch != uint64(taskEpoch) {
 		return workload.Operation{}, coretask.Task{}, workload.ErrRevisionConflict
 	}
-	res, err = tx.ExecContext(c, `UPDATE agent_confirmations SET reservation_json=jsonb_set(reservation_json,'{active}','false'),revision=revision+1,updated_at=$1 WHERE owner_id=$2 AND confirmation_id=$3 AND revision=$4 AND state='consumed'`, now, s.ownerID, confirmationID, confirmationRevision)
+	// Unknown provider outcomes keep the target fenced for reconciliation;
+	// proven success/failure releases it atomically with the terminal updates.
+	confirmationReservationSQL := `UPDATE agent_confirmations SET reservation_json=NULL,revision=revision+1,updated_at=$1 WHERE owner_id=$2 AND confirmation_id=$3 AND revision=$4 AND state='consumed'`
+	if status == "uncertain" {
+		confirmationReservationSQL = `UPDATE agent_confirmations SET reservation_json=jsonb_set(reservation_json,'{active}','false'),revision=revision+1,updated_at=$1 WHERE owner_id=$2 AND confirmation_id=$3 AND revision=$4 AND state='consumed'`
+	}
+	res, err = tx.ExecContext(c, confirmationReservationSQL, now, s.ownerID, confirmationID, confirmationRevision)
 	if err != nil {
 		return workload.Operation{}, coretask.Task{}, err
 	}

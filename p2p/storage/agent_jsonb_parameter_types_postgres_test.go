@@ -333,4 +333,52 @@ func TestPostgresWorkloadConsumeFencedPersistsTypedReservation(t *testing.T) {
 	if err = store.DB().QueryRowContext(ctx, `SELECT jsonb_typeof(reservation_json->'active'),jsonb_typeof(reservation_json->'task_id'),jsonb_typeof(reservation_json->'attempt'),jsonb_typeof(reservation_json->'lease_epoch'),jsonb_typeof(reservation_json->'task_revision') FROM agent_confirmations WHERE confirmation_id=$1`, confirmationID).Scan(&activeType, &taskType, &attemptType, &epochType, &revisionType); err != nil || activeType != "boolean" || taskType != "string" || attemptType != "number" || epochType != "number" || revisionType != "number" {
 		t.Fatalf("ConsumeFenced reservation JSONB = %q/%q/%q/%q/%q err=%v", activeType, taskType, attemptType, epochType, revisionType, err)
 	}
+	if _, _, err := repo.CompleteDispatch(ctx, operationID, taskID, out.DispatchClaim, out.DispatchEpoch, "", workload.Readback{TargetKind: workload.TargetAWSEC2SSM, WorkloadID: workloadID, State: "ready", Digest: digest, At: now}, "completed"); err != nil {
+		t.Fatalf("CompleteDispatch = %v", err)
+	}
+	var released []byte
+	if err = store.DB().QueryRowContext(ctx, `SELECT reservation_json FROM agent_confirmations WHERE confirmation_id=$1`, confirmationID).Scan(&released); err != nil {
+		t.Fatal(err)
+	}
+	if released != nil {
+		t.Fatalf("terminal workload reservation was not released: %s", released)
+	}
+	// A provider-uncertain completion must retain an inactive reservation so
+	// the live-target index fences a second mutation until reconciliation.
+	const taskID2 = "30000000-0000-4000-8000-000000000006"
+	const confirmationID2 = "30000000-0000-4000-8000-000000000007"
+	const operationID2 = "30000000-0000-4000-8000-000000000008"
+	binding2 := jsonbTestBinding(owner, "workload-target")
+	insertJSONBTestTask(t, ctx, store, owner, taskID2, "running", 1, 3, 1, "worker", &lease, now)
+	insertJSONBTestConfirmation(t, ctx, store, owner, confirmationID2, taskID2, "confirmed", 1, binding2, now.Add(time.Hour), now, "")
+	if _, err = store.DB().ExecContext(ctx, `INSERT INTO core_workload_operations(operation_id,owner_id,workload_id,expected_workload_revision,plan_id,operation,plan_revision,plan_digest,target_kind,task_id,confirmation_id,status,revision,created_at,updated_at,dispatch_state) VALUES($1,$2,$3,2,$4,'apply',1,$5,'AWS_EC2_SSM',$6,$7,'waiting_user',1,$8,$8,'prepared')`, operationID2, owner, workloadID, planID, digest, taskID2, confirmationID2, now); err != nil {
+		t.Fatal(err)
+	}
+	uncertainOp, _, err := repo.ConsumeFenced(ctx, operationID2, confirmationID2, digest, 1, workload.TaskFence{TaskID: taskID2, Attempt: 1, LeaseEpoch: 3, Revision: 1, Holder: "worker", ExpiresAt: lease})
+	if err != nil {
+		t.Fatalf("ConsumeFenced uncertain operation = %v", err)
+	}
+	if _, _, err = repo.CompleteDispatch(ctx, operationID2, taskID2, uncertainOp.DispatchClaim, uncertainOp.DispatchEpoch, "provider_uncertain", workload.Readback{TargetKind: workload.TargetAWSEC2SSM, WorkloadID: workloadID, State: "uncertain", Digest: digest, At: now}, "provider response lost"); err != nil {
+		t.Fatalf("CompleteDispatch uncertain = %v", err)
+	}
+	var retained []byte
+	if err = store.DB().QueryRowContext(ctx, `SELECT reservation_json FROM agent_confirmations WHERE confirmation_id=$1`, confirmationID2).Scan(&retained); err != nil {
+		t.Fatal(err)
+	}
+	if len(retained) == 0 || !strings.Contains(string(retained), `"active": false`) {
+		t.Fatalf("uncertain workload reservation was released: %s", retained)
+	}
+	if _, err = store.DB().ExecContext(ctx, `DELETE FROM db_migrations WHERE version=$1`, "p2p: release terminal confirmation reservations v109"); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var retainedAfterMigration []byte
+	if err = store.DB().QueryRowContext(ctx, `SELECT reservation_json FROM agent_confirmations WHERE confirmation_id=$1`, confirmationID2).Scan(&retainedAfterMigration); err != nil {
+		t.Fatal(err)
+	}
+	if len(retainedAfterMigration) == 0 {
+		t.Fatal("v109 incorrectly released uncertain workload reservation")
+	}
 }

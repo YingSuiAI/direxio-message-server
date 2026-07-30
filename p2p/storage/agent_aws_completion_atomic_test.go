@@ -170,7 +170,7 @@ func TestPostgresAWSCompleteLostResponseReplaysFullTerminalSnapshot(t *testing.T
 		WillReturnRows(sqlmock.NewRows([]string{"progress_sequence"}).AddRow(12))
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO agent_task_events(owner_id,task_id,sequence,event_type,status,payload_json,occurred_at)")).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec(regexp.QuoteMeta("UPDATE agent_confirmations SET reservation_json=jsonb_set")).
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE agent_confirmations SET reservation_json=NULL")).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE agent_task_runtime_concurrency SET running_count=GREATEST")).
 		WillReturnResult(sqlmock.NewResult(0, 1))
