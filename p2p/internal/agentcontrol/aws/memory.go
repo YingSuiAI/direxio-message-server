@@ -450,7 +450,7 @@ func (r *MemoryRepository) RetryProvision(_ context.Context, provisionID string,
 	if !ok {
 		return Provision{}, ErrNotFound
 	}
-	if p.Revision != expectedRevision || (p.State != "failed" && p.State != "destroyed") || !provisionSnapshotMatches(p, plan) {
+	if p.Revision != expectedRevision || (p.State != "failed" && p.State != "destroyed" && p.State != "creating") || !provisionSnapshotMatches(p, plan) {
 		return Provision{}, ErrRevisionConflict
 	}
 	now := time.Now().UTC()
@@ -460,7 +460,31 @@ func (r *MemoryRepository) RetryProvision(_ context.Context, provisionID string,
 	retryState := "planned"
 	clearReadback := true
 	selectedChangeID := ""
-	if p.State == "failed" {
+	preProviderRearmed := false
+	if p.State == "creating" {
+		change, found := r.changes[p.ActiveChangeID]
+		confirmation, confirmationFound := r.confirmations[change.ConfirmationID]
+		task, taskFound := r.tasks[change.TaskID]
+		credential, credentialFound := r.credentialHistory[p.CredentialID][p.CredentialRevision]
+		_, reserved := r.reservations[change.ConfirmationID]
+		consumedReplay := false
+		for key, replay := range r.replays {
+			if strings.HasPrefix(key, "change-consume:") && replay.change != nil && replay.change.Change.ConfirmationID == change.ConfirmationID {
+				consumedReplay = true
+			}
+		}
+		if !found || !confirmationFound || !taskFound || !credentialFound || reserved || consumedReplay || change.ProvisionID != p.ID || change.PlanID != p.PlanID || change.CredentialID != p.CredentialID || change.Operation != OperationCreate || change.Status != ChangeWaitingUser || change.Stage != StageRequested || change.ChangeSetID != "" || change.ProviderToken != confirmation.ConfirmationID || change.ProviderRequestDigest != providerRequestDigest(plan, change.ProviderToken) || !confirmation.Binding.Equal(bindingForPlan(plan, credential)) || task.ID != change.TaskID || task.PlanID != plan.ID || task.ConfirmationID != confirmation.ConfirmationID || task.Status != "failed" || task.FailureCode != "task_execution_failed" || confirmation.TaskID != task.ID || confirmation.State != coreconfirmation.StateExpired || confirmation.TerminalReason != "task_execution_failed" || p.Readback != (ProvisionReadback{}) || p.ReconciliationRequired || p.ErrorCode != "" || p.ErrorSummary != "" {
+			return Provision{}, ErrRevisionConflict
+		}
+		for _, event := range r.events {
+			if event.ChangeID == change.ID && event.Kind != "change_requested" {
+				return Provision{}, ErrRevisionConflict
+			}
+		}
+		change.Status, change.Stage, change.ErrorCode, change.ErrorSummary, change.Revision, change.UpdatedAt = ChangeCanceled, StageCanceled, "pre_provider_rearmed", "pre_provider_rearmed", change.Revision+1, now
+		r.changes[change.ID] = change
+		selectedChangeID, preProviderRearmed = change.ID, true
+	} else if p.State == "failed" {
 		var failed *Change
 		for _, changeID := range []string{p.CreateChangeID, p.DestroyChangeID} {
 			if changeID == "" {
@@ -507,7 +531,11 @@ func (r *MemoryRepository) RetryProvision(_ context.Context, provisionID string,
 	if selectedChangeID != "" {
 		changeID = selectedChangeID
 	}
-	r.events = append(r.events, ChangeEvent{ChangeID: changeID, TaskID: "", Kind: "provision_retry_requested", Revision: p.Revision, At: now})
+	kind := "provision_retry_requested"
+	if preProviderRearmed {
+		kind = "provision_preprovider_rearmed"
+	}
+	r.events = append(r.events, ChangeEvent{ChangeID: changeID, TaskID: "", Kind: kind, Revision: p.Revision, At: now})
 	copy := p
 	r.replays[replayKey("provision-retry", idempotencyKey)] = memoryReplay{digest: digest, provision: &copy}
 	return p, nil

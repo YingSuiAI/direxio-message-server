@@ -185,6 +185,16 @@ func TestPostgresAWSClaimProviderMutationPersistsDispatchBeforeProviderCall(t *t
 		t.Fatal(err)
 	}
 	cmd := testAWSProviderMutationCommand()
+	template := []byte(`{"Resources":{}}`)
+	_, templateDigest, err := agentaws.NormalizeTemplate(template)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := agentaws.Plan{ID: testAWSPlanID, CredentialID: "55555555-5555-4555-8555-555555555555", CredentialRevision: 1, Region: "us-east-1", StackName: "claim-provider", Operation: agentaws.OperationCreate, Template: template, TemplateSHA256: templateDigest, Parameters: map[string]string{}, Tags: map[string]string{"service": agentaws.EC2ServiceProfile, "owner": agentaws.OwnerBindingDigest(testAWSOwnerID)}, Capabilities: []string{}, Revision: 1, CreatedAt: time.Now().UTC()}
+	params, _ := json.Marshal(plan.Parameters)
+	tags, _ := json.Marshal(plan.Tags)
+	caps, _ := json.Marshal(plan.Capabilities)
+	providerDigest := agentaws.ProviderRequestDigest(plan, cmd.ConfirmationID)
 	reservation, _ := json.Marshal(map[string]any{
 		"task_id":       cmd.TaskID,
 		"attempt":       cmd.Attempt,
@@ -206,6 +216,11 @@ func TestPostgresAWSClaimProviderMutationPersistsDispatchBeforeProviderCall(t *t
 			AddRow("consumed", cmd.ExpectedConfirmationRevision, cmd.TaskID, reservation))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT request_hash FROM core_aws_replays")).
 		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT plan_id::text,provider_token,provider_request_digest FROM core_aws_changes")).
+		WillReturnRows(sqlmock.NewRows([]string{"plan_id", "provider_token", "provider_request_digest"}).AddRow(plan.ID, cmd.ConfirmationID, providerDigest))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT plan_id::text,credential_id::text,credential_revision,region,stack_name,operation,template,template_sha256,parameters_json,tags_json,capabilities_json,revision,created_at FROM core_aws_plans")).
+		WillReturnRows(sqlmock.NewRows([]string{"plan_id", "credential_id", "credential_revision", "region", "stack_name", "operation", "template", "template_sha256", "parameters_json", "tags_json", "capabilities_json", "revision", "created_at"}).AddRow(plan.ID, plan.CredentialID, plan.CredentialRevision, plan.Region, plan.StackName, string(plan.Operation), plan.Template, plan.TemplateSHA256, params, tags, caps, plan.Revision, plan.CreatedAt))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT EXISTS(SELECT 1 FROM core_aws_events")).WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE core_aws_changes SET stage='reconciling'")).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO core_aws_replays")).

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	coreconfirmation "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcontrol/confirmation"
 	"github.com/google/uuid"
 )
 
@@ -385,6 +386,69 @@ func TestRetryProvisionIsExplicitRevisionFencedAndReplayStable(t *testing.T) {
 	}
 	if events := repo.Events(); len(events) < 2 {
 		t.Fatalf("retry audit events missing: %#v", events)
+	}
+}
+
+func TestRetryProvisionRearmsOnlyExpiredPreProviderCreateOrphan(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMemoryRepository()
+	s := NewService(repo, &testConfirm{}, testTasks{}, nil, NewFakeProvider(), time.Now)
+	credential, err := saveVerifiedCredential(t, s, repo, CredentialInput{Name: "orphan", Region: "us-east-1", AccessKeyID: "a", SecretAccessKey: "b", IdempotencyKey: uuid.NewString()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := validEC2ProvisionRequest()
+	request.CredentialID, request.CredentialRevision = credential.ID, credential.Revision
+	built, err := BuildEC2ProvisionPlan(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := s.CreatePlan(ctx, built.PlanInput(uuid.NewString()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, _ := repo.GetPlan(ctx, view.ID)
+	p := provisionFromPlan(plan, uuid.NewString())
+	if _, err = repo.CreateProvision(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	requested, err := s.RequestChange(ctx, RequestChangeInput{PlanID: plan.ID, ProvisionID: p.ID, ExpectedProvisionRevision: p.Revision, IdempotencyKey: uuid.NewString()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo.mu.Lock()
+	task := repo.tasks[requested.Task.ID]
+	task.Status, task.FailureCode = "failed", "task_execution_failed"
+	repo.tasks[task.ID] = task
+	confirmation := repo.confirmations[requested.Confirmation.ConfirmationID]
+	confirmation.State, confirmation.TerminalReason = coreconfirmation.StateExpired, "task_execution_failed"
+	repo.confirmations[confirmation.ConfirmationID] = confirmation
+	current := repo.provisions[p.ID]
+	repo.mu.Unlock()
+	key := uuid.NewString()
+	first, err := s.RetryProvision(ctx, p.ID, current.Revision, key)
+	if err != nil || first.State != "planned" || first.ActiveChangeID != "" || first.Revision != current.Revision+1 {
+		t.Fatalf("rearm = %#v, %v", first, err)
+	}
+	second, err := s.RetryProvision(ctx, p.ID, current.Revision, key)
+	if err != nil || !reflect.DeepEqual(first, second) {
+		t.Fatalf("replay = %#v, %v", second, err)
+	}
+	change, _ := repo.GetChange(ctx, requested.Change.ID)
+	if change.Status != ChangeCanceled || change.ErrorCode != "pre_provider_rearmed" {
+		t.Fatalf("old change not canceled: %#v", change)
+	}
+	oldTask, _ := repo.GetTask(ctx, requested.Task.ID)
+	oldConfirmation, _ := repo.GetConfirmation(ctx, requested.Confirmation.ConfirmationID)
+	if oldTask != task || !reflect.DeepEqual(oldConfirmation, confirmation) {
+		t.Fatalf("rearm changed terminal task/confirmation: task=%#v confirmation=%#v", oldTask, oldConfirmation)
+	}
+	fresh, err := s.RequestChange(ctx, RequestChangeInput{PlanID: plan.ID, ProvisionID: p.ID, ExpectedProvisionRevision: first.Revision, IdempotencyKey: uuid.NewString()})
+	if err != nil {
+		t.Fatalf("fresh request after rearm: %v", err)
+	}
+	if fresh.Change.ID == requested.Change.ID || fresh.Task.ID == requested.Task.ID || fresh.Confirmation.ConfirmationID == requested.Confirmation.ConfirmationID {
+		t.Fatalf("fresh request reused pre-provider orphan IDs: %#v", fresh)
 	}
 }
 

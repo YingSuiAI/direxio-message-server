@@ -302,13 +302,72 @@ func (r *PostgresAWSRepository) RetryProvision(ctx context.Context, provisionID 
 	if json.Unmarshal(params, &plan.Parameters) != nil || json.Unmarshal(tags, &plan.Tags) != nil || json.Unmarshal(caps, &plan.Capabilities) != nil {
 		return agentaws.Provision{}, agentaws.ErrConflict
 	}
-	if p.Revision != expectedRevision || (p.State != "failed" && p.State != "destroyed") || !agentaws.ProvisionSnapshotMatches(p, plan) {
+	if p.Revision != expectedRevision || (p.State != "failed" && p.State != "destroyed" && p.State != "creating") || !agentaws.ProvisionSnapshotMatches(p, plan) {
 		return agentaws.Provision{}, agentaws.ErrRevisionConflict
 	}
 	retryState := "planned"
 	clearReadback := true
 	selectedChangeID := ""
-	if p.State == "failed" {
+	preProviderRearmed := false
+	if p.State == "creating" {
+		var credential struct {
+			ID, Name, Region, AccountID, UserARN string
+			VerifiedRevision, Revision           int64
+			CreatedAt, UpdatedAt                 time.Time
+		}
+		if err = tx.QueryRowContext(ctx, `SELECT credential_id::text,name,region,account_id,user_arn,verified_revision,revision,created_at,updated_at FROM core_aws_credentials WHERE owner_id=$1 AND credential_id=$2 AND revision=$3 FOR UPDATE`, r.ownerID, p.CredentialID, p.CredentialRevision).Scan(&credential.ID, &credential.Name, &credential.Region, &credential.AccountID, &credential.UserARN, &credential.VerifiedRevision, &credential.Revision, &credential.CreatedAt, &credential.UpdatedAt); err != nil {
+			return agentaws.Provision{}, agentaws.ErrRevisionConflict
+		}
+		credentialValue := agentaws.RehydrateCredentialMetadata(credential.ID, credential.Name, credential.Region, credential.AccountID, credential.UserARN, credential.VerifiedRevision, credential.Revision, credential.CreatedAt, credential.UpdatedAt)
+		if err = tx.QueryRowContext(ctx, `SELECT COALESCE(active_change_id::text,'') FROM core_aws_ec2_provisions WHERE owner_id=$1 AND provision_id=$2 FOR UPDATE`, r.ownerID, provisionID).Scan(&p.ActiveChangeID); err != nil || p.ActiveChangeID == "" {
+			return agentaws.Provision{}, agentaws.ErrRevisionConflict
+		}
+		var changeID, provisionIDLink, planID, credentialID, taskID, confirmationID string
+		var credentialRevision int64
+		var operation agentaws.Operation
+		var status agentaws.ChangeStatus
+		var stage agentaws.ChangeStage
+		var changeSetID string
+		var providerDigest, providerToken string
+		if err = tx.QueryRowContext(ctx, `SELECT change_id::text,COALESCE(provision_id::text,''),plan_id::text,credential_id::text,credential_revision,task_id::text,confirmation_id::text,operation,status,stage,change_set_id,provider_request_digest,provider_token FROM core_aws_changes WHERE owner_id=$1 AND change_id=$2 FOR UPDATE`, r.ownerID, p.ActiveChangeID).Scan(&changeID, &provisionIDLink, &planID, &credentialID, &credentialRevision, &taskID, &confirmationID, &operation, &status, &stage, &changeSetID, &providerDigest, &providerToken); err != nil || provisionIDLink != p.ID || planID != p.PlanID || credentialID != p.CredentialID || credentialRevision != p.CredentialRevision || operation != agentaws.OperationCreate || status != agentaws.ChangeWaitingUser || stage != agentaws.StageRequested || changeSetID != "" || providerDigest == "" || providerToken != confirmationID {
+			return agentaws.Provision{}, agentaws.ErrRevisionConflict
+		}
+		var taskStatus, failureCode, confirmationState, terminalReason string
+		var reservation []byte
+		var taskSpecRaw []byte
+		var bindingRaw []byte
+		if err = tx.QueryRowContext(ctx, `SELECT t.status,t.failure_code,t.spec_json,c.state,c.terminal_reason,c.reservation_json,c.binding_json FROM agent_tasks t JOIN agent_confirmations c ON c.owner_id=t.owner_id AND c.task_id=t.task_id WHERE t.owner_id=$1 AND t.task_id=$2 AND c.confirmation_id=$3 FOR UPDATE`, r.ownerID, taskID, confirmationID).Scan(&taskStatus, &failureCode, &taskSpecRaw, &confirmationState, &terminalReason, &reservation, &bindingRaw); err != nil || taskStatus != "failed" || failureCode != "task_execution_failed" || confirmationState != "expired" || terminalReason != "task_execution_failed" || len(reservation) != 0 {
+			return agentaws.Provision{}, agentaws.ErrRevisionConflict
+		}
+		var taskSpec coretask.TaskSpec
+		if json.Unmarshal(taskSpecRaw, &taskSpec) != nil || taskSpec.Kind != coretask.TaskKindAWSChange || taskSpec.Payload.AWSChange == nil || taskSpec.Payload.AWSChange.ChangeID != changeID || !coretask.ValidUUID(taskSpec.IdempotencyKey) {
+			return agentaws.Provision{}, agentaws.ErrRevisionConflict
+		}
+		var binding coreconfirmation.Binding
+		expectedBinding := agentaws.BindingForPlan(plan, credentialValue)
+		expectedBinding.OwnerID = r.ownerID
+		if json.Unmarshal(bindingRaw, &binding) != nil || !binding.Equal(expectedBinding) {
+			return agentaws.Provision{}, agentaws.ErrRevisionConflict
+		}
+		if p.Readback != (agentaws.ProvisionReadback{}) || p.ReconciliationRequired || p.ErrorCode != "" || p.ErrorSummary != "" {
+			return agentaws.Provision{}, agentaws.ErrRevisionConflict
+		}
+		var progressed bool
+		if !preProviderProviderDigestMatches(plan, providerToken, providerDigest) {
+			return agentaws.Provision{}, agentaws.ErrRevisionConflict
+		}
+		if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM core_aws_events WHERE owner_id=$1 AND change_id=$2 AND kind <> 'change_requested') OR EXISTS(SELECT 1 FROM core_aws_replays WHERE owner_id=$1 AND operation='change-consume' AND (response_json->>'confirmation_id'=$3 OR response_json->>'ConfirmationID'=$3))`, r.ownerID, changeID, confirmationID).Scan(&progressed); err != nil || progressed {
+			return agentaws.Provision{}, agentaws.ErrRevisionConflict
+		}
+		result, updateErr := tx.ExecContext(ctx, `UPDATE core_aws_changes SET status='canceled',stage='canceled',error_code='pre_provider_rearmed',error_summary='pre_provider_rearmed',revision=revision+1,updated_at=$1 WHERE owner_id=$2 AND change_id=$3 AND provision_id=$4 AND status='waiting_user' AND stage='requested'`, time.Now().UTC(), r.ownerID, changeID, p.ID)
+		if updateErr != nil {
+			return agentaws.Provision{}, updateErr
+		}
+		if affected, _ := result.RowsAffected(); affected != 1 {
+			return agentaws.Provision{}, agentaws.ErrRevisionConflict
+		}
+		selectedChangeID, preProviderRearmed = changeID, true
+	} else if p.State == "failed" {
 		var failedOperation agentaws.Operation
 		failedCount := 0
 		for _, changeID := range []string{p.CreateChangeID, p.DestroyChangeID} {
@@ -343,7 +402,9 @@ func (r *PostgresAWSRepository) RetryProvision(ctx context.Context, provisionID 
 	now := time.Now().UTC()
 	var updateErr error
 	var updateResult sql.Result
-	if retryState == "active" && !clearReadback {
+	if preProviderRearmed {
+		updateResult, updateErr = tx.ExecContext(ctx, `UPDATE core_aws_ec2_provisions SET state='planned',active_change_id=NULL,stack_id='',instance_id='',public_ip='',security_group_id='',output_digest='',observed_at=NULL,reconciliation_required=false,error_code='',error_summary='',revision=revision+1,updated_at=$1 WHERE owner_id=$2 AND provision_id=$3 AND revision=$4 AND state='creating' AND active_change_id=$5`, now, r.ownerID, provisionID, expectedRevision, selectedChangeID)
+	} else if retryState == "active" && !clearReadback {
 		updateResult, updateErr = tx.ExecContext(ctx, `UPDATE core_aws_ec2_provisions SET state='active',active_change_id=NULL,reconciliation_required=false,error_code='',error_summary='',revision=revision+1,updated_at=$1 WHERE owner_id=$2 AND provision_id=$3 AND revision=$4 AND state='failed'`, now, r.ownerID, provisionID, expectedRevision)
 	} else {
 		updateResult, updateErr = tx.ExecContext(ctx, `UPDATE core_aws_ec2_provisions SET state='planned',active_change_id=NULL,stack_id='',instance_id='',public_ip='',security_group_id='',output_digest='',observed_at=NULL,reconciliation_required=false,error_code='',error_summary='',revision=revision+1,updated_at=$1 WHERE owner_id=$2 AND provision_id=$3 AND revision=$4 AND state IN ('failed','destroyed')`, now, r.ownerID, provisionID, expectedRevision)
@@ -364,7 +425,11 @@ func (r *PostgresAWSRepository) RetryProvision(ctx context.Context, provisionID 
 			selectedChangeID = p.CreateChangeID
 		}
 	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO core_aws_ec2_provision_events(owner_id,provision_id,change_id,sequence,event_id,kind,revision,at) VALUES($1,$2,NULLIF($3,'')::uuid,$4,$5,$6,$7,$8)`, r.ownerID, provisionID, selectedChangeID, seq, uuid.NewString(), "provision_retry_requested", expectedRevision+1, now); err != nil {
+	kind := "provision_retry_requested"
+	if preProviderRearmed {
+		kind = "provision_preprovider_rearmed"
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO core_aws_ec2_provision_events(owner_id,provision_id,change_id,sequence,event_id,kind,revision,at) VALUES($1,$2,NULLIF($3,'')::uuid,$4,$5,$6,$7,$8)`, r.ownerID, provisionID, selectedChangeID, seq, uuid.NewString(), kind, expectedRevision+1, now); err != nil {
 		return agentaws.Provision{}, err
 	}
 	p.State, p.ActiveChangeID = retryState, ""
@@ -382,6 +447,21 @@ func (r *PostgresAWSRepository) RetryProvision(ctx context.Context, provisionID 
 	}
 	return p, nil
 }
+
+// preProviderProviderDigestMatches permits the former plan+token digest only
+// after RetryProvision has proved this is an unconsumed, provider-free orphan.
+// New requests always persist the canonical full-plan digest.
+func preProviderProviderDigestMatches(plan agentaws.Plan, token, digest string) bool {
+	if digest == agentaws.ProviderRequestDigest(plan, token) {
+		return true
+	}
+	legacy := stringDigest(struct {
+		Plan  string
+		Token string
+	}{plan.ID, token})
+	return digest == legacy
+}
+
 func (r *PostgresAWSRepository) GetProvision(ctx context.Context, id string) (agentaws.Provision, error) {
 	if r == nil || r.store == nil || r.store.db == nil || !validAWSUUID(id) {
 		return agentaws.Provision{}, agentaws.ErrInvalid
@@ -633,10 +713,7 @@ func (r *PostgresAWSRepository) RequestChange(ctx context.Context, in agentaws.R
 	if _, err = tx.ExecContext(ctx, `INSERT INTO agent_confirmations(confirmation_id,owner_id,operation_domain,target_id,target_revision,binding_digest,binding_json,task_id,state,revision,expires_at,created_at,updated_at) VALUES($1,$2,'aws',$3,$4,$5,$6,$7,'pending',1,$8,$9,$9)`, confID, r.ownerID, p.ID, p.Revision, b.Digest, bRaw, taskID, now.Add(24*time.Hour), now); err != nil {
 		return agentaws.ChangeRequestResult{}, err
 	}
-	v := agentaws.Change{ID: changeID, PlanID: p.ID, CredentialID: p.CredentialID, ProvisionID: in.ProvisionID, TaskID: taskID, ConfirmationID: confID, Operation: p.Operation, Status: agentaws.ChangeWaitingUser, Stage: agentaws.StageRequested, Revision: 1, ProviderToken: confID, ProviderRequestDigest: stringDigest(struct {
-		Plan  string
-		Token string
-	}{p.ID, confID}), CreatedAt: now, UpdatedAt: now}
+	v := agentaws.Change{ID: changeID, PlanID: p.ID, CredentialID: p.CredentialID, ProvisionID: in.ProvisionID, TaskID: taskID, ConfirmationID: confID, Operation: p.Operation, Status: agentaws.ChangeWaitingUser, Stage: agentaws.StageRequested, Revision: 1, ProviderToken: confID, ProviderRequestDigest: agentaws.ProviderRequestDigest(p, confID), CreatedAt: now, UpdatedAt: now}
 	if _, err = tx.ExecContext(ctx, `INSERT INTO core_aws_changes(owner_id,change_id,plan_id,credential_id,credential_revision,provision_id,task_id,confirmation_id,operation,status,stage,provider_token,provider_request_digest,revision,created_at,updated_at) VALUES($1,$2,$3,$4,(SELECT credential_revision FROM core_aws_plans WHERE owner_id=$1 AND plan_id=$3),NULLIF($5,'')::uuid,$6,$7,$8,$9,$10,$11,$12,1,$13,$13)`, r.ownerID, v.ID, v.PlanID, v.CredentialID, v.ProvisionID, v.TaskID, v.ConfirmationID, v.Operation, v.Status, v.Stage, v.ProviderToken, v.ProviderRequestDigest, now); err != nil {
 		return agentaws.ChangeRequestResult{}, err
 	}
@@ -1733,8 +1810,46 @@ func (r *PostgresAWSRepository) ConsumeChange(ctx context.Context, cmd agentaws.
 	if err != nil || status != "running" || taskRev != cmd.ExpectedTaskRevision || uint32(attempt) != cmd.Attempt || uint64(epoch) != cmd.LeaseEpoch {
 		return agentaws.Reservation{}, agentaws.ErrRevisionConflict
 	}
+	var planID, providerToken, storedProviderDigest string
+	if err = tx.QueryRowContext(ctx, `SELECT plan_id::text,provider_token,provider_request_digest FROM core_aws_changes WHERE owner_id=$1 AND change_id=$2 AND task_id=$3 AND confirmation_id=$4 AND revision=$5 AND status='waiting_user' AND stage='requested' FOR UPDATE`, r.ownerID, cmd.ChangeID, cmd.TaskID, cmd.ConfirmationID, cmd.ExpectedChangeRevision).Scan(&planID, &providerToken, &storedProviderDigest); err != nil {
+		return agentaws.Reservation{}, agentaws.ErrRevisionConflict
+	}
+	var plan agentaws.Plan
+	var params, tags, caps []byte
+	if err = tx.QueryRowContext(ctx, `SELECT plan_id::text,credential_id::text,credential_revision,region,stack_name,operation,template,template_sha256,parameters_json,tags_json,capabilities_json,revision,created_at FROM core_aws_plans WHERE owner_id=$1 AND plan_id=$2 FOR UPDATE`, r.ownerID, planID).Scan(&plan.ID, &plan.CredentialID, &plan.CredentialRevision, &plan.Region, &plan.StackName, &plan.Operation, &plan.Template, &plan.TemplateSHA256, &params, &tags, &caps, &plan.Revision, &plan.CreatedAt); err != nil || json.Unmarshal(params, &plan.Parameters) != nil || json.Unmarshal(tags, &plan.Tags) != nil || json.Unmarshal(caps, &plan.Capabilities) != nil {
+		return agentaws.Reservation{}, agentaws.ErrRevisionConflict
+	}
+	if providerToken != cmd.ConfirmationID || !preProviderProviderDigestMatches(plan, providerToken, storedProviderDigest) {
+		return agentaws.Reservation{}, agentaws.ErrInvalid
+	}
+	var confirmationTaskID, confirmationState string
+	var confirmationRevision int64
+	var confirmationExpires time.Time
+	var reservationRaw, bindingRaw []byte
+	if err = tx.QueryRowContext(ctx, `SELECT task_id::text,state,revision,expires_at,reservation_json,binding_json FROM agent_confirmations WHERE owner_id=$1 AND confirmation_id=$2 FOR UPDATE`, r.ownerID, cmd.ConfirmationID).Scan(&confirmationTaskID, &confirmationState, &confirmationRevision, &confirmationExpires, &reservationRaw, &bindingRaw); err != nil {
+		return agentaws.Reservation{}, agentaws.ErrRevisionConflict
+	}
+	if confirmationTaskID != cmd.TaskID || confirmationState != "confirmed" || confirmationRevision != cmd.ExpectedConfirmationRevision || !confirmationExpires.After(time.Now().UTC()) || len(reservationRaw) != 0 {
+		return agentaws.Reservation{}, agentaws.ErrRevisionConflict
+	}
+	var credential struct {
+		ID, Name, Region, AccountID, UserARN string
+		VerifiedRevision, Revision           int64
+		CreatedAt, UpdatedAt                 time.Time
+	}
+	if err = tx.QueryRowContext(ctx, `SELECT credential_id::text,name,region,account_id,user_arn,verified_revision,revision,created_at,updated_at FROM core_aws_credentials WHERE owner_id=$1 AND credential_id=$2 AND revision=$3 FOR UPDATE`, r.ownerID, plan.CredentialID, plan.CredentialRevision).Scan(&credential.ID, &credential.Name, &credential.Region, &credential.AccountID, &credential.UserARN, &credential.VerifiedRevision, &credential.Revision, &credential.CreatedAt, &credential.UpdatedAt); err != nil {
+		return agentaws.Reservation{}, agentaws.ErrRevisionConflict
+	}
+	credentialValue := agentaws.RehydrateCredentialMetadata(credential.ID, credential.Name, credential.Region, credential.AccountID, credential.UserARN, credential.VerifiedRevision, credential.Revision, credential.CreatedAt, credential.UpdatedAt)
+	expectedBinding := agentaws.BindingForPlan(plan, credentialValue)
+	expectedBinding.OwnerID = r.ownerID
+	var storedBinding coreconfirmation.Binding
+	if json.Unmarshal(bindingRaw, &storedBinding) != nil || cmd.Binding.IsZero() || !storedBinding.Equal(expectedBinding) || !cmd.Binding.Equal(expectedBinding) {
+		return agentaws.Reservation{}, agentaws.ErrInvalid
+	}
+	canonicalProviderDigest := agentaws.ProviderRequestDigest(plan, providerToken)
 	now := time.Now().UTC()
-	res, err := tx.ExecContext(ctx, `UPDATE core_aws_changes SET status='running',stage='change_set_creating',revision=revision+1,updated_at=$1 WHERE owner_id=$2 AND change_id=$3 AND task_id=$4 AND confirmation_id=$5 AND revision=$6 AND status='waiting_user'`, now, r.ownerID, cmd.ChangeID, cmd.TaskID, cmd.ConfirmationID, cmd.ExpectedChangeRevision)
+	res, err := tx.ExecContext(ctx, `UPDATE core_aws_changes SET status='running',stage='change_set_creating',provider_request_digest=$1,revision=revision+1,updated_at=$2 WHERE owner_id=$3 AND change_id=$4 AND task_id=$5 AND confirmation_id=$6 AND revision=$7 AND status='waiting_user' AND stage='requested'`, canonicalProviderDigest, now, r.ownerID, cmd.ChangeID, cmd.TaskID, cmd.ConfirmationID, cmd.ExpectedChangeRevision)
 	if err != nil {
 		return agentaws.Reservation{}, err
 	}
@@ -2122,6 +2237,33 @@ func (r *PostgresAWSRepository) ClaimProviderMutation(ctx context.Context, cmd a
 		return agentaws.ExecutionFence{}, agentaws.ErrRevisionConflict
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return agentaws.ExecutionFence{}, err
+	}
+	var planID, providerToken, storedProviderDigest string
+	if err = tx.QueryRowContext(ctx, `SELECT plan_id::text,provider_token,provider_request_digest FROM core_aws_changes WHERE owner_id=$1 AND change_id=$2 AND task_id=$3 AND confirmation_id=$4 AND revision=$5 AND status='running' FOR UPDATE`, r.ownerID, cmd.ChangeID, cmd.TaskID, cmd.ConfirmationID, cmd.ExpectedChangeRevision).Scan(&planID, &providerToken, &storedProviderDigest); err != nil {
+		return agentaws.ExecutionFence{}, agentaws.ErrRevisionConflict
+	}
+	var plan agentaws.Plan
+	var params, tags, caps []byte
+	if err = tx.QueryRowContext(ctx, `SELECT plan_id::text,credential_id::text,credential_revision,region,stack_name,operation,template,template_sha256,parameters_json,tags_json,capabilities_json,revision,created_at FROM core_aws_plans WHERE owner_id=$1 AND plan_id=$2 FOR UPDATE`, r.ownerID, planID).Scan(&plan.ID, &plan.CredentialID, &plan.CredentialRevision, &plan.Region, &plan.StackName, &plan.Operation, &plan.Template, &plan.TemplateSHA256, &params, &tags, &caps, &plan.Revision, &plan.CreatedAt); err != nil || json.Unmarshal(params, &plan.Parameters) != nil || json.Unmarshal(tags, &plan.Tags) != nil || json.Unmarshal(caps, &plan.Capabilities) != nil {
+		return agentaws.ExecutionFence{}, agentaws.ErrRevisionConflict
+	}
+	if providerToken != cmd.ConfirmationID || !preProviderProviderDigestMatches(plan, providerToken, storedProviderDigest) {
+		return agentaws.ExecutionFence{}, agentaws.ErrInvalid
+	}
+	var dispatched bool
+	if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM core_aws_events WHERE owner_id=$1 AND change_id=$2 AND kind='provider_mutation_dispatched')`, r.ownerID, cmd.ChangeID).Scan(&dispatched); err != nil {
+		return agentaws.ExecutionFence{}, err
+	}
+	if dispatched {
+		return agentaws.ExecutionFence{}, agentaws.ErrRevisionConflict
+	}
+	canonicalProviderDigest := agentaws.ProviderRequestDigest(plan, providerToken)
+	if storedProviderDigest != canonicalProviderDigest {
+		if res, updateErr := tx.ExecContext(ctx, `UPDATE core_aws_changes SET provider_request_digest=$1,updated_at=$2 WHERE owner_id=$3 AND change_id=$4 AND revision=$5 AND status='running'`, canonicalProviderDigest, time.Now().UTC(), r.ownerID, cmd.ChangeID, cmd.ExpectedChangeRevision); updateErr != nil {
+			return agentaws.ExecutionFence{}, updateErr
+		} else if n, _ := res.RowsAffected(); n != 1 {
+			return agentaws.ExecutionFence{}, agentaws.ErrRevisionConflict
+		}
 	}
 	now := time.Now().UTC()
 	res, err := tx.ExecContext(ctx, `UPDATE core_aws_changes SET stage='reconciling',revision=revision+1,updated_at=$1 WHERE owner_id=$2 AND change_id=$3 AND task_id=$4 AND confirmation_id=$5 AND revision=$6 AND status='running'`, now, r.ownerID, cmd.ChangeID, cmd.TaskID, cmd.ConfirmationID, cmd.ExpectedChangeRevision)

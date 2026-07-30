@@ -42,21 +42,37 @@ func TestPostgresAWSConsumeChangePersistsTypedReservationAtomically(t *testing.T
 	)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	digest := strings.Repeat("a", 64)
+	template := []byte(`{"Resources":{}}`)
+	_, templateDigest, err := agentaws.NormalizeTemplate(template)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := agentaws.Plan{ID: planID, CredentialID: credentialID, CredentialRevision: 1, Region: "ap-southeast-1", StackName: "typed-jsonb", Operation: agentaws.OperationCreate, Template: template, TemplateSHA256: templateDigest, Parameters: map[string]string{}, Tags: map[string]string{"service": agentaws.EC2ServiceProfile, "owner": agentaws.OwnerBindingDigest(owner)}, Capabilities: []string{}, Revision: 1, CreatedAt: now}
+	params, _ := json.Marshal(plan.Parameters)
+	tags, _ := json.Marshal(plan.Tags)
+	caps, _ := json.Marshal(plan.Capabilities)
+	credential := agentaws.RehydrateCredentialMetadata(credentialID, "test", plan.Region, "123456789012", "arn:aws:iam::123456789012:user/test", 1, 1, now, now)
+	binding := agentaws.BindingForPlan(plan, credential)
+	binding.OwnerID = owner
+	bindingRaw, _ := json.Marshal(binding)
+	spec, _ := (task.TaskSpec{Kind: task.TaskKindAWSChange, Payload: task.TaskPayload{AWSChange: &task.AWSChangeTaskPayload{ChangeID: changeID}}, Goal: "AWS change", IdempotencyKey: idempotencyKey, AvailableAt: now}).Normalize()
+	specRaw, _ := json.Marshal(spec)
+	providerDigest := agentaws.ProviderRequestDigest(plan, confirmationID)
 	// Insert the immutable FK chain directly: the test is concerned with the
 	// consumption transaction and deliberately does not invoke any provider.
-	if _, err = store.DB().ExecContext(ctx, `INSERT INTO agent_tasks(task_id,owner_id,spec_json,status,attempt,lease_epoch,lease_holder,lease_expires_at,revision,available_at,created_at,updated_at) VALUES($1,$2,'{}','running',2,7,'worker',$3,9,$4,$4,$4)`, taskID, owner, now.Add(time.Hour), now); err != nil {
+	if _, err = store.DB().ExecContext(ctx, `INSERT INTO agent_tasks(task_id,owner_id,spec_json,status,attempt,lease_epoch,lease_holder,lease_expires_at,revision,available_at,created_at,updated_at) VALUES($1,$2,$3,'running',2,7,'worker',$4,9,$5,$5,$5)`, taskID, owner, specRaw, now.Add(time.Hour), now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = store.DB().ExecContext(ctx, `INSERT INTO agent_confirmations(confirmation_id,owner_id,operation_domain,target_id,target_revision,binding_digest,binding_json,task_id,state,revision,expires_at,created_at,updated_at) VALUES($1,$2,'aws.change',$3,1,$4,'{}',$5,'confirmed',3,$6,$7,$7)`, confirmationID, owner, changeID, digest, taskID, now.Add(time.Hour), now); err != nil {
+	if _, err = store.DB().ExecContext(ctx, `INSERT INTO agent_confirmations(confirmation_id,owner_id,operation_domain,target_id,target_revision,binding_digest,binding_json,task_id,state,revision,expires_at,created_at,updated_at) VALUES($1,$2,'aws',$3,$4,$5,$6,$7,'confirmed',3,$8,$9,$9)`, confirmationID, owner, binding.TargetID, binding.TargetRevision, binding.Digest, bindingRaw, taskID, now.Add(time.Hour), now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = store.DB().ExecContext(ctx, `INSERT INTO core_aws_credentials(owner_id,credential_id,revision,envelope_version,aad_version,key_id,nonce,ciphertext,envelope_digest,name,region,created_at,updated_at) VALUES($1,$2,1,1,1,'test',decode('000000000000000000000000','hex'),decode('00','hex'),$3,'test','ap-southeast-1',$4,$4)`, owner, credentialID, digest, now); err != nil {
+	if _, err = store.DB().ExecContext(ctx, `INSERT INTO core_aws_credentials(owner_id,credential_id,revision,envelope_version,aad_version,key_id,nonce,ciphertext,envelope_digest,name,region,account_id,user_arn,verified_revision,created_at,updated_at) VALUES($1,$2,1,1,1,'test',decode('000000000000000000000000','hex'),decode('00','hex'),$3,'test',$4,$5,$6,1,$7,$7)`, owner, credentialID, digest, plan.Region, credential.AccountID, credential.UserARN, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = store.DB().ExecContext(ctx, `INSERT INTO core_aws_plans(owner_id,plan_id,credential_id,credential_revision,region,stack_name,operation,template,template_sha256,parameters_json,tags_json,capabilities_json,created_at) VALUES($1,$2,$3,1,'ap-southeast-1','typed-jsonb','create','template',$4,'{}','{}','[]',$5)`, owner, planID, credentialID, digest, now); err != nil {
+	if _, err = store.DB().ExecContext(ctx, `INSERT INTO core_aws_plans(owner_id,plan_id,credential_id,credential_revision,region,stack_name,operation,template,template_sha256,parameters_json,tags_json,capabilities_json,revision,created_at) VALUES($1,$2,$3,1,$4,$5,'create',$6,$7,$8,$9,$10,1,$11)`, owner, planID, credentialID, plan.Region, plan.StackName, plan.Template, plan.TemplateSHA256, params, tags, caps, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = store.DB().ExecContext(ctx, `INSERT INTO core_aws_changes(owner_id,change_id,plan_id,credential_id,credential_revision,task_id,confirmation_id,operation,status,stage,revision,created_at,updated_at) VALUES($1,$2,$3,$4,1,$5,$6,'create','waiting_user','requested',4,$7,$7)`, owner, changeID, planID, credentialID, taskID, confirmationID, now); err != nil {
+	if _, err = store.DB().ExecContext(ctx, `INSERT INTO core_aws_changes(owner_id,change_id,plan_id,credential_id,credential_revision,task_id,confirmation_id,operation,status,stage,provider_token,provider_request_digest,revision,created_at,updated_at) VALUES($1,$2,$3,$4,1,$5,$6,'create','waiting_user','requested',$7,$8,4,$9,$9)`, owner, changeID, planID, credentialID, taskID, confirmationID, confirmationID, providerDigest, now); err != nil {
 		t.Fatal(err)
 	}
 
@@ -68,7 +84,7 @@ func TestPostgresAWSConsumeChangePersistsTypedReservationAtomically(t *testing.T
 		ChangeID: changeID, ConfirmationID: confirmationID, TaskID: taskID,
 		Attempt: 2, LeaseEpoch: 7, ExpectedChangeRevision: 4,
 		ExpectedTaskRevision: 9, ExpectedConfirmationRevision: 3,
-		IdempotencyKey: idempotencyKey,
+		IdempotencyKey: idempotencyKey, Binding: binding,
 	})
 	if err != nil {
 		t.Fatalf("consume AWS change: %v", err)

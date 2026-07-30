@@ -182,6 +182,22 @@ func (e *embeddedTaskExecutor) executeAWSChange(ctx context.Context, queued agen
 			Binding:                      fence.Confirmation.Binding,
 		})
 		if err != nil {
+			// A cryptographic/immutable binding mismatch is deterministic.  Let
+			// the generic worker terminalize it; deferring would retry forever.
+			if errors.Is(err, coreaws.ErrInvalid) {
+				return agenttask.Result{}, err
+			}
+			// A confirmation expiry can race the worker between its initial fence
+			// read and ConsumeChange.  When the durable rows still prove that no
+			// provider-facing transition occurred, the retry coordinator owns the
+			// orphan; do not let the generic worker add a second terminal failure.
+			recovery := awsConsumeRecovery(ctx, e.aws, change, queued)
+			if recovery == awsConsumeFinalized {
+				return agenttask.Result{}, agentruntime.ErrTaskFinalized
+			}
+			if recovery == awsConsumeDeferred {
+				return agenttask.Result{}, agentruntime.ErrTaskDeferred
+			}
 			return agenttask.Result{}, err
 		}
 	}
@@ -206,6 +222,43 @@ func (e *embeddedTaskExecutor) executeAWSChange(ctx context.Context, queued agen
 		return agenttask.Result{}, agentruntime.ErrTaskFinalized
 	}
 	return agenttask.Result{}, executeErr
+}
+
+type awsConsumeRecoveryResult uint8
+
+const (
+	awsConsumeInvalid awsConsumeRecoveryResult = iota
+	awsConsumeDeferred
+	awsConsumeFinalized
+)
+
+func awsConsumeRecovery(ctx context.Context, aws *coreaws.Service, change coreaws.Change, queued agenttask.Task) awsConsumeRecoveryResult {
+	if aws == nil || change.Status != coreaws.ChangeWaitingUser || change.Stage != coreaws.StageRequested || change.TaskID != queued.ID {
+		return awsConsumeInvalid
+	}
+	latest, err := aws.GetChange(ctx, change.ID)
+	if err != nil {
+		return awsConsumeDeferred
+	}
+	if latest.ID != change.ID || latest.TaskID != queued.ID || latest.ConfirmationID != change.ConfirmationID {
+		return awsConsumeInvalid
+	}
+	fence, err := aws.ExecutionFence(ctx, latest.ConfirmationID)
+	if err != nil {
+		return awsConsumeDeferred
+	}
+	if latest.Status == coreaws.ChangeSucceeded || latest.Status == coreaws.ChangeFailed || latest.Status == coreaws.ChangeCanceled || latest.Stage == coreaws.StageReconciling || latest.Stage == coreaws.StageReconciliationRequired || (fence.Confirmation.State == "consumed" && fence.Reservation.Active) {
+		return awsConsumeFinalized
+	}
+	if latest.Status != coreaws.ChangeWaitingUser || latest.Stage != coreaws.StageRequested || latest.ChangeSetID != "" {
+		return awsConsumeInvalid
+	}
+	if fence.Change.ID == latest.ID && fence.Task.ID == queued.ID && fence.Task.Status == "running" &&
+		fence.Task.Attempt == queued.Attempt && fence.Task.LeaseEpoch == queued.LeaseEpoch && uint64(fence.Task.Revision) >= queued.Revision &&
+		fence.Confirmation.State == "confirmed" && fence.Confirmation.ExpiresAt.After(time.Now().UTC()) && !fence.Reservation.Active && latest.Status == coreaws.ChangeWaitingUser && latest.Stage == coreaws.StageRequested && latest.ChangeSetID == "" {
+		return awsConsumeDeferred
+	}
+	return awsConsumeInvalid
 }
 
 func (e *embeddedTaskExecutor) executeWorkload(ctx context.Context, queued agenttask.Task) (agenttask.Result, error) {
