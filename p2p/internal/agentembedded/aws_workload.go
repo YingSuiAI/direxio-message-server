@@ -234,7 +234,7 @@ func planViewMap(v coreaws.PlanView) map[string]any {
 	return map[string]any{"plan_id": v.ID, "credential_id": v.CredentialID, "credential_revision": v.CredentialRevision, "region": v.Region, "stack_name": v.StackName, "operation": string(v.Operation), "template_sha256": v.TemplateSHA256, "parameters": v.Parameters, "tags": v.Tags, "capabilities": v.Capabilities, "revision": v.Revision, "created_at": v.CreatedAt.UTC().Format(time.RFC3339Nano)}
 }
 func quoteMap(v coreaws.Quote) map[string]any {
-	return map[string]any{"plan_id": v.PlanID, "operation": string(v.Operation), "region": v.Region, "stack_name": v.StackName, "resource_count": v.ResourceCount, "parameter_count": v.ParameterCount, "tag_count": v.TagCount, "estimated_monthly_usd": v.EstimatedMonthlyUSD, "summary": v.Summary, "plan_digest": v.PlanDigest}
+	return map[string]any{"plan_id": v.PlanID, "operation": string(v.Operation), "region": v.Region, "stack_name": v.StackName, "resource_count": v.ResourceCount, "parameter_count": v.ParameterCount, "tag_count": v.TagCount, "estimated_monthly_usd": v.EstimatedMonthlyUSD, "price_status": v.PriceStatus, "summary": v.Summary, "plan_digest": v.PlanDigest}
 }
 func changeMap(v coreaws.Change) map[string]any {
 	return map[string]any{"change_id": v.ID, "plan_id": v.PlanID, "credential_id": v.CredentialID, "task_id": v.TaskID, "confirmation_id": v.ConfirmationID, "operation": string(v.Operation), "status": string(v.Status), "stage": string(v.Stage), "change_set_id": v.ChangeSetID, "provider_request_digest": v.ProviderRequestDigest, "revision": v.Revision, "error_code": v.ErrorCode, "error_summary": v.ErrorSummary, "created_at": v.CreatedAt.UTC().Format(time.RFC3339Nano), "updated_at": v.UpdatedAt.UTC().Format(time.RFC3339Nano)}

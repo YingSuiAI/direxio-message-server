@@ -217,9 +217,15 @@ func (s *Service) CreatePlan(ctx context.Context, in PlanInput) (PlanView, error
 	if !validUUID(in.CredentialID) {
 		return PlanView{}, ErrInvalid
 	}
+	if in.ExpectedCredentialRevision < 0 {
+		return PlanView{}, ErrInvalid
+	}
 	cred, e := s.repo.GetCredential(ctx, in.CredentialID)
 	if e != nil {
 		return PlanView{}, e
+	}
+	if in.ExpectedCredentialRevision > 0 && in.ExpectedCredentialRevision != cred.Revision {
+		return PlanView{}, ErrRevisionConflict
 	}
 	norm, digest, e := normalizeTemplate(in.Template)
 	if e != nil {

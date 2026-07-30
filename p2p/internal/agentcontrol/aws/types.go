@@ -219,6 +219,7 @@ type Quote struct {
 	ResourceCount            int
 	ParameterCount, TagCount int
 	EstimatedMonthlyUSD      float64
+	PriceStatus              string
 	Summary                  string
 	PlanDigest               string
 }
@@ -279,6 +280,7 @@ func secretFingerprint(value string) string {
 
 type PlanInput struct {
 	ID, CredentialID, Region, StackName string
+	ExpectedCredentialRevision          int64
 	Operation                           Operation
 	Template                            []byte
 	Parameters, Tags                    map[string]string
@@ -357,11 +359,29 @@ func sortedKeys(m map[string]string) []string {
 	return k
 }
 func quoteFor(p Plan) Quote {
-	resources := strings.Count(string(p.Template), "\"Type\"")
-	if resources == 0 {
-		resources = 1
+	resources, resourcesKnown := cloudFormationResourceCount(p.Template)
+	if !resourcesKnown {
+		summary := fmt.Sprintf("%s %s in %s (resource count and AWS pricing unavailable; review the CloudFormation plan before confirmation)", p.Operation, p.StackName, p.Region)
+		return Quote{PlanID: p.ID, Operation: p.Operation, Region: p.Region, StackName: p.StackName, ParameterCount: len(p.Parameters), TagCount: len(p.Tags), PriceStatus: "unavailable", Summary: summary, PlanDigest: planDigest(p)}
+	}
+	if p.Tags["dirextalk:price-status"] == "unavailable" {
+		summary := fmt.Sprintf("%s %s in %s (%d resources; AWS pricing unavailable, review EC2, EBS, public IPv4 and data-transfer charges before confirmation)", p.Operation, p.StackName, p.Region, resources)
+		return Quote{PlanID: p.ID, Operation: p.Operation, Region: p.Region, StackName: p.StackName, ResourceCount: resources, ParameterCount: len(p.Parameters), TagCount: len(p.Tags), PriceStatus: "unavailable", Summary: summary, PlanDigest: planDigest(p)}
 	}
 	est := float64(resources) * 0.01
 	summary := fmt.Sprintf("%s %s in %s (%d resources; deterministic estimate $%.2f/month)", p.Operation, p.StackName, p.Region, resources, est)
-	return Quote{PlanID: p.ID, Operation: p.Operation, Region: p.Region, StackName: p.StackName, ResourceCount: resources, ParameterCount: len(p.Parameters), TagCount: len(p.Tags), EstimatedMonthlyUSD: est, Summary: summary, PlanDigest: planDigest(p)}
+	return Quote{PlanID: p.ID, Operation: p.Operation, Region: p.Region, StackName: p.StackName, ResourceCount: resources, ParameterCount: len(p.Parameters), TagCount: len(p.Tags), EstimatedMonthlyUSD: est, PriceStatus: "deterministic_estimate", Summary: summary, PlanDigest: planDigest(p)}
+}
+
+func cloudFormationResourceCount(template []byte) (int, bool) {
+	if !json.Valid(template) {
+		return 0, false
+	}
+	var document struct {
+		Resources map[string]json.RawMessage `json:"Resources"`
+	}
+	if err := json.Unmarshal(template, &document); err != nil || document.Resources == nil {
+		return 0, false
+	}
+	return len(document.Resources), true
 }
