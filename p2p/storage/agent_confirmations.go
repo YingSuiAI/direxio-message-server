@@ -144,6 +144,19 @@ func readConfirmationReplayTx(ctx context.Context, tx *sql.Tx, owner, operation,
 	if storedDigest != string(digest) {
 		return confirmation.Confirmation{}, true, confirmation.ErrIdempotencyConflict
 	}
+	var terminal struct {
+		Confirmation *confirmation.Confirmation `json:"confirmation"`
+		Error        string                     `json:"error,omitempty"`
+	}
+	if json.Unmarshal(raw, &terminal) == nil && terminal.Confirmation != nil {
+		switch terminal.Error {
+		case "expired":
+			return *terminal.Confirmation, true, confirmation.ErrExpired
+		case "":
+			return *terminal.Confirmation, true, nil
+		}
+		return confirmation.Confirmation{}, true, confirmation.ErrConflict
+	}
 	var out confirmation.Confirmation
 	if json.Unmarshal(raw, &out) != nil {
 		return confirmation.Confirmation{}, true, confirmation.ErrConflict
@@ -153,6 +166,18 @@ func readConfirmationReplayTx(ctx context.Context, tx *sql.Tx, owner, operation,
 
 func saveConfirmationReplayTx(ctx context.Context, tx *sql.Tx, owner, operation, key string, digest confirmation.Digest, value confirmation.Confirmation, at time.Time) error {
 	raw, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO agent_confirmation_replays(owner_id,operation,idempotency_key,request_digest,response_json,created_at) VALUES($1,$2,$3,$4,$5,$6)`, owner, operation, key, string(digest), raw, at.UTC())
+	return err
+}
+
+func saveConfirmationReplayTerminalTx(ctx context.Context, tx *sql.Tx, owner, operation, key string, digest confirmation.Digest, value confirmation.Confirmation, terminalError string, at time.Time) error {
+	raw, err := json.Marshal(struct {
+		Confirmation confirmation.Confirmation `json:"confirmation"`
+		Error        string                    `json:"error"`
+	}{Confirmation: value, Error: terminalError})
 	if err != nil {
 		return err
 	}
@@ -280,7 +305,23 @@ func (s *DatabaseConfirmationStore) Confirm(ctx context.Context, c confirmation.
 		return confirmation.Confirmation{}, confirmation.ErrConflict
 	}
 	if !stored.ExpiresAt.After(at) {
-		return confirmation.Confirmation{}, confirmation.ErrExpired
+		if e = expireConfirmationAndTaskTx(ctx, tx, stored, taskRow, confirmation.ReasonExpired, at); e != nil {
+			return confirmation.Confirmation{}, e
+		}
+		var expired confirmation.Confirmation
+		expired, e = getConfirmationTx(ctx, tx, c.OwnerID, c.ID)
+		if e != nil {
+			return confirmation.Confirmation{}, e
+		}
+		if replayEnabled {
+			if e = saveConfirmationReplayTerminalTx(ctx, tx, c.OwnerID, "confirm", c.IdempotencyKey, c.RequestDigest, expired, "expired", at); e != nil {
+				return confirmation.Confirmation{}, e
+			}
+		}
+		if e = tx.Commit(); e != nil {
+			return confirmation.Confirmation{}, e
+		}
+		return expired, confirmation.ErrExpired
 	}
 	if taskRow.Status != "waiting_user" {
 		return confirmation.Confirmation{}, confirmation.ErrConflict
@@ -362,7 +403,21 @@ func (s *DatabaseConfirmationStore) Reject(ctx context.Context, c confirmation.R
 		return confirmation.Confirmation{}, confirmation.ErrConflict
 	}
 	if !stored.ExpiresAt.After(at) {
-		return confirmation.Confirmation{}, confirmation.ErrExpired
+		if e = expireConfirmationAndTaskTx(ctx, tx, stored, taskRow, confirmation.ReasonExpired, at); e != nil {
+			return confirmation.Confirmation{}, e
+		}
+		var expired confirmation.Confirmation
+		expired, e = getConfirmationTx(ctx, tx, c.OwnerID, c.ID)
+		if e != nil {
+			return confirmation.Confirmation{}, e
+		}
+		if e = saveConfirmationReplayTerminalTx(ctx, tx, c.OwnerID, "reject", c.IdempotencyKey, c.RequestDigest, expired, "expired", at); e != nil {
+			return confirmation.Confirmation{}, e
+		}
+		if e = tx.Commit(); e != nil {
+			return confirmation.Confirmation{}, e
+		}
+		return expired, confirmation.ErrExpired
 	}
 	if taskRow.Status != "waiting_user" {
 		return confirmation.Confirmation{}, confirmation.ErrConflict
@@ -383,6 +438,11 @@ func (s *DatabaseConfirmationStore) Reject(ctx context.Context, c confirmation.R
 	}
 	if e = terminalizeConfirmationsTx(ctx, tx, taskID, confirmation.ReasonUserRejected, at); e != nil {
 		return confirmation.Confirmation{}, e
+	}
+	if strings.HasPrefix(stored.Binding.OperationDomain, "workload:") {
+		if e = terminalizeWorkloadOperationTx(ctx, tx, stored, "rejected", "user_rejected", c.Reason, at); e != nil {
+			return confirmation.Confirmation{}, e
+		}
 	}
 	if _, e = tx.ExecContext(ctx, `INSERT INTO agent_task_events(owner_id,task_id,sequence,event_type,status,payload_json,occurred_at) SELECT owner_id,task_id,progress_sequence,'confirmation_rejected','canceled',jsonb_build_object('reason',$2),$3 FROM agent_tasks WHERE task_id=$1 AND owner_id=$4`, taskID, c.Reason, at, c.OwnerID); e != nil {
 		return confirmation.Confirmation{}, e
@@ -445,7 +505,21 @@ func (s *DatabaseConfirmationStore) Consume(ctx context.Context, c confirmation.
 		return confirmation.Confirmation{}, confirmation.ErrConflict
 	}
 	if !stored.ExpiresAt.After(at) {
-		return confirmation.Confirmation{}, confirmation.ErrExpired
+		if e = expireConfirmationAndTaskTx(ctx, tx, stored, taskRow, confirmation.ReasonExpired, at); e != nil {
+			return confirmation.Confirmation{}, e
+		}
+		var expired confirmation.Confirmation
+		expired, e = getConfirmationTx(ctx, tx, c.OwnerID, c.ID)
+		if e != nil {
+			return confirmation.Confirmation{}, e
+		}
+		if e = saveConfirmationReplayTerminalTx(ctx, tx, c.OwnerID, "consume", c.IdempotencyKey, c.RequestDigest, expired, "expired", at); e != nil {
+			return confirmation.Confirmation{}, e
+		}
+		if e = tx.Commit(); e != nil {
+			return confirmation.Confirmation{}, e
+		}
+		return expired, confirmation.ErrExpired
 	}
 	r, e := tx.ExecContext(ctx, `UPDATE agent_confirmations SET state='consumed',reservation_json=jsonb_build_object('task_id',$1,'attempt',$2,'lease_epoch',$3,'task_revision',$4),revision=revision+1,updated_at=$5 WHERE confirmation_id=$6 AND owner_id=$7 AND state='confirmed' AND revision=$8`, c.TaskID, c.Attempt, c.LeaseEpoch, c.ExpectedTaskRevision, at, c.ID, c.OwnerID, c.ExpectedRevision)
 	if e != nil {
@@ -578,12 +652,79 @@ func expireConfirmationAndTaskTx(ctx context.Context, tx *sql.Tx, stored confirm
 	if err = terminalizeConfirmationsTx(ctx, tx, stored.TaskID, reason, at.UTC()); err != nil {
 		return err
 	}
+	if strings.HasPrefix(stored.Binding.OperationDomain, "workload:") {
+		if err = terminalizeWorkloadOperationTx(ctx, tx, stored, "expired", reason, reason, at.UTC()); err != nil {
+			return err
+		}
+	}
 	if taskIsMutable {
 		if _, err = tx.ExecContext(ctx, `INSERT INTO agent_task_events(owner_id,task_id,sequence,event_type,status,payload_json,occurred_at) SELECT owner_id,task_id,progress_sequence,$1,'failed',jsonb_build_object('reason',$1),$2 FROM agent_tasks WHERE task_id=$3 AND owner_id=$4`, reason, at.UTC(), stored.TaskID, stored.OwnerID); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// terminalizeWorkloadOperationTx keeps the workload operation projection in
+// lockstep with its confirmation/task terminal transition. Workload
+// operations have their own live index; leaving one in waiting_user would
+// incorrectly block a subsequent operation for the same workload forever.
+// The operation row is locked by task identity (the task was already locked
+// by the caller), then transitioned and given one terminal event in the same
+// transaction. Non-workload confirmations simply have no matching row.
+func terminalizeWorkloadOperationTx(ctx context.Context, tx *sql.Tx, stored confirmation.Confirmation, status, code, summary string, at time.Time) error {
+	owner, taskID, confirmationID, targetID := stored.OwnerID, stored.TaskID, stored.ID, stored.Binding.TargetID
+	rows, err := tx.QueryContext(ctx, `SELECT operation_id::text,workload_id::text,confirmation_id::text,plan_revision,operation,status,dispatch_state,revision
+		FROM core_workload_operations WHERE owner_id=$1 AND task_id=$2 FOR UPDATE`, owner, taskID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		if err = rows.Err(); err != nil {
+			return err
+		}
+		return confirmation.ErrNotFound
+	}
+	var operationID, workloadID, operationConfirmationID, operationKind, operationStatus, dispatchState string
+	var planRevision, revision int64
+	if err = rows.Scan(&operationID, &workloadID, &operationConfirmationID, &planRevision, &operationKind, &operationStatus, &dispatchState, &revision); err != nil {
+		return err
+	}
+	if rows.Next() {
+		return confirmation.ErrConflict
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	expectedOperation := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(stored.Binding.OperationDomain, "workload:")))
+	if expectedOperation == "" || operationConfirmationID != confirmationID || workloadID != targetID ||
+		planRevision != stored.Binding.TargetRevision || strings.ToLower(strings.TrimSpace(operationKind)) != expectedOperation {
+		return confirmation.ErrConflict
+	}
+	if operationStatus != "waiting_user" || dispatchState != "prepared" || revision < 1 {
+		return confirmation.ErrConflict
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE core_workload_operations
+		SET status=$1,dispatch_state='terminal',failure_code=$2,failure_summary=$3,
+			revision=revision+1,updated_at=$4
+		WHERE owner_id=$5 AND operation_id=$6 AND task_id=$7 AND status='waiting_user'
+		  AND dispatch_state='prepared' AND revision=$8`, status, code, summary, at.UTC(), owner, operationID, taskID, revision)
+	if err != nil {
+		return err
+	}
+	if count, _ := result.RowsAffected(); count != 1 {
+		return confirmation.ErrRevisionConflict
+	}
+	var sequence uint64
+	if err = tx.QueryRowContext(ctx, `INSERT INTO core_workload_event_counters(owner_id,operation_id,next_sequence)
+		VALUES($1,$2,2)
+		ON CONFLICT(owner_id,operation_id) DO UPDATE
+		SET next_sequence=core_workload_event_counters.next_sequence+1
+		RETURNING next_sequence-1`, owner, operationID).Scan(&sequence); err != nil {
+		return err
+	}
+	return insertWorkloadEventTx(ctx, tx, owner, operationID, sequence, "terminal", status, summary, nil, at.UTC())
 }
 
 func (s *DatabaseConfirmationStore) ExpireAt(ctx context.Context, owner, id string, at time.Time) error {
