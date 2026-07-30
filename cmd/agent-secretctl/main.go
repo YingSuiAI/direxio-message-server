@@ -53,6 +53,16 @@ func main() {
 		if err := storage.RotateAgentSecrets(context.Background(), db, rotationOptions(path)); err != nil {
 			fail()
 		}
+	case "upgrade":
+		dsn := strings.TrimSpace(os.Getenv("P2P_AGENT_SECRET_DATABASE_DSN"))
+		if dsn == "" {
+			fail()
+		}
+		db := openDatabase(dsn)
+		defer db.Close()
+		if err := storage.UpgradeLegacyModelSecrets(context.Background(), db, rotationOptions(path)); err != nil {
+			fail()
+		}
 	default:
 		fail()
 	}

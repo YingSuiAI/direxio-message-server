@@ -209,6 +209,169 @@ func RotateAgentSecrets(ctx context.Context, db *sql.DB, options AgentSecretRota
 	return nil
 }
 
+// UpgradeLegacyModelSecrets re-wraps only legacy model-profile credentials
+// (the rows with a blank key_id) with the keyring's current active key. It is
+// intentionally separate from RotateAgentSecrets: it never creates, changes,
+// or retires a key and does not touch generic/AWS secrets. Each bounded batch
+// commits independently, so an interrupted invocation is safe to resume and
+// subsequent invocations are idempotent.
+func UpgradeLegacyModelSecrets(ctx context.Context, db *sql.DB, options AgentSecretRotationOptions) error {
+	if db == nil {
+		return ErrAgentSecretRotation
+	}
+	options, err := options.normalized()
+	if err != nil {
+		return err
+	}
+	guard, err := acquireAgentSecretMaintenanceGuard(ctx, db)
+	if err != nil {
+		return ErrAgentSecretRotation
+	}
+	defer releaseAgentSecretMaintenanceGuard(guard)
+	keyring, err := LoadAgentSecretKeyring(options.KeyringFile)
+	if err != nil {
+		return ErrAgentSecretRotation
+	}
+	enveloper, err := NewAgentSecretEnveloper(keyring)
+	if err != nil {
+		return ErrAgentSecretRotation
+	}
+	legacyKey, err := loadLegacyModelProfileKey(options.LegacyModelProfileKeyFile)
+	if err != nil {
+		return ErrAgentSecretRotation
+	}
+	for {
+		current, err := upgradeLegacyCurrentModelSecretBatch(ctx, db, options, enveloper, legacyKey)
+		if err != nil {
+			return ErrAgentSecretRotation
+		}
+		history, err := upgradeLegacyHistoricalModelSecretBatch(ctx, db, options, enveloper, legacyKey)
+		if err != nil {
+			return ErrAgentSecretRotation
+		}
+		if current+history == 0 {
+			break
+		}
+	}
+	// A successful upgrade must no longer depend on the legacy key. Verify all
+	// secret domains with only the keyring, so callers can safely remove the
+	// legacy key file after this command returns.
+	verifyOptions := options
+	verifyOptions.LegacyModelProfileKeyFile = ""
+	if err := VerifyAgentSecretDatabase(ctx, db, verifyOptions); err != nil {
+		return ErrAgentSecretRotation
+	}
+	return nil
+}
+
+func upgradeLegacyCurrentModelSecretBatch(ctx context.Context, db *sql.DB, options AgentSecretRotationOptions, enveloper *AgentSecretEnveloper, legacyKey []byte) (int, error) {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(ctx, `SELECT owner_id,profile_id,provider,
+			CASE WHEN api_key_profile_revision>0 THEN api_key_profile_revision ELSE revision END,
+			credential_version,api_key_key_id,api_key_envelope_version,api_key_aad_version,api_key_nonce,api_key_ciphertext
+		FROM p2p_agent_model_profiles
+		WHERE api_key_ciphertext<>''::bytea AND api_key_key_id=''
+		ORDER BY owner_id,profile_id
+		LIMIT $1
+		FOR UPDATE SKIP LOCKED`, options.BatchSize)
+	if err != nil {
+		return 0, err
+	}
+	items, err := scanModelSecretRotationRows(rows)
+	if err != nil {
+		return 0, err
+	}
+	for _, item := range items {
+		plaintext, err := openModelRotationSecret(enveloper, legacyKey, item)
+		if err != nil {
+			return 0, err
+		}
+		sealed, err := SealModelProfileCredential(enveloper, item.OwnerID, item.ProfileID, item.Provider, item.ProfileRevision, item.CredentialVersion, plaintext)
+		clear(plaintext)
+		if err != nil {
+			return 0, err
+		}
+		result, err := tx.ExecContext(ctx, `UPDATE p2p_agent_model_profiles
+			SET api_key_version=2,api_key_key_id=$3,api_key_profile_revision=$4,api_key_envelope_version=$5,api_key_aad_version=$6,api_key_nonce=$7,api_key_ciphertext=$8
+			WHERE owner_id=$1 AND profile_id=$2 AND api_key_key_id='' AND api_key_envelope_version=$9 AND api_key_aad_version=$10 AND api_key_nonce=$11 AND api_key_ciphertext=$12`,
+			item.OwnerID, item.ProfileID, sealed.KeyID, item.ProfileRevision, sealed.EnvelopeVersion, sealed.AADVersion, sealed.Nonce, sealed.Ciphertext,
+			item.EnvelopeVersion, item.AADVersion, item.Nonce, item.Ciphertext)
+		if err != nil {
+			return 0, err
+		}
+		if affected, err := result.RowsAffected(); err != nil || affected != 1 {
+			return 0, ErrAgentSecretRotation
+		}
+		if err := upsertAgentSecretUsageTx(ctx, tx, "model_profile.current", item.OwnerID, item.ProfileID, item.ProfileRevision, "model_profile_credential", item.Provider, sealed.AgentSecretEnvelope); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return len(items), nil
+}
+
+func upgradeLegacyHistoricalModelSecretBatch(ctx context.Context, db *sql.DB, options AgentSecretRotationOptions, enveloper *AgentSecretEnveloper, legacyKey []byte) (int, error) {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(ctx, `SELECT c.owner_id,c.profile_id,c.provider,
+			COALESCE(NULLIF(c.profile_revision,0),(
+				SELECT MIN(r.profile_revision)
+				FROM p2p_agent_model_profile_revisions r
+				WHERE r.owner_id=c.owner_id AND r.profile_id=c.profile_id AND r.credential_version=c.credential_version
+			),1),
+			c.credential_version,c.api_key_key_id,c.api_key_envelope_version,c.api_key_aad_version,c.api_key_nonce,c.api_key_ciphertext
+		FROM p2p_agent_model_profile_credentials c
+		WHERE c.api_key_ciphertext<>''::bytea AND c.api_key_key_id=''
+		ORDER BY c.owner_id,c.profile_id,c.credential_version
+		LIMIT $1
+		FOR UPDATE OF c SKIP LOCKED`, options.BatchSize)
+	if err != nil {
+		return 0, err
+	}
+	items, err := scanModelSecretRotationRows(rows)
+	if err != nil {
+		return 0, err
+	}
+	for _, item := range items {
+		plaintext, err := openModelRotationSecret(enveloper, legacyKey, item)
+		if err != nil {
+			return 0, err
+		}
+		sealed, err := SealModelProfileCredential(enveloper, item.OwnerID, item.ProfileID, item.Provider, item.ProfileRevision, item.CredentialVersion, plaintext)
+		clear(plaintext)
+		if err != nil {
+			return 0, err
+		}
+		result, err := tx.ExecContext(ctx, `UPDATE p2p_agent_model_profile_credentials
+			SET api_key_key_id=$4,profile_revision=$5,api_key_envelope_version=$6,api_key_aad_version=$7,api_key_nonce=$8,api_key_ciphertext=$9
+			WHERE owner_id=$1 AND profile_id=$2 AND credential_version=$3 AND api_key_key_id='' AND api_key_envelope_version=$10 AND api_key_aad_version=$11 AND api_key_nonce=$12 AND api_key_ciphertext=$13`,
+			item.OwnerID, item.ProfileID, item.CredentialVersion, sealed.KeyID, item.ProfileRevision, sealed.EnvelopeVersion, sealed.AADVersion, sealed.Nonce, sealed.Ciphertext,
+			item.EnvelopeVersion, item.AADVersion, item.Nonce, item.Ciphertext)
+		if err != nil {
+			return 0, err
+		}
+		if affected, err := result.RowsAffected(); err != nil || affected != 1 {
+			return 0, ErrAgentSecretRotation
+		}
+		if err := upsertAgentSecretUsageTx(ctx, tx, "model_profile.history", item.OwnerID, item.ProfileID, item.ProfileRevision, "model_profile_credential", item.Provider, sealed.AgentSecretEnvelope); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return len(items), nil
+}
+
 func prepareAgentSecretKeyringRotation(path string) (agentSecretKeyringFile, *AgentSecretKeyring, []string, error) {
 	file, err := readAgentSecretKeyringFile(path)
 	if err != nil {

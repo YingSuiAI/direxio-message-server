@@ -56,6 +56,35 @@ func TestAgentSecretLiveRuntimeGuardBlocksRotation(t *testing.T) {
 	}
 }
 
+func TestAgentSecretLiveRuntimeGuardBlocksLegacyUpgrade(t *testing.T) {
+	ctx := context.Background()
+	store := newAgentSecretGuardTestStore(t)
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "keyring.json")
+	initial, err := LoadOrCreateAgentSecretKeyring(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	guard, err := AcquireAgentSecretRuntimeGuard(ctx, store.DB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer guard.Close()
+	if err := UpgradeLegacyModelSecrets(ctx, store.DB(), AgentSecretRotationOptions{KeyringFile: path, LeaseOwner: "guard-upgrade-test"}); !errors.Is(err, ErrAgentSecretRotation) {
+		t.Fatalf("legacy upgrade while service is live = %v, want fenced failure", err)
+	}
+	after, err := LoadAgentSecretKeyring(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.activeKeyID != initial.activeKeyID {
+		t.Fatal("blocked legacy upgrade changed the active key")
+	}
+}
+
 func TestInitializeAgentSecretKeyringRefusesLostKeyWithCiphertext(t *testing.T) {
 	ctx := context.Background()
 	store := newAgentSecretGuardTestStore(t)
