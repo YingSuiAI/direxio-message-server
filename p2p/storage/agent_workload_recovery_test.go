@@ -20,6 +20,24 @@ const (
 	testWorkloadConfirmationID = "55555555-5555-4555-8555-555555555555"
 )
 
+func TestPostgresWorkloadListsRejectMalformedUUIDPageTokens(t *testing.T) {
+	db, _, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo, err := NewAgentWorkloadStore(NewUnmigratedDatabaseStore(db, sqlutil.NewDummyWriter()), testWorkloadOwnerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := repo.ListWorkloads(t.Context(), 20, "not-a-uuid"); !errors.Is(err, workload.ErrInvalid) {
+		t.Fatalf("ListWorkloads error = %v, want ErrInvalid", err)
+	}
+	if _, _, err := repo.ListPlans(t.Context(), 20, "not-a-uuid"); !errors.Is(err, workload.ErrInvalid) {
+		t.Fatalf("ListPlans error = %v, want ErrInvalid", err)
+	}
+}
+
 func TestPostgresWorkloadRecoverClaimPromotesConsumedReservation(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

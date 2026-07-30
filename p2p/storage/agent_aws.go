@@ -335,7 +335,7 @@ func (r *PostgresAWSRepository) getCredential(c context.Context, id string, revi
 	var v agentaws.Credentials
 	var key string
 	var nonce, ciphertext []byte
-	query := `SELECT c.credential_id::text,c.name,c.region,c.account_id,c.user_arn,c.verified_revision,c.revision,c.created_at,c.updated_at,s.key_id,s.nonce,s.ciphertext FROM core_aws_credentials c JOIN p2p_agent_secrets s ON s.owner_id=c.owner_id AND s.entity_id=c.credential_id AND s.secret_revision=c.revision AND s.secret_domain='aws' AND s.purpose='credential' WHERE c.owner_id=$1 AND c.credential_id=$2`
+	query := `SELECT c.credential_id::text,c.name,c.region,c.account_id,c.user_arn,c.verified_revision,c.revision,c.created_at,c.updated_at,s.key_id,s.nonce,s.ciphertext FROM core_aws_credentials c JOIN p2p_agent_secrets s ON s.owner_id=c.owner_id AND s.entity_id=c.credential_id::text AND s.secret_revision=c.revision AND s.secret_domain='aws' AND s.purpose='credential' WHERE c.owner_id=$1 AND c.credential_id=$2`
 	args := []any{r.ownerID, id}
 	if exact {
 		query += ` AND c.revision=$3`
@@ -370,10 +370,11 @@ func (r *PostgresAWSRepository) getCredential(c context.Context, id string, revi
 	return agentaws.RehydrateCredentials(v.ID, v.Name, v.Region, v.AccountID, v.UserARN, []byte(payload.Access), []byte(payload.Secret), []byte(payload.Session), v.VerifiedRevision, v.Revision, v.CreatedAt, v.UpdatedAt), nil
 }
 func (r *PostgresAWSRepository) ListCredentials(c context.Context, n int, k string) (agentaws.CredentialPage, error) {
-	if n < 0 || n > 100 || r == nil || r.store == nil || r.store.db == nil {
+	k = strings.TrimSpace(k)
+	if n < 0 || n > 100 || r == nil || r.store == nil || r.store.db == nil || (k != "" && !validAWSUUID(k)) {
 		return agentaws.CredentialPage{}, agentaws.ErrInvalid
 	}
-	rows, err := r.store.db.QueryContext(c, `SELECT c.credential_id::text,c.name,c.region,c.account_id,c.user_arn,c.revision,c.created_at,c.updated_at,EXISTS(SELECT 1 FROM p2p_agent_secrets s WHERE s.owner_id=c.owner_id AND s.entity_id=c.credential_id AND s.secret_domain='aws' AND s.purpose='credential' AND s.secret_revision=c.revision) FROM core_aws_credentials c JOIN core_aws_credential_current cur ON cur.owner_id=c.owner_id AND cur.credential_id=c.credential_id AND cur.revision=c.revision AND cur.deleted_at IS NULL WHERE c.owner_id=$1 AND c.credential_id>$2 ORDER BY c.credential_id LIMIT $3`, r.ownerID, k, n+1)
+	rows, err := r.store.db.QueryContext(c, `SELECT c.credential_id::text,c.name,c.region,c.account_id,c.user_arn,c.revision,c.created_at,c.updated_at,EXISTS(SELECT 1 FROM p2p_agent_secrets s WHERE s.owner_id=c.owner_id AND s.entity_id=c.credential_id::text AND s.secret_domain='aws' AND s.purpose='credential' AND s.secret_revision=c.revision) FROM core_aws_credentials c JOIN core_aws_credential_current cur ON cur.owner_id=c.owner_id AND cur.credential_id=c.credential_id AND cur.revision=c.revision AND cur.deleted_at IS NULL WHERE c.owner_id=$1 AND c.credential_id>COALESCE(NULLIF($2,'')::uuid,'00000000-0000-0000-0000-000000000000'::uuid) ORDER BY c.credential_id LIMIT $3`, r.ownerID, k, n+1)
 	if err != nil {
 		return agentaws.CredentialPage{}, err
 	}
@@ -629,7 +630,11 @@ func (r *PostgresAWSRepository) GetPlan(c context.Context, id string) (agentaws.
 	return v, nil
 }
 func (r *PostgresAWSRepository) ListPlans(c context.Context, n int, k string) (agentaws.PlanPage, error) {
-	rows, err := r.store.db.QueryContext(c, `SELECT plan_id::text,credential_id::text,credential_revision,region,stack_name,operation,template,template_sha256,parameters_json,tags_json,capabilities_json,revision,created_at FROM core_aws_plans WHERE owner_id=$1 AND plan_id>$2 ORDER BY plan_id LIMIT $3`, r.ownerID, k, n+1)
+	k = strings.TrimSpace(k)
+	if r == nil || r.store == nil || r.store.db == nil || n < 0 || n > 100 || (k != "" && !validAWSUUID(k)) {
+		return agentaws.PlanPage{}, agentaws.ErrInvalid
+	}
+	rows, err := r.store.db.QueryContext(c, `SELECT plan_id::text,credential_id::text,credential_revision,region,stack_name,operation,template,template_sha256,parameters_json,tags_json,capabilities_json,revision,created_at FROM core_aws_plans WHERE owner_id=$1 AND plan_id>COALESCE(NULLIF($2,'')::uuid,'00000000-0000-0000-0000-000000000000'::uuid) ORDER BY plan_id LIMIT $3`, r.ownerID, k, n+1)
 	if err != nil {
 		return agentaws.PlanPage{}, err
 	}
@@ -683,10 +688,12 @@ func (r *PostgresAWSRepository) GetChangeByConfirmation(c context.Context, id st
 	return v, err
 }
 func (r *PostgresAWSRepository) ListChanges(c context.Context, n int, p, k string) (agentaws.ChangePage, error) {
-	if n < 0 || n > 100 {
+	p = strings.TrimSpace(p)
+	k = strings.TrimSpace(k)
+	if n < 0 || n > 100 || (p != "" && !validAWSUUID(p)) || (k != "" && !validAWSUUID(k)) {
 		return agentaws.ChangePage{}, agentaws.ErrInvalid
 	}
-	rows, err := r.store.db.QueryContext(c, `SELECT change_id::text,plan_id::text,credential_id::text,task_id::text,confirmation_id::text,operation,status,stage,change_set_id,provider_request_digest,provider_token,revision,error_code,error_summary,created_at,updated_at FROM core_aws_changes WHERE owner_id=$1 AND ($2='' OR plan_id=$2) AND change_id>$3 ORDER BY change_id LIMIT $4`, r.ownerID, p, k, func() int {
+	rows, err := r.store.db.QueryContext(c, `SELECT change_id::text,plan_id::text,credential_id::text,task_id::text,confirmation_id::text,operation,status,stage,change_set_id,provider_request_digest,provider_token,revision,error_code,error_summary,created_at,updated_at FROM core_aws_changes WHERE owner_id=$1 AND ($2='' OR plan_id=NULLIF($2,'')::uuid) AND change_id>COALESCE(NULLIF($3,'')::uuid,'00000000-0000-0000-0000-000000000000'::uuid) ORDER BY change_id LIMIT $4`, r.ownerID, p, k, func() int {
 		if n == 0 {
 			return 101
 		}

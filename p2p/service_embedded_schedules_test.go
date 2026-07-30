@@ -11,6 +11,7 @@ import (
 	agentruntime "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcontrol/runtime"
 	p2pstorage "github.com/YingSuiAI/dirextalk-message-server/p2p/storage"
 	"github.com/YingSuiAI/dirextalk-message-server/setup/config"
+	"github.com/YingSuiAI/dirextalk-message-server/setup/process"
 	"github.com/YingSuiAI/dirextalk-message-server/test"
 )
 
@@ -92,5 +93,81 @@ func TestDatabaseServiceMissingAgentKeyringFailsClosedWithoutCreatingIt(t *testi
 	}
 	if _, apiErr := service.Handle(ctx, "profile.get", nil); apiErr != nil {
 		t.Fatalf("ordinary ProductCore remains available: %v", apiErr)
+	}
+}
+
+func TestDatabaseServiceEmbeddedAWSWorkloadReadiness(t *testing.T) {
+	ctx := context.Background()
+	connStr, closeDB := test.PrepareDBConnectionString(t, test.DBTypePostgres)
+	t.Cleanup(closeDB)
+	dbOpts := config.DatabaseOptions{ConnectionString: config.DataSource(connStr)}
+	store, err := NewDatabaseStore(ctx, sqlutil.NewConnectionManager(nil, dbOpts), &dbOpts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	keyringFile := filepath.Join(t.TempDir(), "secret-keyring.json")
+	if _, err := p2pstorage.LoadOrCreateAgentSecretKeyring(keyringFile); err != nil {
+		t.Fatalf("initialize Agent secret keyring: %v", err)
+	}
+	service, err := NewServiceWithStore(ctx, Config{
+		ServerName:             "example.com",
+		AgentSecretKeyringFile: keyringFile,
+	}, store)
+	if err != nil {
+		t.Fatalf("NewServiceWithStore: %v", err)
+	}
+
+	processCtx := process.NewProcessContext()
+	if !service.StartEmbeddedScheduler(processCtx, "embedded-readiness-test") {
+		t.Fatal("StartEmbeddedScheduler returned false with PostgreSQL and an initialized Agent keyring")
+	}
+	t.Cleanup(func() {
+		processCtx.ShutdownDendrite()
+		processCtx.WaitForComponentsToFinish()
+	})
+
+	if !service.EmbeddedSchedulesReady() {
+		t.Fatal("embedded scheduler is not ready after startup")
+	}
+	backends, apiErr := service.Handle(ctx, "agent.backends.get", nil)
+	if apiErr != nil {
+		t.Fatalf("agent.backends.get: %v", apiErr)
+	}
+	embedded, ok := backends.(map[string]any)["embedded"].(map[string]any)
+	if !ok {
+		t.Fatalf("embedded backend missing from response: %#v", backends)
+	}
+	capabilities, ok := embedded["capabilities"].([]string)
+	if !ok {
+		t.Fatalf("embedded capabilities have unexpected type: %#v", embedded["capabilities"])
+	}
+	for _, want := range []string{"aws.control", "workload.aws_ssm", "workload.aws_ecs"} {
+		found := false
+		for _, capability := range capabilities {
+			if capability == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("capability %q missing from %#v", want, capabilities)
+		}
+	}
+
+	credentials, apiErr := service.Handle(ctx, "agent.core.aws.credentials.list", map[string]any{})
+	if apiErr != nil {
+		t.Fatalf("agent.core.aws.credentials.list: %v", apiErr)
+	}
+	if got, ok := credentials.(map[string]any)["credentials"].([]any); !ok || len(got) != 0 {
+		t.Fatalf("credentials.list = %#v, want an empty result", credentials)
+	}
+	workloads, apiErr := service.Handle(ctx, "agent.core.workloads.list", map[string]any{})
+	if apiErr != nil {
+		t.Fatalf("agent.core.workloads.list: %v", apiErr)
+	}
+	if got, ok := workloads.(map[string]any)["plans"].([]any); !ok || len(got) != 0 {
+		t.Fatalf("workloads.list = %#v, want an empty result", workloads)
 	}
 }

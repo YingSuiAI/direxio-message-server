@@ -35,6 +35,42 @@ func testAWSProviderMutationCommand() agentaws.ProviderMutationCommand {
 	}
 }
 
+func TestPostgresAWSListsRejectMalformedUUIDPageTokens(t *testing.T) {
+	db, _, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo, err := NewAgentAWSRepository(NewUnmigratedDatabaseStore(db, sqlutil.NewDummyWriter()), testAWSOwnerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, list := range map[string]func() error{
+		"credentials": func() error {
+			_, err := repo.ListCredentials(t.Context(), 20, "not-a-uuid")
+			return err
+		},
+		"plans": func() error {
+			_, err := repo.ListPlans(t.Context(), 20, "not-a-uuid")
+			return err
+		},
+		"changes_page": func() error {
+			_, err := repo.ListChanges(t.Context(), 20, "", "not-a-uuid")
+			return err
+		},
+		"changes_plan": func() error {
+			_, err := repo.ListChanges(t.Context(), 20, "not-a-uuid", "")
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := list(); !errors.Is(err, agentaws.ErrInvalid) {
+				t.Fatalf("error = %v, want ErrInvalid", err)
+			}
+		})
+	}
+}
+
 func TestPostgresAWSCommitProviderMutationUsesAtomicFence(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

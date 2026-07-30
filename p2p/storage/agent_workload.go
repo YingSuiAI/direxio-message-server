@@ -121,7 +121,7 @@ func (s *PostgresWorkloadStore) pinAWSCredentialGrantTx(ctx context.Context, tx 
 		var verified int64
 		err := tx.QueryRowContext(ctx, `SELECT c.region,c.account_id,c.verified_revision
 			FROM core_aws_credentials c
-			JOIN p2p_agent_secrets secret ON secret.secret_domain='aws' AND secret.owner_id=c.owner_id AND secret.entity_id=c.credential_id AND secret.secret_revision=c.revision AND secret.purpose='credential'
+			JOIN p2p_agent_secrets secret ON secret.secret_domain='aws' AND secret.owner_id=c.owner_id AND secret.entity_id=c.credential_id::text AND secret.secret_revision=c.revision AND secret.purpose='credential'
 			WHERE c.owner_id=$1 AND c.credential_id=$2 AND c.revision=$3
 			FOR KEY SHARE`, s.ownerID, grant.ReferenceID, grant.Revision).Scan(&region, &account, &verified)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -174,10 +174,11 @@ func (s *PostgresWorkloadStore) GetWorkload(c context.Context, id string) (workl
 	return w, nil
 }
 func (s *PostgresWorkloadStore) ListWorkloads(c context.Context, n int, k string) ([]workload.Workload, string, error) {
-	if n <= 0 || n > 200 {
+	k = strings.TrimSpace(k)
+	if n <= 0 || n > 200 || (k != "" && !workload.ValidUUID(k)) {
 		return nil, "", workload.ErrInvalid
 	}
-	rows, err := s.store.db.QueryContext(c, `SELECT workload_id::text FROM core_workloads WHERE owner_id=$1 AND workload_id>$2 ORDER BY workload_id LIMIT $3`, s.ownerID, k, n+1)
+	rows, err := s.store.db.QueryContext(c, `SELECT workload_id::text FROM core_workloads WHERE owner_id=$1 AND workload_id>COALESCE(NULLIF($2,'')::uuid,'00000000-0000-0000-0000-000000000000'::uuid) ORDER BY workload_id LIMIT $3`, s.ownerID, k, n+1)
 	if err != nil {
 		return nil, "", err
 	}
@@ -209,10 +210,11 @@ func (s *PostgresWorkloadStore) ListWorkloads(c context.Context, n int, k string
 	return out, next, nil
 }
 func (s *PostgresWorkloadStore) ListPlans(c context.Context, n int, k string) ([]workload.Plan, string, error) {
-	if n <= 0 || n > 200 {
+	k = strings.TrimSpace(k)
+	if n <= 0 || n > 200 || (k != "" && !workload.ValidUUID(k)) {
 		return nil, "", workload.ErrInvalid
 	}
-	rows, err := s.store.db.QueryContext(c, `SELECT plan_id::text FROM core_workload_plans WHERE owner_id=$1 AND plan_id>$2 ORDER BY plan_id LIMIT $3`, s.ownerID, k, n+1)
+	rows, err := s.store.db.QueryContext(c, `SELECT plan_id::text FROM core_workload_plans WHERE owner_id=$1 AND plan_id>COALESCE(NULLIF($2,'')::uuid,'00000000-0000-0000-0000-000000000000'::uuid) ORDER BY plan_id LIMIT $3`, s.ownerID, k, n+1)
 	if err != nil {
 		return nil, "", err
 	}
