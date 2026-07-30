@@ -271,6 +271,81 @@ func TestDurableTurnPinsServerModelProfileAcrossRotationDeleteAndReactivation(t 
 	}
 }
 
+func TestDurableTurnHonorsRequestedServerModelProfilePin(t *testing.T) {
+	store := storage.NewMemoryStore()
+	created, err := store.SyncModelProfiles(context.Background(), "owner", "requested-pin-create", "", []storage.ModelProfileSyncEntry{{
+		ClientProfileID: "client-1",
+		Provider:        "deepseek",
+		Model:           "deepseek-chat",
+		BaseURL:         "https://api.deepseek.com/v1",
+		APIKey:          agentStringPtr("turn-secret"),
+	}})
+	if err != nil || len(created.Profiles) != 1 {
+		t.Fatalf("profile create: %#v, %v", created, err)
+	}
+	pinned := created.Profiles[0]
+	if _, err := store.SyncModelProfiles(context.Background(), "owner", "requested-pin-update", "", []storage.ModelProfileSyncEntry{{
+		ClientProfileID:  "client-1",
+		ExpectedRevision: agentInt64Ptr(pinned.Revision),
+		Provider:         "openai",
+		Model:            "gpt-4o",
+		BaseURL:          "https://api.openai.com/v1",
+	}}); err != nil {
+		t.Fatalf("profile update: %v", err)
+	}
+
+	runner := &pinnedTurnRunner{}
+	module := New(Config{Runner: runner, Turns: store, ModelProfiles: store, OwnerID: func() string { return "owner" }})
+	params := map[string]any{
+		"turn_id":                "turn-requested-pin",
+		"conversation_id":        "conversation-requested-pin",
+		"prompt":                 "hello",
+		"model_profile_id":       pinned.ProfileID,
+		"model_profile_revision": pinned.Revision,
+		"credential_version":     pinned.CredentialVersion,
+	}
+	if err := module.DurableStream(context.Background(), "owner", "agent.chat.stream", params, func(agentturns.StreamEvent) error { return nil }); err != nil {
+		t.Fatalf("durable stream: %v", err)
+	}
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	if runner.executions != 1 || len(runner.params) != 1 {
+		t.Fatalf("runner executions=%d params=%d", runner.executions, len(runner.params))
+	}
+	resolved, ok := runner.params[0]["model_profile"].(map[string]any)
+	if !ok || resolved["provider"] != "deepseek" || resolved["model"] != "deepseek-chat" || resolved["api_key"] != "turn-secret" {
+		t.Fatalf("runner requested pin = %#v", runner.params[0])
+	}
+}
+
+func TestDurableTurnRejectsPartialServerModelProfilePin(t *testing.T) {
+	store := storage.NewMemoryStore()
+	created, err := store.SyncModelProfiles(context.Background(), "owner", "partial-pin-create", "", []storage.ModelProfileSyncEntry{{
+		ClientProfileID: "client-1",
+		Provider:        "deepseek",
+		Model:           "deepseek-chat",
+		BaseURL:         "https://api.deepseek.com/v1",
+		APIKey:          agentStringPtr("turn-secret"),
+	}})
+	if err != nil || len(created.Profiles) != 1 {
+		t.Fatalf("profile create: %#v, %v", created, err)
+	}
+	module := New(Config{Runner: &pinnedTurnRunner{}, Turns: store, ModelProfiles: store, OwnerID: func() string { return "owner" }})
+	params := map[string]any{
+		"turn_id":                "turn-partial-pin",
+		"conversation_id":        "conversation-partial-pin",
+		"prompt":                 "hello",
+		"model_profile_id":       created.Profiles[0].ProfileID,
+		"model_profile_revision": created.Profiles[0].Revision,
+	}
+	if err := module.DurableStream(context.Background(), "owner", "agent.chat.stream", params, func(agentturns.StreamEvent) error { return nil }); err == nil {
+		t.Fatal("partial model profile pin accepted")
+	}
+	if _, ok, _ := store.GetAgentTurn(context.Background(), "owner", "turn-partial-pin"); ok {
+		t.Fatal("partial model profile pin reserved a turn")
+	}
+}
+
 func TestDurableImageTurnValidatesBeforeReserveAndSupportsDigestOnlyReattach(t *testing.T) {
 	store := storage.NewMemoryStore()
 	created, err := store.SyncModelProfiles(context.Background(), "owner", "image-profile-create", "", []storage.ModelProfileSyncEntry{{ClientProfileID: "image-client", Provider: "openai", Model: "gpt-4o", BaseURL: "https://api.openai.com/v1", APIKey: agentStringPtr("secret"), ModelKind: storage.ModelKindConversation, InputModalities: []string{"text", "image"}}})

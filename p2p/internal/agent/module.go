@@ -197,8 +197,16 @@ func (m *Module) DurableStream(ctx context.Context, ownerID, action string, para
 			}
 		}
 	}
-	requestedRevision, requestedCredential := int64(0), int64(0)
+	requestedRevision := actionbase.Int64(params["model_profile_revision"])
+	requestedCredential := actionbase.Int64(params["credential_version"])
+	if (requestedRevision > 0) != (requestedCredential > 0) {
+		return fmt.Errorf("model profile revision and credential version must be provided together")
+	}
 	if pin, ok := ctx.Value(pinnedProfileContextKey{}).(pinnedProfileContext); ok {
+		if (requestedRevision > 0 && requestedRevision != pin.revision) ||
+			(requestedCredential > 0 && requestedCredential != pin.credential) {
+			return fmt.Errorf("model profile pin is ambiguous")
+		}
 		requestedRevision, requestedCredential = pin.revision, pin.credential
 	}
 	if profileID != "" && turnID != "" {
