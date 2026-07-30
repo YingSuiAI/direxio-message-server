@@ -18,7 +18,7 @@ import (
 // owner/provision identity. A response replay therefore never creates a
 // second deployment row, while two owners can safely use the same provision
 // UUID in isolated owner namespaces.
-func deploymentIDForProvision(ownerID, provisionID string) (string, error) {
+func legacyDeploymentIDForProvision(ownerID, provisionID string) (string, error) {
 	ownerID = strings.TrimSpace(ownerID)
 	provisionID = strings.TrimSpace(provisionID)
 	if ownerID == "" || !validAWSUUID(provisionID) {
@@ -30,19 +30,41 @@ func deploymentIDForProvision(ownerID, provisionID string) (string, error) {
 	return fmt.Sprintf("%s-%s-%s-%s-%s", hex.EncodeToString(sum[0:4]), hex.EncodeToString(sum[4:6]), hex.EncodeToString(sum[6:8]), hex.EncodeToString(sum[8:10]), hex.EncodeToString(sum[10:16])), nil
 }
 
+// canonicalPublicUUID changes only RFC UUID version and variant bits. It must
+// stay byte-for-byte identical to core_canonical_public_uuid in v108.
+func canonicalPublicUUID(raw [16]byte) string {
+	raw[6] = (raw[6] & 0x0f) | 0x30
+	raw[8] = (raw[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%s-%s-%s-%s-%s", hex.EncodeToString(raw[0:4]), hex.EncodeToString(raw[4:6]), hex.EncodeToString(raw[6:8]), hex.EncodeToString(raw[8:10]), hex.EncodeToString(raw[10:16]))
+}
+
+func publicDeploymentIDForProvision(ownerID, provisionID string) (string, error) {
+	ownerID = strings.TrimSpace(ownerID)
+	provisionID = strings.TrimSpace(provisionID)
+	if ownerID == "" || !validAWSUUID(provisionID) {
+		return "", errors.New("storage: invalid deployment identity")
+	}
+	sum := md5.Sum([]byte("dirextalk:deployment:v1:" + ownerID + ":" + provisionID))
+	return canonicalPublicUUID(sum), nil
+}
+
 // DeploymentIDForProvision exposes the stable mapping to the embedding layer
 // without exposing SQL or allowing callers to choose a deployment identity.
 func DeploymentIDForProvision(ownerID, provisionID string) (string, error) {
-	return deploymentIDForProvision(ownerID, provisionID)
+	return publicDeploymentIDForProvision(ownerID, provisionID)
 }
 
 func ensureCoreDeploymentTx(ctx context.Context, tx *sql.Tx, ownerID, provisionID string, p agentaws.Provision) (string, error) {
-	deploymentID, err := deploymentIDForProvision(ownerID, provisionID)
+	deploymentID, err := legacyDeploymentIDForProvision(ownerID, provisionID)
+	if err != nil {
+		return "", err
+	}
+	publicDeploymentID, err := publicDeploymentIDForProvision(ownerID, provisionID)
 	if err != nil {
 		return "", err
 	}
 	object, _ := json.Marshal(map[string]any{
-		"deployment_id": deploymentID,
+		"deployment_id": publicDeploymentID,
 		"provision_id":  p.ID,
 		"plan_id":       p.PlanID,
 		"plan_digest":   p.PlanDigest,
@@ -50,18 +72,18 @@ func ensureCoreDeploymentTx(ctx context.Context, tx *sql.Tx, ownerID, provisionI
 		"status":        p.State,
 		"revision":      p.Revision,
 	})
-	_, err = tx.ExecContext(ctx, `INSERT INTO core_deployments(owner_id,deployment_id,provision_id,state,target_kind,revision,object_json,created_at,updated_at)
-		VALUES($1,$2,$3,$4,'AWS_EC2',$5,$6,NOW(),NOW())
+	_, err = tx.ExecContext(ctx, `INSERT INTO core_deployments(owner_id,deployment_id,public_deployment_id,provision_id,state,target_kind,revision,object_json,created_at,updated_at)
+		VALUES($1,$2,$3,$4,$5,'AWS_EC2',$6,$7,NOW(),NOW())
 		ON CONFLICT DO NOTHING`,
-		ownerID, deploymentID, provisionID, p.State, p.Revision, object)
+		ownerID, deploymentID, publicDeploymentID, provisionID, p.State, p.Revision, object)
 	if err != nil {
 		return "", err
 	}
-	var canonicalID string
-	if err := tx.QueryRowContext(ctx, `SELECT deployment_id::text FROM core_deployments WHERE owner_id=$1 AND provision_id=$2 FOR UPDATE`, ownerID, provisionID).Scan(&canonicalID); err != nil {
+	var canonicalID, canonicalPublicID string
+	if err := tx.QueryRowContext(ctx, `SELECT deployment_id::text,public_deployment_id::text FROM core_deployments WHERE owner_id=$1 AND provision_id=$2 FOR UPDATE`, ownerID, provisionID).Scan(&canonicalID, &canonicalPublicID); err != nil {
 		return "", err
 	}
-	if canonicalID != deploymentID {
+	if canonicalID != deploymentID || canonicalPublicID != publicDeploymentID {
 		return "", errors.New("storage: deployment identity conflict")
 	}
 	return deploymentID, nil
@@ -103,7 +125,7 @@ func linkWorkloadDeploymentTx(ctx context.Context, tx *sql.Tx, ownerID, workload
 	if string(p.SecretGrantRefs[0].BindingDigest) != hex.EncodeToString(binding.BindingDigest[:]) {
 		return "", workload.ErrConflict
 	}
-	deploymentID, err := deploymentIDForProvision(ownerID, provisionID)
+	deploymentID, err := legacyDeploymentIDForProvision(ownerID, provisionID)
 	if err != nil {
 		return "", workload.ErrInvalid
 	}

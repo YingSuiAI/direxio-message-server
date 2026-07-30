@@ -102,7 +102,7 @@ func (s *WorkloadDeploymentSource) GetDeploymentByID(ctx context.Context, owner,
 	if s == nil || s.store == nil || strings.TrimSpace(owner) == "" || strings.TrimSpace(deploymentID) == "" {
 		return nil, false, nil
 	}
-	row := s.store.db.QueryRowContext(ctx, unifiedDeploymentSelect+` WHERE d.owner_id=$1 AND d.deployment_id::text=$2`, strings.TrimSpace(owner), strings.TrimSpace(deploymentID))
+	row := s.store.db.QueryRowContext(ctx, unifiedDeploymentSelect+` WHERE d.owner_id=$1 AND d.public_deployment_id::text=$2`, strings.TrimSpace(owner), strings.TrimSpace(deploymentID))
 	object, _, _, err := scanUnifiedDeployment(row)
 	if err == sql.ErrNoRows {
 		return nil, false, nil
@@ -123,7 +123,7 @@ func (s *WorkloadDeploymentSource) GetDeploymentByWorkloadID(ctx context.Context
 }
 
 func (s *WorkloadDeploymentSource) ListDeploymentEventsByID(ctx context.Context, owner, deploymentID string, after int64, limit int) ([]map[string]any, int64, error) {
-	return s.listDeploymentEvents(ctx, owner, "d.deployment_id::text=$2", deploymentID, after, limit)
+	return s.listDeploymentEvents(ctx, owner, "d.public_deployment_id::text=$2", deploymentID, after, limit)
 }
 
 func (s *WorkloadDeploymentSource) ListDeploymentEventsByWorkloadID(ctx context.Context, owner, workloadID string, after int64, limit int) ([]map[string]any, int64, error) {
@@ -140,7 +140,7 @@ func (s *WorkloadDeploymentSource) listDeploymentEvents(ctx context.Context, own
 	if limit > 256 {
 		limit = 256
 	}
-	rows, err := s.store.db.QueryContext(ctx, `SELECT e.event_id::text,e.sequence,e.source_kind,e.source_id::text,e.source_sequence,e.event_json,e.created_at,d.deployment_id::text,COALESCE(d.workload_id::text,''),d.state
+	rows, err := s.store.db.QueryContext(ctx, `SELECT e.public_event_id::text,e.sequence,e.source_kind,e.source_id::text,e.source_sequence,e.event_json,e.created_at,d.public_deployment_id::text,COALESCE(d.workload_id::text,''),d.state
 		FROM core_deployment_events e JOIN core_deployments d ON d.owner_id=e.owner_id AND d.deployment_id=e.deployment_id
 		WHERE d.owner_id=$1 AND `+lookup+` AND e.sequence>$3
 		ORDER BY e.sequence LIMIT $4`, strings.TrimSpace(owner), strings.TrimSpace(identifier), after, limit+1)
@@ -266,9 +266,9 @@ const workloadDeploymentSelect = `SELECT
 	) o ON TRUE`
 
 const unifiedDeploymentSelect = `SELECT
-	d.deployment_id::text,COALESCE(d.provision_id::text,''),COALESCE(d.workload_id::text,''),d.state,d.target_kind,d.revision,d.object_json,d.actual_json,COALESCE(pr.state,''),COALESCE(pr.output_digest,''),d.updated_at,
+	d.public_deployment_id::text,COALESCE(d.provision_id::text,''),COALESCE(d.workload_id::text,''),d.state,d.target_kind,d.revision,d.object_json,d.actual_json,COALESCE(pr.state,''),COALESCE(pr.output_digest,''),d.updated_at,
 	COALESCE(w.revision,0),COALESCE(w.plan_id::text,''),COALESCE(w.plan_digest,''),COALESCE(w.state,''),COALESCE(w.actual_snapshot_json,'{}'::jsonb),
-	COALESCE(o.operation_id::text,''),COALESCE(o.operation,''),COALESCE(o.plan_revision,0),COALESCE(o.plan_digest,''),COALESCE(o.task_id::text,''),COALESCE(o.confirmation_id::text,''),COALESCE(o.status,''),COALESCE(o.revision,0),COALESCE(o.failure_code,''),COALESCE(o.created_at,d.created_at),COALESCE(o.updated_at,d.updated_at),COALESCE(o.dispatch_epoch,0),o.dispatch_lease_until
+	COALESCE(o.operation_id::text,''),COALESCE(o.operation,''),COALESCE(o.plan_revision,0),COALESCE(o.plan_digest,''),COALESCE(o.task_id::text,''),COALESCE(o.confirmation_id::text,''),COALESCE(o.status,''),COALESCE(o.revision,0),COALESCE(o.failure_code,''),COALESCE(o.created_at,d.created_at),COALESCE(o.updated_at,d.updated_at),COALESCE(o.dispatch_epoch,0),o.dispatch_lease_until,d.deployment_id::text
 	FROM core_deployments d
 	LEFT JOIN core_aws_ec2_provisions pr ON pr.owner_id=d.owner_id AND pr.provision_id=d.provision_id
 	LEFT JOIN core_workloads w ON w.owner_id=d.owner_id AND w.workload_id=d.workload_id
@@ -325,7 +325,7 @@ func scanWorkloadDeployment(row workloadDeploymentScanner) (map[string]any, time
 }
 
 func scanUnifiedDeployment(row workloadDeploymentScanner) (map[string]any, time.Time, string, error) {
-	var deploymentID, provisionID, workloadID, state, targetKind string
+	var deploymentID, provisionID, workloadID, state, targetKind, legacyDeploymentID string
 	var revision, workloadRevision, planRevision, operationRevision, dispatchEpoch int64
 	var objectRaw, deploymentActualRaw, workloadActualRaw []byte
 	var provisionState, provisionOutputDigest string
@@ -334,7 +334,7 @@ func scanUnifiedDeployment(row workloadDeploymentScanner) (map[string]any, time.
 	var dispatchUntil sql.NullTime
 	if err := row.Scan(&deploymentID, &provisionID, &workloadID, &state, &targetKind, &revision, &objectRaw, &deploymentActualRaw, &provisionState, &provisionOutputDigest, &updatedAt,
 		&workloadRevision, &planID, &planDigest, &workloadState, &workloadActualRaw,
-		&operationID, &operationKind, &planRevision, &operationPlanDigest, &taskID, &confirmationID, &operationStatus, &operationRevision, &failureCode, &operationCreatedAt, &operationUpdatedAt, &dispatchEpoch, &dispatchUntil); err != nil {
+		&operationID, &operationKind, &planRevision, &operationPlanDigest, &taskID, &confirmationID, &operationStatus, &operationRevision, &failureCode, &operationCreatedAt, &operationUpdatedAt, &dispatchEpoch, &dispatchUntil, &legacyDeploymentID); err != nil {
 		return nil, time.Time{}, "", err
 	}
 	object := map[string]any{}
@@ -376,7 +376,7 @@ func scanUnifiedDeployment(row workloadDeploymentScanner) (map[string]any, time.
 		}
 	}
 	object["updated_at"] = updatedAt.UTC().Format(time.RFC3339Nano)
-	return agentcore.StripDeploymentInternalFields(object), updatedAt.UTC(), deploymentID, nil
+	return agentcore.StripDeploymentInternalFields(object), updatedAt.UTC(), legacyDeploymentID, nil
 }
 
 func normalizeWorkloadActual(actual map[string]any) map[string]any {

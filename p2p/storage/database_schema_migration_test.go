@@ -71,6 +71,8 @@ func TestDatabaseStoreCreatesBusinessIndexes(t *testing.T) {
 		"p2p_legacy_agent_invocations_state_updated_idx",
 		"p2p_native_agent_turns_owner_conversation_idx",
 		"p2p_native_agent_turns_active_idx",
+		"core_deployments_owner_public_deployment_uidx",
+		"core_deployment_events_owner_public_event_uidx",
 	}
 	for _, indexName := range expected {
 		t.Run(indexName, func(t *testing.T) {
@@ -93,6 +95,49 @@ func TestDatabaseStoreCreatesBusinessIndexes(t *testing.T) {
 	}
 	if messageTableCount != 0 {
 		t.Fatalf("p2p_messages table must not be created after Matrix-source migration")
+	}
+}
+
+func TestDatabasePublicDeploymentUUIDMigrationIsCanonicalAndRegisteredOnce(t *testing.T) {
+	ctx := context.Background()
+	connStr, closeDB := test.PrepareDBConnectionString(t, test.DBTypePostgres)
+	defer closeDB()
+	dbOpts := config.DatabaseOptions{ConnectionString: config.DataSource(connStr)}
+	store, err := NewDatabaseStore(ctx, sqlutil.NewConnectionManager(nil, dbOpts), &dbOpts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	var canonical string
+	if err := store.DB().QueryRowContext(ctx, `SELECT core_canonical_public_uuid('00010203-0405-ff07-ff09-0a0b0c0d0e0f'::uuid)::text`).Scan(&canonical); err != nil {
+		t.Fatal(err)
+	}
+	if canonical != "00010203-0405-3f07-bf09-0a0b0c0d0e0f" {
+		t.Fatalf("canonical public UUID = %q", canonical)
+	}
+	var registrations int
+	if err := store.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM db_migrations WHERE version='p2p: public deployment UUIDs v108'`).Scan(&registrations); err != nil {
+		t.Fatal(err)
+	}
+	if registrations != 1 {
+		t.Fatalf("v108 migration registrations = %d, want 1", registrations)
+	}
+	const owner = "@migration-owner:example.test"
+	const legacyDeployment = "00000000-0000-f000-f000-000000000001"
+	const publicDeployment = "00000000-0000-3000-b000-000000000001"
+	const legacyEvent = "00000000-0000-e000-f000-000000000002"
+	const publicEvent = "00000000-0000-3000-b000-000000000002"
+	// This is the exact v107-era column shape: v108 must derive the public
+	// identity before NOT NULL is checked during a rolling deployment.
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO core_deployments(owner_id,deployment_id,state,target_kind,revision,object_json) VALUES($1,$2,'pending','AWS_EC2',1,$3::jsonb)`, owner, legacyDeployment, `{"deployment_id":"00000000-0000-f000-f000-000000000001"}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO core_deployment_events(owner_id,deployment_id,event_id,sequence,source_kind,source_id,source_sequence,event_json) VALUES($1,$2,$3,1,'provision','00000000-0000-4000-8000-000000000003',1,'{"kind":"queued","status":"pending"}')`, owner, legacyDeployment, legacyEvent); err != nil {
+		t.Fatalf("legacy deployment FK must remain usable: %v", err)
+	}
+	events, _, err := NewWorkloadDeploymentSource(store).ListDeploymentEventsByID(ctx, owner, publicDeployment, 0, 10)
+	if err != nil || len(events) != 1 || events[0]["event_id"] != publicEvent || events[0]["deployment_id"] != publicDeployment {
+		t.Fatalf("public deployment event lookup = %#v, err=%v", events, err)
 	}
 }
 

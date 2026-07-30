@@ -33,6 +33,29 @@ func TestDeploymentIDForProvisionIsOwnerScopedAndReplayStable(t *testing.T) {
 	}
 }
 
+func TestPublicDeploymentIDIsCanonicalRFCUUIDWhileLegacyKeyIsPreserved(t *testing.T) {
+	const owner = "@owner:example.test"
+	const provision = "77777777-7777-4777-8777-777777777777"
+	legacy, err := legacyDeploymentIDForProvision(owner, provision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	public, err := DeploymentIDForProvision(owner, provision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if public[14] != '3' || !strings.ContainsRune("89ab", rune(public[19])) {
+		t.Fatalf("public deployment ID is not a canonical RFC UUID: %q", public)
+	}
+	if legacy == public {
+		t.Fatalf("legacy and public identities unexpectedly alias: %q", legacy)
+	}
+	raw := [16]byte{0, 1, 2, 3, 4, 5, 0xff, 7, 0xff, 9, 10, 11, 12, 13, 14, 15}
+	if got, want := canonicalPublicUUID(raw), "00010203-0405-3f07-bf09-0a0b0c0d0e0f"; got != want {
+		t.Fatalf("canonical UUID bytes = %q, want %q", got, want)
+	}
+}
+
 type unifiedDeploymentScannerFixture struct{ destroyed bool }
 
 func (f unifiedDeploymentScannerFixture) Scan(dest ...any) error {
@@ -44,6 +67,7 @@ func (f unifiedDeploymentScannerFixture) Scan(dest ...any) error {
 		"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "cccccccc-cccc-4ccc-8ccc-cccccccccccc", state, "AWS_EC2", int64(3), []byte(`{"deployment_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}`), []byte(`{}`), "active", "sha256:out", time.Unix(10, 0).UTC(),
 		int64(2), "dddddddd-dddd-4ddd-8ddd-dddddddddddd", "sha256:ok", "ready", []byte(`{"state":"ready","identity":{"endpoint":"http://203.0.113.9"},"applied_plan_digest":"sha256:ok","readback_digest":"sha256:ok"}`),
 		"eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", "apply", int64(1), "plan", "ffffffff-ffff-4fff-8fff-ffffffffffff", "11111111-1111-4111-8111-111111111111", "succeeded", int64(2), "", time.Unix(1, 0).UTC(), time.Unix(10, 0).UTC(), int64(1), nil,
+		"aaaaaaaa-aaaa-faaa-faaa-aaaaaaaaaaaa",
 	}
 	for i := range dest {
 		switch ptr := dest[i].(type) {

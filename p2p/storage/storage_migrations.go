@@ -1568,6 +1568,71 @@ func (s *DatabaseStore) migrate(ctx context.Context) error {
 			`ALTER TABLE p2p_agent_model_profile_credentials ADD CONSTRAINT p2p_agent_model_profile_credentials_api_key_envelope_check CHECK (credential_version>0 AND octet_length(api_key_ciphertext)>16 AND octet_length(api_key_nonce)=12 AND ((api_key_key_id='' AND api_key_envelope_version=0 AND api_key_aad_version=0) OR (api_key_key_id<>'' AND api_key_envelope_version=1 AND api_key_aad_version=1)))`,
 		})
 	}})
+	m.AddMigrations(sqlutil.Migration{Version: "p2p: public deployment UUIDs v108", Up: func(ctx context.Context, txn *sql.Tx) error {
+		return execMigrationStatements(ctx, txn, []string{
+			// The legacy IDs are durable internal keys. Public IDs retain all
+			// entropy but normalize the RFC UUID version and variant bits.
+			`CREATE OR REPLACE FUNCTION core_canonical_public_uuid(value UUID) RETURNS UUID LANGUAGE SQL IMMUTABLE STRICT AS $$
+				SELECT encode(set_byte(set_byte(uuid_send(value),6,(get_byte(uuid_send(value),6) & 15) | 48),8,(get_byte(uuid_send(value),8) & 63) | 128),'hex')::uuid
+			$$`,
+			`ALTER TABLE core_deployments ADD COLUMN IF NOT EXISTS public_deployment_id UUID`,
+			`ALTER TABLE core_deployment_events ADD COLUMN IF NOT EXISTS public_event_id UUID`,
+			`CREATE OR REPLACE FUNCTION core_fill_public_deployment_id() RETURNS trigger LANGUAGE plpgsql AS $$
+			BEGIN
+				IF NEW.public_deployment_id IS NULL THEN NEW.public_deployment_id:=core_canonical_public_uuid(NEW.deployment_id); END IF;
+				RETURN NEW;
+			END $$`,
+			`CREATE OR REPLACE FUNCTION core_fill_public_deployment_event_id() RETURNS trigger LANGUAGE plpgsql AS $$
+			BEGIN
+				IF NEW.public_event_id IS NULL THEN NEW.public_event_id:=core_canonical_public_uuid(NEW.event_id); END IF;
+				RETURN NEW;
+			END $$`,
+			`DROP TRIGGER IF EXISTS core_deployments_public_id_fill ON core_deployments`,
+			`CREATE TRIGGER core_deployments_public_id_fill BEFORE INSERT OR UPDATE OF deployment_id,public_deployment_id ON core_deployments FOR EACH ROW EXECUTE FUNCTION core_fill_public_deployment_id()`,
+			`DROP TRIGGER IF EXISTS core_deployment_events_public_id_fill ON core_deployment_events`,
+			`CREATE TRIGGER core_deployment_events_public_id_fill BEFORE INSERT OR UPDATE OF event_id,public_event_id ON core_deployment_events FOR EACH ROW EXECUTE FUNCTION core_fill_public_deployment_event_id()`,
+			`UPDATE core_deployments SET public_deployment_id=core_canonical_public_uuid(deployment_id) WHERE public_deployment_id IS NULL`,
+			`UPDATE core_deployment_events SET public_event_id=core_canonical_public_uuid(event_id) WHERE public_event_id IS NULL`,
+			`UPDATE core_deployments SET object_json=jsonb_set(COALESCE(object_json,'{}'::jsonb),'{deployment_id}',to_jsonb(public_deployment_id::text),true)`,
+			`ALTER TABLE core_deployments ALTER COLUMN public_deployment_id SET NOT NULL`,
+			`ALTER TABLE core_deployment_events ALTER COLUMN public_event_id SET NOT NULL`,
+			`CREATE UNIQUE INDEX IF NOT EXISTS core_deployments_owner_public_deployment_uidx ON core_deployments(owner_id,public_deployment_id)`,
+			`CREATE UNIQUE INDEX IF NOT EXISTS core_deployment_events_owner_public_event_uidx ON core_deployment_events(owner_id,public_event_id)`,
+			`CREATE OR REPLACE FUNCTION core_fanout_workload_event() RETURNS trigger LANGUAGE plpgsql AS $$
+			DECLARE d UUID; seq BIGINT; payload JSONB; op_kind TEXT; public_state TEXT;
+			BEGIN
+				SELECT deployment_id INTO d FROM core_deployments WHERE owner_id=NEW.owner_id AND workload_id=NEW.workload_id FOR UPDATE;
+				IF d IS NULL THEN RETURN NEW; END IF;
+				IF EXISTS (SELECT 1 FROM core_deployment_events WHERE owner_id=NEW.owner_id AND deployment_id=d AND source_kind='workload' AND source_id=NEW.operation_id AND source_sequence=NEW.sequence) THEN RETURN NEW; END IF;
+				INSERT INTO core_deployment_event_counters(owner_id,deployment_id,next_sequence) VALUES(NEW.owner_id,d,2)
+				ON CONFLICT(owner_id,deployment_id) DO UPDATE SET next_sequence=core_deployment_event_counters.next_sequence+1 RETURNING next_sequence-1 INTO seq;
+				payload := jsonb_build_object('kind',NEW.kind,'status',NEW.status,'message',COALESCE(NEW.message,''),'actual',jsonb_build_object('state',NEW.readback_json->>'state','applied_plan_id',NEW.readback_json->>'applied_plan_id','applied_plan_digest',NEW.readback_json->>'applied_plan_digest','readback_digest',NEW.readback_json->>'readback_digest','provider_version',NEW.readback_json->>'provider_version','observed_at',NEW.readback_json->>'observed_at'),'at',NEW.at);
+				INSERT INTO core_deployment_events(owner_id,deployment_id,event_id,public_event_id,sequence,source_kind,source_id,source_sequence,event_json,created_at)
+				VALUES(NEW.owner_id,d,md5(NEW.owner_id || ':workload:' || NEW.operation_id::text || ':' || NEW.sequence::text)::uuid,core_canonical_public_uuid(md5(NEW.owner_id || ':workload:' || NEW.operation_id::text || ':' || NEW.sequence::text)::uuid),seq,'workload',NEW.operation_id,NEW.sequence,payload,NEW.at)
+				ON CONFLICT(owner_id,deployment_id,source_kind,source_id,source_sequence) DO NOTHING;
+				SELECT operation INTO op_kind FROM core_workload_operations WHERE owner_id=NEW.owner_id AND operation_id=NEW.operation_id;
+				public_state := CASE WHEN NEW.status IN ('succeeded','completed') AND op_kind='destroy' THEN 'destroyed' WHEN NEW.status IN ('succeeded','completed') THEN 'ready' WHEN NEW.status IN ('failed','uncertain','canceled','expired','rejected') THEN NEW.status WHEN NEW.status IN ('running','dispatched') THEN 'running' ELSE NULL END;
+				UPDATE core_deployments SET state=COALESCE(public_state,state),revision=revision+1,object_json=CASE WHEN public_state IS NULL THEN object_json ELSE jsonb_set(object_json,'{status}',to_jsonb(CASE WHEN public_state='ready' THEN 'succeeded' ELSE public_state END),true) END,actual_json=CASE WHEN NEW.readback_json IS NULL OR NEW.readback_json='null'::jsonb THEN actual_json ELSE NEW.readback_json END,updated_at=NEW.at WHERE owner_id=NEW.owner_id AND deployment_id=d;
+				RETURN NEW;
+			END $$`,
+			`CREATE OR REPLACE FUNCTION core_fanout_provision_event() RETURNS trigger LANGUAGE plpgsql AS $$
+			DECLARE d UUID; seq BIGINT; payload JSONB; current_state TEXT;
+			BEGIN
+				SELECT deployment_id INTO d FROM core_deployments WHERE owner_id=NEW.owner_id AND provision_id=NEW.provision_id FOR UPDATE;
+				IF d IS NULL THEN RETURN NEW; END IF;
+				IF EXISTS (SELECT 1 FROM core_deployment_events WHERE owner_id=NEW.owner_id AND deployment_id=d AND source_kind='provision' AND source_id=NEW.provision_id AND source_sequence=NEW.sequence) THEN RETURN NEW; END IF;
+				INSERT INTO core_deployment_event_counters(owner_id,deployment_id,next_sequence) VALUES(NEW.owner_id,d,2)
+				ON CONFLICT(owner_id,deployment_id) DO UPDATE SET next_sequence=core_deployment_event_counters.next_sequence+1 RETURNING next_sequence-1 INTO seq;
+				SELECT state INTO current_state FROM core_aws_ec2_provisions WHERE owner_id=NEW.owner_id AND provision_id=NEW.provision_id;
+				payload := jsonb_build_object('kind',NEW.kind,'status',COALESCE(current_state,''),'change_id',COALESCE(NEW.change_id::text,''),'at',NEW.at);
+				INSERT INTO core_deployment_events(owner_id,deployment_id,event_id,public_event_id,sequence,source_kind,source_id,source_sequence,event_json,created_at)
+				VALUES(NEW.owner_id,d,md5(NEW.owner_id || ':provision:' || NEW.provision_id::text || ':' || NEW.sequence::text)::uuid,core_canonical_public_uuid(md5(NEW.owner_id || ':provision:' || NEW.provision_id::text || ':' || NEW.sequence::text)::uuid),seq,'provision',NEW.provision_id,NEW.sequence,payload,NEW.at)
+				ON CONFLICT(owner_id,deployment_id,source_kind,source_id,source_sequence) DO NOTHING;
+				UPDATE core_deployments SET state=COALESCE(NULLIF(current_state,''),state),revision=revision+1,object_json=jsonb_set(object_json,'{status}',to_jsonb(COALESCE(NULLIF(current_state,''),state)),true),updated_at=NEW.at WHERE owner_id=NEW.owner_id AND deployment_id=d;
+				RETURN NEW;
+			END $$`,
+		})
+	}})
 	return m.Up(ctx)
 }
 
