@@ -126,7 +126,7 @@ func lockConfirmationReplayTx(ctx context.Context, tx *sql.Tx, owner, operation,
 	if strings.TrimSpace(owner) == "" || !validConfirmationUUID(key) {
 		return confirmation.ErrInvalid
 	}
-	lockKey := strings.TrimSpace(owner) + "\x00" + operation + "\x00" + key
+	lockKey := canonicalAdvisoryLockIdentity("agent-confirmation", strings.TrimSpace(owner), operation, key)
 	_, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, lockKey)
 	return err
 }

@@ -1041,7 +1041,7 @@ func (s *DatabaseStore) ReserveScheduleConfirmation(ctx context.Context, v Sched
 		return ScheduleConfirmation{}, false, e
 	}
 	defer tx.Rollback()
-	if _, e = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, v.OwnerID+"\x00"+v.ConversationID); e != nil {
+	if _, e = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, canonicalAdvisoryLockIdentity("schedule-confirmation", v.OwnerID, v.ConversationID)); e != nil {
 		return ScheduleConfirmation{}, false, e
 	}
 	var active ScheduleConfirmation

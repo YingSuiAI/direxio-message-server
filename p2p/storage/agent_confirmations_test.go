@@ -97,7 +97,7 @@ func terminalConfirmationReplayJSON(t *testing.T, value confirmation.Confirmatio
 
 func expectConfirmationReplayMiss(mock sqlmock.Sqlmock, owner, operation, key string) {
 	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")).
-		WithArgs(owner + "\x00" + operation + "\x00" + key).
+		WithArgs(canonicalAdvisoryLockIdentity("agent-confirmation", owner, operation, key)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT request_digest,response_json FROM agent_confirmation_replays")).
 		WithArgs(owner, operation, key).
@@ -177,7 +177,7 @@ func TestDatabaseConfirmationConfirmPersistsAndReplaysResponse(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")).
-		WithArgs(testConfirmationOwner + "\x00confirm\x00" + key).
+		WithArgs(canonicalAdvisoryLockIdentity("agent-confirmation", testConfirmationOwner, "confirm", key)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT request_digest,response_json FROM agent_confirmation_replays")).
 		WithArgs(testConfirmationOwner, "confirm", key).
@@ -226,7 +226,7 @@ func TestDatabaseConfirmationConfirmLateExpiryTerminalizesBeforeReturning(t *tes
 		t.Fatalf("expected expired confirmation, got %v", err)
 	}
 	mock.ExpectBegin()
-	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")).WithArgs(testConfirmationOwner + "\x00confirm\x00" + key).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")).WithArgs(canonicalAdvisoryLockIdentity("agent-confirmation", testConfirmationOwner, "confirm", key)).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT request_digest,response_json FROM agent_confirmation_replays")).WithArgs(testConfirmationOwner, "confirm", key).WillReturnRows(sqlmock.NewRows([]string{"request_digest", "response_json"}).AddRow(string(confirmation.RequestDigestForConfirm(command)), terminalConfirmationReplayJSON(t, expired)))
 	mock.ExpectRollback()
 	second, err := store.Confirm(t.Context(), command)
@@ -236,7 +236,7 @@ func TestDatabaseConfirmationConfirmLateExpiryTerminalizesBeforeReturning(t *tes
 	conflictCommand := command
 	conflictCommand.ExpectedRevision = 2
 	mock.ExpectBegin()
-	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")).WithArgs(testConfirmationOwner + "\x00confirm\x00" + key).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")).WithArgs(canonicalAdvisoryLockIdentity("agent-confirmation", testConfirmationOwner, "confirm", key)).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT request_digest,response_json FROM agent_confirmation_replays")).WithArgs(testConfirmationOwner, "confirm", key).WillReturnRows(sqlmock.NewRows([]string{"request_digest", "response_json"}).AddRow(string(confirmation.RequestDigestForConfirm(command)), terminalConfirmationReplayJSON(t, expired)))
 	mock.ExpectRollback()
 	if _, err = store.Confirm(t.Context(), conflictCommand); !errors.Is(err, confirmation.ErrIdempotencyConflict) {
@@ -339,7 +339,7 @@ func TestDatabaseConfirmationRejectLateExpiryTerminalizesBeforeReturning(t *test
 		t.Fatalf("expected expired confirmation, got %v", err)
 	}
 	mock.ExpectBegin()
-	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")).WithArgs(testConfirmationOwner + "\x00reject\x00" + key).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")).WithArgs(canonicalAdvisoryLockIdentity("agent-confirmation", testConfirmationOwner, "reject", key)).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT request_digest,response_json FROM agent_confirmation_replays")).WithArgs(testConfirmationOwner, "reject", key).WillReturnRows(sqlmock.NewRows([]string{"request_digest", "response_json"}).AddRow(string(confirmation.RequestDigestForReject(command)), terminalConfirmationReplayJSON(t, expired)))
 	mock.ExpectRollback()
 	second, err := store.Reject(t.Context(), command)
@@ -349,7 +349,7 @@ func TestDatabaseConfirmationRejectLateExpiryTerminalizesBeforeReturning(t *test
 	conflictCommand := command
 	conflictCommand.Reason = "different"
 	mock.ExpectBegin()
-	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")).WithArgs(testConfirmationOwner + "\x00reject\x00" + key).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")).WithArgs(canonicalAdvisoryLockIdentity("agent-confirmation", testConfirmationOwner, "reject", key)).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT request_digest,response_json FROM agent_confirmation_replays")).WithArgs(testConfirmationOwner, "reject", key).WillReturnRows(sqlmock.NewRows([]string{"request_digest", "response_json"}).AddRow(string(confirmation.RequestDigestForReject(command)), terminalConfirmationReplayJSON(t, expired)))
 	mock.ExpectRollback()
 	if _, err = store.Reject(t.Context(), conflictCommand); !errors.Is(err, confirmation.ErrIdempotencyConflict) {
@@ -457,7 +457,7 @@ func TestDatabaseConfirmationConsumeRejectsExpiredApprovalBeforeReservation(t *t
 		t.Fatalf("expected expired rejection, got %v", err)
 	}
 	mock.ExpectBegin()
-	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")).WithArgs(testConfirmationOwner + "\x00consume\x00" + key).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")).WithArgs(canonicalAdvisoryLockIdentity("agent-confirmation", testConfirmationOwner, "consume", key)).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT request_digest,response_json FROM agent_confirmation_replays")).WithArgs(testConfirmationOwner, "consume", key).WillReturnRows(sqlmock.NewRows([]string{"request_digest", "response_json"}).AddRow(string(confirmation.RequestDigestForConsume(command)), terminalConfirmationReplayJSON(t, expired)))
 	mock.ExpectRollback()
 	second, err := store.Consume(t.Context(), command)
@@ -467,7 +467,7 @@ func TestDatabaseConfirmationConsumeRejectsExpiredApprovalBeforeReservation(t *t
 	conflictCommand := command
 	conflictCommand.ExpectedTaskRevision = 10
 	mock.ExpectBegin()
-	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")).WithArgs(testConfirmationOwner + "\x00consume\x00" + key).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")).WithArgs(canonicalAdvisoryLockIdentity("agent-confirmation", testConfirmationOwner, "consume", key)).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT request_digest,response_json FROM agent_confirmation_replays")).WithArgs(testConfirmationOwner, "consume", key).WillReturnRows(sqlmock.NewRows([]string{"request_digest", "response_json"}).AddRow(string(confirmation.RequestDigestForConsume(command)), terminalConfirmationReplayJSON(t, expired)))
 	mock.ExpectRollback()
 	if _, err = store.Consume(t.Context(), conflictCommand); !errors.Is(err, confirmation.ErrIdempotencyConflict) {
@@ -530,7 +530,7 @@ func TestDatabaseConfirmationConsumePersistsReplayWithReservation(t *testing.T) 
 	}
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")).
-		WithArgs(testConfirmationOwner + "\x00consume\x00" + key).
+		WithArgs(canonicalAdvisoryLockIdentity("agent-confirmation", testConfirmationOwner, "consume", key)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT request_digest,response_json FROM agent_confirmation_replays")).
 		WithArgs(testConfirmationOwner, "consume", key).

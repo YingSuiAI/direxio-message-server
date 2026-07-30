@@ -76,7 +76,7 @@ func testDatabaseTaskRows(t *testing.T, value testDatabaseTaskRow) *sqlmock.Rows
 
 func expectTaskReplayMiss(mock sqlmock.Sqlmock, owner, operation, key string) {
 	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")).
-		WithArgs(owner + "\x00task\x00" + operation + "\x00" + key).
+		WithArgs(canonicalAdvisoryLockIdentity("agent-task", owner, operation, key)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT request_digest,response_json FROM agent_task_replays")).
 		WithArgs(owner, operation, key).
@@ -152,7 +152,7 @@ func TestDatabaseTaskCreateSerializesAndReplaysFullSnapshot(t *testing.T) {
 	// and receives the original immutable response without reading task state.
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")).
-		WithArgs(testTaskOwnerA + "\x00task\x00create\x00" + key).
+		WithArgs(canonicalAdvisoryLockIdentity("agent-task", testTaskOwnerA, "create", key)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT request_digest,response_json FROM agent_task_replays")).
 		WithArgs(testTaskOwnerA, "create", key).
@@ -178,7 +178,7 @@ func TestDatabaseTaskCreateSerializesAndReplaysFullSnapshot(t *testing.T) {
 	conflict.Mutation.RequestDigest = strings.Repeat("b", 64)
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")).
-		WithArgs(testTaskOwnerA + "\x00task\x00create\x00" + key).
+		WithArgs(canonicalAdvisoryLockIdentity("agent-task", testTaskOwnerA, "create", key)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT request_digest,response_json FROM agent_task_replays")).
 		WithArgs(testTaskOwnerA, "create", key).
@@ -268,7 +268,7 @@ func TestDatabaseTaskCancelPersistsAtomicReplayBeforeMutableChecks(t *testing.T)
 	retry.At = at.Add(time.Minute)
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")).
-		WithArgs(testTaskOwnerA + "\x00task\x00cancel\x00" + key).
+		WithArgs(canonicalAdvisoryLockIdentity("agent-task", testTaskOwnerA, "cancel", key)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT request_digest,response_json FROM agent_task_replays")).
 		WithArgs(testTaskOwnerA, "cancel", key).
@@ -286,7 +286,7 @@ func TestDatabaseTaskCancelPersistsAtomicReplayBeforeMutableChecks(t *testing.T)
 	conflict.Reason = "different reason"
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")).
-		WithArgs(testTaskOwnerA + "\x00task\x00cancel\x00" + key).
+		WithArgs(canonicalAdvisoryLockIdentity("agent-task", testTaskOwnerA, "cancel", key)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT request_digest,response_json FROM agent_task_replays")).
 		WithArgs(testTaskOwnerA, "cancel", key).
@@ -386,7 +386,7 @@ func TestDatabaseTaskRetryPersistsSuccessorEventAndReplayAtomically(t *testing.T
 		WithArgs(testTaskID).
 		WillReturnRows(sqlmock.NewRows([]string{"owner_id"}).AddRow(testTaskOwnerA))
 	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")).
-		WithArgs(testTaskOwnerA + "\x00task\x00retry\x00" + key).
+		WithArgs(canonicalAdvisoryLockIdentity("agent-task", testTaskOwnerA, "retry", key)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT request_digest,response_json FROM agent_task_replays")).
 		WithArgs(testTaskOwnerA, "retry", key).
@@ -407,7 +407,7 @@ func TestDatabaseTaskRetryPersistsSuccessorEventAndReplayAtomically(t *testing.T
 		WithArgs(testTaskID).
 		WillReturnRows(sqlmock.NewRows([]string{"owner_id"}).AddRow(testTaskOwnerA))
 	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")).
-		WithArgs(testTaskOwnerA + "\x00task\x00retry\x00" + key).
+		WithArgs(canonicalAdvisoryLockIdentity("agent-task", testTaskOwnerA, "retry", key)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT request_digest,response_json FROM agent_task_replays")).
 		WithArgs(testTaskOwnerA, "retry", key).

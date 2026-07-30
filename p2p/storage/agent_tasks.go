@@ -176,7 +176,7 @@ func lockTaskReplayTx(ctx context.Context, tx *sql.Tx, owner, operation, key str
 	if err != nil || canonicalKey != key {
 		return task.ErrInvalid
 	}
-	lockKey := strings.TrimSpace(owner) + "\x00task\x00" + operation + "\x00" + canonicalKey
+	lockKey := canonicalAdvisoryLockIdentity("agent-task", strings.TrimSpace(owner), operation, canonicalKey)
 	_, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, lockKey)
 	return err
 }

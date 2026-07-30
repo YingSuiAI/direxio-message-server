@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -431,26 +430,6 @@ func stringDigest(v any) string {
 	b, _ := json.Marshal(v)
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
-}
-
-// canonicalAdvisoryLockIdentity returns a deterministic, collision-safe and
-// NUL-free identity for PostgreSQL advisory locks. Length-prefixing each
-// component keeps distinct part boundaries distinct before hashing, while the
-// explicit domain prevents unrelated lock namespaces from sharing identities.
-func canonicalAdvisoryLockIdentity(domain string, parts ...string) string {
-	h := sha256.New()
-	var length [8]byte
-	writePart := func(part string) {
-		value := []byte(part)
-		binary.BigEndian.PutUint64(length[:], uint64(len(value)))
-		_, _ = h.Write(length[:])
-		_, _ = h.Write(value)
-	}
-	writePart(domain)
-	for _, part := range parts {
-		writePart(part)
-	}
-	return hex.EncodeToString(h.Sum(nil))
 }
 
 // ReplayCredential reads the durable response snapshot before a caller tries
