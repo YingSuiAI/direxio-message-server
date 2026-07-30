@@ -1966,7 +1966,168 @@
         },
         "response": {
           "confirmation": {
-            "type": "object"
+            "type": "object",
+            "required": true,
+            "properties": {
+              "binding": {
+                "type": "object",
+                "required": true,
+                "properties": {
+                  "content_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "execution_digest": {
+                    "type": "string"
+                  },
+                  "manifest_digest": {
+                    "type": "string"
+                  },
+                  "network_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "network_grants": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "operation_domain": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "owner_id": {
+                    "type": "string"
+                  },
+                  "parameter_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "permission_digest": {
+                    "type": "string"
+                  },
+                  "secret_grant_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "secret_grants": {
+                    "type": "array",
+                    "required": true,
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "binding_digest": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "purpose": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "reference_id": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "secret_revision": {
+                          "type": "integer",
+                          "presence": {
+                            "present": "positive_integer",
+                            "empty": "omitted"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "selected_command": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "selected_tool": {
+                    "type": "string"
+                  },
+                  "source_commit": {
+                    "type": "string"
+                  },
+                  "source_version": {
+                    "type": "string"
+                  },
+                  "target_id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "target_kind": {
+                    "type": "string"
+                  },
+                  "target_revision": {
+                    "type": "integer",
+                    "required": true,
+                    "presence": {
+                      "present": "positive_integer"
+                    }
+                  }
+                }
+              },
+              "confirmation_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "created_at": {
+                "type": "string",
+                "required": true
+              },
+              "expected_workload_revision": {
+                "type": "integer",
+                "presence": {
+                  "omitted": "when_no_workload_fence",
+                  "present": "nonnegative_integer"
+                }
+              },
+              "expires_at": {
+                "type": "string",
+                "required": true
+              },
+              "revision": {
+                "type": "integer",
+                "required": true,
+                "presence": {
+                  "present": "positive_integer"
+                }
+              },
+              "state": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "one_of:pending|confirmed|consumed|rejected|expired",
+                  "empty": "rejected"
+                }
+              },
+              "task_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "terminal_code": {
+                "type": "string"
+              },
+              "terminal_note": {
+                "type": "string"
+              },
+              "terminal_reason": {
+                "type": "string"
+              },
+              "updated_at": {
+                "type": "string",
+                "required": true
+              }
+            }
           }
         }
       }
@@ -2006,7 +2167,167 @@
           "confirmations": {
             "type": "array",
             "items": {
-              "type": "object"
+              "type": "object",
+              "properties": {
+                "binding": {
+                  "type": "object",
+                  "required": true,
+                  "properties": {
+                    "content_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "execution_digest": {
+                      "type": "string"
+                    },
+                    "manifest_digest": {
+                      "type": "string"
+                    },
+                    "network_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "network_grants": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "operation_domain": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "owner_id": {
+                      "type": "string"
+                    },
+                    "parameter_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "permission_digest": {
+                      "type": "string"
+                    },
+                    "secret_grant_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "secret_grants": {
+                      "type": "array",
+                      "required": true,
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "binding_digest": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "purpose": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "reference_id": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "secret_revision": {
+                            "type": "integer",
+                            "presence": {
+                              "present": "positive_integer",
+                              "empty": "omitted"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "selected_command": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "selected_tool": {
+                      "type": "string"
+                    },
+                    "source_commit": {
+                      "type": "string"
+                    },
+                    "source_version": {
+                      "type": "string"
+                    },
+                    "target_id": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "target_kind": {
+                      "type": "string"
+                    },
+                    "target_revision": {
+                      "type": "integer",
+                      "required": true,
+                      "presence": {
+                        "present": "positive_integer"
+                      }
+                    }
+                  }
+                },
+                "confirmation_id": {
+                  "type": "string",
+                  "required": true,
+                  "presence": {
+                    "present": "canonical_uuid"
+                  }
+                },
+                "created_at": {
+                  "type": "string",
+                  "required": true
+                },
+                "expected_workload_revision": {
+                  "type": "integer",
+                  "presence": {
+                    "omitted": "when_no_workload_fence",
+                    "present": "nonnegative_integer"
+                  }
+                },
+                "expires_at": {
+                  "type": "string",
+                  "required": true
+                },
+                "revision": {
+                  "type": "integer",
+                  "required": true,
+                  "presence": {
+                    "present": "positive_integer"
+                  }
+                },
+                "state": {
+                  "type": "string",
+                  "required": true,
+                  "presence": {
+                    "present": "one_of:pending|confirmed|consumed|rejected|expired",
+                    "empty": "rejected"
+                  }
+                },
+                "task_id": {
+                  "type": "string",
+                  "required": true,
+                  "presence": {
+                    "present": "canonical_uuid"
+                  }
+                },
+                "terminal_code": {
+                  "type": "string"
+                },
+                "terminal_note": {
+                  "type": "string"
+                },
+                "terminal_reason": {
+                  "type": "string"
+                },
+                "updated_at": {
+                  "type": "string",
+                  "required": true
+                }
+              }
             }
           },
           "next_page_token": {
@@ -2036,7 +2357,168 @@
         },
         "response": {
           "confirmation": {
-            "type": "object"
+            "type": "object",
+            "required": true,
+            "properties": {
+              "binding": {
+                "type": "object",
+                "required": true,
+                "properties": {
+                  "content_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "execution_digest": {
+                    "type": "string"
+                  },
+                  "manifest_digest": {
+                    "type": "string"
+                  },
+                  "network_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "network_grants": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "operation_domain": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "owner_id": {
+                    "type": "string"
+                  },
+                  "parameter_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "permission_digest": {
+                    "type": "string"
+                  },
+                  "secret_grant_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "secret_grants": {
+                    "type": "array",
+                    "required": true,
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "binding_digest": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "purpose": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "reference_id": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "secret_revision": {
+                          "type": "integer",
+                          "presence": {
+                            "present": "positive_integer",
+                            "empty": "omitted"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "selected_command": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "selected_tool": {
+                    "type": "string"
+                  },
+                  "source_commit": {
+                    "type": "string"
+                  },
+                  "source_version": {
+                    "type": "string"
+                  },
+                  "target_id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "target_kind": {
+                    "type": "string"
+                  },
+                  "target_revision": {
+                    "type": "integer",
+                    "required": true,
+                    "presence": {
+                      "present": "positive_integer"
+                    }
+                  }
+                }
+              },
+              "confirmation_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "created_at": {
+                "type": "string",
+                "required": true
+              },
+              "expected_workload_revision": {
+                "type": "integer",
+                "presence": {
+                  "omitted": "when_no_workload_fence",
+                  "present": "nonnegative_integer"
+                }
+              },
+              "expires_at": {
+                "type": "string",
+                "required": true
+              },
+              "revision": {
+                "type": "integer",
+                "required": true,
+                "presence": {
+                  "present": "positive_integer"
+                }
+              },
+              "state": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "one_of:pending|confirmed|consumed|rejected|expired",
+                  "empty": "rejected"
+                }
+              },
+              "task_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "terminal_code": {
+                "type": "string"
+              },
+              "terminal_note": {
+                "type": "string"
+              },
+              "terminal_reason": {
+                "type": "string"
+              },
+              "updated_at": {
+                "type": "string",
+                "required": true
+              }
+            }
           }
         }
       }
@@ -2062,7 +2544,168 @@
         },
         "response": {
           "confirmation": {
-            "type": "object"
+            "type": "object",
+            "required": true,
+            "properties": {
+              "binding": {
+                "type": "object",
+                "required": true,
+                "properties": {
+                  "content_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "execution_digest": {
+                    "type": "string"
+                  },
+                  "manifest_digest": {
+                    "type": "string"
+                  },
+                  "network_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "network_grants": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "operation_domain": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "owner_id": {
+                    "type": "string"
+                  },
+                  "parameter_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "permission_digest": {
+                    "type": "string"
+                  },
+                  "secret_grant_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "secret_grants": {
+                    "type": "array",
+                    "required": true,
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "binding_digest": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "purpose": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "reference_id": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "secret_revision": {
+                          "type": "integer",
+                          "presence": {
+                            "present": "positive_integer",
+                            "empty": "omitted"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "selected_command": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "selected_tool": {
+                    "type": "string"
+                  },
+                  "source_commit": {
+                    "type": "string"
+                  },
+                  "source_version": {
+                    "type": "string"
+                  },
+                  "target_id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "target_kind": {
+                    "type": "string"
+                  },
+                  "target_revision": {
+                    "type": "integer",
+                    "required": true,
+                    "presence": {
+                      "present": "positive_integer"
+                    }
+                  }
+                }
+              },
+              "confirmation_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "created_at": {
+                "type": "string",
+                "required": true
+              },
+              "expected_workload_revision": {
+                "type": "integer",
+                "presence": {
+                  "omitted": "when_no_workload_fence",
+                  "present": "nonnegative_integer"
+                }
+              },
+              "expires_at": {
+                "type": "string",
+                "required": true
+              },
+              "revision": {
+                "type": "integer",
+                "required": true,
+                "presence": {
+                  "present": "positive_integer"
+                }
+              },
+              "state": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "one_of:pending|confirmed|consumed|rejected|expired",
+                  "empty": "rejected"
+                }
+              },
+              "task_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "terminal_code": {
+                "type": "string"
+              },
+              "terminal_note": {
+                "type": "string"
+              },
+              "terminal_reason": {
+                "type": "string"
+              },
+              "updated_at": {
+                "type": "string",
+                "required": true
+              }
+            }
           }
         }
       }
@@ -5193,7 +5836,174 @@
         "response": {
           "confirmation": {
             "type": "object",
-            "required": true
+            "required": true,
+            "properties": {
+              "binding": {
+                "type": "object",
+                "required": true,
+                "properties": {
+                  "content_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "execution_digest": {
+                    "type": "string"
+                  },
+                  "manifest_digest": {
+                    "type": "string"
+                  },
+                  "network_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "network_grants": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "operation_domain": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "owner_id": {
+                    "type": "string"
+                  },
+                  "parameter_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "permission_digest": {
+                    "type": "string"
+                  },
+                  "secret_grant_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "secret_grants": {
+                    "type": "array",
+                    "required": true,
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "binding_digest": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "purpose": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "reference_id": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "secret_revision": {
+                          "type": "integer",
+                          "presence": {
+                            "present": "positive_integer",
+                            "empty": "omitted"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "selected_command": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "selected_tool": {
+                    "type": "string"
+                  },
+                  "source_commit": {
+                    "type": "string"
+                  },
+                  "source_version": {
+                    "type": "string"
+                  },
+                  "target_id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "target_kind": {
+                    "type": "string"
+                  },
+                  "target_revision": {
+                    "type": "integer",
+                    "required": true,
+                    "presence": {
+                      "present": "positive_integer"
+                    }
+                  }
+                }
+              },
+              "confirmation_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "created_at": {
+                "type": "string",
+                "required": true
+              },
+              "expected_workload_revision": {
+                "type": "integer",
+                "presence": {
+                  "omitted": "when_no_workload_fence",
+                  "present": "nonnegative_integer"
+                }
+              },
+              "expires_at": {
+                "type": "string",
+                "required": true
+              },
+              "revision": {
+                "type": "integer",
+                "required": true,
+                "presence": {
+                  "present": "positive_integer"
+                }
+              },
+              "state": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "one_of:pending|confirmed|consumed|rejected|expired",
+                  "empty": "rejected"
+                }
+              },
+              "task_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "terminal_code": {
+                "type": "string"
+              },
+              "terminal_note": {
+                "type": "string"
+              },
+              "terminal_reason": {
+                "type": "string"
+              },
+              "updated_at": {
+                "type": "string",
+                "required": true
+              }
+            }
+          },
+          "expected_workload_revision": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "nonnegative_integer"
+            }
           },
           "operation": {
             "type": "object",
@@ -5616,6 +6426,13 @@
                 "type": "string",
                 "required": true
               },
+              "expected_workload_revision": {
+                "type": "integer",
+                "required": true,
+                "presence": {
+                  "present": "nonnegative_integer"
+                }
+              },
               "failure_code": {
                 "type": "string",
                 "required": true
@@ -5648,7 +6465,35 @@
                 "type": "integer",
                 "required": true
               },
+              "secret_grant_refs": {
+                "type": "array",
+                "required": true,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "binding_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "purpose": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "reference_id": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "secret_revision": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              },
               "status": {
+                "type": "string",
+                "required": true
+              },
+              "summary": {
                 "type": "string",
                 "required": true
               },
@@ -5698,7 +6543,174 @@
         "response": {
           "confirmation": {
             "type": "object",
-            "required": true
+            "required": true,
+            "properties": {
+              "binding": {
+                "type": "object",
+                "required": true,
+                "properties": {
+                  "content_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "execution_digest": {
+                    "type": "string"
+                  },
+                  "manifest_digest": {
+                    "type": "string"
+                  },
+                  "network_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "network_grants": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "operation_domain": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "owner_id": {
+                    "type": "string"
+                  },
+                  "parameter_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "permission_digest": {
+                    "type": "string"
+                  },
+                  "secret_grant_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "secret_grants": {
+                    "type": "array",
+                    "required": true,
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "binding_digest": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "purpose": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "reference_id": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "secret_revision": {
+                          "type": "integer",
+                          "presence": {
+                            "present": "positive_integer",
+                            "empty": "omitted"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "selected_command": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "selected_tool": {
+                    "type": "string"
+                  },
+                  "source_commit": {
+                    "type": "string"
+                  },
+                  "source_version": {
+                    "type": "string"
+                  },
+                  "target_id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "target_kind": {
+                    "type": "string"
+                  },
+                  "target_revision": {
+                    "type": "integer",
+                    "required": true,
+                    "presence": {
+                      "present": "positive_integer"
+                    }
+                  }
+                }
+              },
+              "confirmation_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "created_at": {
+                "type": "string",
+                "required": true
+              },
+              "expected_workload_revision": {
+                "type": "integer",
+                "presence": {
+                  "omitted": "when_no_workload_fence",
+                  "present": "nonnegative_integer"
+                }
+              },
+              "expires_at": {
+                "type": "string",
+                "required": true
+              },
+              "revision": {
+                "type": "integer",
+                "required": true,
+                "presence": {
+                  "present": "positive_integer"
+                }
+              },
+              "state": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "one_of:pending|confirmed|consumed|rejected|expired",
+                  "empty": "rejected"
+                }
+              },
+              "task_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "terminal_code": {
+                "type": "string"
+              },
+              "terminal_note": {
+                "type": "string"
+              },
+              "terminal_reason": {
+                "type": "string"
+              },
+              "updated_at": {
+                "type": "string",
+                "required": true
+              }
+            }
+          },
+          "expected_workload_revision": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "nonnegative_integer"
+            }
           },
           "operation": {
             "type": "object",
@@ -6121,6 +7133,13 @@
                 "type": "string",
                 "required": true
               },
+              "expected_workload_revision": {
+                "type": "integer",
+                "required": true,
+                "presence": {
+                  "present": "nonnegative_integer"
+                }
+              },
               "failure_code": {
                 "type": "string",
                 "required": true
@@ -6153,7 +7172,35 @@
                 "type": "integer",
                 "required": true
               },
+              "secret_grant_refs": {
+                "type": "array",
+                "required": true,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "binding_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "purpose": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "reference_id": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "secret_revision": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              },
               "status": {
+                "type": "string",
+                "required": true
+              },
+              "summary": {
                 "type": "string",
                 "required": true
               },
@@ -6615,6 +7662,13 @@
                 "type": "string",
                 "required": true
               },
+              "expected_workload_revision": {
+                "type": "integer",
+                "required": true,
+                "presence": {
+                  "present": "nonnegative_integer"
+                }
+              },
               "failure_code": {
                 "type": "string",
                 "required": true
@@ -6647,7 +7701,35 @@
                 "type": "integer",
                 "required": true
               },
+              "secret_grant_refs": {
+                "type": "array",
+                "required": true,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "binding_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "purpose": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "reference_id": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "secret_revision": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              },
               "status": {
+                "type": "string",
+                "required": true
+              },
+              "summary": {
                 "type": "string",
                 "required": true
               },
@@ -6874,6 +7956,531 @@
                   "type": "string",
                   "required": true
                 }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.workloads.operations.reconcile",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "operation_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "operation": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "actual": {
+                "type": "object",
+                "properties": {
+                  "applied_plan_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "applied_plan_id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "identity": {
+                    "type": "object",
+                    "required": true,
+                    "properties": {
+                      "aws_account_id": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "aws_ec2_document_version": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "aws_ec2_required_instance_tags": {
+                        "type": "object",
+                        "required": true
+                      },
+                      "aws_ec2_systemd_service": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "aws_ecs_assign_public_ip": {
+                        "type": "boolean",
+                        "required": true
+                      },
+                      "aws_ecs_cluster_arn": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "aws_ecs_desired_count": {
+                        "type": "integer",
+                        "required": true
+                      },
+                      "aws_ecs_execution_role_arn": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "aws_ecs_image_uri": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "aws_ecs_platform_version": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "aws_ecs_security_group_ids": {
+                        "type": "array",
+                        "required": true,
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "aws_ecs_service_name": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "aws_ecs_subnet_ids": {
+                        "type": "array",
+                        "required": true,
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "aws_ecs_target_group_arn": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "aws_ecs_target_group_port": {
+                        "type": "integer",
+                        "required": true
+                      },
+                      "aws_ecs_task_family": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "aws_ecs_task_role_arn": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "aws_region": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "cluster": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "core_runner_id": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "core_runner_service": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "desired_count": {
+                        "type": "integer",
+                        "required": true
+                      },
+                      "endpoint": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "image_digest": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "instance_id": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "kind": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "service": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "task_definition_revision": {
+                        "type": "string",
+                        "required": true
+                      }
+                    }
+                  },
+                  "observed_at": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "provider_version": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "readback_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "revision": {
+                    "type": "integer",
+                    "required": true
+                  },
+                  "state": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "updated_at": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "workload_id": {
+                    "type": "string",
+                    "required": true
+                  }
+                }
+              },
+              "confirmation_id": {
+                "type": "string",
+                "required": true
+              },
+              "created_at": {
+                "type": "string",
+                "required": true
+              },
+              "desired_plan": {
+                "type": "object",
+                "required": true,
+                "properties": {
+                  "plan_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "plan_id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "plan_revision": {
+                    "type": "integer",
+                    "required": true
+                  },
+                  "resource_limits": {
+                    "type": "object",
+                    "required": true,
+                    "properties": {
+                      "cpu": {
+                        "type": "integer",
+                        "required": true
+                      },
+                      "disk_mb": {
+                        "type": "integer",
+                        "required": true
+                      },
+                      "memory_mb": {
+                        "type": "integer",
+                        "required": true
+                      },
+                      "output_mb": {
+                        "type": "integer",
+                        "required": true
+                      },
+                      "processes": {
+                        "type": "integer",
+                        "required": true
+                      },
+                      "timeout_seconds": {
+                        "type": "integer",
+                        "required": true
+                      }
+                    }
+                  },
+                  "secret_grants": {
+                    "type": "array",
+                    "required": true,
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "binding_digest": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "purpose": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "reference_id": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "secret_revision": {
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  },
+                  "target": {
+                    "type": "object",
+                    "required": true,
+                    "properties": {
+                      "identity": {
+                        "type": "object",
+                        "required": true,
+                        "properties": {
+                          "aws_account_id": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "aws_ec2_document_version": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "aws_ec2_required_instance_tags": {
+                            "type": "object",
+                            "required": true
+                          },
+                          "aws_ec2_systemd_service": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "aws_ecs_assign_public_ip": {
+                            "type": "boolean",
+                            "required": true
+                          },
+                          "aws_ecs_cluster_arn": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "aws_ecs_desired_count": {
+                            "type": "integer",
+                            "required": true
+                          },
+                          "aws_ecs_execution_role_arn": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "aws_ecs_image_uri": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "aws_ecs_platform_version": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "aws_ecs_security_group_ids": {
+                            "type": "array",
+                            "required": true,
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "aws_ecs_service_name": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "aws_ecs_subnet_ids": {
+                            "type": "array",
+                            "required": true,
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "aws_ecs_target_group_arn": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "aws_ecs_target_group_port": {
+                            "type": "integer",
+                            "required": true
+                          },
+                          "aws_ecs_task_family": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "aws_ecs_task_role_arn": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "aws_region": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "cluster": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "core_runner_id": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "core_runner_service": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "desired_count": {
+                            "type": "integer",
+                            "required": true
+                          },
+                          "endpoint": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "image_digest": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "instance_id": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "kind": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "service": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "task_definition_revision": {
+                            "type": "string",
+                            "required": true
+                          }
+                        }
+                      },
+                      "labels": {
+                        "type": "object",
+                        "required": true
+                      },
+                      "network_grants": {
+                        "type": "array",
+                        "required": true,
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "required": true
+                            },
+                            "reference_id": {
+                              "type": "string",
+                              "required": true
+                            }
+                          }
+                        }
+                      },
+                      "ports": {
+                        "type": "array",
+                        "required": true,
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "port": {
+                              "type": "integer",
+                              "required": true
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "dispatch_epoch": {
+                "type": "integer",
+                "required": true
+              },
+              "dispatch_lease_until": {
+                "type": "string",
+                "required": true
+              },
+              "expected_workload_revision": {
+                "type": "integer",
+                "required": true,
+                "presence": {
+                  "present": "nonnegative_integer"
+                }
+              },
+              "failure_code": {
+                "type": "string",
+                "required": true
+              },
+              "failure_summary": {
+                "type": "string",
+                "required": true
+              },
+              "kind": {
+                "type": "string",
+                "required": true
+              },
+              "operation_id": {
+                "type": "string",
+                "required": true
+              },
+              "plan_digest": {
+                "type": "string",
+                "required": true
+              },
+              "plan_id": {
+                "type": "string",
+                "required": true
+              },
+              "plan_revision": {
+                "type": "integer",
+                "required": true
+              },
+              "revision": {
+                "type": "integer",
+                "required": true
+              },
+              "secret_grant_refs": {
+                "type": "array",
+                "required": true,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "binding_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "purpose": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "reference_id": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "secret_revision": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              },
+              "status": {
+                "type": "string",
+                "required": true
+              },
+              "summary": {
+                "type": "string",
+                "required": true
+              },
+              "target_kind": {
+                "type": "string",
+                "required": true
+              },
+              "task_id": {
+                "type": "string",
+                "required": true
+              },
+              "updated_at": {
+                "type": "string",
+                "required": true
+              },
+              "workload_id": {
+                "type": "string",
+                "required": true
               }
             }
           }
@@ -7272,7 +8879,74 @@
         },
         "response": {
           "credential": {
-            "type": "object"
+            "type": "object",
+            "required": true,
+            "properties": {
+              "access_key_configured": {
+                "type": "boolean",
+                "required": true
+              },
+              "account_id": {
+                "type": "string",
+                "required": true
+              },
+              "created_at": {
+                "type": "string",
+                "required": true
+              },
+              "credential_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "name": {
+                "type": "string",
+                "required": true
+              },
+              "region": {
+                "type": "string",
+                "required": true
+              },
+              "revision": {
+                "type": "integer",
+                "required": true,
+                "presence": {
+                  "present": "positive_integer"
+                }
+              },
+              "secret_access_key_configured": {
+                "type": "boolean",
+                "required": true
+              },
+              "session_token_configured": {
+                "type": "boolean",
+                "required": true
+              },
+              "tested_at": {
+                "type": "string",
+                "presence": {
+                  "omitted": "when_verified_revision_differs",
+                  "present": "when_verified_revision_matches_revision"
+                }
+              },
+              "updated_at": {
+                "type": "string",
+                "required": true
+              },
+              "user_arn": {
+                "type": "string",
+                "required": true
+              },
+              "verified_revision": {
+                "type": "integer",
+                "required": true,
+                "presence": {
+                  "present": "nonnegative_integer"
+                }
+              }
+            }
           }
         }
       }
@@ -7316,7 +8990,74 @@
         },
         "response": {
           "credential": {
-            "type": "object"
+            "type": "object",
+            "required": true,
+            "properties": {
+              "access_key_configured": {
+                "type": "boolean",
+                "required": true
+              },
+              "account_id": {
+                "type": "string",
+                "required": true
+              },
+              "created_at": {
+                "type": "string",
+                "required": true
+              },
+              "credential_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "name": {
+                "type": "string",
+                "required": true
+              },
+              "region": {
+                "type": "string",
+                "required": true
+              },
+              "revision": {
+                "type": "integer",
+                "required": true,
+                "presence": {
+                  "present": "positive_integer"
+                }
+              },
+              "secret_access_key_configured": {
+                "type": "boolean",
+                "required": true
+              },
+              "session_token_configured": {
+                "type": "boolean",
+                "required": true
+              },
+              "tested_at": {
+                "type": "string",
+                "presence": {
+                  "omitted": "when_verified_revision_differs",
+                  "present": "when_verified_revision_matches_revision"
+                }
+              },
+              "updated_at": {
+                "type": "string",
+                "required": true
+              },
+              "user_arn": {
+                "type": "string",
+                "required": true
+              },
+              "verified_revision": {
+                "type": "integer",
+                "required": true,
+                "presence": {
+                  "present": "nonnegative_integer"
+                }
+              }
+            }
           }
         }
       }
@@ -7375,8 +9116,75 @@
         "response": {
           "credentials": {
             "type": "array",
+            "required": true,
             "items": {
-              "type": "object"
+              "type": "object",
+              "properties": {
+                "access_key_configured": {
+                  "type": "boolean",
+                  "required": true
+                },
+                "account_id": {
+                  "type": "string",
+                  "required": true
+                },
+                "created_at": {
+                  "type": "string",
+                  "required": true
+                },
+                "credential_id": {
+                  "type": "string",
+                  "required": true,
+                  "presence": {
+                    "present": "canonical_uuid"
+                  }
+                },
+                "name": {
+                  "type": "string",
+                  "required": true
+                },
+                "region": {
+                  "type": "string",
+                  "required": true
+                },
+                "revision": {
+                  "type": "integer",
+                  "required": true,
+                  "presence": {
+                    "present": "positive_integer"
+                  }
+                },
+                "secret_access_key_configured": {
+                  "type": "boolean",
+                  "required": true
+                },
+                "session_token_configured": {
+                  "type": "boolean",
+                  "required": true
+                },
+                "tested_at": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "when_verified_revision_differs",
+                    "present": "when_verified_revision_matches_revision"
+                  }
+                },
+                "updated_at": {
+                  "type": "string",
+                  "required": true
+                },
+                "user_arn": {
+                  "type": "string",
+                  "required": true
+                },
+                "verified_revision": {
+                  "type": "integer",
+                  "required": true,
+                  "presence": {
+                    "present": "nonnegative_integer"
+                  }
+                }
+              }
             }
           },
           "next_page_token": {
@@ -7559,6 +9367,3631 @@
           },
           "status": {
             "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.aws.ec2_provisions.plan",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "acknowledge_public_exposure": {
+            "type": "boolean",
+            "required": true,
+            "presence": {
+              "present": "must_be_true",
+              "empty": "rejected"
+            }
+          },
+          "credential_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid",
+              "empty": "rejected"
+            }
+          },
+          "display_name": {
+            "type": "string",
+            "required": true
+          },
+          "expected_credential_revision": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "positive_integer",
+              "empty": "rejected"
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid",
+              "empty": "rejected"
+            }
+          },
+          "instance_type": {
+            "type": "string",
+            "required": true
+          },
+          "public_http": {
+            "type": "boolean",
+            "required": true
+          },
+          "region": {
+            "type": "string",
+            "required": true
+          },
+          "stack_name": {
+            "type": "string",
+            "required": true
+          },
+          "volume_gib": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "positive_integer",
+              "empty": "rejected"
+            }
+          }
+        },
+        "response": {
+          "plan": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "acknowledge_public_exposure": {
+                "type": "boolean",
+                "required": true
+              },
+              "content_digest": {
+                "type": "string",
+                "required": true
+              },
+              "created_at": {
+                "type": "string",
+                "required": true
+              },
+              "credential_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "credential_revision": {
+                "type": "integer",
+                "required": true,
+                "presence": {
+                  "present": "positive_integer"
+                }
+              },
+              "display_name": {
+                "type": "string",
+                "required": true
+              },
+              "instance_type": {
+                "type": "string",
+                "required": true
+              },
+              "network_digest": {
+                "type": "string",
+                "required": true
+              },
+              "operation": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "one_of:create|delete",
+                  "empty": "rejected"
+                }
+              },
+              "parameter_digest": {
+                "type": "string",
+                "required": true
+              },
+              "plan_digest": {
+                "type": "string",
+                "required": true
+              },
+              "plan_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "public_http": {
+                "type": "boolean",
+                "required": true
+              },
+              "region": {
+                "type": "string",
+                "required": true
+              },
+              "revision": {
+                "type": "integer",
+                "required": true,
+                "presence": {
+                  "present": "positive_integer"
+                }
+              },
+              "secret_grant_digest": {
+                "type": "string",
+                "required": true
+              },
+              "stack_name": {
+                "type": "string",
+                "required": true
+              },
+              "target_id": {
+                "type": "string",
+                "required": true
+              },
+              "template_sha256": {
+                "type": "string",
+                "required": true
+              },
+              "volume_gib": {
+                "type": "integer",
+                "required": true
+              }
+            }
+          },
+          "provision": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "active_change_id": {
+                "type": "string",
+                "presence": {
+                  "present": "canonical_uuid",
+                  "empty": "omitted"
+                }
+              },
+              "content_digest": {
+                "type": "string",
+                "presence": {
+                  "present": "immutable_digest",
+                  "empty": "omitted"
+                }
+              },
+              "create_change_id": {
+                "type": "string",
+                "presence": {
+                  "present": "canonical_uuid",
+                  "empty": "omitted"
+                }
+              },
+              "created_at": {
+                "type": "string",
+                "required": true
+              },
+              "credential_binding_digest": {
+                "type": "string",
+                "presence": {
+                  "present": "immutable_digest",
+                  "empty": "omitted"
+                }
+              },
+              "credential_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "credential_revision": {
+                "type": "integer",
+                "required": true,
+                "presence": {
+                  "present": "positive_integer"
+                }
+              },
+              "destroy_change_id": {
+                "type": "string",
+                "presence": {
+                  "present": "canonical_uuid",
+                  "empty": "omitted"
+                }
+              },
+              "error_code": {
+                "type": "string"
+              },
+              "error_summary": {
+                "type": "string"
+              },
+              "network_digest": {
+                "type": "string",
+                "presence": {
+                  "present": "immutable_digest",
+                  "empty": "omitted"
+                }
+              },
+              "parameter_digest": {
+                "type": "string",
+                "presence": {
+                  "present": "immutable_digest",
+                  "empty": "omitted"
+                }
+              },
+              "plan_digest": {
+                "type": "string",
+                "required": true
+              },
+              "plan_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "plan_revision": {
+                "type": "integer",
+                "required": true,
+                "presence": {
+                  "present": "positive_integer"
+                }
+              },
+              "profile": {
+                "type": "string",
+                "required": true
+              },
+              "provision_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "readback": {
+                "type": "object",
+                "properties": {
+                  "instance_id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "observed_at": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "output_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "public_ip": {
+                    "type": "string"
+                  },
+                  "security_group_id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "stack_id": {
+                    "type": "string",
+                    "required": true
+                  }
+                },
+                "presence": {
+                  "omitted": "empty_before_verified_readback",
+                  "present": "verified_readback_only",
+                  "empty": "empty_before_verified_readback"
+                }
+              },
+              "reconciliation_required": {
+                "type": "boolean",
+                "required": true
+              },
+              "region": {
+                "type": "string",
+                "required": true
+              },
+              "revision": {
+                "type": "integer",
+                "required": true,
+                "presence": {
+                  "present": "positive_integer"
+                }
+              },
+              "secret_grant_digest": {
+                "type": "string",
+                "presence": {
+                  "present": "immutable_digest",
+                  "empty": "omitted"
+                }
+              },
+              "stack_name": {
+                "type": "string",
+                "required": true
+              },
+              "state": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "one_of:planned|creating|active|destroying|destroyed|uncertain|failed",
+                  "empty": "rejected"
+                }
+              },
+              "target_id": {
+                "type": "string",
+                "presence": {
+                  "present": "canonical_aws_target",
+                  "empty": "omitted"
+                }
+              },
+              "template_sha256": {
+                "type": "string",
+                "required": true
+              },
+              "updated_at": {
+                "type": "string",
+                "required": true
+              }
+            }
+          },
+          "quote": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "estimated_monthly_usd": {
+                "type": "number",
+                "required": true
+              },
+              "operation": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "one_of:create|delete",
+                  "empty": "rejected"
+                }
+              },
+              "parameter_count": {
+                "type": "integer",
+                "required": true
+              },
+              "plan_digest": {
+                "type": "string",
+                "required": true
+              },
+              "plan_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "price_status": {
+                "type": "string",
+                "required": true
+              },
+              "region": {
+                "type": "string",
+                "required": true
+              },
+              "resource_count": {
+                "type": "integer",
+                "required": true
+              },
+              "stack_name": {
+                "type": "string",
+                "required": true
+              },
+              "summary": {
+                "type": "string",
+                "required": true
+              },
+              "tag_count": {
+                "type": "integer",
+                "required": true
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.aws.ec2_provisions.get",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "provision_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid",
+              "empty": "rejected"
+            }
+          }
+        },
+        "response": {
+          "provision": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "active_change_id": {
+                "type": "string",
+                "presence": {
+                  "present": "canonical_uuid",
+                  "empty": "omitted"
+                }
+              },
+              "content_digest": {
+                "type": "string",
+                "presence": {
+                  "present": "immutable_digest",
+                  "empty": "omitted"
+                }
+              },
+              "create_change_id": {
+                "type": "string",
+                "presence": {
+                  "present": "canonical_uuid",
+                  "empty": "omitted"
+                }
+              },
+              "created_at": {
+                "type": "string",
+                "required": true
+              },
+              "credential_binding_digest": {
+                "type": "string",
+                "presence": {
+                  "present": "immutable_digest",
+                  "empty": "omitted"
+                }
+              },
+              "credential_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "credential_revision": {
+                "type": "integer",
+                "required": true,
+                "presence": {
+                  "present": "positive_integer"
+                }
+              },
+              "destroy_change_id": {
+                "type": "string",
+                "presence": {
+                  "present": "canonical_uuid",
+                  "empty": "omitted"
+                }
+              },
+              "error_code": {
+                "type": "string"
+              },
+              "error_summary": {
+                "type": "string"
+              },
+              "network_digest": {
+                "type": "string",
+                "presence": {
+                  "present": "immutable_digest",
+                  "empty": "omitted"
+                }
+              },
+              "parameter_digest": {
+                "type": "string",
+                "presence": {
+                  "present": "immutable_digest",
+                  "empty": "omitted"
+                }
+              },
+              "plan_digest": {
+                "type": "string",
+                "required": true
+              },
+              "plan_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "plan_revision": {
+                "type": "integer",
+                "required": true,
+                "presence": {
+                  "present": "positive_integer"
+                }
+              },
+              "profile": {
+                "type": "string",
+                "required": true
+              },
+              "provision_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "readback": {
+                "type": "object",
+                "properties": {
+                  "instance_id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "observed_at": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "output_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "public_ip": {
+                    "type": "string"
+                  },
+                  "security_group_id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "stack_id": {
+                    "type": "string",
+                    "required": true
+                  }
+                },
+                "presence": {
+                  "omitted": "empty_before_verified_readback",
+                  "present": "verified_readback_only",
+                  "empty": "empty_before_verified_readback"
+                }
+              },
+              "reconciliation_required": {
+                "type": "boolean",
+                "required": true
+              },
+              "region": {
+                "type": "string",
+                "required": true
+              },
+              "revision": {
+                "type": "integer",
+                "required": true,
+                "presence": {
+                  "present": "positive_integer"
+                }
+              },
+              "secret_grant_digest": {
+                "type": "string",
+                "presence": {
+                  "present": "immutable_digest",
+                  "empty": "omitted"
+                }
+              },
+              "stack_name": {
+                "type": "string",
+                "required": true
+              },
+              "state": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "one_of:planned|creating|active|destroying|destroyed|uncertain|failed",
+                  "empty": "rejected"
+                }
+              },
+              "target_id": {
+                "type": "string",
+                "presence": {
+                  "present": "canonical_aws_target",
+                  "empty": "omitted"
+                }
+              },
+              "template_sha256": {
+                "type": "string",
+                "required": true
+              },
+              "updated_at": {
+                "type": "string",
+                "required": true
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.aws.ec2_provisions.list",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "page_size": {
+            "type": "integer",
+            "presence": {
+              "omitted": "server_default"
+            }
+          },
+          "page_token": {
+            "type": "string",
+            "presence": {
+              "omitted": "first_page"
+            }
+          },
+          "state": {
+            "type": "string",
+            "presence": {
+              "omitted": "all_values",
+              "present": "one_of:planned|creating|active|destroying|destroyed|uncertain|failed",
+              "empty": "rejected"
+            }
+          }
+        },
+        "response": {
+          "next_page_token": {
+            "type": "string"
+          },
+          "provisions": {
+            "type": "array",
+            "required": true,
+            "items": {
+              "type": "object",
+              "properties": {
+                "active_change_id": {
+                  "type": "string",
+                  "presence": {
+                    "present": "canonical_uuid",
+                    "empty": "omitted"
+                  }
+                },
+                "content_digest": {
+                  "type": "string",
+                  "presence": {
+                    "present": "immutable_digest",
+                    "empty": "omitted"
+                  }
+                },
+                "create_change_id": {
+                  "type": "string",
+                  "presence": {
+                    "present": "canonical_uuid",
+                    "empty": "omitted"
+                  }
+                },
+                "created_at": {
+                  "type": "string",
+                  "required": true
+                },
+                "credential_binding_digest": {
+                  "type": "string",
+                  "presence": {
+                    "present": "immutable_digest",
+                    "empty": "omitted"
+                  }
+                },
+                "credential_id": {
+                  "type": "string",
+                  "required": true,
+                  "presence": {
+                    "present": "canonical_uuid"
+                  }
+                },
+                "credential_revision": {
+                  "type": "integer",
+                  "required": true,
+                  "presence": {
+                    "present": "positive_integer"
+                  }
+                },
+                "destroy_change_id": {
+                  "type": "string",
+                  "presence": {
+                    "present": "canonical_uuid",
+                    "empty": "omitted"
+                  }
+                },
+                "error_code": {
+                  "type": "string"
+                },
+                "error_summary": {
+                  "type": "string"
+                },
+                "network_digest": {
+                  "type": "string",
+                  "presence": {
+                    "present": "immutable_digest",
+                    "empty": "omitted"
+                  }
+                },
+                "parameter_digest": {
+                  "type": "string",
+                  "presence": {
+                    "present": "immutable_digest",
+                    "empty": "omitted"
+                  }
+                },
+                "plan_digest": {
+                  "type": "string",
+                  "required": true
+                },
+                "plan_id": {
+                  "type": "string",
+                  "required": true,
+                  "presence": {
+                    "present": "canonical_uuid"
+                  }
+                },
+                "plan_revision": {
+                  "type": "integer",
+                  "required": true,
+                  "presence": {
+                    "present": "positive_integer"
+                  }
+                },
+                "profile": {
+                  "type": "string",
+                  "required": true
+                },
+                "provision_id": {
+                  "type": "string",
+                  "required": true,
+                  "presence": {
+                    "present": "canonical_uuid"
+                  }
+                },
+                "readback": {
+                  "type": "object",
+                  "properties": {
+                    "instance_id": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "observed_at": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "output_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "public_ip": {
+                      "type": "string"
+                    },
+                    "security_group_id": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "stack_id": {
+                      "type": "string",
+                      "required": true
+                    }
+                  },
+                  "presence": {
+                    "omitted": "empty_before_verified_readback",
+                    "present": "verified_readback_only",
+                    "empty": "empty_before_verified_readback"
+                  }
+                },
+                "reconciliation_required": {
+                  "type": "boolean",
+                  "required": true
+                },
+                "region": {
+                  "type": "string",
+                  "required": true
+                },
+                "revision": {
+                  "type": "integer",
+                  "required": true,
+                  "presence": {
+                    "present": "positive_integer"
+                  }
+                },
+                "secret_grant_digest": {
+                  "type": "string",
+                  "presence": {
+                    "present": "immutable_digest",
+                    "empty": "omitted"
+                  }
+                },
+                "stack_name": {
+                  "type": "string",
+                  "required": true
+                },
+                "state": {
+                  "type": "string",
+                  "required": true,
+                  "presence": {
+                    "present": "one_of:planned|creating|active|destroying|destroyed|uncertain|failed",
+                    "empty": "rejected"
+                  }
+                },
+                "target_id": {
+                  "type": "string",
+                  "presence": {
+                    "present": "canonical_aws_target",
+                    "empty": "omitted"
+                  }
+                },
+                "template_sha256": {
+                  "type": "string",
+                  "required": true
+                },
+                "updated_at": {
+                  "type": "string",
+                  "required": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.aws.ec2_provisions.events",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "after_sequence": {
+            "type": "integer",
+            "presence": {
+              "omitted": "from_beginning",
+              "present": "nonnegative_sequence",
+              "empty": "rejected"
+            }
+          },
+          "limit": {
+            "type": "integer",
+            "presence": {
+              "omitted": "server_default",
+              "present": "positive_integer",
+              "empty": "rejected"
+            }
+          },
+          "provision_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid",
+              "empty": "rejected"
+            }
+          }
+        },
+        "response": {
+          "events": {
+            "type": "array",
+            "required": true,
+            "items": {
+              "type": "object",
+              "properties": {
+                "at": {
+                  "type": "string",
+                  "required": true
+                },
+                "change_id": {
+                  "type": "string",
+                  "presence": {
+                    "present": "canonical_uuid",
+                    "empty": "omitted"
+                  }
+                },
+                "event_id": {
+                  "type": "string",
+                  "required": true,
+                  "presence": {
+                    "present": "canonical_uuid"
+                  }
+                },
+                "kind": {
+                  "type": "string",
+                  "required": true
+                },
+                "provision_id": {
+                  "type": "string",
+                  "required": true,
+                  "presence": {
+                    "present": "canonical_uuid"
+                  }
+                },
+                "revision": {
+                  "type": "integer",
+                  "required": true,
+                  "presence": {
+                    "present": "positive_integer"
+                  }
+                },
+                "sequence": {
+                  "type": "integer",
+                  "required": true,
+                  "presence": {
+                    "present": "monotonically_increasing_nonnegative_sequence"
+                  }
+                },
+                "task_id": {
+                  "type": "string",
+                  "presence": {
+                    "present": "canonical_uuid",
+                    "empty": "omitted"
+                  }
+                }
+              }
+            }
+          },
+          "next_after_sequence": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "nonnegative_sequence"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.aws.ec2_provisions.create.request",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "expected_revision": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "positive_integer",
+              "empty": "rejected"
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid",
+              "empty": "rejected"
+            }
+          },
+          "provision_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid",
+              "empty": "rejected"
+            }
+          }
+        },
+        "response": {
+          "change": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "change_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "change_set_id": {
+                "type": "string"
+              },
+              "confirmation_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "created_at": {
+                "type": "string",
+                "required": true
+              },
+              "credential_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "error_code": {
+                "type": "string"
+              },
+              "error_summary": {
+                "type": "string"
+              },
+              "operation": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "one_of:create|delete",
+                  "empty": "rejected"
+                }
+              },
+              "plan_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "provider_request_digest": {
+                "type": "string"
+              },
+              "provision_id": {
+                "type": "string",
+                "presence": {
+                  "present": "canonical_uuid",
+                  "empty": "omitted"
+                }
+              },
+              "revision": {
+                "type": "integer",
+                "required": true,
+                "presence": {
+                  "present": "positive_integer"
+                }
+              },
+              "stage": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "one_of:requested|change_set_creating|change_set_ready|executing|reconciling|reconciliation_required|succeeded|failed|canceled",
+                  "empty": "rejected"
+                }
+              },
+              "status": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "one_of:waiting_user|running|succeeded|failed|canceled",
+                  "empty": "rejected"
+                }
+              },
+              "task_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "updated_at": {
+                "type": "string",
+                "required": true
+              }
+            }
+          },
+          "confirmation": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "binding": {
+                "type": "object",
+                "required": true,
+                "properties": {
+                  "content_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "execution_digest": {
+                    "type": "string"
+                  },
+                  "manifest_digest": {
+                    "type": "string"
+                  },
+                  "network_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "network_grants": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "operation_domain": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "owner_id": {
+                    "type": "string"
+                  },
+                  "parameter_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "permission_digest": {
+                    "type": "string"
+                  },
+                  "secret_grant_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "secret_grants": {
+                    "type": "array",
+                    "required": true,
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "binding_digest": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "purpose": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "reference_id": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "secret_revision": {
+                          "type": "integer",
+                          "presence": {
+                            "present": "positive_integer",
+                            "empty": "omitted"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "selected_command": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "selected_tool": {
+                    "type": "string"
+                  },
+                  "source_commit": {
+                    "type": "string"
+                  },
+                  "source_version": {
+                    "type": "string"
+                  },
+                  "target_id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "target_kind": {
+                    "type": "string"
+                  },
+                  "target_revision": {
+                    "type": "integer",
+                    "required": true,
+                    "presence": {
+                      "present": "positive_integer"
+                    }
+                  }
+                }
+              },
+              "confirmation_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "created_at": {
+                "type": "string",
+                "required": true
+              },
+              "expected_workload_revision": {
+                "type": "integer",
+                "presence": {
+                  "omitted": "when_no_workload_fence",
+                  "present": "nonnegative_integer"
+                }
+              },
+              "expires_at": {
+                "type": "string",
+                "required": true
+              },
+              "revision": {
+                "type": "integer",
+                "required": true,
+                "presence": {
+                  "present": "positive_integer"
+                }
+              },
+              "state": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "one_of:pending|confirmed|consumed|rejected|expired",
+                  "empty": "rejected"
+                }
+              },
+              "task_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "terminal_code": {
+                "type": "string"
+              },
+              "terminal_note": {
+                "type": "string"
+              },
+              "terminal_reason": {
+                "type": "string"
+              },
+              "updated_at": {
+                "type": "string",
+                "required": true
+              }
+            }
+          },
+          "confirmation_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid",
+              "empty": "rejected"
+            }
+          },
+          "provision": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "active_change_id": {
+                "type": "string",
+                "presence": {
+                  "present": "canonical_uuid",
+                  "empty": "omitted"
+                }
+              },
+              "content_digest": {
+                "type": "string",
+                "presence": {
+                  "present": "immutable_digest",
+                  "empty": "omitted"
+                }
+              },
+              "create_change_id": {
+                "type": "string",
+                "presence": {
+                  "present": "canonical_uuid",
+                  "empty": "omitted"
+                }
+              },
+              "created_at": {
+                "type": "string",
+                "required": true
+              },
+              "credential_binding_digest": {
+                "type": "string",
+                "presence": {
+                  "present": "immutable_digest",
+                  "empty": "omitted"
+                }
+              },
+              "credential_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "credential_revision": {
+                "type": "integer",
+                "required": true,
+                "presence": {
+                  "present": "positive_integer"
+                }
+              },
+              "destroy_change_id": {
+                "type": "string",
+                "presence": {
+                  "present": "canonical_uuid",
+                  "empty": "omitted"
+                }
+              },
+              "error_code": {
+                "type": "string"
+              },
+              "error_summary": {
+                "type": "string"
+              },
+              "network_digest": {
+                "type": "string",
+                "presence": {
+                  "present": "immutable_digest",
+                  "empty": "omitted"
+                }
+              },
+              "parameter_digest": {
+                "type": "string",
+                "presence": {
+                  "present": "immutable_digest",
+                  "empty": "omitted"
+                }
+              },
+              "plan_digest": {
+                "type": "string",
+                "required": true
+              },
+              "plan_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "plan_revision": {
+                "type": "integer",
+                "required": true,
+                "presence": {
+                  "present": "positive_integer"
+                }
+              },
+              "profile": {
+                "type": "string",
+                "required": true
+              },
+              "provision_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "readback": {
+                "type": "object",
+                "properties": {
+                  "instance_id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "observed_at": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "output_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "public_ip": {
+                    "type": "string"
+                  },
+                  "security_group_id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "stack_id": {
+                    "type": "string",
+                    "required": true
+                  }
+                },
+                "presence": {
+                  "omitted": "empty_before_verified_readback",
+                  "present": "verified_readback_only",
+                  "empty": "empty_before_verified_readback"
+                }
+              },
+              "reconciliation_required": {
+                "type": "boolean",
+                "required": true
+              },
+              "region": {
+                "type": "string",
+                "required": true
+              },
+              "revision": {
+                "type": "integer",
+                "required": true,
+                "presence": {
+                  "present": "positive_integer"
+                }
+              },
+              "secret_grant_digest": {
+                "type": "string",
+                "presence": {
+                  "present": "immutable_digest",
+                  "empty": "omitted"
+                }
+              },
+              "stack_name": {
+                "type": "string",
+                "required": true
+              },
+              "state": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "one_of:planned|creating|active|destroying|destroyed|uncertain|failed",
+                  "empty": "rejected"
+                }
+              },
+              "target_id": {
+                "type": "string",
+                "presence": {
+                  "present": "canonical_aws_target",
+                  "empty": "omitted"
+                }
+              },
+              "template_sha256": {
+                "type": "string",
+                "required": true
+              },
+              "updated_at": {
+                "type": "string",
+                "required": true
+              }
+            }
+          },
+          "task": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "confirmation_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "failure_code": {
+                "type": "string"
+              },
+              "failure_summary": {
+                "type": "string"
+              },
+              "plan_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "revision": {
+                "type": "integer",
+                "required": true,
+                "presence": {
+                  "present": "positive_integer"
+                }
+              },
+              "status": {
+                "type": "string",
+                "required": true
+              },
+              "task_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              }
+            }
+          },
+          "task_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid",
+              "empty": "rejected"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.aws.ec2_provisions.destroy.request",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "expected_revision": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "positive_integer",
+              "empty": "rejected"
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid",
+              "empty": "rejected"
+            }
+          },
+          "provision_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid",
+              "empty": "rejected"
+            }
+          }
+        },
+        "response": {
+          "change": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "change_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "change_set_id": {
+                "type": "string"
+              },
+              "confirmation_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "created_at": {
+                "type": "string",
+                "required": true
+              },
+              "credential_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "error_code": {
+                "type": "string"
+              },
+              "error_summary": {
+                "type": "string"
+              },
+              "operation": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "one_of:create|delete",
+                  "empty": "rejected"
+                }
+              },
+              "plan_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "provider_request_digest": {
+                "type": "string"
+              },
+              "provision_id": {
+                "type": "string",
+                "presence": {
+                  "present": "canonical_uuid",
+                  "empty": "omitted"
+                }
+              },
+              "revision": {
+                "type": "integer",
+                "required": true,
+                "presence": {
+                  "present": "positive_integer"
+                }
+              },
+              "stage": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "one_of:requested|change_set_creating|change_set_ready|executing|reconciling|reconciliation_required|succeeded|failed|canceled",
+                  "empty": "rejected"
+                }
+              },
+              "status": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "one_of:waiting_user|running|succeeded|failed|canceled",
+                  "empty": "rejected"
+                }
+              },
+              "task_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "updated_at": {
+                "type": "string",
+                "required": true
+              }
+            }
+          },
+          "confirmation": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "binding": {
+                "type": "object",
+                "required": true,
+                "properties": {
+                  "content_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "execution_digest": {
+                    "type": "string"
+                  },
+                  "manifest_digest": {
+                    "type": "string"
+                  },
+                  "network_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "network_grants": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "operation_domain": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "owner_id": {
+                    "type": "string"
+                  },
+                  "parameter_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "permission_digest": {
+                    "type": "string"
+                  },
+                  "secret_grant_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "secret_grants": {
+                    "type": "array",
+                    "required": true,
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "binding_digest": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "purpose": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "reference_id": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "secret_revision": {
+                          "type": "integer",
+                          "presence": {
+                            "present": "positive_integer",
+                            "empty": "omitted"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "selected_command": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "selected_tool": {
+                    "type": "string"
+                  },
+                  "source_commit": {
+                    "type": "string"
+                  },
+                  "source_version": {
+                    "type": "string"
+                  },
+                  "target_id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "target_kind": {
+                    "type": "string"
+                  },
+                  "target_revision": {
+                    "type": "integer",
+                    "required": true,
+                    "presence": {
+                      "present": "positive_integer"
+                    }
+                  }
+                }
+              },
+              "confirmation_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "created_at": {
+                "type": "string",
+                "required": true
+              },
+              "expected_workload_revision": {
+                "type": "integer",
+                "presence": {
+                  "omitted": "when_no_workload_fence",
+                  "present": "nonnegative_integer"
+                }
+              },
+              "expires_at": {
+                "type": "string",
+                "required": true
+              },
+              "revision": {
+                "type": "integer",
+                "required": true,
+                "presence": {
+                  "present": "positive_integer"
+                }
+              },
+              "state": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "one_of:pending|confirmed|consumed|rejected|expired",
+                  "empty": "rejected"
+                }
+              },
+              "task_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "terminal_code": {
+                "type": "string"
+              },
+              "terminal_note": {
+                "type": "string"
+              },
+              "terminal_reason": {
+                "type": "string"
+              },
+              "updated_at": {
+                "type": "string",
+                "required": true
+              }
+            }
+          },
+          "confirmation_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid",
+              "empty": "rejected"
+            }
+          },
+          "provision": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "active_change_id": {
+                "type": "string",
+                "presence": {
+                  "present": "canonical_uuid",
+                  "empty": "omitted"
+                }
+              },
+              "content_digest": {
+                "type": "string",
+                "presence": {
+                  "present": "immutable_digest",
+                  "empty": "omitted"
+                }
+              },
+              "create_change_id": {
+                "type": "string",
+                "presence": {
+                  "present": "canonical_uuid",
+                  "empty": "omitted"
+                }
+              },
+              "created_at": {
+                "type": "string",
+                "required": true
+              },
+              "credential_binding_digest": {
+                "type": "string",
+                "presence": {
+                  "present": "immutable_digest",
+                  "empty": "omitted"
+                }
+              },
+              "credential_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "credential_revision": {
+                "type": "integer",
+                "required": true,
+                "presence": {
+                  "present": "positive_integer"
+                }
+              },
+              "destroy_change_id": {
+                "type": "string",
+                "presence": {
+                  "present": "canonical_uuid",
+                  "empty": "omitted"
+                }
+              },
+              "error_code": {
+                "type": "string"
+              },
+              "error_summary": {
+                "type": "string"
+              },
+              "network_digest": {
+                "type": "string",
+                "presence": {
+                  "present": "immutable_digest",
+                  "empty": "omitted"
+                }
+              },
+              "parameter_digest": {
+                "type": "string",
+                "presence": {
+                  "present": "immutable_digest",
+                  "empty": "omitted"
+                }
+              },
+              "plan_digest": {
+                "type": "string",
+                "required": true
+              },
+              "plan_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "plan_revision": {
+                "type": "integer",
+                "required": true,
+                "presence": {
+                  "present": "positive_integer"
+                }
+              },
+              "profile": {
+                "type": "string",
+                "required": true
+              },
+              "provision_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "readback": {
+                "type": "object",
+                "properties": {
+                  "instance_id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "observed_at": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "output_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "public_ip": {
+                    "type": "string"
+                  },
+                  "security_group_id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "stack_id": {
+                    "type": "string",
+                    "required": true
+                  }
+                },
+                "presence": {
+                  "omitted": "empty_before_verified_readback",
+                  "present": "verified_readback_only",
+                  "empty": "empty_before_verified_readback"
+                }
+              },
+              "reconciliation_required": {
+                "type": "boolean",
+                "required": true
+              },
+              "region": {
+                "type": "string",
+                "required": true
+              },
+              "revision": {
+                "type": "integer",
+                "required": true,
+                "presence": {
+                  "present": "positive_integer"
+                }
+              },
+              "secret_grant_digest": {
+                "type": "string",
+                "presence": {
+                  "present": "immutable_digest",
+                  "empty": "omitted"
+                }
+              },
+              "stack_name": {
+                "type": "string",
+                "required": true
+              },
+              "state": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "one_of:planned|creating|active|destroying|destroyed|uncertain|failed",
+                  "empty": "rejected"
+                }
+              },
+              "target_id": {
+                "type": "string",
+                "presence": {
+                  "present": "canonical_aws_target",
+                  "empty": "omitted"
+                }
+              },
+              "template_sha256": {
+                "type": "string",
+                "required": true
+              },
+              "updated_at": {
+                "type": "string",
+                "required": true
+              }
+            }
+          },
+          "task": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "confirmation_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "failure_code": {
+                "type": "string"
+              },
+              "failure_summary": {
+                "type": "string"
+              },
+              "plan_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "revision": {
+                "type": "integer",
+                "required": true,
+                "presence": {
+                  "present": "positive_integer"
+                }
+              },
+              "status": {
+                "type": "string",
+                "required": true
+              },
+              "task_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              }
+            }
+          },
+          "task_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid",
+              "empty": "rejected"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.aws.ec2_provisions.retry",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "expected_revision": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "positive_integer",
+              "empty": "rejected"
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid",
+              "empty": "rejected"
+            }
+          },
+          "provision_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid",
+              "empty": "rejected"
+            }
+          }
+        },
+        "response": {
+          "provision": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "active_change_id": {
+                "type": "string",
+                "presence": {
+                  "present": "canonical_uuid",
+                  "empty": "omitted"
+                }
+              },
+              "content_digest": {
+                "type": "string",
+                "presence": {
+                  "present": "immutable_digest",
+                  "empty": "omitted"
+                }
+              },
+              "create_change_id": {
+                "type": "string",
+                "presence": {
+                  "present": "canonical_uuid",
+                  "empty": "omitted"
+                }
+              },
+              "created_at": {
+                "type": "string",
+                "required": true
+              },
+              "credential_binding_digest": {
+                "type": "string",
+                "presence": {
+                  "present": "immutable_digest",
+                  "empty": "omitted"
+                }
+              },
+              "credential_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "credential_revision": {
+                "type": "integer",
+                "required": true,
+                "presence": {
+                  "present": "positive_integer"
+                }
+              },
+              "destroy_change_id": {
+                "type": "string",
+                "presence": {
+                  "present": "canonical_uuid",
+                  "empty": "omitted"
+                }
+              },
+              "error_code": {
+                "type": "string"
+              },
+              "error_summary": {
+                "type": "string"
+              },
+              "network_digest": {
+                "type": "string",
+                "presence": {
+                  "present": "immutable_digest",
+                  "empty": "omitted"
+                }
+              },
+              "parameter_digest": {
+                "type": "string",
+                "presence": {
+                  "present": "immutable_digest",
+                  "empty": "omitted"
+                }
+              },
+              "plan_digest": {
+                "type": "string",
+                "required": true
+              },
+              "plan_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "plan_revision": {
+                "type": "integer",
+                "required": true,
+                "presence": {
+                  "present": "positive_integer"
+                }
+              },
+              "profile": {
+                "type": "string",
+                "required": true
+              },
+              "provision_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "readback": {
+                "type": "object",
+                "properties": {
+                  "instance_id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "observed_at": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "output_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "public_ip": {
+                    "type": "string"
+                  },
+                  "security_group_id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "stack_id": {
+                    "type": "string",
+                    "required": true
+                  }
+                },
+                "presence": {
+                  "omitted": "empty_before_verified_readback",
+                  "present": "verified_readback_only",
+                  "empty": "empty_before_verified_readback"
+                }
+              },
+              "reconciliation_required": {
+                "type": "boolean",
+                "required": true
+              },
+              "region": {
+                "type": "string",
+                "required": true
+              },
+              "revision": {
+                "type": "integer",
+                "required": true,
+                "presence": {
+                  "present": "positive_integer"
+                }
+              },
+              "secret_grant_digest": {
+                "type": "string",
+                "presence": {
+                  "present": "immutable_digest",
+                  "empty": "omitted"
+                }
+              },
+              "stack_name": {
+                "type": "string",
+                "required": true
+              },
+              "state": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "one_of:planned|creating|active|destroying|destroyed|uncertain|failed",
+                  "empty": "rejected"
+                }
+              },
+              "target_id": {
+                "type": "string",
+                "presence": {
+                  "present": "canonical_aws_target",
+                  "empty": "omitted"
+                }
+              },
+              "template_sha256": {
+                "type": "string",
+                "required": true
+              },
+              "updated_at": {
+                "type": "string",
+                "required": true
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.aws.ec2_provisions.geolibre_install.plan",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "expected_revision": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "positive_integer",
+              "empty": "rejected"
+            }
+          },
+          "expires_at": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "exact_utc_rfc3339",
+              "empty": "rejected"
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid",
+              "empty": "rejected"
+            }
+          },
+          "provision_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid",
+              "empty": "rejected"
+            }
+          }
+        },
+        "response": {
+          "expires_at": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "exact_utc_rfc3339"
+            }
+          },
+          "plan": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "artifact": {
+                "type": "string",
+                "required": true
+              },
+              "created_at": {
+                "type": "string",
+                "required": true
+              },
+              "digest": {
+                "type": "string",
+                "required": true
+              },
+              "expires_at": {
+                "type": "string",
+                "required": true
+              },
+              "image_digest": {
+                "type": "string",
+                "required": true
+              },
+              "plan_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "release": {
+                "type": "object",
+                "required": true,
+                "properties": {
+                  "command_digest": {
+                    "type": "string",
+                    "required": true,
+                    "presence": {
+                      "present": "fixed_geolibre_command_digest"
+                    }
+                  },
+                  "commit": {
+                    "type": "string",
+                    "required": true,
+                    "presence": {
+                      "present": "fixed_geolibre_commit"
+                    }
+                  },
+                  "health_path": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "image_digest": {
+                    "type": "string",
+                    "required": true,
+                    "presence": {
+                      "present": "fixed_geolibre_image_digest"
+                    }
+                  },
+                  "manifest_digest": {
+                    "type": "string",
+                    "required": true,
+                    "presence": {
+                      "present": "fixed_geolibre_manifest_digest"
+                    }
+                  },
+                  "port": {
+                    "type": "integer",
+                    "required": true
+                  },
+                  "service": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "version": {
+                    "type": "string",
+                    "required": true,
+                    "presence": {
+                      "present": "fixed_geolibre_release"
+                    }
+                  }
+                }
+              },
+              "revision": {
+                "type": "integer",
+                "required": true,
+                "presence": {
+                  "present": "positive_integer"
+                }
+              },
+              "source": {
+                "type": "string",
+                "required": true
+              },
+              "summary": {
+                "type": "string",
+                "required": true
+              },
+              "target_kind": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "aws-ec2-ssm"
+                }
+              },
+              "typed_resource_limits": {
+                "type": "object",
+                "required": true,
+                "properties": {
+                  "cpu": {
+                    "type": "integer",
+                    "required": true
+                  },
+                  "disk_mb": {
+                    "type": "integer",
+                    "required": true
+                  },
+                  "memory_mb": {
+                    "type": "integer",
+                    "required": true
+                  },
+                  "output_mb": {
+                    "type": "integer",
+                    "required": true
+                  },
+                  "processes": {
+                    "type": "integer",
+                    "required": true
+                  },
+                  "timeout_seconds": {
+                    "type": "integer",
+                    "required": true
+                  }
+                }
+              },
+              "typed_target": {
+                "type": "object",
+                "required": true,
+                "properties": {
+                  "account_id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "credential_id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "credential_revision": {
+                    "type": "integer",
+                    "required": true
+                  },
+                  "exposure": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "instance_id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "port": {
+                    "type": "integer",
+                    "required": true
+                  },
+                  "provision_id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "provision_revision": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "public_endpoint": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "region": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "service": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "sidecar": {
+                    "type": "string",
+                    "required": true
+                  }
+                }
+              }
+            }
+          },
+          "provision_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid",
+              "empty": "rejected"
+            }
+          },
+          "provision_revision": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "positive_integer",
+              "empty": "rejected"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.core.aws.ec2_provisions.geolibre_install.request",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "expected_revision": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "positive_integer",
+              "empty": "rejected"
+            }
+          },
+          "expected_workload_revision": {
+            "type": "integer",
+            "presence": {
+              "omitted": "omitted_when_workload_id_omitted",
+              "present": "positive_integer_when_workload_id_present",
+              "empty": "rejected"
+            }
+          },
+          "expires_at": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "exact_utc_rfc3339",
+              "empty": "rejected"
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid",
+              "empty": "rejected"
+            }
+          },
+          "plan_digest": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "immutable_digest",
+              "empty": "rejected"
+            }
+          },
+          "plan_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid",
+              "empty": "rejected"
+            }
+          },
+          "plan_revision": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "positive_integer",
+              "empty": "rejected"
+            }
+          },
+          "provision_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid",
+              "empty": "rejected"
+            }
+          },
+          "workload_id": {
+            "type": "string",
+            "presence": {
+              "omitted": "omitted",
+              "present": "canonical_uuid",
+              "empty": "rejected"
+            }
+          }
+        },
+        "response": {
+          "confirmation": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "binding": {
+                "type": "object",
+                "required": true,
+                "properties": {
+                  "content_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "execution_digest": {
+                    "type": "string"
+                  },
+                  "manifest_digest": {
+                    "type": "string"
+                  },
+                  "network_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "network_grants": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "operation_domain": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "owner_id": {
+                    "type": "string"
+                  },
+                  "parameter_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "permission_digest": {
+                    "type": "string"
+                  },
+                  "secret_grant_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "secret_grants": {
+                    "type": "array",
+                    "required": true,
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "binding_digest": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "purpose": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "reference_id": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "secret_revision": {
+                          "type": "integer",
+                          "presence": {
+                            "present": "positive_integer",
+                            "empty": "omitted"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "selected_command": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "selected_tool": {
+                    "type": "string"
+                  },
+                  "source_commit": {
+                    "type": "string"
+                  },
+                  "source_version": {
+                    "type": "string"
+                  },
+                  "target_id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "target_kind": {
+                    "type": "string"
+                  },
+                  "target_revision": {
+                    "type": "integer",
+                    "required": true,
+                    "presence": {
+                      "present": "positive_integer"
+                    }
+                  }
+                }
+              },
+              "confirmation_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "created_at": {
+                "type": "string",
+                "required": true
+              },
+              "expected_workload_revision": {
+                "type": "integer",
+                "presence": {
+                  "omitted": "when_no_workload_fence",
+                  "present": "nonnegative_integer"
+                }
+              },
+              "expires_at": {
+                "type": "string",
+                "required": true
+              },
+              "revision": {
+                "type": "integer",
+                "required": true,
+                "presence": {
+                  "present": "positive_integer"
+                }
+              },
+              "state": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "one_of:pending|confirmed|consumed|rejected|expired",
+                  "empty": "rejected"
+                }
+              },
+              "task_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "terminal_code": {
+                "type": "string"
+              },
+              "terminal_note": {
+                "type": "string"
+              },
+              "terminal_reason": {
+                "type": "string"
+              },
+              "updated_at": {
+                "type": "string",
+                "required": true
+              }
+            }
+          },
+          "confirmation_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid",
+              "empty": "rejected"
+            }
+          },
+          "expected_workload_revision": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "nonnegative_integer"
+            }
+          },
+          "expires_at": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "exact_utc_rfc3339"
+            }
+          },
+          "operation": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "actual": {
+                "type": "object",
+                "properties": {
+                  "applied_plan_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "applied_plan_id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "identity": {
+                    "type": "object",
+                    "required": true,
+                    "properties": {
+                      "aws_account_id": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "aws_ec2_document_version": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "aws_ec2_required_instance_tags": {
+                        "type": "object",
+                        "required": true
+                      },
+                      "aws_ec2_systemd_service": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "aws_ecs_assign_public_ip": {
+                        "type": "boolean",
+                        "required": true
+                      },
+                      "aws_ecs_cluster_arn": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "aws_ecs_desired_count": {
+                        "type": "integer",
+                        "required": true
+                      },
+                      "aws_ecs_execution_role_arn": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "aws_ecs_image_uri": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "aws_ecs_platform_version": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "aws_ecs_security_group_ids": {
+                        "type": "array",
+                        "required": true,
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "aws_ecs_service_name": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "aws_ecs_subnet_ids": {
+                        "type": "array",
+                        "required": true,
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "aws_ecs_target_group_arn": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "aws_ecs_target_group_port": {
+                        "type": "integer",
+                        "required": true
+                      },
+                      "aws_ecs_task_family": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "aws_ecs_task_role_arn": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "aws_region": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "cluster": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "core_runner_id": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "core_runner_service": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "desired_count": {
+                        "type": "integer",
+                        "required": true
+                      },
+                      "endpoint": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "image_digest": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "instance_id": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "kind": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "service": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "task_definition_revision": {
+                        "type": "string",
+                        "required": true
+                      }
+                    }
+                  },
+                  "observed_at": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "provider_version": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "readback_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "revision": {
+                    "type": "integer",
+                    "required": true
+                  },
+                  "state": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "updated_at": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "workload_id": {
+                    "type": "string",
+                    "required": true
+                  }
+                }
+              },
+              "confirmation_id": {
+                "type": "string",
+                "required": true
+              },
+              "created_at": {
+                "type": "string",
+                "required": true
+              },
+              "desired_plan": {
+                "type": "object",
+                "required": true,
+                "properties": {
+                  "plan_digest": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "plan_id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "plan_revision": {
+                    "type": "integer",
+                    "required": true
+                  },
+                  "resource_limits": {
+                    "type": "object",
+                    "required": true,
+                    "properties": {
+                      "cpu": {
+                        "type": "integer",
+                        "required": true
+                      },
+                      "disk_mb": {
+                        "type": "integer",
+                        "required": true
+                      },
+                      "memory_mb": {
+                        "type": "integer",
+                        "required": true
+                      },
+                      "output_mb": {
+                        "type": "integer",
+                        "required": true
+                      },
+                      "processes": {
+                        "type": "integer",
+                        "required": true
+                      },
+                      "timeout_seconds": {
+                        "type": "integer",
+                        "required": true
+                      }
+                    }
+                  },
+                  "secret_grants": {
+                    "type": "array",
+                    "required": true,
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "binding_digest": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "purpose": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "reference_id": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "secret_revision": {
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  },
+                  "target": {
+                    "type": "object",
+                    "required": true,
+                    "properties": {
+                      "identity": {
+                        "type": "object",
+                        "required": true,
+                        "properties": {
+                          "aws_account_id": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "aws_ec2_document_version": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "aws_ec2_required_instance_tags": {
+                            "type": "object",
+                            "required": true
+                          },
+                          "aws_ec2_systemd_service": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "aws_ecs_assign_public_ip": {
+                            "type": "boolean",
+                            "required": true
+                          },
+                          "aws_ecs_cluster_arn": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "aws_ecs_desired_count": {
+                            "type": "integer",
+                            "required": true
+                          },
+                          "aws_ecs_execution_role_arn": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "aws_ecs_image_uri": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "aws_ecs_platform_version": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "aws_ecs_security_group_ids": {
+                            "type": "array",
+                            "required": true,
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "aws_ecs_service_name": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "aws_ecs_subnet_ids": {
+                            "type": "array",
+                            "required": true,
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "aws_ecs_target_group_arn": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "aws_ecs_target_group_port": {
+                            "type": "integer",
+                            "required": true
+                          },
+                          "aws_ecs_task_family": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "aws_ecs_task_role_arn": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "aws_region": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "cluster": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "core_runner_id": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "core_runner_service": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "desired_count": {
+                            "type": "integer",
+                            "required": true
+                          },
+                          "endpoint": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "image_digest": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "instance_id": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "kind": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "service": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "task_definition_revision": {
+                            "type": "string",
+                            "required": true
+                          }
+                        }
+                      },
+                      "labels": {
+                        "type": "object",
+                        "required": true
+                      },
+                      "network_grants": {
+                        "type": "array",
+                        "required": true,
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "required": true
+                            },
+                            "reference_id": {
+                              "type": "string",
+                              "required": true
+                            }
+                          }
+                        }
+                      },
+                      "ports": {
+                        "type": "array",
+                        "required": true,
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "port": {
+                              "type": "integer",
+                              "required": true
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "dispatch_epoch": {
+                "type": "integer",
+                "required": true
+              },
+              "dispatch_lease_until": {
+                "type": "string",
+                "required": true
+              },
+              "expected_workload_revision": {
+                "type": "integer",
+                "required": true,
+                "presence": {
+                  "present": "nonnegative_integer"
+                }
+              },
+              "failure_code": {
+                "type": "string",
+                "required": true
+              },
+              "failure_summary": {
+                "type": "string",
+                "required": true
+              },
+              "kind": {
+                "type": "string",
+                "required": true
+              },
+              "operation_id": {
+                "type": "string",
+                "required": true
+              },
+              "plan_digest": {
+                "type": "string",
+                "required": true
+              },
+              "plan_id": {
+                "type": "string",
+                "required": true
+              },
+              "plan_revision": {
+                "type": "integer",
+                "required": true
+              },
+              "revision": {
+                "type": "integer",
+                "required": true
+              },
+              "secret_grant_refs": {
+                "type": "array",
+                "required": true,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "binding_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "purpose": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "reference_id": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "secret_revision": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              },
+              "status": {
+                "type": "string",
+                "required": true
+              },
+              "summary": {
+                "type": "string",
+                "required": true
+              },
+              "target_kind": {
+                "type": "string",
+                "required": true
+              },
+              "task_id": {
+                "type": "string",
+                "required": true
+              },
+              "updated_at": {
+                "type": "string",
+                "required": true
+              },
+              "workload_id": {
+                "type": "string",
+                "required": true
+              }
+            }
+          },
+          "plan": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "artifact": {
+                "type": "string",
+                "required": true
+              },
+              "created_at": {
+                "type": "string",
+                "required": true
+              },
+              "digest": {
+                "type": "string",
+                "required": true
+              },
+              "expires_at": {
+                "type": "string",
+                "required": true
+              },
+              "image_digest": {
+                "type": "string",
+                "required": true
+              },
+              "plan_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "release": {
+                "type": "object",
+                "required": true,
+                "properties": {
+                  "command_digest": {
+                    "type": "string",
+                    "required": true,
+                    "presence": {
+                      "present": "fixed_geolibre_command_digest"
+                    }
+                  },
+                  "commit": {
+                    "type": "string",
+                    "required": true,
+                    "presence": {
+                      "present": "fixed_geolibre_commit"
+                    }
+                  },
+                  "health_path": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "image_digest": {
+                    "type": "string",
+                    "required": true,
+                    "presence": {
+                      "present": "fixed_geolibre_image_digest"
+                    }
+                  },
+                  "manifest_digest": {
+                    "type": "string",
+                    "required": true,
+                    "presence": {
+                      "present": "fixed_geolibre_manifest_digest"
+                    }
+                  },
+                  "port": {
+                    "type": "integer",
+                    "required": true
+                  },
+                  "service": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "version": {
+                    "type": "string",
+                    "required": true,
+                    "presence": {
+                      "present": "fixed_geolibre_release"
+                    }
+                  }
+                }
+              },
+              "revision": {
+                "type": "integer",
+                "required": true,
+                "presence": {
+                  "present": "positive_integer"
+                }
+              },
+              "source": {
+                "type": "string",
+                "required": true
+              },
+              "summary": {
+                "type": "string",
+                "required": true
+              },
+              "target_kind": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "aws-ec2-ssm"
+                }
+              },
+              "typed_resource_limits": {
+                "type": "object",
+                "required": true,
+                "properties": {
+                  "cpu": {
+                    "type": "integer",
+                    "required": true
+                  },
+                  "disk_mb": {
+                    "type": "integer",
+                    "required": true
+                  },
+                  "memory_mb": {
+                    "type": "integer",
+                    "required": true
+                  },
+                  "output_mb": {
+                    "type": "integer",
+                    "required": true
+                  },
+                  "processes": {
+                    "type": "integer",
+                    "required": true
+                  },
+                  "timeout_seconds": {
+                    "type": "integer",
+                    "required": true
+                  }
+                }
+              },
+              "typed_target": {
+                "type": "object",
+                "required": true,
+                "properties": {
+                  "account_id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "credential_id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "credential_revision": {
+                    "type": "integer",
+                    "required": true
+                  },
+                  "exposure": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "instance_id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "port": {
+                    "type": "integer",
+                    "required": true
+                  },
+                  "provision_id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "provision_revision": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "public_endpoint": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "region": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "service": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "sidecar": {
+                    "type": "string",
+                    "required": true
+                  }
+                }
+              }
+            }
+          },
+          "provision_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid",
+              "empty": "rejected"
+            }
+          },
+          "provision_revision": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "positive_integer",
+              "empty": "rejected"
+            }
+          },
+          "task": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "attachment_refs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "attempt": {
+                "type": "integer",
+                "required": true
+              },
+              "available_at": {
+                "type": "string"
+              },
+              "conversation_id": {
+                "type": "string"
+              },
+              "created_at": {
+                "type": "string",
+                "required": true
+              },
+              "expected_workload_revision": {
+                "type": "integer",
+                "presence": {
+                  "omitted": "when_task_has_no_workload_fence",
+                  "present": "positive_integer"
+                }
+              },
+              "failure_code": {
+                "type": "string"
+              },
+              "failure_summary": {
+                "type": "string"
+              },
+              "goal": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string"
+              },
+              "knowledge_refs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "lease_epoch": {
+                "type": "integer",
+                "required": true
+              },
+              "model_profile_id": {
+                "type": "string"
+              },
+              "retry_of_task_id": {
+                "type": "string"
+              },
+              "revision": {
+                "type": "integer",
+                "required": true,
+                "presence": {
+                  "present": "positive_integer"
+                }
+              },
+              "status": {
+                "type": "string",
+                "required": true
+              },
+              "task_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "timeout_seconds": {
+                "type": "integer"
+              },
+              "updated_at": {
+                "type": "string",
+                "required": true
+              }
+            }
+          },
+          "task_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid",
+              "empty": "rejected"
+            }
+          },
+          "workload_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid",
+              "empty": "rejected"
+            }
           }
         }
       }

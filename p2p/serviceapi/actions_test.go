@@ -39,8 +39,8 @@ func TestActionSpecsReturnsStableOrderedCopy(t *testing.T) {
 	first := ActionSpecs()
 	second := ActionSpecs()
 
-	if len(first) != 243 {
-		t.Fatalf("ActionSpecs() returned %d actions, want 243", len(first))
+	if len(first) != 253 {
+		t.Fatalf("ActionSpecs() returned %d actions, want 253", len(first))
 	}
 	if !reflect.DeepEqual(first, second) {
 		t.Fatal("ActionSpecs() did not preserve action order")
@@ -127,8 +127,11 @@ func TestWorkloadPlanSchemaNestedFields(t *testing.T) {
 	}
 	apply, _ := ActionSpecFor("agent.core.workloads.apply")
 	op := apply.Schema.Response["operation"]
-	if !op.Required || op.Properties["target_kind"].Type != "string" || op.Properties["desired_plan"].Properties["target"].Properties["network_grants"].Items.Properties["reference_id"].Type != "string" || op.Properties["actual"].Properties["identity"].Properties["aws_ecs_image_uri"].Type != "string" {
+	if !op.Required || op.Properties["target_kind"].Type != "string" || op.Properties["summary"].Type != "string" || op.Properties["secret_grant_refs"].Items.Properties["binding_digest"].Type != "string" || op.Properties["desired_plan"].Properties["target"].Properties["network_grants"].Items.Properties["reference_id"].Type != "string" || op.Properties["actual"].Properties["identity"].Properties["aws_ecs_image_uri"].Type != "string" {
 		t.Fatal("workload operation response schema is incomplete")
+	}
+	if !op.Properties["expected_workload_revision"].Required || op.Properties["expected_workload_revision"].Presence.Present != "nonnegative_integer" {
+		t.Fatal("workload operation expected revision schema is incomplete")
 	}
 }
 func TestAgentCoreFamilySchemaDrift(t *testing.T) {
