@@ -241,7 +241,7 @@ func (s *Service) executeChangeStrict(ctx context.Context, confirmationID string
 }
 
 func destroyReadbackMatches(stack Stack, plan Plan, required []string, expectedStackID string) bool {
-	if stack.Region != plan.Region || stack.StackName != plan.StackName || stack.TemplateSHA256 != plan.TemplateSHA256 || !PlanParametersMatchReadback(plan, stack.Parameters) || canonicalDigest(stack.Tags) != canonicalDigest(plan.Tags) || !stack.Outputs.HasAll(required...) {
+	if stack.Region != plan.Region || stack.StackName != plan.StackName || stack.TemplateSHA256 != plan.TemplateSHA256 || !PlanParametersMatchReadback(plan, stack.Parameters) || canonicalDigest(canonicalProviderTags(stack.Tags)) != canonicalDigest(canonicalProviderTags(plan.Tags)) || !stack.Outputs.HasAll(required...) {
 		return false
 	}
 	if stack.Status != "CREATE_COMPLETE" && stack.Status != "UPDATE_COMPLETE" {
@@ -312,7 +312,7 @@ func (s *Service) reconcileChange(ctx context.Context, c Change, p Plan) (Change
 	if c.Operation == OperationDelete && e == ErrNotFound {
 		want = ""
 	}
-	if (c.Operation == OperationDelete && e == ErrNotFound) || (want != "" && stack.Region == p.Region && stack.StackName == p.StackName && stack.Status == want && stack.TemplateSHA256 != "" && stack.TemplateSHA256 == p.TemplateSHA256 && PlanParametersMatchReadback(p, stack.Parameters) && canonicalDigest(stack.Tags) == canonicalDigest(p.Tags) && stack.Outputs.HasAll(requiredOutputs...)) {
+	if (c.Operation == OperationDelete && e == ErrNotFound) || (want != "" && stack.Region == p.Region && stack.StackName == p.StackName && stack.Status == want && stack.TemplateSHA256 != "" && stack.TemplateSHA256 == p.TemplateSHA256 && PlanParametersMatchReadback(p, stack.Parameters) && canonicalDigest(canonicalProviderTags(stack.Tags)) == canonicalDigest(canonicalProviderTags(p.Tags)) && stack.Outputs.HasAll(requiredOutputs...)) {
 		n := c
 		n.Status = ChangeSucceeded
 		n.Stage = StageSucceeded

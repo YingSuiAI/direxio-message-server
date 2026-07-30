@@ -32,6 +32,13 @@ func TestDestroyReadbackRejectsSameNameReplacementOrImmutableDrift(t *testing.T)
 	if !destroyReadbackMatches(stack, plan, required, stackID) {
 		t.Fatal("matching immutable stack readback rejected")
 	}
+	legacyTags := cloneMap(plan.Tags)
+	legacyTags[RequiredOutputsTag] = strings.ReplaceAll(legacyTags[RequiredOutputsTag], "+", ",")
+	legacyPlan := plan
+	legacyPlan.Tags = legacyTags
+	if !destroyReadbackMatches(stack, legacyPlan, required, stackID) {
+		t.Fatal("legacy plan comma marker was not provider-canonicalized")
+	}
 	for name, mutate := range map[string]func(*Stack){
 		"replacement stack": func(s *Stack) {
 			s.Outputs[string(StackOutputStackID)] = "arn:aws:cloudformation:us-east-1:123456789012:stack/geolibre-prod/11234567-89ab-cdef-0123-456789abcdef"

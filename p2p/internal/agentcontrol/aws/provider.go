@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/aws/aws-sdk-go-v2/aws/arn"
 )
@@ -60,7 +62,9 @@ const (
 )
 
 // RequiredOutputsTag is a durable, plan-bound marker for typed provisions.
-// Its value is a comma-separated list of allowlisted StackOutputKey names.
+// Its persisted value uses '+' as the provider-safe delimiter. Legacy plans
+// may still contain comma-delimited values and are normalized at the provider
+// boundary without changing their durable digest.
 const RequiredOutputsTag = "dirextalk:required-outputs"
 
 // StackOutputs contains only validated values for the allowlisted output
@@ -101,12 +105,23 @@ func isAllowedStackOutputKey(key string) bool {
 
 func requiredStackOutputs(p Plan) ([]string, bool) {
 	raw, ok := p.Tags[RequiredOutputsTag]
-	if !ok || strings.TrimSpace(raw) == "" {
+	if !ok {
 		return nil, true
+	}
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, false
+	}
+	delimiter := "+"
+	if strings.Contains(raw, ",") {
+		if strings.Contains(raw, "+") {
+			return nil, false
+		}
+		delimiter = ","
 	}
 	seen := make(map[string]bool)
 	out := make([]string, 0, 4)
-	for _, part := range strings.Split(raw, ",") {
+	for _, part := range strings.Split(raw, delimiter) {
 		key := strings.TrimSpace(part)
 		if !isAllowedStackOutputKey(key) || seen[key] {
 			return nil, false
@@ -115,6 +130,62 @@ func requiredStackOutputs(p Plan) ([]string, bool) {
 		out = append(out, key)
 	}
 	return out, len(out) > 0
+}
+
+// canonicalProviderTags is the narrow compatibility codec for values sent to
+// CloudFormation. Persisted plan tags and their digests remain untouched.
+func canonicalProviderTags(values map[string]string) map[string]string {
+	if values == nil {
+		return nil
+	}
+	out := cloneMap(values)
+	if raw, ok := out[RequiredOutputsTag]; ok && strings.Contains(raw, ",") && !strings.Contains(raw, "+") {
+		outputs, valid := requiredStackOutputs(Plan{Tags: values})
+		if valid {
+			out[RequiredOutputsTag] = strings.Join(outputs, "+")
+		}
+	}
+	return out
+}
+
+// validateProviderTags applies the shared CloudFormation boundary contract.
+// It returns the provider form while leaving the durable/raw tag map intact.
+func validateProviderTags(values map[string]string) (map[string]string, error) {
+	if len(values) > 50 {
+		return nil, ErrInvalid
+	}
+	if _, valid := requiredStackOutputs(Plan{Tags: values}); !valid {
+		return nil, ErrInvalid
+	}
+	if isTypedEC2Plan(Plan{Tags: values}) {
+		if _, present := values[RequiredOutputsTag]; !present {
+			return nil, ErrInvalid
+		}
+	}
+	canonical := canonicalProviderTags(values)
+	for key, value := range canonical {
+		if strings.HasPrefix(strings.ToLower(key), "aws:") || !validCloudFormationTagText(key, 128) || !validCloudFormationTagText(value, 256) {
+			return nil, ErrInvalid
+		}
+	}
+	return canonical, nil
+}
+
+func validCloudFormationTagText(value string, maxRunes int) bool {
+	if !utf8.ValidString(value) || value == "" || utf8.RuneCountInString(value) > maxRunes {
+		return false
+	}
+	for _, r := range value {
+		if unicode.IsLetter(r) || unicode.IsNumber(r) || unicode.Is(unicode.Z, r) {
+			continue
+		}
+		switch r {
+		case '_', '.', ':', '/', '=', '+', '-', '@':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 type Stack struct {
@@ -212,13 +283,17 @@ func (f *FakeProvider) maybeFail(op string) error {
 func (f *FakeProvider) CreateChangeSet(_ context.Context, handle CredentialHandle, r ChangeSetRequest) (ChangeSet, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.Calls = append(f.Calls, "create_change_set")
 	if handle.Region != r.Region {
 		return ChangeSet{}, ErrConflict
 	}
 	if !validChangeSetName(r.ChangeSetName) {
 		return ChangeSet{}, ErrInvalid
 	}
+	canonicalTags, validationErr := validateProviderTags(r.Tags)
+	if validationErr != nil {
+		return ChangeSet{}, validationErr
+	}
+	f.Calls = append(f.Calls, "create_change_set")
 	if e := f.maybeFail("create_change_set"); e != nil {
 		return ChangeSet{}, e
 	}
@@ -233,7 +308,7 @@ func (f *FakeProvider) CreateChangeSet(_ context.Context, handle CredentialHandl
 	}
 	id := fmt.Sprintf("cs-%d", len(f.Changes)+1)
 	_, templateDigest, _ := normalizeTemplate(r.Template)
-	cs := ChangeSet{ID: id, Name: r.ChangeSetName, StackName: r.StackName, Region: r.Region, RequestDigest: digest, ClientToken: r.ClientToken, Status: "CREATE_COMPLETE", ExecutionStatus: "AVAILABLE", Operation: r.Operation, TemplateSHA256: templateDigest, Parameters: cloneMap(r.Parameters), Tags: cloneMap(r.Tags)}
+	cs := ChangeSet{ID: id, Name: r.ChangeSetName, StackName: r.StackName, Region: r.Region, RequestDigest: digest, ClientToken: r.ClientToken, Status: "CREATE_COMPLETE", ExecutionStatus: "AVAILABLE", Operation: r.Operation, TemplateSHA256: templateDigest, Parameters: cloneMap(r.Parameters), Tags: canonicalTags}
 	f.Changes[id] = cs
 	if f.ResponseLoss || f.ResponseLossCreate {
 		return ChangeSet{}, ErrResponseUncertain

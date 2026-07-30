@@ -2,6 +2,7 @@ package aws
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ type safetyCloudClient struct {
 	createDescription         string
 	createName, createToken   string
 	createCalls               int
+	createTags                []cloudformationtypes.Tag
 	describeNames             []string
 	executeToken, deleteToken string
 	executeErr                error
@@ -29,6 +31,7 @@ func (c *safetyCloudClient) CreateChangeSet(_ context.Context, in *cloudformatio
 	c.createCalls++
 	c.createDescription = aws.ToString(in.Description)
 	c.createName, c.createToken = aws.ToString(in.ChangeSetName), aws.ToString(in.ClientToken)
+	c.createTags = append([]cloudformationtypes.Tag(nil), in.Tags...)
 	return &cloudformation.CreateChangeSetOutput{Id: aws.String("cs-safety")}, nil
 }
 func (c *safetyCloudClient) DescribeChangeSet(_ context.Context, in *cloudformation.DescribeChangeSetInput, _ ...func(*cloudformation.Options)) (*cloudformation.DescribeChangeSetOutput, error) {
@@ -86,12 +89,15 @@ func TestSDKProviderSafetyTokensAndFreshRecovery(t *testing.T) {
 	if operationKey("change", token, string(ProviderMutationCreate), 1, 1) != operationKey("change", token, string(ProviderMutationCreate), 2, 99) {
 		t.Fatal("provider action identity changed across lease reclaim")
 	}
-	req := ChangeSetRequest{Region: "us-east-1", StackName: "safety-stack", ChangeSetName: providerChangeSetName(token), ClientToken: token, Operation: OperationCreate, Template: template, Parameters: map[string]string{}, Tags: map[string]string{}}
+	req := ChangeSetRequest{Region: "us-east-1", StackName: "safety-stack", ChangeSetName: providerChangeSetName(token), ClientToken: token, Operation: OperationCreate, Template: template, Parameters: map[string]string{}, Tags: map[string]string{RequiredOutputsTag: "InstanceId,PublicIp,SecurityGroupId,StackId"}}
 	if _, err = p.CreateChangeSet(context.Background(), safetyHandle(), req); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.HasPrefix(token, "1") || !strings.HasPrefix(client.createName, "dirextalk-") || client.createName != providerChangeSetName(token) || client.createToken != token || client.createName == client.createToken {
 		t.Fatalf("create input name/token=%q/%q", client.createName, client.createToken)
+	}
+	if len(client.createTags) != 1 || aws.ToString(client.createTags[0].Value) != "InstanceId+PublicIp+SecurityGroupId+StackId" {
+		t.Fatalf("provider tags=%v", client.createTags)
 	}
 	if client.createDescription == "" || len(client.createDescription) > 1024 || strings.Contains(client.createDescription, "secret") || strings.Contains(client.createDescription, "AKIA") {
 		t.Fatalf("unsafe description %q", client.createDescription)
@@ -140,6 +146,50 @@ func TestSDKProviderRejectsDigitLeadingChangeSetNameLocally(t *testing.T) {
 	})
 	if err != ErrInvalid || client.createCalls != 0 {
 		t.Fatalf("digit-leading name err=%v create calls=%d", err, client.createCalls)
+	}
+}
+
+func TestSDKProviderRejectsInvalidTagsBeforeCreateCall(t *testing.T) {
+	base := ChangeSetRequest{Region: "us-east-1", StackName: "safety-stack", ChangeSetName: "safe-change", ClientToken: "11111111-1111-4111-8111-111111111115", Operation: OperationCreate, Template: []byte(`{"Resources":{}}`)}
+	cases := []struct {
+		name string
+		tags map[string]string
+	}{
+		{name: "reserved", tags: map[string]string{"aws:reserved": "x"}},
+		{name: "invalid key", tags: map[string]string{"bad?key": "x"}},
+		{name: "invalid value", tags: map[string]string{"key": "bad?value"}},
+		{name: "empty key", tags: map[string]string{"": "x"}},
+		{name: "empty value", tags: map[string]string{"key": ""}},
+		{name: "quote key", tags: map[string]string{"quote\"key": "x"}},
+		{name: "malformed required outputs", tags: map[string]string{RequiredOutputsTag: "InstanceId+InstanceId"}},
+		{name: "typed marker missing", tags: map[string]string{"service": EC2ServiceProfile, "dirextalk:template-profile": EC2ServiceProfile, "dirextalk:template-version": ec2TemplateVersion}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &safetyCloudClient{}
+			p, err := NewSDKProvider(SDKClients{CloudFormation: client})
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := base
+			req.Tags = tc.tags
+			if _, err = p.CreateChangeSet(context.Background(), safetyHandle(), req); err != ErrInvalid || client.createCalls != 0 {
+				t.Fatalf("invalid tags err=%v create calls=%d", err, client.createCalls)
+			}
+		})
+	}
+	tooMany := map[string]string{}
+	for i := 0; i < 51; i++ {
+		tooMany[fmt.Sprintf("key-%d", i)] = "x"
+	}
+	client := &safetyCloudClient{}
+	p, err := NewSDKProvider(SDKClients{CloudFormation: client})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base.Tags = tooMany
+	if _, err = p.CreateChangeSet(context.Background(), safetyHandle(), base); err != ErrInvalid || client.createCalls != 0 {
+		t.Fatalf("too many tags err=%v create calls=%d", err, client.createCalls)
 	}
 }
 

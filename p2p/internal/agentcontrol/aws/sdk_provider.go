@@ -181,6 +181,10 @@ func (p *SDKProvider) CreateChangeSet(ctx context.Context, handle CredentialHand
 	if (req.Operation != OperationCreate && req.Operation != OperationUpdate) || !validStackName(req.StackName) || !validChangeSetName(req.ChangeSetName) || strings.TrimSpace(req.ClientToken) == "" || len(req.Template) == 0 {
 		return ChangeSet{}, ErrInvalid
 	}
+	tags, err := tagsToSDK(req.Tags)
+	if err != nil {
+		return ChangeSet{}, err
+	}
 	client, err := p.factory.NewCloudFormation(handle)
 	if err != nil {
 		return ChangeSet{}, ErrInvalid
@@ -190,7 +194,7 @@ func (p *SDKProvider) CreateChangeSet(ctx context.Context, handle CredentialHand
 		changeType = cloudformationtypes.ChangeSetTypeUpdate
 	}
 	digest := providerRequestDigest(Plan{Region: req.Region, StackName: req.StackName, Operation: req.Operation, Template: req.Template, Parameters: req.Parameters, Tags: req.Tags, Capabilities: req.Capabilities}, req.ClientToken)
-	in := &cloudformation.CreateChangeSetInput{StackName: aws.String(req.StackName), ChangeSetName: aws.String(req.ChangeSetName), ClientToken: aws.String(req.ClientToken), Description: aws.String(changeSetDescription(req.ClientToken, digest)), ChangeSetType: changeType, TemplateBody: aws.String(string(req.Template)), Parameters: parametersToSDK(req.Parameters), Tags: tagsToSDK(req.Tags), Capabilities: capabilitiesToSDK(req.Capabilities)}
+	in := &cloudformation.CreateChangeSetInput{StackName: aws.String(req.StackName), ChangeSetName: aws.String(req.ChangeSetName), ClientToken: aws.String(req.ClientToken), Description: aws.String(changeSetDescription(req.ClientToken, digest)), ChangeSetType: changeType, TemplateBody: aws.String(string(req.Template)), Parameters: parametersToSDK(req.Parameters), Tags: tags, Capabilities: capabilitiesToSDK(req.Capabilities)}
 	callCtx, cancel := p.operationContext(ctx)
 	defer cancel()
 	out, err := client.CreateChangeSet(callCtx, in)
@@ -205,7 +209,7 @@ func (p *SDKProvider) CreateChangeSet(ctx context.Context, handle CredentialHand
 		id = req.ChangeSetName
 	}
 	_, templateSHA, _ := normalizeTemplate(req.Template)
-	cs := ChangeSet{ID: id, Name: req.ChangeSetName, StackName: req.StackName, ClientToken: req.ClientToken, Region: req.Region, RequestDigest: digest, Operation: req.Operation, TemplateSHA256: templateSHA, Parameters: cloneMap(req.Parameters), Tags: cloneMap(req.Tags)}
+	cs := ChangeSet{ID: id, Name: req.ChangeSetName, StackName: req.StackName, ClientToken: req.ClientToken, Region: req.Region, RequestDigest: digest, Operation: req.Operation, TemplateSHA256: templateSHA, Parameters: cloneMap(req.Parameters), Tags: canonicalProviderTags(req.Tags)}
 	p.mu.Lock()
 	p.known[changeSetKey(req.Region, req.StackName, req.ChangeSetName)] = cs
 	p.known[changeSetKey(req.Region, req.StackName, id)] = cs
@@ -554,12 +558,16 @@ func validStackReference(value, region, account string) bool {
 	return len(parts) == 3 && parts[0] == "stack" && validStackName(parts[1]) && validUUID(parts[2])
 }
 
-func tagsToSDK(values map[string]string) []cloudformationtypes.Tag {
-	out := make([]cloudformationtypes.Tag, 0, len(values))
-	for k, v := range values {
+func tagsToSDK(values map[string]string) ([]cloudformationtypes.Tag, error) {
+	canonical, err := validateProviderTags(values)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]cloudformationtypes.Tag, 0, len(canonical))
+	for k, v := range canonical {
 		out = append(out, cloudformationtypes.Tag{Key: aws.String(k), Value: aws.String(v)})
 	}
-	return out
+	return out, nil
 }
 
 func tagsFromSDK(values []cloudformationtypes.Tag) map[string]string {

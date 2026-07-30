@@ -106,8 +106,12 @@ func TestBuildEC2ProvisionPlanContainsFixedSafeResources(t *testing.T) {
 	if strings.Contains(template, request.OwnerID) || corePlan.Tags["owner"] != ec2OwnerBindingDigest(request.OwnerID) {
 		t.Fatal("raw owner leaked or owner digest was not bound")
 	}
-	if corePlan.Tags[RequiredOutputsTag] != "InstanceId,PublicIp,SecurityGroupId,StackId" {
+	if corePlan.Tags[RequiredOutputsTag] != "InstanceId+PublicIp+SecurityGroupId+StackId" {
 		t.Fatalf("required outputs marker = %q", corePlan.Tags[RequiredOutputsTag])
+	}
+	providerTags, err := validateProviderTags(corePlan.Tags)
+	if err != nil || providerTags[RequiredOutputsTag] != corePlan.Tags[RequiredOutputsTag] {
+		t.Fatalf("complete EC2 tag set failed provider validation: tags=%v err=%v", providerTags, err)
 	}
 	if strings.Contains(template, `"SSMInstanceProfile":{"Properties":{"Roles":[{"Ref":"SSMRole"}],"Tags"`) {
 		t.Fatal("AWS::IAM::InstanceProfile does not support Tags")

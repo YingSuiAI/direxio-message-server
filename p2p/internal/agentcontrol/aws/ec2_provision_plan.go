@@ -138,7 +138,7 @@ func BuildEC2ProvisionPlan(req EC2ProvisionRequest) (EC2ProvisionPlan, error) {
 		"dirextalk:request-digest":   requestDigest,
 		"dirextalk:template-digest":  templateDigest,
 		"dirextalk:stack-name":       req.StackName,
-		RequiredOutputsTag:           strings.Join([]string{string(StackOutputInstanceID), string(StackOutputPublicIP), string(StackOutputSecurityGroup), string(StackOutputStackID)}, ","),
+		RequiredOutputsTag:           strings.Join([]string{string(StackOutputInstanceID), string(StackOutputPublicIP), string(StackOutputSecurityGroup), string(StackOutputStackID)}, "+"),
 		"dirextalk:price-status":     "unavailable",
 		"dirextalk:template-version": ec2TemplateVersion,
 	}
