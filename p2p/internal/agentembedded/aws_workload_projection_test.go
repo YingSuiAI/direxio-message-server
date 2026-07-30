@@ -130,6 +130,41 @@ func TestEmbeddedWorkloadProjectionPreservesWireContractAndSecretRevision(t *tes
 	}
 }
 
+func TestEmbeddedConfirmationProjectionEmitsCanonicalArrayFields(t *testing.T) {
+	for name, binding := range map[string]coreconfirmation.Binding{
+		"empty": {},
+		"non_empty": {
+			NetworkGrants:   []string{"security-group:sg-0123456789abcdef0", "network:subnet-0123456789abcdef0"},
+			SelectedCommand: []string{"echo one", "echo two"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			projected := confirmationMap(coreconfirmation.Confirmation{ConfirmationID: "11111111-1111-4111-8111-111111111111", Binding: binding})
+			encoded, err := json.Marshal(projected)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var wire struct {
+				Binding struct {
+					NetworkGrants   []string `json:"network_grants"`
+					SelectedCommand []string `json:"selected_command"`
+				} `json:"binding"`
+			}
+			if err := json.Unmarshal(encoded, &wire); err != nil {
+				t.Fatal(err)
+			}
+			if wire.Binding.NetworkGrants == nil || wire.Binding.SelectedCommand == nil {
+				t.Fatalf("array fields must not be null: %s", encoded)
+			}
+			expectedGrants := append([]string{}, binding.NetworkGrants...)
+			expectedCommand := append([]string{}, binding.SelectedCommand...)
+			if !equalProjectionValue(wire.Binding.NetworkGrants, expectedGrants) || !equalProjectionValue(wire.Binding.SelectedCommand, expectedCommand) {
+				t.Fatalf("array fields changed order/content: got grants=%#v command=%#v, want grants=%#v command=%#v", wire.Binding.NetworkGrants, wire.Binding.SelectedCommand, expectedGrants, expectedCommand)
+			}
+		})
+	}
+}
+
 func equalProjectionValue(got, want any) bool {
 	gotJSON, gotErr := json.Marshal(got)
 	wantJSON, wantErr := json.Marshal(want)
