@@ -34,7 +34,9 @@ func (p serviceAgentAccountPort) CreateMatrixSession(ctx context.Context, params
 	p.service.mu.Lock()
 	issuer := p.service.sessions
 	userID := p.service.agentMXIDLocked()
-	displayName := p.service.agentDisplayNameLocked()
+	onlineIdentity := agentmodule.OnlineAgentIdentity(p.service.agentConfig)
+	displayName := onlineIdentity.DisplayName
+	avatarURL := onlineIdentity.AvatarURL
 	homeserver := p.service.homeserver
 	p.service.mu.Unlock()
 	session := agentmodule.MatrixSession{
@@ -45,7 +47,7 @@ func (p serviceAgentAccountPort) CreateMatrixSession(ctx context.Context, params
 	if issuer == nil {
 		return session, nil
 	}
-	token, err := issuer.EnsureMatrixSession(ctx, userID, displayName, "", requestedDeviceID, false)
+	token, err := issuer.EnsureMatrixSession(ctx, userID, displayName, avatarURL, requestedDeviceID, false)
 	if err != nil {
 		return agentmodule.MatrixSession{}, internalError(err)
 	}

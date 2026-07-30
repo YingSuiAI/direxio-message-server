@@ -13,6 +13,13 @@ import (
 
 const LegacyPluginID = "io.dirextalk.agent"
 
+const (
+	configKeyDisplayName         = "display_name"
+	configKeyAvatarURL           = "avatar_url"
+	configKeyNativeAgentIdentity = "native_agent_identity"
+	configKeyOnlineAgentIdentity = "online_agent_identity"
+)
+
 // LegacyPluginStore is the only plugin persistence capability needed to import
 // pre-native Agent configuration during service startup.
 type LegacyPluginStore interface {
@@ -22,9 +29,14 @@ type LegacyPluginStore interface {
 // ToNativeMap combines shared Agent fields and runtime-owned fields while
 // excluding credentials that must never enter portal state.
 func ToNativeMap(cfg dirextalkdomain.AgentConfig) map[string]any {
+	cfg = NormalizeConfig(cfg)
+	nativeIdentity := NativeAgentIdentity(cfg)
+	onlineIdentity := OnlineAgentIdentity(cfg)
 	out := cloneMap(cfg.Native)
-	out["display_name"] = cfg.DisplayName
-	out["avatar_url"] = cfg.AvatarURL
+	out[configKeyDisplayName] = nativeIdentity.DisplayName
+	out[configKeyAvatarURL] = nativeIdentity.AvatarURL
+	out[configKeyNativeAgentIdentity] = identityMap(nativeIdentity)
+	out[configKeyOnlineAgentIdentity] = identityMap(onlineIdentity)
 	out["context_window"] = cfg.ContextWindow
 	out["enabled"] = cfg.Enabled
 	out["model"] = cfg.Model
@@ -43,11 +55,17 @@ func FromNativeMap(current dirextalkdomain.AgentConfig, config map[string]any) d
 	merged = SanitizeNativeConfigMap(merged)
 
 	next := current
-	if _, ok := merged["display_name"]; ok {
-		next.DisplayName = actionbase.String(merged["display_name"])
+	if _, ok := merged[configKeyDisplayName]; ok {
+		next.NativeAgentIdentity.DisplayName = actionbase.String(merged[configKeyDisplayName])
 	}
-	if _, ok := merged["avatar_url"]; ok {
-		next.AvatarURL = actionbase.String(merged["avatar_url"])
+	if _, ok := merged[configKeyAvatarURL]; ok {
+		next.NativeAgentIdentity.AvatarURL = actionbase.String(merged[configKeyAvatarURL])
+	}
+	if _, ok := config[configKeyNativeAgentIdentity]; ok {
+		next.NativeAgentIdentity = mergeIdentity(next.NativeAgentIdentity, config[configKeyNativeAgentIdentity])
+	}
+	if _, ok := config[configKeyOnlineAgentIdentity]; ok {
+		next.OnlineAgentIdentity = mergeIdentity(next.OnlineAgentIdentity, config[configKeyOnlineAgentIdentity])
 	}
 	if value := actionbase.Int64(merged["context_window"]); value > 0 {
 		next.ContextWindow = value
@@ -76,6 +94,57 @@ func FromNativeMap(current dirextalkdomain.AgentConfig, config map[string]any) d
 		next.Native = native
 	} else {
 		next.Native = nil
+	}
+	return NormalizeConfig(next)
+}
+
+// ApplyConfigUpdate merges ProductCore agent.config.update params into the
+// durable Agent configuration while preserving legacy top-level compatibility.
+func ApplyConfigUpdate(current dirextalkdomain.AgentConfig, params map[string]any) dirextalkdomain.AgentConfig {
+	next := current
+	values := actionbase.Params(params)
+	hasNativeIdentity := hasKey(params, configKeyNativeAgentIdentity)
+	hasOnlineIdentity := hasKey(params, configKeyOnlineAgentIdentity)
+
+	if displayName := values.String(configKeyDisplayName); displayName != "" {
+		next.DisplayName = displayName
+		if !hasNativeIdentity {
+			next.NativeAgentIdentity.DisplayName = displayName
+		}
+		if !hasOnlineIdentity {
+			next.OnlineAgentIdentity.DisplayName = displayName
+		}
+	}
+	if _, ok := params[configKeyAvatarURL]; ok {
+		avatarURL := values.String(configKeyAvatarURL)
+		next.AvatarURL = avatarURL
+		if !hasNativeIdentity {
+			next.NativeAgentIdentity.AvatarURL = avatarURL
+		}
+		if !hasOnlineIdentity {
+			next.OnlineAgentIdentity.AvatarURL = avatarURL
+		}
+	}
+	if hasNativeIdentity {
+		next.NativeAgentIdentity = mergeIdentity(next.NativeAgentIdentity, params[configKeyNativeAgentIdentity])
+	}
+	if hasOnlineIdentity {
+		next.OnlineAgentIdentity = mergeIdentity(next.OnlineAgentIdentity, params[configKeyOnlineAgentIdentity])
+	}
+	if contextWindow := values.Int64("context_window"); contextWindow > 0 {
+		next.ContextWindow = contextWindow
+	}
+	if _, ok := params["enabled"]; ok {
+		next.Enabled = values.Bool("enabled")
+	}
+	if model := values.String("model"); model != "" {
+		next.Model = model
+	}
+	if systemPrompt := values.String("system_prompt"); systemPrompt != "" {
+		next.SystemPrompt = systemPrompt
+	}
+	if _, ok := params["mcp_blocked_room_ids"]; ok {
+		next.MCPBlockedRoomIDs = values.Strings("mcp_blocked_room_ids")
 	}
 	return NormalizeConfig(next)
 }
@@ -150,6 +219,8 @@ func MergeLegacyConfig(current dirextalkdomain.AgentConfig, legacy map[string]an
 func NormalizeConfig(cfg dirextalkdomain.AgentConfig) dirextalkdomain.AgentConfig {
 	empty := strings.TrimSpace(cfg.DisplayName) == "" &&
 		strings.TrimSpace(cfg.AvatarURL) == "" &&
+		identityEmpty(cfg.NativeAgentIdentity) &&
+		identityEmpty(cfg.OnlineAgentIdentity) &&
 		cfg.ContextWindow == 0 &&
 		!cfg.Enabled &&
 		strings.TrimSpace(cfg.Model) == "" &&
@@ -157,6 +228,8 @@ func NormalizeConfig(cfg dirextalkdomain.AgentConfig) dirextalkdomain.AgentConfi
 		len(cfg.MCPBlockedRoomIDs) == 0
 	if empty {
 		cfg.DisplayName = "Agent"
+		cfg.NativeAgentIdentity = dirextalkdomain.AgentIdentityConfig{DisplayName: "Agent"}
+		cfg.OnlineAgentIdentity = dirextalkdomain.AgentIdentityConfig{DisplayName: "Agent"}
 		cfg.ContextWindow = 30
 		cfg.Enabled = true
 		return cfg
@@ -167,6 +240,14 @@ func NormalizeConfig(cfg dirextalkdomain.AgentConfig) dirextalkdomain.AgentConfi
 		cfg.DisplayName = strings.TrimSpace(cfg.DisplayName)
 	}
 	cfg.AvatarURL = strings.TrimSpace(cfg.AvatarURL)
+	legacyIdentity := dirextalkdomain.AgentIdentityConfig{
+		DisplayName: cfg.DisplayName,
+		AvatarURL:   cfg.AvatarURL,
+	}
+	cfg.NativeAgentIdentity = normalizeIdentity(cfg.NativeAgentIdentity, legacyIdentity)
+	cfg.OnlineAgentIdentity = normalizeIdentity(cfg.OnlineAgentIdentity, legacyIdentity)
+	cfg.DisplayName = cfg.NativeAgentIdentity.DisplayName
+	cfg.AvatarURL = cfg.NativeAgentIdentity.AvatarURL
 	if cfg.ContextWindow <= 0 {
 		cfg.ContextWindow = 30
 	}
@@ -207,6 +288,8 @@ func sanitizeModelProfiles(profiles []any) []any {
 func configEmpty(cfg dirextalkdomain.AgentConfig) bool {
 	return actionbase.String(cfg.DisplayName) == "" &&
 		actionbase.String(cfg.AvatarURL) == "" &&
+		identityEmpty(cfg.NativeAgentIdentity) &&
+		identityEmpty(cfg.OnlineAgentIdentity) &&
 		cfg.ContextWindow == 0 &&
 		!cfg.Enabled &&
 		actionbase.String(cfg.Model) == "" &&
@@ -217,11 +300,74 @@ func configEmpty(cfg dirextalkdomain.AgentConfig) bool {
 
 func sharedConfigKey(key string) bool {
 	switch key {
-	case "display_name", "avatar_url", "context_window", "enabled", "model", "system_prompt", "mcp_blocked_room_ids":
+	case configKeyDisplayName, configKeyAvatarURL, configKeyNativeAgentIdentity, configKeyOnlineAgentIdentity, "context_window", "enabled", "model", "system_prompt", "mcp_blocked_room_ids":
 		return true
 	default:
 		return false
 	}
+}
+
+func NativeAgentIdentity(cfg dirextalkdomain.AgentConfig) dirextalkdomain.AgentIdentityConfig {
+	return NormalizeConfig(cfg).NativeAgentIdentity
+}
+
+func OnlineAgentIdentity(cfg dirextalkdomain.AgentConfig) dirextalkdomain.AgentIdentityConfig {
+	return NormalizeConfig(cfg).OnlineAgentIdentity
+}
+
+func mergeIdentity(current dirextalkdomain.AgentIdentityConfig, value any) dirextalkdomain.AgentIdentityConfig {
+	raw, ok := value.(map[string]any)
+	if !ok {
+		return current
+	}
+	values := actionbase.Params(raw)
+	next := current
+	if displayName := values.String(configKeyDisplayName); displayName != "" {
+		next.DisplayName = displayName
+	}
+	if _, ok := raw[configKeyAvatarURL]; ok {
+		next.AvatarURL = values.String(configKeyAvatarURL)
+	}
+	return next
+}
+
+func normalizeIdentity(identity, fallback dirextalkdomain.AgentIdentityConfig) dirextalkdomain.AgentIdentityConfig {
+	identity.DisplayName = strings.TrimSpace(identity.DisplayName)
+	identity.AvatarURL = strings.TrimSpace(identity.AvatarURL)
+	fallback.DisplayName = strings.TrimSpace(fallback.DisplayName)
+	fallback.AvatarURL = strings.TrimSpace(fallback.AvatarURL)
+	if identity.DisplayName == "" && identity.AvatarURL == "" {
+		identity = fallback
+	}
+	if strings.TrimSpace(identity.DisplayName) == "" {
+		identity.DisplayName = fallbackString(fallback.DisplayName, "Agent")
+	}
+	return identity
+}
+
+func identityEmpty(identity dirextalkdomain.AgentIdentityConfig) bool {
+	return strings.TrimSpace(identity.DisplayName) == "" &&
+		strings.TrimSpace(identity.AvatarURL) == ""
+}
+
+func identityMap(identity dirextalkdomain.AgentIdentityConfig) map[string]any {
+	return map[string]any{
+		configKeyDisplayName: strings.TrimSpace(identity.DisplayName),
+		configKeyAvatarURL:   strings.TrimSpace(identity.AvatarURL),
+	}
+}
+
+func hasKey(values map[string]any, key string) bool {
+	_, ok := values[key]
+	return ok
+}
+
+func fallbackString(value, fallback string) string {
+	value = strings.TrimSpace(value)
+	if value != "" {
+		return value
+	}
+	return strings.TrimSpace(fallback)
 }
 
 func cloneMap(values map[string]any) map[string]any {

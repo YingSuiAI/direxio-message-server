@@ -114,7 +114,14 @@ func TestAgentMatrixSessionCreateUsesAgentIdentity(t *testing.T) {
 	issuer := &recordingMatrixSessionIssuer{}
 	service.SetMatrixSessionIssuer(issuer)
 	mustHandle[map[string]any](t, service, "agent.config.update", map[string]any{
-		"display_name": "Dirextalk Agent",
+		"native_agent_identity": map[string]any{
+			"display_name": "Ying Prime",
+			"avatar_url":   "mxc://example.com/ying",
+		},
+		"online_agent_identity": map[string]any{
+			"display_name": "Dirextalk Agent",
+			"avatar_url":   "mxc://example.com/online-agent",
+		},
 	})
 
 	session := mustHandle[map[string]any](t, service, "agent.matrix_session.create", map[string]any{
@@ -133,8 +140,8 @@ func TestAgentMatrixSessionCreateUsesAgentIdentity(t *testing.T) {
 	if issuer.sessionName != "Dirextalk Agent" {
 		t.Fatalf("expected Matrix issuer to use agent display name, got %q", issuer.sessionName)
 	}
-	if issuer.sessionURL != "" {
-		t.Fatalf("expected agent Matrix session avatar to be empty by default, got %q", issuer.sessionURL)
+	if issuer.sessionURL != "mxc://example.com/online-agent" {
+		t.Fatalf("expected Matrix issuer to use online agent avatar, got %q", issuer.sessionURL)
 	}
 	if session["device_id"] != "DIREXTALK_CLI" {
 		t.Fatalf("expected session device id to be DIREXTALK_CLI, got %#v", session)

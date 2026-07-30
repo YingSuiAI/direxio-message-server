@@ -17,6 +17,7 @@ This document is the backend-owned current contract for Dirextalk Agent state, N
 - Bridge availability is Matrix room state type `io.dirextalk.agent.status`, state key `@agent:<server>`, with content field `online`.
 - The running bridge publishes `online=true` or `online=false` through its Matrix session. Server startup or repair and `agent.config.update enabled=false` may publish `online=false` as a safe fallback.
 - The server does not infer bridge availability from Agent configuration, `/sync`, realtime WebSocket lifetime, or Matrix presence. `sync.bootstrap` returns `agent_room_id`, not `agent_online`, and does not emit `agent.presence`.
+- `agent.config.get` returns two mode-specific Agent identities: `native_agent_identity` for Ying / Native Agent and `online_agent_identity` for Your Agent / Matrix bridge Agent. Each identity contains `display_name` and `avatar_url`. Top-level `display_name` and `avatar_url` remain legacy compatibility fields and mirror the effective Native Agent identity. A legacy `agent.config.update` that only sends top-level identity fields updates both mode identities; when nested identity fields are sent, they are merged per mode and take precedence for that mode. `agent.matrix_session.create` uses `online_agent_identity` for the Matrix Agent session profile.
 
 ## Native Agent Ownership
 

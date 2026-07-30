@@ -165,8 +165,16 @@ func TestDatabaseStoreRestoresPortalAndBusinessState(t *testing.T) {
 	post := mustHandle[channelPostRecord](t, service, "channels.posts.create", map[string]any{"channel_id": ch.ChannelID, "body": "post body"})
 	mustHandle[channelCommentRecord](t, service, "channels.comments.create", map[string]any{"channel_id": ch.ChannelID, "post_id": post.PostID, "body": "comment body"})
 	mustHandle[map[string]any](t, service, "agent.config.update", map[string]any{
-		"display_name":         "Storage Agent",
-		"avatar_url":           "mxc://example.com/storage-agent",
+		"display_name": "Storage Legacy Agent",
+		"avatar_url":   "mxc://example.com/storage-legacy-agent",
+		"native_agent_identity": map[string]any{
+			"display_name": "Storage Ying",
+			"avatar_url":   "mxc://example.com/storage-ying",
+		},
+		"online_agent_identity": map[string]any{
+			"display_name": "Storage Online",
+			"avatar_url":   "mxc://example.com/storage-online",
+		},
 		"context_window":       float64(96),
 		"enabled":              true,
 		"model":                "storage-model",
@@ -228,8 +236,14 @@ func TestDatabaseStoreRestoresPortalAndBusinessState(t *testing.T) {
 	}
 	agentConfig := mustHandle[map[string]any](t, reloaded, "agent.config.get", nil)
 	blockedRooms := agentConfig["mcp_blocked_room_ids"].([]string)
-	if agentConfig["display_name"] != "Storage Agent" ||
-		agentConfig["avatar_url"] != "mxc://example.com/storage-agent" ||
+	nativeIdentity := agentConfig["native_agent_identity"].(map[string]any)
+	onlineIdentity := agentConfig["online_agent_identity"].(map[string]any)
+	if agentConfig["display_name"] != "Storage Ying" ||
+		agentConfig["avatar_url"] != "mxc://example.com/storage-ying" ||
+		nativeIdentity["display_name"] != "Storage Ying" ||
+		nativeIdentity["avatar_url"] != "mxc://example.com/storage-ying" ||
+		onlineIdentity["display_name"] != "Storage Online" ||
+		onlineIdentity["avatar_url"] != "mxc://example.com/storage-online" ||
 		agentConfig["model"] != "storage-model" ||
 		agentConfig["system_prompt"] != "stored prompt" ||
 		int64Param(agentConfig["context_window"]) != 96 ||

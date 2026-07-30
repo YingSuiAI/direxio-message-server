@@ -1,6 +1,12 @@
 # API Interface Change Record
 
-Last updated: 2026-07-23
+Last updated: 2026-07-30
+
+## 2026-07-30 Agent Mode-Specific Identities
+
+`agent.config.get` and `agent.config.update` now support mode-specific Agent identity objects. `native_agent_identity` owns Ying / Native Agent `display_name` and `avatar_url`; `online_agent_identity` owns Your Agent / Matrix bridge `display_name` and `avatar_url`. The existing top-level `display_name` and `avatar_url` remain for legacy clients and mirror the effective Native Agent identity in responses.
+
+A legacy update that sends only top-level identity fields synchronizes both mode identities. When nested identities are sent, updates merge per mode so one mode can change without clearing or overwriting the other; nested values take precedence for their mode. `agent.matrix_session.create` uses `online_agent_identity` when creating or ensuring the Matrix Agent session.
 
 ## 2026-07-23 Native Agent Anthropic, Gemini, And xAI Model Lists
 

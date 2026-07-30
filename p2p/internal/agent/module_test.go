@@ -138,11 +138,38 @@ func TestAccountHandlersPreserveSessionAndConfigContracts(t *testing.T) {
 	if config["display_name"] != "Ops Agent" || config["enabled"] != false || config["model"] != "local-model" || config["system_prompt"] != "concise" {
 		t.Fatalf("unexpected public config: %#v", config)
 	}
+	nativeIdentity := config["native_agent_identity"].(map[string]any)
+	onlineIdentity := config["online_agent_identity"].(map[string]any)
+	if nativeIdentity["display_name"] != "Ops Agent" ||
+		onlineIdentity["display_name"] != "Ops Agent" {
+		t.Fatalf("legacy top-level update should sync mode identities: %#v", config)
+	}
 	if _, found := config["api_key"]; found || !account.published {
 		t.Fatalf("config must stay sanitized and disabling must publish offline: %#v published=%v", config, account.published)
 	}
 	blocked := config["mcp_blocked_room_ids"].([]string)
 	if len(blocked) != 1 || blocked[0] != "!secret:example.com" {
 		t.Fatalf("blocked rooms = %#v", blocked)
+	}
+
+	updated, actionErr = handlers["agent.config.update"](context.Background(), map[string]any{
+		"native_agent_identity": map[string]any{
+			"display_name": "Ying Prime",
+		},
+		"online_agent_identity": map[string]any{
+			"avatar_url": "mxc://example.com/online",
+		},
+	})
+	if actionErr != nil {
+		t.Fatalf("agent.config.update identities: %v", actionErr)
+	}
+	config = updated.(map[string]any)
+	nativeIdentity = config["native_agent_identity"].(map[string]any)
+	onlineIdentity = config["online_agent_identity"].(map[string]any)
+	if nativeIdentity["display_name"] != "Ying Prime" ||
+		nativeIdentity["avatar_url"] != "" ||
+		onlineIdentity["display_name"] != "Ops Agent" ||
+		onlineIdentity["avatar_url"] != "mxc://example.com/online" {
+		t.Fatalf("nested identity updates should merge independently: %#v", config)
 	}
 }
