@@ -130,13 +130,40 @@ func (p *Provider) Destroy(ctx context.Context, plan coreworkload.Plan, op corew
 	if err = p.verify(ctx, h, clients, plan); err != nil {
 		return coreworkload.Readback{}, err
 	}
-	if _, err = p.command(ctx, clients.SSM, plan.Target.InstanceID, plan, []string{"systemctl stop " + plan.Target.EC2SystemdService, "systemctl disable " + plan.Target.EC2SystemdService}, "destroy"); err != nil {
+	commands, err := destroyCommands(plan)
+	if err != nil {
 		return coreworkload.Readback{}, err
 	}
-	if _, err = p.command(ctx, clients.SSM, plan.Target.InstanceID, plan, []string{inactiveProbe(plan.Target.EC2SystemdService)}, "destroy-ready"); err != nil {
+	if _, err = p.command(ctx, clients.SSM, plan.Target.InstanceID, plan, commands, "destroy"); err != nil {
+		return coreworkload.Readback{}, err
+	}
+	if _, err = p.command(ctx, clients.SSM, plan.Target.InstanceID, plan, []string{destroyedProbe(plan)}, "destroy-ready"); err != nil {
 		return coreworkload.Readback{}, err
 	}
 	return p.readback(ctx, clients, plan, op, "destroyed")
+}
+
+func destroyCommands(plan coreworkload.Plan) ([]string, error) {
+	commands := []string{
+		"systemctl stop " + plan.Target.EC2SystemdService,
+		"systemctl disable " + plan.Target.EC2SystemdService,
+	}
+	switch plan.Target.EC2CleanupProfile {
+	case "":
+		return commands, nil
+	case coreworkload.EC2CleanupProfileGeoLibreStaticV1:
+		return []string{
+			"set -euo pipefail",
+			"if systemctl list-unit-files --type=service --no-legend | awk '{print $1}' | grep -Fxq " + coreworkload.GeoLibreStaticV1Service + "; then systemctl stop " + coreworkload.GeoLibreStaticV1Service + "; systemctl disable " + coreworkload.GeoLibreStaticV1Service + "; fi",
+			"docker info >/dev/null",
+			"if docker container inspect dirextalk-geolibre >/dev/null 2>&1; then docker rm -f dirextalk-geolibre >/dev/null; fi",
+			"if docker image inspect " + coreworkload.GeoLibreStaticV1ImageURI + " >/dev/null 2>&1; then docker image rm " + coreworkload.GeoLibreStaticV1ImageURI + " >/dev/null; fi",
+			"rm -f /etc/systemd/system/" + coreworkload.GeoLibreStaticV1Service + " /var/lib/dirextalk-geolibre/nginx.conf.template",
+			"systemctl daemon-reload",
+		}, nil
+	default:
+		return nil, workaws.ErrInvalid
+	}
 }
 func (p *Provider) Read(ctx context.Context, plan coreworkload.Plan, op coreworkload.Operation) (coreworkload.Readback, error) {
 	h, clients, err := p.prepare(ctx, plan, op)
@@ -149,7 +176,7 @@ func (p *Provider) Read(ctx context.Context, plan coreworkload.Plan, op corework
 	state := "ready"
 	if _, err = p.command(ctx, clients.SSM, plan.Target.InstanceID, plan, []string{activeProbe(plan.Target.EC2SystemdService)}, "read"); err != nil {
 		state = "destroyed"
-		if _, e := p.command(ctx, clients.SSM, plan.Target.InstanceID, plan, []string{inactiveProbe(plan.Target.EC2SystemdService)}, "read"); e != nil {
+		if _, e := p.command(ctx, clients.SSM, plan.Target.InstanceID, plan, []string{destroyedProbe(plan)}, "read"); e != nil {
 			return coreworkload.Readback{}, err
 		}
 	}
@@ -157,6 +184,9 @@ func (p *Provider) Read(ctx context.Context, plan coreworkload.Plan, op corework
 }
 func (p *Provider) prepare(ctx context.Context, plan coreworkload.Plan, op coreworkload.Operation) (workaws.CredentialHandle, Clients, error) {
 	if plan.TargetKind != coreworkload.TargetAWSEC2SSM || op.TargetKind != plan.TargetKind || plan.Digest != op.PlanDigest || plan.Revision != op.PlanRevision {
+		return workaws.CredentialHandle{}, Clients{}, workaws.ErrInvalid
+	}
+	if _, err := plan.Normalize(); err != nil || coreworkload.PlanInputDigest(plan) != plan.Digest {
 		return workaws.CredentialHandle{}, Clients{}, workaws.ErrInvalid
 	}
 	if err := plan.Target.ValidateCanonicalTarget(plan.TargetKind); err != nil {
@@ -255,6 +285,17 @@ func (p *Provider) command(ctx context.Context, cl SSMClient, instance string, p
 }
 func activeProbe(s string) string   { return fmt.Sprintf("systemctl is-active --quiet %s", s) }
 func inactiveProbe(s string) string { return fmt.Sprintf("systemctl is-inactive --quiet %s", s) }
+
+func destroyedProbe(plan coreworkload.Plan) string {
+	if plan.Target.EC2CleanupProfile != coreworkload.EC2CleanupProfileGeoLibreStaticV1 {
+		return inactiveProbe(plan.Target.EC2SystemdService)
+	}
+	return "set -euo pipefail; docker info >/dev/null; " +
+		"test ! -e /etc/systemd/system/" + coreworkload.GeoLibreStaticV1Service + "; " +
+		"test ! -e /var/lib/dirextalk-geolibre/nginx.conf.template; " +
+		"test -z \"$(docker container ls -a --filter name=^/dirextalk-geolibre$ --format '{{.Names}}')\"; " +
+		"! docker image inspect " + coreworkload.GeoLibreStaticV1ImageURI + " >/dev/null 2>&1"
+}
 
 // DeterministicComment is safe to expose in acceptance tests and read-only
 // reconciliation tooling; it contains no command or credential material.

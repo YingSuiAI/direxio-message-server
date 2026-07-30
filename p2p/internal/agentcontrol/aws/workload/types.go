@@ -68,6 +68,7 @@ type TargetSettings struct {
 	Labels               map[string]string `json:"labels,omitempty"`
 	EC2DocumentVersion   string            `json:"ec2_document_version,omitempty" yaml:"ec2_document_version,omitempty" mapstructure:"ec2_document_version"`
 	EC2SystemdService    string            `json:"ec2_systemd_service,omitempty" yaml:"ec2_systemd_service,omitempty" mapstructure:"ec2_systemd_service"`
+	EC2CleanupProfile    string            `json:"ec2_cleanup_profile,omitempty" yaml:"ec2_cleanup_profile,omitempty" mapstructure:"ec2_cleanup_profile"`
 	RequiredInstanceTags map[string]string `json:"required_instance_tags,omitempty" yaml:"required_instance_tags,omitempty" mapstructure:"required_instance_tags"`
 	ECSClusterARN        string            `json:"ecs_cluster_arn,omitempty" yaml:"ecs_cluster_arn,omitempty" mapstructure:"ecs_cluster_arn"`
 	ECSServiceName       string            `json:"ecs_service_name,omitempty" yaml:"ecs_service_name,omitempty" mapstructure:"ecs_service_name"`
@@ -83,6 +84,17 @@ type TargetSettings struct {
 	ECSDesiredCount      int64             `json:"ecs_desired_count,omitempty" yaml:"ecs_desired_count,omitempty" mapstructure:"ecs_desired_count"`
 	ECSImageURI          string            `json:"ecs_image_uri,omitempty" yaml:"ecs_image_uri,omitempty" mapstructure:"ecs_image_uri"`
 }
+
+const (
+	EC2CleanupProfileGeoLibreStaticV1 = "geolibre-static-v1"
+	GeoLibreStaticV1Release           = "geolibre-2856ef8-v1"
+	GeoLibreStaticV1Service           = "dirextalk-geolibre.service"
+	GeoLibreStaticV1ImageDigest       = "bd18a93768087e5619e75e2e8282ce347aed9179987ee8a7f471df862b72d64d"
+	GeoLibreStaticV1ImageURI          = "ghcr.io/opengeos/geolibre@sha256:" + GeoLibreStaticV1ImageDigest
+	GeoLibreStaticV1Source            = "https://github.com/opengeos/GeoLibre.git#2856ef8c0b227ad18ecf43d4623cf00013c1740e"
+	GeoLibreStaticV1ManifestDigest    = "849a9977a72efe5b4e70d28517c1edf038d7ca91c0fc4f53183a3ee3b1095a86"
+	GeoLibreStaticV1CommandDigest     = "f0263e3ae0f0ad857da924ade38f9bd24e6643a0ed37829b4bcaf2152d7bd582"
+)
 
 // TargetIdentity is the provider-safe, exact identity used for readback
 // fencing. It contains no arbitrary provider payload or credentials.
@@ -310,6 +322,12 @@ func planInputDigest(p Plan) string {
 }
 func PlanInputDigest(p Plan) string { return planInputDigest(p) }
 
+// CommandStepsDigest binds an ordered, already-normalized command program.
+// Fixed server-owned workload profiles use it to reject any command mutation.
+func CommandStepsDigest(commands []string) string {
+	return canonicalDigest(append([]string(nil), commands...))
+}
+
 // CanonicalAWSSecretARN accepts only reference-only Secrets Manager and SSM
 // Parameter Store ARNs. It intentionally does not resolve or read values.
 func CanonicalAWSSecretARN(v string) (string, bool) {
@@ -453,6 +471,9 @@ func (p Plan) Normalize() (Plan, error) {
 			return Plan{}, ErrInvalid
 		}
 	}
+	if p.Target.EC2CleanupProfile == EC2CleanupProfileGeoLibreStaticV1 && !validGeoLibreStaticV1Plan(p) {
+		return Plan{}, ErrInvalid
+	}
 	for _, port := range p.Target.Ports {
 		if port < 1 || port > 65535 {
 			return Plan{}, ErrInvalid
@@ -490,6 +511,56 @@ func (p Plan) Normalize() (Plan, error) {
 	return p, nil
 }
 
+func validGeoLibreStaticV1Plan(p Plan) bool {
+	manifestDigest := p.Target.Labels["dirextalk:manifest-digest"]
+	commandDigest := p.Target.Labels["dirextalk:command-digest"]
+	ownerBinding := strings.TrimPrefix(p.Target.RequiredInstanceTags["owner"], "sha256:")
+	planID := p.Target.RequiredInstanceTags["dirextalk:plan-id"]
+	provisionID := p.Target.Labels["dirextalk:provision-id"]
+	if len(p.Target.NetworkGrantDetails) != 1 || len(p.NetworkGrants) != 1 {
+		return false
+	}
+	networkGrant := p.Target.NetworkGrantDetails[0]
+	return p.TargetKind == TargetAWSEC2SSM &&
+		p.Target.EC2SystemdService == GeoLibreStaticV1Service &&
+		p.ImageURI == GeoLibreStaticV1ImageURI &&
+		p.ImageDigest == GeoLibreStaticV1ImageDigest &&
+		p.Source == GeoLibreStaticV1Source &&
+		manifestDigest == GeoLibreStaticV1ManifestDigest &&
+		p.Artifact == "geolibre-manifest:"+GeoLibreStaticV1ManifestDigest &&
+		commandDigest == GeoLibreStaticV1CommandDigest &&
+		CommandStepsDigest(p.CommandSteps) == GeoLibreStaticV1CommandDigest &&
+		p.Target.Labels["dirextalk:release"] == GeoLibreStaticV1Release &&
+		p.Target.Labels["dirextalk:exposure"] == "public-unauthenticated-http" &&
+		p.Target.Labels["dirextalk:sidecar"] == "disabled" &&
+		p.Target.RequiredInstanceTags["managed"] == "true" &&
+		p.Target.RequiredInstanceTags["service"] == "geolibre" &&
+		strings.HasPrefix(p.Target.RequiredInstanceTags["owner"], "sha256:") &&
+		ValidDigest(ownerBinding) &&
+		ValidUUID(planID) &&
+		ValidUUID(provisionID) &&
+		networkGrant.Kind == "aws_security_group" &&
+		validEC2ResourceID(networkGrant.ReferenceID, "sg-") &&
+		p.NetworkGrants[0] == "security-group:"+networkGrant.ReferenceID &&
+		p.Summary == GeoLibreStaticV1Summary(provisionID)
+}
+
+func validEC2ResourceID(value, prefix string) bool {
+	if !strings.HasPrefix(value, prefix) {
+		return false
+	}
+	suffix := strings.TrimPrefix(value, prefix)
+	if len(suffix) != 8 && len(suffix) != 17 {
+		return false
+	}
+	for _, char := range suffix {
+		if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 func validPinnedImageURI(v string) bool {
 	v = strings.TrimSpace(v)
 	idx := strings.LastIndex(v, "@sha256:")
@@ -517,6 +588,9 @@ func validateTargetSettings(kind TargetKind, t TargetSettings) error {
 	switch kind {
 	case TargetAWSEC2SSM:
 		if !validDocumentVersion(t.EC2DocumentVersion) || !validSystemdService(t.EC2SystemdService) || len(t.RequiredInstanceTags) == 0 {
+			return ErrInvalid
+		}
+		if t.EC2CleanupProfile != "" && t.EC2CleanupProfile != EC2CleanupProfileGeoLibreStaticV1 {
 			return ErrInvalid
 		}
 		for k, v := range t.RequiredInstanceTags {
