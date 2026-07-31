@@ -126,6 +126,9 @@ func (m *Migrator) up(ctx context.Context, target string) error {
 			migration := m.migrations[i]
 			// Skip migration if it was already executed
 			if _, ok := executedMigrations[migration.Version]; ok {
+				if target != "" && migration.Version == target {
+					break
+				}
 				continue
 			}
 			logrus.Debugf("Executing database migration '%s'", migration.Version)

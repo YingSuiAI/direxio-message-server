@@ -157,6 +157,12 @@ func TestMigratorUpToStopsAtKnownTargetAndRejectsUnknown(t *testing.T) {
 	if got := strings.Join(ran, ","); got != "v1,v2" {
 		t.Fatalf("UpTo execution = %q", got)
 	}
+	if err := m.UpTo(ctx, "v2"); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(ran, ","); got != "v1,v2" {
+		t.Fatalf("repeat UpTo crossed target = %q", got)
+	}
 	if err := m.UpTo(ctx, "missing"); err == nil {
 		t.Fatal("UpTo accepted unknown target")
 	}
