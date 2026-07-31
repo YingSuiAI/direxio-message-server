@@ -386,6 +386,67 @@ func TestPostgresAWSConfirmationRejectVsLinkedRequestChangeIsBounded(t *testing.
 	}
 }
 
+func TestPostgresAWSConfirmationOriginalPlanLockPrecedesProvisionDeterministically(t *testing.T) {
+	store, _, fx, requested, now := newServiceDerivedDestroyPostgresFixture(t)
+	blocker, err := store.DB().BeginTx(fx.ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Rollback()
+	var lockedPlan string
+	if err = blocker.QueryRowContext(fx.ctx, `SELECT plan_id::text FROM core_aws_plans WHERE owner_id=$1 AND plan_id=$2 FOR UPDATE`, fx.owner, fx.planID).Scan(&lockedPlan); err != nil {
+		t.Fatal(err)
+	}
+	if lockedPlan != fx.planID {
+		t.Fatalf("blocked wrong plan = %q", lockedPlan)
+	}
+
+	rejectResult := make(chan error, 1)
+	go func() {
+		_, rejectErr := NewDatabaseConfirmationStore(store.DB()).Reject(fx.ctx, coreconfirmation.RejectCommand{
+			OwnerID: fx.owner, ConfirmationID: requested.Confirmation.ConfirmationID,
+			IdempotencyKey: "99999999-9999-4999-8999-999999999986", ExpectedRevision: 1,
+			Reason: "declined", At: now,
+		})
+		rejectResult <- rejectErr
+	}()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		var waiting int
+		err = store.DB().QueryRowContext(fx.ctx, `SELECT count(*) FROM pg_stat_activity WHERE wait_event_type='Lock' AND query LIKE '%FROM core_aws_plans WHERE owner_id=$1 AND plan_id=$2 FOR UPDATE%'`).Scan(&waiting)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if waiting > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Reject did not block on the original plan lock")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	var provisionID string
+	if err = store.DB().QueryRowContext(fx.ctx, `SELECT provision_id::text FROM core_aws_ec2_provisions WHERE owner_id=$1 AND provision_id=$2 FOR UPDATE NOWAIT`, fx.owner, fx.provisionID).Scan(&provisionID); err != nil {
+		t.Fatalf("provision lock was not available while original plan was blocked: %v", err)
+	}
+	if provisionID != fx.provisionID {
+		t.Fatalf("locked wrong provision = %q", provisionID)
+	}
+	if err = blocker.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err = <-rejectResult:
+		if err != nil {
+			t.Fatalf("Reject after original plan release = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Reject did not complete after original plan release")
+	}
+}
+
 func TestPostgresAWSConfirmationRejectReleasesCreate(t *testing.T) {
 	store, _, fx := newPreProviderPostgresFixture(t)
 	preparePreProviderConfirmation(t, store, fx, agentaws.OperationCreate)
