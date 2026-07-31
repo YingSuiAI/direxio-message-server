@@ -306,7 +306,7 @@ func TestPostgresStoreCreateRequestCancelWithSubMicrosecondTimes(t *testing.T) {
 	defer store.Close()
 	owner := "@workload-real-chain:example.test"
 	credentialID := "89999999-9999-4999-8999-999999999999"
-	now := time.Now().UTC()
+	now := time.Now().UTC().Truncate(time.Microsecond).Add(123 * time.Nanosecond)
 	if _, err = store.DB().ExecContext(ctx, `INSERT INTO core_aws_credentials(owner_id,credential_id,revision,envelope_version,aad_version,key_id,nonce,ciphertext,envelope_digest,name,region,account_id,user_arn,verified_revision,created_at,updated_at) VALUES($1,$2,1,1,1,'test',decode('000000000000000000000000','hex'),decode('00000000000000000000000000000000','hex'),$3,'chain','us-east-1','123456789012','arn:aws:iam::123456789012:user/test',1,$4,$4)`, owner, credentialID, strings.Repeat("a", 64), now); err != nil {
 		t.Fatal(err)
 	}
@@ -353,7 +353,9 @@ func TestPostgresStoreCreateRequestCancelWithSubMicrosecondTimes(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	cancelCommand := coretask.CancelCommand{OwnerID: owner, TaskID: requested.Task.ID, ExpectedRevision: requested.Task.Revision, Mutation: coretask.MutationCommand{IdempotencyKey: "8c999999-9999-4999-8999-999999999999", ExpectedRevision: requested.Task.Revision}, Reason: "chain cancel", At: time.Now().UTC()}
+	// Reuse the first previously-conflicted idempotency key after restoring the
+	// canonical column, proving the failed transaction did not poison replay.
+	cancelCommand := coretask.CancelCommand{OwnerID: owner, TaskID: requested.Task.ID, ExpectedRevision: requested.Task.Revision, Mutation: coretask.MutationCommand{IdempotencyKey: "8d009999-9999-4999-8999-999999999999", ExpectedRevision: requested.Task.Revision}, Reason: "column tamper", At: time.Now().UTC()}
 	canceled, err := NewDatabaseTaskStore(db).Cancel(ctx, cancelCommand)
 	if err != nil || canceled.Status != coretask.StatusCanceled {
 		t.Fatalf("real CreatePlan->RequestOperation->Cancel = %+v, %v", canceled, err)
