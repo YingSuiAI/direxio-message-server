@@ -9,11 +9,14 @@ import (
 )
 
 type ProcessContext struct {
-	mu       sync.RWMutex
-	wg       sync.WaitGroup      // used to wait for components to shutdown
-	ctx      context.Context     // cancelled when Stop is called
-	shutdown context.CancelFunc  // shut down Dendrite
-	degraded map[string]struct{} // reasons why the process is degraded
+	mu                    sync.RWMutex
+	wg                    sync.WaitGroup      // used to wait for components to shutdown
+	ctx                   context.Context     // cancelled when Stop is called
+	shutdown              context.CancelFunc  // shut down Dendrite
+	degraded              map[string]struct{} // reasons why the process is degraded
+	shutdownCallbacksMu   sync.Mutex
+	shutdownCallbacks     []func()
+	shutdownCallbacksOnce sync.Once
 }
 
 func NewProcessContext() *ProcessContext {
@@ -48,6 +51,29 @@ func (b *ProcessContext) WaitForShutdown() <-chan struct{} {
 
 func (b *ProcessContext) WaitForComponentsToFinish() {
 	b.wg.Wait()
+	if b.ctx.Err() != nil {
+		b.shutdownCallbacksOnce.Do(func() {
+			b.shutdownCallbacksMu.Lock()
+			callbacks := append([]func(){}, b.shutdownCallbacks...)
+			b.shutdownCallbacks = nil
+			b.shutdownCallbacksMu.Unlock()
+			for _, callback := range callbacks {
+				callback()
+			}
+		})
+	}
+}
+
+// RegisterShutdownCallback runs once after process cancellation and all
+// registered components have stopped. It is the final shutdown phase for
+// resources that must remain fenced while HTTP and workers drain.
+func (b *ProcessContext) RegisterShutdownCallback(callback func()) {
+	if b == nil || callback == nil {
+		return
+	}
+	b.shutdownCallbacksMu.Lock()
+	b.shutdownCallbacks = append(b.shutdownCallbacks, callback)
+	b.shutdownCallbacksMu.Unlock()
 }
 
 func (b *ProcessContext) Degraded(err error) {

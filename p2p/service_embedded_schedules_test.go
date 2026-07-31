@@ -284,15 +284,16 @@ func TestDatabaseServiceMissingAgentKeyringInitializesAndIsIdempotent(t *testing
 	if _, apiErr := service.Handle(ctx, "profile.get", nil); apiErr != nil {
 		t.Fatalf("ordinary ProductCore remains available: %v", apiErr)
 	}
-	// A concurrent startup cannot steal the live process's shared guard.
+	// A healthy successor may overlap while both runtimes hold shared guards.
 	blocked, err := NewServiceWithStore(ctx, Config{ServerName: "example.com", AgentSecretKeyringFile: keyring}, store)
 	if err != nil {
 		t.Fatalf("concurrent startup: %v", err)
 	}
-	if blocked.agentSecretReady {
-		t.Fatal("concurrent startup bypassed the live Agent runtime guard")
+	if !blocked.agentSecretReady {
+		t.Fatalf("concurrent startup did not retain Agent readiness: %v", blocked.modelProfileInitErr)
 	}
 	service.closeAgentSecretGuard()
+	blocked.closeAgentSecretGuard()
 	// A restart with the same database/keyring must verify the existing file
 	// without replacing it or changing its permissions.
 	before, err := os.ReadFile(keyring)
@@ -372,6 +373,46 @@ func TestDatabaseServiceLostAgentKeyringWithCiphertextSurvivesOrdinaryStartup(t 
 	}
 	if _, apiErr := service.Handle(ctx, "profile.get", nil); apiErr != nil {
 		t.Fatalf("ordinary ProductCore unavailable after lost keyring: %v", apiErr)
+	}
+}
+
+func TestAgentSecretGuardReleasesAfterProcessComponentsDrain(t *testing.T) {
+	ctx := context.Background()
+	connStr, closeDB := test.PrepareDBConnectionString(t, test.DBTypePostgres)
+	t.Cleanup(closeDB)
+	dbOpts := config.DatabaseOptions{ConnectionString: config.DataSource(connStr)}
+	store, err := NewDatabaseStore(ctx, sqlutil.NewConnectionManager(nil, dbOpts), &dbOpts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	keyring := filepath.Join(t.TempDir(), "secret-keyring.json")
+	if _, err := p2pstorage.LoadOrCreateAgentSecretKeyring(keyring); err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewServiceWithStore(ctx, Config{ServerName: "example.com", AgentSecretKeyringFile: keyring}, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Force the scheduler's readiness branch to remain unavailable while a
+	// separate component simulates an in-flight shutdown drain.
+	service.agentTaskRuntime = nil
+	processCtx := process.NewProcessContext()
+	processCtx.ComponentStarted()
+	if service.StartEmbeddedScheduler(processCtx, "guard-drain-test") {
+		t.Fatal("scheduler unexpectedly started")
+	}
+	if err := os.Remove(keyring); err != nil {
+		t.Fatal(err)
+	}
+	processCtx.ShutdownDendrite()
+	if _, err := p2pstorage.InitializeAgentSecretKeyringForDatabase(ctx, store.DB(), keyring); !errors.Is(err, p2pstorage.ErrAgentSecretKeyringUnavailable) {
+		t.Fatalf("maintenance crossed in-flight shutdown guard: %v", err)
+	}
+	processCtx.ComponentFinished()
+	processCtx.WaitForComponentsToFinish()
+	if _, err := p2pstorage.InitializeAgentSecretKeyringForDatabase(ctx, store.DB(), keyring); err != nil {
+		t.Fatalf("maintenance after process drain: %v", err)
 	}
 }
 

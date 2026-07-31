@@ -128,16 +128,11 @@ func (s *Service) closeAgentSecretGuard() {
 	})
 }
 
-func (s *Service) watchAgentSecretGuardShutdown(processCtx *process.ProcessContext) {
+func (s *Service) registerAgentSecretGuardShutdown(processCtx *process.ProcessContext) {
 	if s == nil || processCtx == nil {
 		return
 	}
-	processCtx.ComponentStarted()
-	go func() {
-		defer processCtx.ComponentFinished()
-		<-processCtx.Context().Done()
-		s.closeAgentSecretGuard()
-	}()
+	processCtx.RegisterShutdownCallback(s.closeAgentSecretGuard)
 }
 
 func (s *Service) embeddedAgentCapabilityReady(capability string) bool {
@@ -220,7 +215,7 @@ func (s *Service) StartEmbeddedScheduler(processCtx *process.ProcessContext, wor
 		loop != nil &&
 		s.agentRuntimeInitErr == nil
 	s.mu.Unlock()
-	s.watchAgentSecretGuardShutdown(processCtx)
+	s.registerAgentSecretGuardShutdown(processCtx)
 	startAgentConfirmationSweeper(processCtx, owner, confirmationSweep, confirmationSweepInterval)
 	if !ready {
 		return false

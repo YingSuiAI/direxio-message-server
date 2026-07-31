@@ -140,6 +140,20 @@ func BootstrapAgentSecretRuntime(ctx context.Context, db *sql.DB, path string) (
 	if db == nil || path == "" {
 		return nil, nil, ErrAgentSecretKeyringUnavailable
 	}
+	if _, statErr := os.Stat(path); statErr == nil {
+		guard, err := AcquireAgentSecretRuntimeGuard(ctx, db)
+		if err != nil {
+			return nil, nil, ErrAgentSecretKeyringUnavailable
+		}
+		keyring, err := LoadAgentSecretKeyring(path)
+		if err != nil {
+			_ = guard.Close()
+			return nil, nil, ErrAgentSecretKeyringUnavailable
+		}
+		return keyring, guard, nil
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return nil, nil, ErrAgentSecretKeyringUnavailable
+	}
 	conn, err := acquireAgentSecretMaintenanceGuard(ctx, db)
 	if err != nil {
 		return nil, nil, ErrAgentSecretKeyringUnavailable
@@ -152,6 +166,8 @@ func BootstrapAgentSecretRuntime(ctx context.Context, db *sql.DB, path string) (
 	}()
 	var keyring *AgentSecretKeyring
 	if _, statErr := os.Stat(path); statErr == nil {
+		// Another fenced initializer won the race while we acquired the
+		// exclusive lock; load the now-existing file before handoff.
 		keyring, err = LoadAgentSecretKeyring(path)
 	} else if errors.Is(statErr, os.ErrNotExist) {
 		if err = agentSecretDatabaseHasCiphertext(ctx, conn); err == nil {
