@@ -209,3 +209,32 @@ func lockAWSPreProviderByConfirmationTx(ctx context.Context, tx *sql.Tx, owner, 
 	}
 	return lockAWSPreProviderProvisionTx(ctx, tx, resolvedOwner, provisionID)
 }
+
+// lockAWSPreProviderByTaskTx takes the same provision fence as confirmation
+// terminalization, but resolves it from the task before that task row is
+// locked.  This preserves the provider path lock order (provision fence,
+// then task/change rows) for owner-initiated task cancellation.
+func lockAWSPreProviderByTaskTx(ctx context.Context, tx *sql.Tx, owner, taskID string) (bool, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT owner_id,COALESCE(provision_id::text,'') FROM core_aws_changes WHERE owner_id=$1 AND task_id=$2`, owner, taskID)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return false, rows.Err()
+	}
+	var resolvedOwner, provisionID string
+	if err = rows.Scan(&resolvedOwner, &provisionID); err != nil {
+		return false, err
+	}
+	if rows.Next() {
+		return false, coreconfirmation.ErrConflict
+	}
+	if err = rows.Err(); err != nil {
+		return false, err
+	}
+	if provisionID == "" {
+		return true, nil
+	}
+	return true, lockAWSPreProviderProvisionTx(ctx, tx, resolvedOwner, provisionID)
+}

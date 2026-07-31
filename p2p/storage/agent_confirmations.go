@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcontrol/confirmation"
+	coretask "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcontrol/task"
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 )
@@ -79,6 +80,40 @@ func getConfirmationTx(ctx context.Context, tx *sql.Tx, owner, id string) (confi
 
 func getConfirmationForUpdateTx(ctx context.Context, tx *sql.Tx, owner, id string) (confirmation.Confirmation, error) {
 	return scanConfirmation(tx.QueryRowContext(ctx, `SELECT confirmation_id::text,owner_id,operation_domain,target_id,target_revision,binding_digest,binding_json,task_id::text,state,revision,created_at,updated_at,expires_at,terminal_reason FROM agent_confirmations WHERE ($1='' OR owner_id=$1) AND confirmation_id=$2 FOR UPDATE`, owner, id))
+}
+
+// getExternalTaskConfirmationForUpdateTx returns the sole live external
+// binding for a task. Task cancellation must not guess a projection from a
+// partial or ambiguous confirmation relationship.
+func getExternalTaskConfirmationForUpdateTx(ctx context.Context, tx *sql.Tx, owner, taskID string, kind coretask.TaskKind) (confirmation.Confirmation, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT confirmation_id::text,owner_id,operation_domain,target_id,target_revision,binding_digest,binding_json,task_id::text,state,revision,created_at,updated_at,expires_at,terminal_reason
+		FROM agent_confirmations WHERE owner_id=$1 AND task_id=$2 AND (operation_domain='aws' OR operation_domain LIKE 'workload:%')`+
+		` AND state IN ('pending','confirmed') AND reservation_json IS NULL FOR UPDATE`, owner, taskID)
+	if err != nil {
+		return confirmation.Confirmation{}, err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		if err = rows.Err(); err != nil {
+			return confirmation.Confirmation{}, err
+		}
+		return confirmation.Confirmation{}, confirmation.ErrNotFound
+	}
+	stored, err := scanConfirmation(rows)
+	if err != nil {
+		return confirmation.Confirmation{}, err
+	}
+	if rows.Next() {
+		return confirmation.Confirmation{}, confirmation.ErrConflict
+	}
+	if err = rows.Err(); err != nil {
+		return confirmation.Confirmation{}, err
+	}
+	if (kind == coretask.TaskKindAWSChange && stored.Binding.OperationDomain != "aws") ||
+		(kind == coretask.TaskKindWorkload && !strings.HasPrefix(stored.Binding.OperationDomain, "workload:")) {
+		return confirmation.Confirmation{}, confirmation.ErrConflict
+	}
+	return stored, nil
 }
 
 type confirmationTaskRow struct {

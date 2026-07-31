@@ -219,6 +219,9 @@ func TestDatabaseTaskCancelPersistsAtomicReplayBeforeMutableChecks(t *testing.T)
 
 	mock.ExpectBegin()
 	expectTaskReplayMiss(mock, testTaskOwnerA, "cancel", key)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT owner_id,COALESCE(provision_id::text,'') FROM core_aws_changes WHERE owner_id=$1 AND task_id=$2")).
+		WithArgs(testTaskOwnerA, testTaskID).
+		WillReturnRows(sqlmock.NewRows([]string{"owner_id", "provision_id"}))
 	mock.ExpectQuery(regexp.QuoteMeta(databaseTaskSelect+` WHERE task_id=$1 AND owner_id=$2 FOR UPDATE`)).
 		WithArgs(testTaskID, testTaskOwnerA).
 		WillReturnRows(testDatabaseTaskRows(t, testDatabaseTaskRow{

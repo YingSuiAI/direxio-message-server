@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	coreconfirmation "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcontrol/confirmation"
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcontrol/task"
 	"github.com/google/uuid"
 )
@@ -614,6 +615,15 @@ func (s *DatabaseTaskStore) Cancel(ctx context.Context, c task.CancelCommand) (t
 	if replay, found, replayErr := readTaskReplayTx(ctx, tx, c.OwnerID, "cancel", c.Mutation.IdempotencyKey, c.Mutation.RequestDigest); found || replayErr != nil {
 		return replay, replayErr
 	}
+	// The AWS provider path takes this fence before it locks task/change rows.
+	// Resolve it by task here so a cancel cannot invert that durable lock order.
+	hasAWSChange, e := lockAWSPreProviderByTaskTx(ctx, tx, c.OwnerID, c.TaskID)
+	if e != nil {
+		if errors.Is(e, coreconfirmation.ErrConflict) {
+			return task.Task{}, task.ErrConflict
+		}
+		return task.Task{}, e
+	}
 	current, e := getDatabaseTaskTx(ctx, tx, c.OwnerID, c.TaskID, true)
 	if e != nil {
 		return task.Task{}, e
@@ -623,6 +633,36 @@ func (s *DatabaseTaskStore) Cancel(ctx context.Context, c task.CancelCommand) (t
 	}
 	if current.Status == task.StatusSucceeded || current.Status == task.StatusFailed || current.Status == task.StatusCanceled {
 		return task.Task{}, task.ErrTerminal
+	}
+	if hasAWSChange && current.Spec.Kind != task.TaskKindAWSChange {
+		return task.Task{}, task.ErrConflict
+	}
+	if current.Spec.Kind == task.TaskKindAWSChange || current.Spec.Kind == task.TaskKindWorkload {
+		// An external dispatch may have irreversible provider work in flight.
+		// Only its pre-provider waiting/queued states can be canceled here.
+		if current.Status != task.StatusWaitingUser && current.Status != task.StatusQueued {
+			return task.Task{}, task.ErrConflict
+		}
+		stored, terminalizeErr := getExternalTaskConfirmationForUpdateTx(ctx, tx, c.OwnerID, c.TaskID, current.Spec.Kind)
+		if terminalizeErr == nil {
+			if (current.Status == task.StatusWaitingUser && stored.State != coreconfirmation.StatePending) ||
+				(current.Status == task.StatusQueued && stored.State != coreconfirmation.StateConfirmed) {
+				terminalizeErr = coreconfirmation.ErrConflict
+			}
+		}
+		if terminalizeErr == nil {
+			if current.Spec.Kind == task.TaskKindAWSChange {
+				terminalizeErr = terminalizeAWSPreProviderChangeTx(ctx, tx, stored, confirmationTaskRow{OwnerID: current.OwnerID, Status: string(current.Status), Attempt: int(current.Attempt), LeaseEpoch: int64(current.LeaseEpoch), Revision: int64(current.Revision)}, c.Reason, c.At.UTC())
+			} else {
+				terminalizeErr = terminalizeWorkloadOperationTx(ctx, tx, stored, "canceled", "canceled", c.Reason, c.At.UTC())
+			}
+		}
+		if terminalizeErr != nil {
+			if errors.Is(terminalizeErr, coreconfirmation.ErrConflict) || errors.Is(terminalizeErr, coreconfirmation.ErrNotFound) || errors.Is(terminalizeErr, coreconfirmation.ErrRevisionConflict) {
+				return task.Task{}, task.ErrConflict
+			}
+			return task.Task{}, terminalizeErr
+		}
 	}
 	running := current.Status == task.StatusRunning
 	if running && (current.Lease == nil || current.Lease.Epoch != current.LeaseEpoch) {
