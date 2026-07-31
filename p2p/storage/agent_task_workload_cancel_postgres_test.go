@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -324,8 +325,41 @@ func TestPostgresStoreCreateRequestCancelWithSubMicrosecondTimes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	canceled, err := NewDatabaseTaskStore(store.DB()).Cancel(ctx, coretask.CancelCommand{OwnerID: owner, TaskID: requested.Task.ID, ExpectedRevision: requested.Task.Revision, Mutation: coretask.MutationCommand{IdempotencyKey: "8c999999-9999-4999-8999-999999999999", ExpectedRevision: requested.Task.Revision}, Reason: "chain cancel", At: time.Now().UTC()})
+	db := store.DB()
+	var canonicalDomain, canonicalTarget, canonicalDigest string
+	var canonicalTargetRevision int64
+	if err = db.QueryRowContext(ctx, `SELECT operation_domain,target_id,target_revision,binding_digest FROM agent_confirmations WHERE confirmation_id=$1`, requested.Confirmation.ConfirmationID).Scan(&canonicalDomain, &canonicalTarget, &canonicalTargetRevision, &canonicalDigest); err != nil {
+		t.Fatal(err)
+	}
+	tamperCases := []struct {
+		column  string
+		value   any
+		restore any
+	}{
+		{"operation_domain", "workload:destroy", canonicalDomain},
+		{"target_id", "89999999-9999-4999-8999-999999999998", canonicalTarget},
+		{"target_revision", int64(99), canonicalTargetRevision},
+		{"binding_digest", strings.Repeat("d", 64), canonicalDigest},
+	}
+	for i, tc := range tamperCases {
+		if _, err = db.ExecContext(ctx, `UPDATE agent_confirmations SET `+tc.column+`=$1 WHERE confirmation_id=$2`, tc.value, requested.Confirmation.ConfirmationID); err != nil {
+			t.Fatal(err)
+		}
+		_, tamperErr := NewDatabaseTaskStore(db).Cancel(ctx, coretask.CancelCommand{OwnerID: owner, TaskID: requested.Task.ID, ExpectedRevision: requested.Task.Revision, Mutation: coretask.MutationCommand{IdempotencyKey: fmt.Sprintf("8d%02d9999-9999-4999-8999-999999999999", i), ExpectedRevision: requested.Task.Revision}, Reason: "column tamper", At: time.Now().UTC()})
+		if !errors.Is(tamperErr, coretask.ErrConflict) {
+			t.Fatalf("confirmation %s tamper error = %v, want conflict", tc.column, tamperErr)
+		}
+		if _, err = db.ExecContext(ctx, `UPDATE agent_confirmations SET `+tc.column+`=$1 WHERE confirmation_id=$2`, tc.restore, requested.Confirmation.ConfirmationID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cancelCommand := coretask.CancelCommand{OwnerID: owner, TaskID: requested.Task.ID, ExpectedRevision: requested.Task.Revision, Mutation: coretask.MutationCommand{IdempotencyKey: "8c999999-9999-4999-8999-999999999999", ExpectedRevision: requested.Task.Revision}, Reason: "chain cancel", At: time.Now().UTC()}
+	canceled, err := NewDatabaseTaskStore(db).Cancel(ctx, cancelCommand)
 	if err != nil || canceled.Status != coretask.StatusCanceled {
 		t.Fatalf("real CreatePlan->RequestOperation->Cancel = %+v, %v", canceled, err)
+	}
+	replayed, err := NewDatabaseTaskStore(db).Cancel(ctx, cancelCommand)
+	if err != nil || replayed.ID != canceled.ID || replayed.Revision != canceled.Revision {
+		t.Fatalf("real chain cancel replay = %+v, %v", replayed, err)
 	}
 }
