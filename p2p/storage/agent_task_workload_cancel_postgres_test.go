@@ -42,7 +42,10 @@ func TestPostgresWorkloadTaskCancelFencesWaitingAndQueued(t *testing.T) {
 		}
 		digest := plan.Digest
 		planJSON, _ := json.Marshal(plan)
-		if _, err = db.ExecContext(ctx, `INSERT INTO core_workload_plans(plan_id,owner_id,create_idempotency_key,create_request_hash,revision,digest,summary,plan_json,target_kind,target_identity_json,resource_limits_json,secret_grant_refs_json,expires_at,created_at) VALUES($1,$2,$3,$4,1,$5,'cancel fence',$6,'AWS_EC2_SSM','{}','{}','[]',$7,$8)`, planID, owner, confirmationID, digest, digest, planJSON, now.Add(time.Hour), now); err != nil {
+		targetRaw, _ := json.Marshal(plan.Target.Identity)
+		limitsRaw, _ := json.Marshal(plan.ResourceLimits)
+		refsRaw, _ := json.Marshal(plan.SecretGrantRefs)
+		if _, err = db.ExecContext(ctx, `INSERT INTO core_workload_plans(plan_id,owner_id,create_idempotency_key,create_request_hash,revision,digest,summary,plan_json,target_kind,target_identity_json,resource_limits_json,secret_grant_refs_json,expires_at,created_at) VALUES($1,$2,$3,$4,1,$5,$6,$7,'AWS_EC2_SSM',$8,$9,$10,$11,$12)`, planID, owner, confirmationID, digest, digest, plan.Summary, planJSON, targetRaw, limitsRaw, refsRaw, now.Add(time.Hour), now); err != nil {
 			t.Fatal(err)
 		}
 		if _, err = db.ExecContext(ctx, `INSERT INTO core_workloads(workload_id,owner_id,revision,plan_id,plan_digest,target_kind,state,actual_snapshot_json,updated_at) VALUES($1,$2,1,$3,$4,'AWS_EC2_SSM','pending','{}',$5)`, workloadID, owner, planID, digest, now); err != nil {
@@ -117,7 +120,10 @@ func TestPostgresWorkloadTaskCancelFencesWaitingAndQueued(t *testing.T) {
 	}
 	digest := plan.Digest
 	planJSON, _ := json.Marshal(plan)
-	if _, err = db.ExecContext(ctx, `INSERT INTO core_workload_plans(plan_id,owner_id,create_idempotency_key,create_request_hash,revision,digest,summary,plan_json,target_kind,target_identity_json,resource_limits_json,secret_grant_refs_json,expires_at,created_at) VALUES($1,$2,$3,$4,1,$5,'mismatch',$6,'AWS_EC2_SSM','{}','{}','[]',$7,$8)`, planID, owner, confirmationID, digest, digest, planJSON, now.Add(time.Hour), now); err != nil {
+	targetRaw, _ := json.Marshal(plan.Target.Identity)
+	limitsRaw, _ := json.Marshal(plan.ResourceLimits)
+	refsRaw, _ := json.Marshal(plan.SecretGrantRefs)
+	if _, err = db.ExecContext(ctx, `INSERT INTO core_workload_plans(plan_id,owner_id,create_idempotency_key,create_request_hash,revision,digest,summary,plan_json,target_kind,target_identity_json,resource_limits_json,secret_grant_refs_json,expires_at,created_at) VALUES($1,$2,$3,$4,1,$5,$6,$7,'AWS_EC2_SSM',$8,$9,$10,$11,$12)`, planID, owner, confirmationID, digest, digest, plan.Summary, planJSON, targetRaw, limitsRaw, refsRaw, now.Add(time.Hour), now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = db.ExecContext(ctx, `INSERT INTO core_workloads(workload_id,owner_id,revision,plan_id,plan_digest,target_kind,state,actual_snapshot_json,updated_at) VALUES($1,$2,1,$3,$4,'AWS_EC2_SSM','pending','{}',$5)`, workloadID, owner, planID, digest, now); err != nil {
@@ -227,7 +233,10 @@ func TestPostgresWorkloadDestroyCancelRejectsStaleWorkloadRevision(t *testing.T)
 		t.Fatal(err)
 	}
 	planJSON, _ := json.Marshal(plan)
-	if _, err = db.ExecContext(ctx, `INSERT INTO core_workload_plans(plan_id,owner_id,create_idempotency_key,create_request_hash,revision,digest,summary,plan_json,target_kind,target_identity_json,resource_limits_json,secret_grant_refs_json,expires_at,created_at) VALUES($1,$2,$3,$4,1,$5,'destroy stale',$6,'AWS_EC2_SSM','{}','{}','[]',$7,$8)`, planID, owner, confirmationID, plan.Digest, plan.Digest, planJSON, now.Add(time.Hour), now); err != nil {
+	targetRaw, _ := json.Marshal(plan.Target.Identity)
+	limitsRaw, _ := json.Marshal(plan.ResourceLimits)
+	refsRaw, _ := json.Marshal(plan.SecretGrantRefs)
+	if _, err = db.ExecContext(ctx, `INSERT INTO core_workload_plans(plan_id,owner_id,create_idempotency_key,create_request_hash,revision,digest,summary,plan_json,target_kind,target_identity_json,resource_limits_json,secret_grant_refs_json,expires_at,created_at) VALUES($1,$2,$3,$4,1,$5,$6,$7,'AWS_EC2_SSM',$8,$9,$10,$11,$12)`, planID, owner, confirmationID, plan.Digest, plan.Digest, plan.Summary, planJSON, targetRaw, limitsRaw, refsRaw, now.Add(time.Hour), now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = db.ExecContext(ctx, `INSERT INTO core_workloads(workload_id,owner_id,revision,plan_id,plan_digest,target_kind,state,actual_snapshot_json,updated_at) VALUES($1,$2,2,$3,$4,'AWS_EC2_SSM','ready','{}',$5)`, workloadID, owner, planID, plan.Digest, now); err != nil {

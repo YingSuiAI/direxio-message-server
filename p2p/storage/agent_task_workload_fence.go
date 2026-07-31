@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"time"
 
 	workload "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcontrol/aws/workload"
 	coreconfirmation "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcontrol/confirmation"
@@ -63,9 +64,11 @@ func validateWorkloadTaskFenceTx(ctx context.Context, tx *sql.Tx, current coreta
 	}
 	var authoritativePlanID, authoritativeDigest, authoritativeTargetKind string
 	var authoritativeRevision int64
-	var planRaw []byte
-	err = tx.QueryRowContext(ctx, `SELECT plan_id::text,revision,digest,target_kind,plan_json FROM core_workload_plans WHERE owner_id=$1 AND plan_id=$2 FOR SHARE`, current.OwnerID, planID).Scan(
-		&authoritativePlanID, &authoritativeRevision, &authoritativeDigest, &authoritativeTargetKind, &planRaw,
+	var planRaw, targetIdentityRaw, resourceLimitsRaw, secretGrantRefsRaw []byte
+	var authoritativeSummary string
+	var authoritativeExpiresAt, authoritativeCreatedAt time.Time
+	err = tx.QueryRowContext(ctx, `SELECT plan_id::text,revision,digest,summary,plan_json,target_kind,target_identity_json,resource_limits_json,secret_grant_refs_json,expires_at,created_at FROM core_workload_plans WHERE owner_id=$1 AND plan_id=$2 FOR SHARE`, current.OwnerID, planID).Scan(
+		&authoritativePlanID, &authoritativeRevision, &authoritativeDigest, &authoritativeSummary, &planRaw, &authoritativeTargetKind, &targetIdentityRaw, &resourceLimitsRaw, &secretGrantRefsRaw, &authoritativeExpiresAt, &authoritativeCreatedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return coreconfirmation.ErrConflict
@@ -93,6 +96,15 @@ func validateWorkloadTaskFenceTx(ctx context.Context, tx *sql.Tx, current coreta
 	if !reflect.DeepEqual(normalizedPlan, canonicalPlan) {
 		return coreconfirmation.ErrConflict
 	}
+	expectedTargetRaw, _ := json.Marshal(normalizedPlan.Target.Identity)
+	expectedLimitsRaw, _ := json.Marshal(normalizedPlan.ResourceLimits)
+	expectedRefsRaw, _ := json.Marshal(normalizedPlan.SecretGrantRefs)
+	if authoritativeSummary != normalizedPlan.Summary || !authoritativeExpiresAt.UTC().Equal(normalizedPlan.ExpiresAt.UTC()) ||
+		!authoritativeCreatedAt.UTC().Equal(normalizedPlan.CreatedAt.UTC()) ||
+		!canonicalJSONEqual(targetIdentityRaw, expectedTargetRaw) || !canonicalJSONEqual(resourceLimitsRaw, expectedLimitsRaw) ||
+		!canonicalJSONEqual(secretGrantRefsRaw, expectedRefsRaw) {
+		return coreconfirmation.ErrConflict
+	}
 	expectedBinding := workload.BindingForOperation(normalizedPlan, payload.WorkloadID, workload.OperationKind(operation))
 	expectedBinding.OwnerID = current.OwnerID
 	expectedBinding, err = expectedBinding.Normalize()
@@ -100,4 +112,9 @@ func validateWorkloadTaskFenceTx(ctx context.Context, tx *sql.Tx, current coreta
 		return coreconfirmation.ErrConflict
 	}
 	return nil
+}
+
+func canonicalJSONEqual(a, b []byte) bool {
+	var left, right any
+	return json.Unmarshal(a, &left) == nil && json.Unmarshal(b, &right) == nil && reflect.DeepEqual(left, right)
 }
