@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -19,13 +18,12 @@ import (
 )
 
 func TestAgentConfirmationSweepRetriesWithBoundedBackoff(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	const interval = 20 * time.Millisecond
 	var calls atomic.Int32
 	var first, second time.Time
-	reported := make(chan error, 1)
 	done := make(chan struct{})
+	processCtx := process.NewProcessContext()
+	ctx := processCtx.Context()
 	go func() {
 		runAgentConfirmationSweep(ctx, interval, func() string { return "@owner:example.com" }, func(_ context.Context, owner string, at time.Time) error {
 			if owner != "@owner:example.com" {
@@ -37,10 +35,10 @@ func TestAgentConfirmationSweepRetriesWithBoundedBackoff(t *testing.T) {
 				return errors.New("temporary database failure")
 			case 2:
 				second = at
-				cancel()
+				processCtx.ShutdownDendrite()
 			}
 			return nil
-		}, func(err error) { reported <- err })
+		})
 		close(done)
 	}()
 	select {
@@ -51,16 +49,11 @@ func TestAgentConfirmationSweepRetriesWithBoundedBackoff(t *testing.T) {
 	if calls.Load() != 2 {
 		t.Fatalf("sweep calls = %d, want 2", calls.Load())
 	}
-	if second.Sub(first) < interval {
-		t.Fatalf("retry interval = %s, want at least %s", second.Sub(first), interval)
+	if second.Sub(first) < 2*interval-5*time.Millisecond {
+		t.Fatalf("retry interval = %s, want near %s", second.Sub(first), 2*interval)
 	}
-	select {
-	case err := <-reported:
-		if err == nil || !strings.Contains(err.Error(), "temporary database failure") {
-			t.Fatalf("reported sweep error = %v", err)
-		}
-	default:
-		t.Fatal("sweep error was not reported")
+	if degraded, reasons := processCtx.IsDegraded(); degraded || len(reasons) != 0 {
+		t.Fatalf("transient sweep failure degraded process: %v", reasons)
 	}
 }
 
@@ -73,7 +66,7 @@ func TestAgentConfirmationSweepSkipsUnavailableOwner(t *testing.T) {
 		runAgentConfirmationSweep(ctx, time.Millisecond, func() string { return "" }, func(context.Context, string, time.Time) error {
 			called <- struct{}{}
 			return nil
-		}, nil)
+		})
 		close(done)
 	}()
 	time.Sleep(10 * time.Millisecond)
@@ -99,7 +92,7 @@ func TestAgentConfirmationSweepCancellationInterruptsInFlightCall(t *testing.T) 
 			close(started)
 			<-callCtx.Done()
 			return callCtx.Err()
-		}, nil)
+		})
 		close(done)
 	}()
 	select {
@@ -112,6 +105,45 @@ func TestAgentConfirmationSweepCancellationInterruptsInFlightCall(t *testing.T) 
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("in-flight confirmation sweep did not cancel")
+	}
+}
+
+func TestConfirmationSweepStartsWhenSchedulerReadinessFails(t *testing.T) {
+	processCtx := process.NewProcessContext()
+	started := make(chan struct{})
+	service := &Service{
+		servicePortalState:             servicePortalState{ownerMXID: "@owner:example.com"},
+		agentConfirmationSweepInterval: time.Millisecond,
+		agentConfirmationSweep: func(ctx context.Context, owner string, _ time.Time) error {
+			if owner != "@owner:example.com" {
+				t.Errorf("sweep owner = %q", owner)
+			}
+			close(started)
+			<-ctx.Done()
+			return ctx.Err()
+		},
+	}
+	if service.StartEmbeddedScheduler(processCtx, "not-ready") {
+		t.Fatal("StartEmbeddedScheduler succeeded without scheduler readiness")
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("confirmation sweep did not start when scheduler was not ready")
+	}
+	if service.EmbeddedSchedulesReady() {
+		t.Fatal("scheduler readiness became true without runtime dependencies")
+	}
+	processCtx.ShutdownDendrite()
+	finished := make(chan struct{})
+	go func() {
+		processCtx.WaitForComponentsToFinish()
+		close(finished)
+	}()
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("confirmation sweep component did not stop on process cancellation")
 	}
 }
 

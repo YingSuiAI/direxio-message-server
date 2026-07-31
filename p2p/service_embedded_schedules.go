@@ -21,7 +21,7 @@ const (
 // reads while remaining owned by the process lifecycle. Errors are retried
 // with bounded backoff; a failed sweep must not stop the worker or schedule
 // loop.
-func runAgentConfirmationSweep(ctx context.Context, interval time.Duration, owner func() string, sweep func(context.Context, string, time.Time) error, reportError func(error)) {
+func runAgentConfirmationSweep(ctx context.Context, interval time.Duration, owner func() string, sweep func(context.Context, string, time.Time) error) {
 	if ctx == nil || owner == nil || sweep == nil {
 		return
 	}
@@ -51,9 +51,6 @@ func runAgentConfirmationSweep(ctx context.Context, interval time.Duration, owne
 		err := sweep(sweepCtx, ownerID, time.Now().UTC())
 		cancel()
 		if err != nil {
-			if reportError != nil {
-				reportError(fmt.Errorf("embedded Agent confirmation expiry sweep: %w", err))
-			}
 			if backoff >= maxAgentConfirmationSweepBackoff/2 {
 				backoff = maxAgentConfirmationSweepBackoff
 			} else {
@@ -64,6 +61,17 @@ func runAgentConfirmationSweep(ctx context.Context, interval time.Duration, owne
 		}
 		timer.Reset(backoff)
 	}
+}
+
+func startAgentConfirmationSweeper(processCtx *process.ProcessContext, owner func() string, sweep func(context.Context, string, time.Time) error, interval time.Duration) {
+	if processCtx == nil || owner == nil || sweep == nil {
+		return
+	}
+	processCtx.ComponentStarted()
+	go func() {
+		defer processCtx.ComponentFinished()
+		runAgentConfirmationSweep(processCtx.Context(), interval, owner, sweep)
+	}()
 }
 
 // EmbeddedSchedulesReady is fail-closed and intentionally distinct from the
@@ -162,14 +170,16 @@ func (s *Service) StartEmbeddedScheduler(processCtx *process.ProcessContext, wor
 	guard := s.agentSecretGuard
 	confirmationSweep := s.agentConfirmationSweep
 	confirmationSweepInterval := s.agentConfirmationSweepInterval
+	owner := s.OwnerMXID
 	ready := s.agentSecretRuntimeReadyLocked() &&
 		s.scheduleModule != nil &&
 		s.scheduleModule.Ready() &&
 		worker != nil &&
 		loop != nil &&
 		s.agentRuntimeInitErr == nil
+	s.mu.Unlock()
+	startAgentConfirmationSweeper(processCtx, owner, confirmationSweep, confirmationSweepInterval)
 	if !ready {
-		s.mu.Unlock()
 		if guard != nil {
 			processCtx.ComponentStarted()
 			go func() {
@@ -180,6 +190,7 @@ func (s *Service) StartEmbeddedScheduler(processCtx *process.ProcessContext, wor
 		}
 		return false
 	}
+	s.mu.Lock()
 	s.scheduleRunning = true
 	s.mu.Unlock()
 
@@ -196,21 +207,6 @@ func (s *Service) StartEmbeddedScheduler(processCtx *process.ProcessContext, wor
 			s.agentSecretReady = false
 			s.mu.Unlock()
 		}()
-		sweepCtx, cancelSweep := context.WithCancel(processCtx.Context())
-		sweepDone := make(chan struct{})
-		if confirmationSweep != nil {
-			go func() {
-				defer close(sweepDone)
-				runAgentConfirmationSweep(sweepCtx, confirmationSweepInterval, s.OwnerMXID, confirmationSweep, processCtx.Degraded)
-			}()
-		} else {
-			close(sweepDone)
-		}
-		defer func() {
-			cancelSweep()
-			<-sweepDone
-		}()
-
 		workerCtx, cancelWorker := context.WithCancel(context.Background())
 		scheduleCtx, cancelSchedule := context.WithCancel(context.Background())
 		defer cancelWorker()
