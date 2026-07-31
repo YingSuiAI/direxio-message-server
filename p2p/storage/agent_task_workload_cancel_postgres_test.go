@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -289,5 +290,42 @@ func TestPostgresWorkloadDestroyCancelRejectsStaleWorkloadRevision(t *testing.T)
 	}
 	if taskStatus != "waiting_user" || operationStatus != "waiting_user" || revision != 2 {
 		t.Fatalf("stale destroy mutated state: task=%s operation=%s workload_revision=%d", taskStatus, operationStatus, revision)
+	}
+}
+
+func TestPostgresStoreCreateRequestCancelWithSubMicrosecondTimes(t *testing.T) {
+	ctx := context.Background()
+	conn, closeDB := test.PrepareDBConnectionString(t, test.DBTypePostgres)
+	defer closeDB()
+	opts := config.DatabaseOptions{ConnectionString: config.DataSource(conn)}
+	store, err := NewDatabaseStore(ctx, sqlutil.NewConnectionManager(nil, opts), &opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	owner := "@workload-real-chain:example.test"
+	credentialID := "89999999-9999-4999-8999-999999999999"
+	now := time.Now().UTC()
+	if _, err = store.DB().ExecContext(ctx, `INSERT INTO core_aws_credentials(owner_id,credential_id,revision,envelope_version,aad_version,key_id,nonce,ciphertext,envelope_digest,name,region,account_id,user_arn,verified_revision,created_at,updated_at) VALUES($1,$2,1,1,1,'test',decode('000000000000000000000000','hex'),decode('00000000000000000000000000000000','hex'),$3,'chain','us-east-1','123456789012','arn:aws:iam::123456789012:user/test',1,$4,$4)`, owner, credentialID, strings.Repeat("a", 64), now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.DB().ExecContext(ctx, `INSERT INTO p2p_agent_secrets(secret_domain,owner_id,entity_id,secret_revision,purpose,reference,binding_digest,envelope_version,aad_version,key_id,nonce,ciphertext,created_at) VALUES('aws',$1,$2,1,'credential',$2,decode($3,'hex'),1,1,'test',decode('000000000000000000000000','hex'),decode('00000000000000000000000000000000','hex'),$4)`, owner, credentialID, strings.Repeat("b", 64), now); err != nil {
+		t.Fatal(err)
+	}
+	repo, err := NewAgentWorkloadStore(store, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := repo.CreatePlan(ctx, workload.PlanInput{Summary: "real chain", TargetKind: workload.TargetAWSEC2SSM, Target: workload.TargetSettings{Identity: workload.TargetIdentity{Kind: workload.TargetAWSEC2SSM, AccountID: "123456789012", Region: "us-east-1", InstanceID: "i-0123456789abcdef0"}, AccountID: "123456789012", Region: "us-east-1", InstanceID: "i-0123456789abcdef0", EC2DocumentVersion: "1", EC2SystemdService: "dirextalk.service", RequiredInstanceTags: map[string]string{"managed": "true"}}, SecretGrantRefs: []workload.SecretGrantRef{{ReferenceID: credentialID, Revision: 1, Purpose: "aws_credential", BindingDigest: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}}, ExpiresAt: now.Add(time.Hour), IdempotencyKey: "8a999999-9999-4999-8999-999999999999"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requested, err := repo.RequestOperation(ctx, workload.RequestCommand{PlanID: plan.ID, Kind: workload.OperationApply, IdempotencyKey: "8b999999-9999-4999-8999-999999999999", ExpiresAt: now.Add(30 * time.Minute)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	canceled, err := NewDatabaseTaskStore(store.DB()).Cancel(ctx, coretask.CancelCommand{OwnerID: owner, TaskID: requested.Task.ID, ExpectedRevision: requested.Task.Revision, Mutation: coretask.MutationCommand{IdempotencyKey: "8c999999-9999-4999-8999-999999999999", ExpectedRevision: requested.Task.Revision}, Reason: "chain cancel", At: time.Now().UTC()})
+	if err != nil || canceled.Status != coretask.StatusCanceled {
+		t.Fatalf("real CreatePlan->RequestOperation->Cancel = %+v, %v", canceled, err)
 	}
 }
