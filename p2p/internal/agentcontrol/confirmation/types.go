@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	coretask "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcontrol/task"
 	"github.com/google/uuid"
@@ -118,10 +119,32 @@ type Binding struct {
 	ParameterDigest   Digest
 	NetworkDigest     Digest
 	SecretGrantDigest Digest
-	SelectedTool      string
-	SelectedCommand   []string
-	NetworkGrants     []string
-	SecretGrants      []SecretGrant
+	// Execution V2 binds a user decision to one immutable plan/run/stage and
+	// target snapshot. These fields remain empty for legacy confirmation
+	// domains and are mandatory for operation domains prefixed execution:v2.
+	PlanID              string
+	PlanRevision        int64
+	PlanDigest          Digest
+	DeploymentID        string
+	RunID               string
+	RunRevision         int64
+	StageID             string
+	StageRevision       int64
+	StageDigest         Digest
+	TargetDigest        Digest
+	ArtifactSetDigest   Digest
+	PolicyDigest        Digest
+	CostQuoteDigest     Digest
+	RollbackDigest      Digest
+	PreviewDigest       Digest
+	RiskLevel           string
+	GateType            string
+	StageIdempotencyKey string
+	BindingExpiresAt    time.Time
+	SelectedTool        string
+	SelectedCommand     []string
+	NetworkGrants       []string
+	SecretGrants        []SecretGrant
 }
 
 // IsZero reports whether no binding expectation was supplied. Keep this
@@ -131,7 +154,14 @@ func (b Binding) IsZero() bool {
 	return b.Digest == "" && b.OwnerID == "" && b.OperationDomain == "" && b.TargetID == "" &&
 		b.TargetRevision == 0 && b.TargetKind == "" && b.SourceVersion == "" && b.SourceCommit == "" &&
 		b.ContentDigest == "" && b.ManifestDigest == "" && b.ExecutionDigest == "" && b.PermissionDigest == "" &&
-		b.ParameterDigest == "" && b.NetworkDigest == "" && b.SecretGrantDigest == "" && b.SelectedTool == "" &&
+		b.ParameterDigest == "" && b.NetworkDigest == "" && b.SecretGrantDigest == "" &&
+		b.PlanID == "" && b.PlanRevision == 0 && b.PlanDigest == "" && b.DeploymentID == "" &&
+		b.RunID == "" && b.RunRevision == 0 && b.StageID == "" && b.StageRevision == 0 &&
+		b.StageDigest == "" && b.TargetDigest == "" && b.ArtifactSetDigest == "" &&
+		b.PolicyDigest == "" && b.CostQuoteDigest == "" && b.RollbackDigest == "" &&
+		b.PreviewDigest == "" && b.RiskLevel == "" && b.GateType == "" &&
+		b.StageIdempotencyKey == "" && b.BindingExpiresAt.IsZero() &&
+		b.SelectedTool == "" &&
 		len(b.SelectedCommand) == 0 && len(b.NetworkGrants) == 0 && len(b.SecretGrants) == 0
 }
 
@@ -163,8 +193,20 @@ func (b Binding) normalized() (Binding, error) {
 	b.SourceVersion = strings.TrimSpace(b.SourceVersion)
 	b.SourceCommit = strings.TrimSpace(b.SourceCommit)
 	b.TargetKind = strings.TrimSpace(b.TargetKind)
+	b.PlanID = strings.TrimSpace(b.PlanID)
+	b.DeploymentID = strings.TrimSpace(b.DeploymentID)
+	b.RunID = strings.TrimSpace(b.RunID)
+	b.StageID = strings.TrimSpace(b.StageID)
+	b.RiskLevel = strings.TrimSpace(b.RiskLevel)
+	b.GateType = strings.TrimSpace(b.GateType)
+	b.StageIdempotencyKey = strings.TrimSpace(b.StageIdempotencyKey)
 	b.SelectedTool = strings.TrimSpace(b.SelectedTool)
-	if b.OperationDomain == "" || b.TargetID == "" || b.TargetRevision < 1 || (b.SourceVersion == "" && b.SourceCommit == "") {
+	executionV2 := isExecutionV2Domain(b.OperationDomain)
+	if strings.HasPrefix(b.OperationDomain, "execution:v2") && !executionV2 {
+		return Binding{}, ErrInvalid
+	}
+	if b.OperationDomain == "" || b.TargetID == "" || b.TargetRevision < 1 ||
+		(!executionV2 && b.SourceVersion == "" && b.SourceCommit == "") {
 		return Binding{}, ErrInvalid
 	}
 	for _, d := range []Digest{b.ContentDigest, b.ParameterDigest, b.NetworkDigest, b.SecretGrantDigest} {
@@ -176,6 +218,43 @@ func (b Binding) normalized() (Binding, error) {
 		if d != "" && !d.Valid() {
 			return Binding{}, ErrInvalid
 		}
+	}
+	for _, d := range []Digest{
+		b.PlanDigest, b.StageDigest, b.TargetDigest, b.ArtifactSetDigest,
+		b.PolicyDigest, b.CostQuoteDigest, b.RollbackDigest, b.PreviewDigest,
+	} {
+		if d != "" && !d.Valid() {
+			return Binding{}, ErrInvalid
+		}
+	}
+	if executionV2 {
+		if !validBoundedIdentity(b.OwnerID) || !validBindingToken(b.TargetKind) ||
+			!validateUUID(b.TargetID) ||
+			!validateUUID(b.PlanID) || b.PlanRevision < 1 || !b.PlanDigest.Valid() ||
+			!validateUUID(b.RunID) || b.RunRevision < 1 ||
+			!validateUUID(b.StageID) || b.StageRevision < 1 || !b.StageDigest.Valid() ||
+			!b.TargetDigest.Valid() || !b.ExecutionDigest.Valid() ||
+			!b.ArtifactSetDigest.Valid() || !b.PolicyDigest.Valid() ||
+			!b.CostQuoteDigest.Valid() || !b.RollbackDigest.Valid() ||
+			!b.PreviewDigest.Valid() || b.BindingExpiresAt.IsZero() ||
+			b.BindingExpiresAt.Location() != time.UTC ||
+			!validateUUID(b.StageIdempotencyKey) ||
+			!validExecutionV2RiskGate(b.RiskLevel, b.GateType) {
+			return Binding{}, ErrInvalid
+		}
+		if strings.TrimPrefix(b.OperationDomain, "execution:v2:") != b.GateType ||
+			b.SourceVersion != "" || b.SourceCommit != "" ||
+			b.ManifestDigest != "" || b.PermissionDigest != "" {
+			return Binding{}, ErrInvalid
+		}
+		if b.SelectedTool != "" || len(b.SelectedCommand) != 0 ||
+			len(b.NetworkGrants) != 0 || len(b.SecretGrants) != 0 {
+			return Binding{}, ErrInvalid
+		}
+		if b.DeploymentID != "" && !validateUUID(b.DeploymentID) {
+			return Binding{}, ErrInvalid
+		}
+		b.BindingExpiresAt = b.BindingExpiresAt.UTC()
 	}
 	for _, command := range b.SelectedCommand {
 		if command == "" || strings.ContainsAny(command, "\r\n\x00") {
@@ -191,11 +270,96 @@ func (b Binding) normalized() (Binding, error) {
 	if err != nil {
 		return Binding{}, err
 	}
+	if executionV2 {
+		// Canonicalize empty legacy slices before sealing so nil and [] cannot
+		// produce different confirmation identities for the same V2 snapshot.
+		b.SelectedCommand = nil
+		b.NetworkGrants = nil
+		b.SecretGrants = nil
+		expected := executionV2BindingDigest(b)
+		if b.Digest == "" {
+			b.Digest = expected
+		} else if !Digest(b.Digest).Valid() || b.Digest != expected {
+			return Binding{}, ErrInvalid
+		}
+	}
 	return b, nil
+}
+
+func executionV2BindingDigest(b Binding) string {
+	b.Digest = ""
+	raw, _ := json.Marshal(b)
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
+
+func validExecutionV2RiskGate(risk, gate string) bool {
+	switch risk {
+	case "R2":
+		switch gate {
+		case "resource_purchase", "secret_access", "remote_execution", "remote_privileged_execution", "repository_write":
+			return true
+		}
+	case "R3":
+		switch gate {
+		case "public_network_exposure", "dns_change", "tls_certificate_issue", "data_migration", "production_cutover":
+			return true
+		}
+	case "R4":
+		switch gate {
+		case "service_destroy", "rollback":
+			return true
+		}
+	}
+	return false
+}
+
+func isExecutionV2Domain(domain string) bool {
+	const prefix = "execution:v2:"
+	domain = strings.TrimSpace(domain)
+	return strings.HasPrefix(domain, prefix) && validBindingToken(strings.TrimPrefix(domain, prefix))
+}
+
+func validBoundedIdentity(value string) bool {
+	return value != "" && len(value) <= 255 && utf8.ValidString(value) &&
+		!strings.ContainsAny(value, "\x00\r\n")
+}
+
+func validBindingToken(value string) bool {
+	if value == "" || len(value) > 128 {
+		return false
+	}
+	for _, r := range value {
+		if !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') ||
+			r == '_' || r == '-' || r == '.' || r == ':') {
+			return false
+		}
+	}
+	return true
 }
 
 // Normalize validates and canonicalizes a binding for persistence boundaries.
 func (b Binding) Normalize() (Binding, error) { return b.normalized() }
+
+// MatchesConfirmationExpiry prevents an execution.v2 card from displaying or
+// persisting an expiry that differs from the immutable value covered by its
+// binding. Legacy domains did not bind expiry and therefore remain compatible.
+func (b Binding) MatchesConfirmationExpiry(expiresAt time.Time) bool {
+	if !isExecutionV2Domain(b.OperationDomain) {
+		return true
+	}
+	return !expiresAt.IsZero() && expiresAt.Location() == time.UTC && b.BindingExpiresAt.Equal(expiresAt)
+}
+
+// MatchesOwner keeps the owner carried by an execution.v2 snapshot identical
+// to the owner-scoped confirmation row. Legacy bindings predate this explicit
+// field and remain governed by their existing row-level owner fence.
+func (b Binding) MatchesOwner(ownerID string) bool {
+	if !isExecutionV2Domain(b.OperationDomain) {
+		return true
+	}
+	return strings.TrimSpace(ownerID) != "" && b.OwnerID == strings.TrimSpace(ownerID)
+}
 
 func normalizeGrantList(values []string) ([]string, error) {
 	seen := make(map[string]struct{}, len(values))
@@ -219,7 +383,6 @@ func normalizeSecretGrantList(values []SecretGrant) ([]SecretGrant, error) {
 	seen := make(map[string]struct{}, len(values))
 	result := make([]SecretGrant, 0, len(values))
 	for _, grant := range values {
-		grant.ReferenceID = strings.TrimSpace(grant.ReferenceID)
 		grant.ReferenceID = strings.TrimSpace(grant.ReferenceID)
 		if !validateUUID(grant.ReferenceID) || !validSecretPurpose(grant.Purpose) || !grant.BindingDigest.Valid() {
 			return nil, ErrInvalid
@@ -257,10 +420,20 @@ func (b Binding) Equal(other Binding) bool {
 	if errA != nil || errB != nil {
 		return false
 	}
-	return a.OwnerID == c.OwnerID && a.OperationDomain == c.OperationDomain && a.TargetID == c.TargetID && a.TargetRevision == c.TargetRevision && a.TargetKind == c.TargetKind &&
+	return a.Digest == c.Digest &&
+		a.OwnerID == c.OwnerID && a.OperationDomain == c.OperationDomain && a.TargetID == c.TargetID && a.TargetRevision == c.TargetRevision && a.TargetKind == c.TargetKind &&
 		a.SourceVersion == c.SourceVersion && a.SourceCommit == c.SourceCommit && a.ContentDigest == c.ContentDigest &&
 		a.ManifestDigest == c.ManifestDigest && a.ExecutionDigest == c.ExecutionDigest && a.PermissionDigest == c.PermissionDigest &&
 		a.ParameterDigest == c.ParameterDigest && a.NetworkDigest == c.NetworkDigest && a.SecretGrantDigest == c.SecretGrantDigest &&
+		a.PlanID == c.PlanID && a.PlanRevision == c.PlanRevision && a.PlanDigest == c.PlanDigest &&
+		a.DeploymentID == c.DeploymentID && a.RunID == c.RunID && a.RunRevision == c.RunRevision &&
+		a.StageID == c.StageID && a.StageRevision == c.StageRevision && a.StageDigest == c.StageDigest &&
+		a.TargetDigest == c.TargetDigest && a.ArtifactSetDigest == c.ArtifactSetDigest &&
+		a.PolicyDigest == c.PolicyDigest && a.CostQuoteDigest == c.CostQuoteDigest &&
+		a.RollbackDigest == c.RollbackDigest && a.PreviewDigest == c.PreviewDigest &&
+		a.RiskLevel == c.RiskLevel && a.GateType == c.GateType &&
+		a.StageIdempotencyKey == c.StageIdempotencyKey &&
+		a.BindingExpiresAt.Equal(c.BindingExpiresAt) &&
 		a.SelectedTool == c.SelectedTool && equalStrings(a.SelectedCommand, c.SelectedCommand) &&
 		equalStrings(a.NetworkGrants, c.NetworkGrants) && equalSecretGrants(a.SecretGrants, c.SecretGrants)
 }

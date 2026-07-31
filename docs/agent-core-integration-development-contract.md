@@ -1,308 +1,328 @@
-# Embedded Agent Control Contract
+# Embedded Agent Control and Execution V2 Contract
 
-Status: authoritative since 2026-07-29
-Migration source: `dirextalk-agent@0fdc0fa2f3836b8c419557ed4fea09bd2ac01669`
+Status: authoritative target since 2026-07-31
 
-This document is the sole server contract for Agent task, confirmation,
-schedule, remote MCP, AWS, workload and deployment-management behavior.
-The former standalone Agent Core service is retired. Its repository is a
-read-only migration source and is not a runtime, fallback or release target.
+This document is the server contract for embedded Agent control and Execution
+Orchestration V2. The Message Server is the control plane. It analyzes,
+compiles, authorizes, coordinates, observes and records remote work, but never
+executes third-party shell, project code or third-party Skills on its own host.
+
+The normative architecture decision is
+[`adr/2026-07-31-execution-orchestration-v2.md`](adr/2026-07-31-execution-orchestration-v2.md).
 
 ## 1. Topology and ownership
 
 - `dirextalk-message-server` is the only persistent Dirextalk application
-  process and the only published application image.
-- PostgreSQL remains external infrastructure. Schema migration and Agent
-  secret administration are one-shot commands from the same image.
-- Agent task workers, confirmations, schedules, AWS control, workload
-  providers, remote MCP execution and deployment reads run in-process.
-- Execution Orchestration V2 permits a server-owned deterministic coordinator
-  that reaches remote targets through typed transports, but that path is a
-  contract-only, capability-gated design
-  until its route, storage, executor and acceptance tests are enabled.
-- There is no Agent Core address, token, CA, port, gRPC client, sidecar,
-  Docker socket or Core Runner.
-- The Message Server never falls back to an external Agent service.
+  process and the only application image.
+- PostgreSQL is the durable authority for Agent tasks, confirmations, plans,
+  runs, stages, receipts, observations, artifacts and service bindings.
+- Every Agent and execution record is owner-scoped. Public operations first
+  authenticate the normal owner session.
 - Online Agent remains the private Matrix Agent-room conversation. Native
-  Agent remains `client.native_agent_stream`; neither uses the retired Core
-  conversation stream.
+  Agent remains `client.native_agent_stream`.
+- There is no Agent Core sidecar, address, token, CA, port, gRPC fallback,
+  Docker socket or local Core Runner.
+- The server never publishes secret plaintext through ProductCore, realtime
+  events, logs, plans, receipts, artifacts or deployment projections.
 
-All Agent control records are owner-scoped. Public actions first authenticate
-the normal owner session, and no credential or plaintext secret is returned
-through ProductCore, realtime events, logs or deployment objects.
+## 2. Pure V2 baseline
 
-## 2. Backend discovery and actions
+The former workload/GeoLibre deployment implementation was never deployed and
+has no historical user data. It is deleted rather than supported as a legacy
+surface:
 
-`agent.backends.get` always returns:
+- no V1 workload, EC2-provision or GeoLibre product action;
+- no V1 workload/provider/task/confirmation execution branch;
+- no V1 deployment ledger, DTO, route, page or recovery state;
+- no compatibility read, observe, reconcile, retry or destroy path;
+- no V1-to-V2 conversion, backfill, alias or dual write.
 
-- `embedded`: the only available backend. Its capability list contains only
-  dependencies that are ready at that instant.
-- `core`: an unavailable compatibility projection. It cannot be selected and
-  has no endpoint or health probe.
+GeoLibre may exist only under the declarative Recipe fixtures and acceptance
+tests. Core Go and Dart code must not identify GeoLibre as a product type.
 
-The possible embedded capability tokens are:
+The migration registry preserves upstream `main` migrations v1 through v77
+unchanged. All schema introduced on this undeployed branch is represented by
+one direct-final v78 migration. A fresh database therefore creates the final
+Agent and Execution V2 schema in one step. v78 may directly extend an
+upstream-main table where the final schema requires it, but must not split
+branch work into chained compatibility migrations, compatibility tables,
+old-row rewrites or branch-only backfills.
 
-- `model_profiles.server`
-- `model_roles.server`
-- `memory.server`
-- `task`
-- `schedules.server`
-- `confirmation`
-- `mcp`
-- `aws.control`
-- `workload.aws_ssm`
-- `workload.aws_ecs`
-- `deployments.server`
+## 3. Discovery and public actions
 
-`skill` and `workload.core_runner` are never advertised. Readiness is checked
-again when every capability-owned action is invoked; discovery is not an
-authorization or availability cache.
+`agent.backends.get` exposes only dependencies that are ready at request time.
+Existing non-deployment embedded capabilities, such as model profiles, memory,
+tasks, schedules, confirmations, remote MCP and reusable AWS control, retain
+their current readiness checks.
 
-The existing `agent.core.*` action names remain wire-compatible management
-names but invoke in-process modules directly:
-
-- tasks and confirmations use the PostgreSQL Agent runtime;
-- schedules use the one generic occurrence/task materializer;
-- model profiles use the existing Message Server model-profile store;
-- MCP accepts pinned HTTPS Streamable HTTP installations only;
-- AWS and workloads use typed in-process providers;
-- dashboard/deployments read the canonical workload operation/event tables.
-
-`client.agent_core_stream` and every Core conversation request are rejected.
-`client.native_agent_stream` remains the Native Agent transport. Server-managed
-chat may carry `model_profile_id` and a complete
-`model_profile_revision`/`credential_version` pair; the server pins that
-immutable snapshot before durable execution. The public `POST /mcp` contract
-is unchanged.
-
-## 3. PostgreSQL runtime
-
-The deployment migration registry owns one version each:
-
-- v97: secret envelopes, key usage and model-credential compatibility;
-- v98: task, event, replay, lease/concurrency, execution snapshot, model/tool
-  rounds, confirmation and reservation state;
-- v99: pinned MCP extension versions, secret revisions, execution receipts and
-  uncertain outcomes;
-- v100: AWS credential revisions and CloudFormation plans/changes/events;
-- v101: workload plans, persistent quotes, workloads, operations and events;
-- v102: generic schedule templates, occurrence/task links and deployment
-  event cursors.
-
-Duplicate migration versions are a startup error. Agent tables carry
-`owner_id`, immutable revision/digest bindings, owner-scoped foreign keys and
-idempotency constraints.
-
-Workers claim due tasks with `FOR UPDATE SKIP LOCKED`. Every running mutation
-is fenced by task revision, attempt, lease epoch, holder and expiry. A crashed
-worker's expired task is transactionally requeued while its concurrency slot
-is repaired; the successor receives a new lease epoch. Domain terminal state,
-generic task terminal state, task event, confirmation-reservation release and
-concurrency decrement commit in the same transaction.
-
-Shutdown stops new claims, waits for the configured grace period, then lets
-uncompleted work recover through lease expiry. It does not fabricate failure
-after the grace period.
-
-## 4. Schedules
-
-There is one schedule engine:
-
-- `agent.schedules.*` maps `prompt` and `model_profile_id` into a simple Agent
-  task template and preserves the legacy `run` projection.
-- `agent.core.schedules.*` preserves the full task template, active/paused
-  state and typed trigger DTO.
-- due and run-now triggers transactionally create one occurrence, one schedule
-  run and one generic task.
-- the Core-compatible trigger projection exposes the same
-  `occurrence_id/task_id`; it does not invoke a second executor.
-
-## 5. Secret keyring
-
-`P2P_AGENT_SECRET_KEYRING_FILE` points to the version-1 keyring. Production
-Compose uses:
-
-`/var/dirextalk-message-server/agent/secret-keyring.json`
-
-The directory is mode `0700`; the file is mode `0600`. A key is a random
-32-byte AES-256 key. Exactly one key is active and older retained keys are
-decrypt-only.
-
-Every encrypted row stores `envelope_version`, `aad_version`, `key_id`, a
-12-byte nonce and AES-GCM ciphertext including its authentication tag. The
-canonical length-prefixed AAD binds secret domain, owner, entity,
-revision/version, purpose/reference and binding digest.
-
-Writes always use the active key. Reads select the row's exact key ID.
-Unknown keys, authentication failure, wrong AAD or unsupported versions fail
-the whole Agent secret subsystem closed. Agent secret-dependent capabilities
-are omitted, while ordinary Matrix and ProductCore service remains available.
-
-Model, AWS and extension credentials are immutable secret revisions. Tasks,
-confirmations and workload records retain references and digests only.
-Existing legacy model credentials are upgraded only by an explicit offline
-`agent-secretctl upgrade` run. Before the migration, stop the persistent
-service and make one restorable backup set containing PostgreSQL, the keyring,
-and the legacy model-profile raw-key file. A serving process initializes an
-absent v1 keyring after PostgreSQL migrations only when no keyring-bound
-ciphertext exists; `agent-secretctl init` remains an optional explicit
-preflight. Then run `upgrade` with
-`P2P_AGENT_SECRET_KEYRING_FILE`, `P2P_AGENT_SECRET_DATABASE_DSN`, and
-`P2P_AGENT_MODEL_PROFILE_KEY_FILE` supplied through the environment; key
-material and database credentials are never command-line arguments. The
-upgrade uses row locks and CAS and overwrites the shared model-profile nonce
-and ciphertext columns with the v1 envelope and metadata; it does not clear
-those columns. It is never run automatically by Compose or server startup.
-Run `agent-secretctl verify` again with the legacy-key environment unset so
-verification succeeds using only the keyring. If migration or verification
-fails, rollback is an atomic restore of the PostgreSQL, keyring, and legacy-key
-backup set, not an image-only rollback. Destructive v110 cleanup of legacy
-compatibility material is deferred until fleet convergence and the rollback
-window has closed.
-
-The same image provides:
+Execution capability tokens are:
 
 ```text
-agent-secretctl init
-agent-secretctl upgrade
-agent-secretctl verify
-agent-secretctl rotate
+execution.v2
+execution.v2.plan
+execution.v2.run
+execution.v2.observe
+execution.v2.provision
+execution.v2.bindings
+execution.v2.transport.aws_ssm
 ```
 
-Keys are read from the keyring file, never CLI arguments or PostgreSQL.
-Rotation requires the persistent service to be stopped, is resumable, uses
-row locks/CAS, and verifies the full database before an old decrypt-only key
-may be removed.
+Deferred transports are advertised only after their own implementation,
+failure semantics and acceptance tests are ready:
 
-## 6. AWS and workloads
+```text
+execution.v2.transport.ssh
+execution.v2.transport.http_api
+```
 
-AWS credentials are encrypted and revisioned; read APIs are strictly redacted.
-Every plan/change pins an exact credential revision.
+No Execution V2 capability or action is public merely because its types,
+schema or documentation exist. Publication requires a wired route, durable
+repository, deterministic coordinator, executor, capability gate and passing
+acceptance tests.
 
-CloudFormation mutation and readback are typed. A lost or ambiguous response
-enters reconciliation and performs typed describe/readback before any further
-decision; external side effects are never blindly repeated.
+The V2 action namespace is `agent.execution.v2.*`. All actions are owner-only
+and use the existing WS-first ProductCore envelope. Every mutation requires a
+UUID `idempotency_key`; a mutation of an existing object also requires
+`expected_revision`. The server computes every authoritative digest.
 
-Supported workload targets are:
+Once a mutation may have been dispatched over WebSocket, the client must not
+replay it over HTTP. It may only query the authoritative object or request
+typed reconciliation.
 
-- `AWS_EC2_SSM`: exact account/region, Linux EC2 identity, required tags, SSM
-  Online state and the fixed `AWS-RunShellScript` document contract.
-- `AWS_ECS`: exact cluster/network/task family/roles/target group and image
-  digest, followed by independent typed readback.
+Native Agent may analyze a project, create or read a plan, request or inspect a
+run, and read or invoke a Service Binding. It may not confirm a gate, send raw
+SSM/SSH commands, call an AWS SDK passthrough or invoke an arbitrary URL.
 
-`CORE_RUNNER` is rejected before side effects and is never advertised.
-Quotes are PostgreSQL records with IDs and expiry. Workload events allocate
-both per-operation sequence and public per-workload cursor under locked
-counters; `MAX+1` is forbidden. Deployment dashboard/list/get/events read
-`core_workloads`, `core_workload_operations` and `core_workload_events`
-directly—there is no external reconciliation loop.
+## 4. Durable identities and state
 
-### Execution Orchestration V2 (contract gate; not live)
+The canonical identities are:
 
-The normative decision record is
-[`adr/2026-07-31-execution-orchestration-v2.md`](adr/2026-07-31-execution-orchestration-v2.md).
+- `project_id`: stable project identity;
+- `analysis_id`: one immutable project analysis;
+- `target_id + target_revision`: an exact execution-target snapshot;
+- `plan_id + plan_revision + plan_digest`: an immutable plan revision;
+- `deployment_id`: stable identity for a long-running service;
+- `run_id`: one execution attempt;
+- stable `stage_key` and `step_key` in a plan;
+- materialized `stage_id` and `step_attempt_id` in a run.
 
-The server may include built-in declarative Planning Skills/Recipes. They are
-trusted, versioned planning inputs only: each may produce immutable,
-canonical, secret-free plan fragments bound to a content digest and revision
-references, but may not execute shell/code/skills, call a provider, fetch
-third-party content, or mutate state. GeoLibre is a fixture/recipe for this
-boundary, not a product target or public contract.
+V2 does not use `workload_id`, `provision_id` or another V1 identifier.
 
-The boundaries are fixed:
+Plans move from `draft` to `ready`, then optionally to `expired` or
+`superseded`. Runs use:
 
-- the **planner** validates declarative requests and produces candidate plan
-  fragments without credentials or side effects;
-- the **compiler** merges and canonicalizes fragments into a typed stage graph
-  and immutable plan digest, without dispatch or mutation retry;
-- **policy** authenticates the owner and checks capability, target,
-  credential/configuration revisions, risk, expiry, quota, and idempotency;
-- the server-owned deterministic **coordinator** resolves only frozen typed
-  plans/stages, dispatches them to remote targets through a versioned typed
-  transport, and persists typed receipt/progress/readback/error evidence.
+```text
+pending -> waiting_user -> queued -> running
+        -> succeeded | failed | uncertain | canceled | rejected | expired
+```
 
-The Message Server does not execute local third-party shell/code/skills, expose
-raw SSM/SSH/AWS passthrough, or provide a local fallback for the coordinator.
-Native Agent confirmation cannot authorize an execution.v2 mutation. The
-frozen plan and each mutating stage require an owner-scoped control-plane
-confirmation containing the exact plan/stage digests, policy/revision facts,
-expiry, and idempotency key. If dispatch is lost or ambiguous, the mutation is
-recorded as `uncertain`; it is never replayed, sent over another transport, or
-run locally. Only typed read-only reconciliation or explicitly authorized
-destroy/recovery may proceed against that uncertainty.
+Stages use:
 
-V1 create remains until V2 acceptance is complete. It may be retired only
-after the V2 route, durable storage, typed executor/transport, focused tests,
-and deployment enablement all pass. V1 read, observe, reconcile, and destroy
-remain retained for compatibility and recovery.
+```text
+blocked -> waiting_user -> queued -> running
+        -> succeeded | failed | uncertain | skipped | canceled | rejected
+        | expired
+```
 
-The first production slice is AWS SSM long-running services through the typed
-coordinator. SSH, generic HTTP, DNS, TLS, and Coding Worker are deferred and
-must not be advertised. `execution.v2.*` capabilities and actions are omitted
-until their server route, storage, executor, tests, and enablement are all
-ready; this contract does not claim any unimplemented phase is live.
+All plan, stage and step snapshots are strict, canonical, size-bounded JSON.
+Unknown fields, trailing values, invalid normalization, row/snapshot mismatch
+or digest mismatch fail closed.
 
-## 7. Remote MCP and Skills
+## 5. Planning Skills, Recipes and typed steps
 
-Only HTTPS Streamable HTTP MCP is accepted. stdio, local MCP, subprocesses and
-third-party Skill execution are rejected before side effects. The built-in
-declarative Planning Skills/Recipes described above are the narrow exception:
-they can only emit immutable plan fragments and never execute a skill or
-provider action.
+Built-in Planning Skills are trusted declarative planning inputs. They may
+read allowlisted project facts and produce analysis or plan fragments. They
+may not execute code, call a provider, read arbitrary local files, fetch
+undeclared network content or mutate state.
 
-Discovery is bounded to the fixed Official Registry, Smithery, Glama and
-GitHub authorities. Candidate pins retain the public hyphenated values
-(`official-registry`, `streamable-http`, `mcp-credential`) and are re-inspected
-at install/update. The first successful remote `tools/list` transaction pins
-canonical tool schema digests to the active immutable version; later drift is
-a conflict, and execution rechecks the pinned list before `tools/call`.
+Recipes are versioned declarative YAML. Their manifest pins the content
+digest, schemas, allowed step kinds, target capabilities, network declarations
+and secret purposes. Each plan pins the selected one to three Skill/Recipe
+versions and digests.
 
-An execution is bound to owner, installation, immutable version, content and
-manifest digests, tool schema, network grants, secret grants and canonical
-input digest. All deterministic validation finishes before confirmation
-consumption. After consumption:
+The first supported typed steps are:
 
-- success atomically writes the receipt and terminal task state;
-- an ambiguous response atomically writes `uncertain`;
-- a successor lease that finds an already-consumed confirmation records
-  `uncertain` without replaying the remote tool.
+```text
+target.inspect
+compute.provision
+compute.destroy
+source.fetch
+artifact.upload
+package.ensure
+file.put
+container.apply
+systemd.apply
+script.run
+http.probe
+tcp.probe
+artifact.collect
+cleanup
+```
 
-`agent.core.skills.*` returns stable unavailable behavior and no `skill`
-capability is published. Built-in Native Agent skills are a separate
-Message Server feature.
+`script.run` references an immutable content-addressed artifact. Inline shell
+is invalid. The frozen step includes interpreter, argv, cwd, non-secret
+environment, secret references, privilege, network grants, accepted exit
+codes, timeout, output limit, redaction and postcondition.
 
-The public `POST /mcp` remains the independent Dirextalk MCP server and keeps
-agent-token, Origin and room-permission enforcement. Third-party MCP
-installations do not share its lifecycle.
+Artifact metadata is durable in PostgreSQL. The first content backend is a
+SHA-256-addressed atomic file store rooted at `P2P_AGENT_ARTIFACT_DIR`.
+Artifact paths are never trusted as authority and secret plaintext is
+forbidden.
 
-## 8. Cutover and rollback
+## 6. Compiler, policy and coordinator boundaries
 
-No standalone Agent database is imported and no dual-write period exists.
-Before cutover, the retired service must have zero non-terminal tasks, pending
-confirmations, AWS changes, workload operations and unresolved uncertain
-operations. Preserve a read-only backup.
+- The planner produces candidate analysis and declarative fragments without
+  credentials or side effects.
+- The compiler normalizes typed steps, validates the stage DAG, resolves
+  immutable pins and computes plan, stage and artifact-set digests.
+- Policy authenticates the owner and rechecks exact target, credential,
+  secret, quote, risk, expiry, revision and idempotency facts.
+- The deterministic coordinator materializes one task per stage, executes
+  steps in order through a typed remote transport, and persists receipts and
+  readback after every step.
 
-Production order:
+Workers use PostgreSQL row locks, CAS revisions, attempt numbers, lease epochs,
+holders and expiries. An expired lease may be taken over without letting the
+old holder commit. Domain terminal state, generic task terminal state, task
+event, confirmation reservation release and concurrency decrement commit
+atomically.
 
-1. back up PostgreSQL, data directory and keyring;
-2. deploy additive v97-v102 schema/runtime with capabilities not ready;
-3. initialize the keyring and upgrade/verify model credentials;
-4. enable capabilities only after secret/runtime readiness succeeds;
-5. remove and revoke retired Agent Core credentials, endpoints and image;
-6. archive the Agent repository read-only.
+The same target cannot run conflicting mutations concurrently. Target
+mutation leases are generic and contain no project identity.
 
-Rollback after secret upgrade must atomically restore both PostgreSQL and the
-matching keyring backup; rolling back only the image is invalid.
+Rollback is a separate run. It selects only frozen rollback steps for stages
+proved applied by the source run, orders them by the inverse dependency DAG
+and uses a fresh high-risk confirmation. It never silently executes rollback
+or substitutes forward steps.
 
-## 9. Required verification
+This rollback mechanism is not enabled for the initial generic container
+Recipe. That Recipe is initial-deploy-only and contains no destructive cleanup
+or replacement path. Upgrade, repair, destroy and rollback are rejected for it
+until the product has a typed versioned or blue-green rollback strategy.
 
-- PostgreSQL migrations, duplicate-version rejection, idempotency conflict,
-  lease takeover, concurrency, confirmation reservation and restart recovery.
-- AES-GCM round trip, wrong AAD fields, tamper, unknown key, dual-key reads,
-  resumable upgrade and rotation; plaintext scans across DB/log/event/API.
-- typed CloudFormation/SSM/ECS mocks including response loss, reconciliation
-  and destroy readback; real-account acceptance before production enablement.
-- HTTPS MCP initialize/tools-list/tools-call, grants, confirmation, timeout and
-  ambiguous response; negative stdio/Skill/Core Runner cases.
-- legacy `agent.core.*` DTOs, Native Agent stream and public `/mcp`.
-- one-image Compose restart recovery with no Agent service/port/gRPC settings.
+## 7. Confirmation contract
+
+R0/R1 read-only or low-risk stages may queue automatically. R2 resource
+purchase, secret access, sudo, remote mutation and repository write require
+confirmation. R3 public network, DNS, TLS, migration and production cutover
+use independent confirmations. R4 destroy, data deletion and destructive
+rollback use an independent high-risk confirmation.
+
+The authoritative binding covers:
+
+```text
+owner_id
+plan_id / plan_revision / plan_digest
+deployment_id
+run_id / run_revision
+stage_id / stage_digest
+target_id / target_revision / target_digest
+execution_digest
+artifact_set_digest
+network_digest
+secret_grant_digest
+policy_digest
+cost_quote_digest
+rollback_digest
+preview_digest
+risk_level / gate_type / expires_at
+```
+
+The server creates a safe `ConfirmationPreview`. It may expose identifiers,
+titles, typed step names, target summary, risk, cost, rollback summary and the
+normalized network grants selected for that stage, but not argv, environment
+values, secret references, provider payloads or raw scripts. `network_digest`
+binds both the exact target network policy and those selected grants. Flutter
+renders this allowlisted projection and verifies only identity, linkage,
+revision, binding digest, expiry and account scope.
+
+Any change to a command, commit, artifact, target, secret revision, port,
+quote, policy or rollback content creates a new immutable plan/stage revision
+and invalidates the old confirmation.
+
+## 8. AWS and remote execution
+
+AWS credentials are encrypted, owner-scoped and revisioned. Read APIs are
+strictly redacted. CloudFormation and AWS readback remain typed.
+
+The first production transport is AWS SSM against a pinned
+`aws_ec2_instance` target. New compute defaults to no public inbound access and
+SSM management. Business ingress is a separate R3 stage.
+
+The initial CloudFormation security group permits public IPv4 TCP/443 egress
+to any destination. It does not enforce DNS names, TLS SNI, registry hosts or
+URL paths. Plans using this profile must therefore declare the canonical broad
+grant `https://*:443` (external scope) for each stage that uses it, including
+`package.ensure` and `container.apply`. Exact OCI image content remains
+SHA-256-pinned, but that content pin must not be presented as a network-policy
+restriction.
+
+The SSM transport provides typed inspect, dispatch, poll, reconcile, cancel
+and artifact collection operations. It records the provider operation and SSM
+Command ID as soon as they are known. A timeout, disconnect or lost response
+after possible dispatch becomes `uncertain`. The coordinator performs
+readback only; it never resends blindly or falls back to SSH, HTTP or local
+execution.
+
+Host CPU, memory, disk, EC2 state, SSM state and service probes are collected
+through controlled read-only inspection. AWS/infrastructure views contain
+infrastructure and health summaries only; project versions, images, commands,
+DNS, TLS and migrations belong to the deployment/run event surface.
+
+SSH and HTTP API transports remain absent until they provide durable operation
+identity, idempotency, readback and their own capability gates.
+
+## 9. Service Binding and remote jobs
+
+A successful service deployment may create a machine-readable
+`ServiceBinding` with pinned endpoint, protocol, authentication secret
+references, operation schemas, health probe and usage/runbook artifacts.
+`service_bindings.invoke` may call only a schema-pinned HTTP operation.
+SSM/SSH administration always requires a new plan and run.
+
+Remote coding is a later `purpose=job` use of the same plan/run/stage
+framework. Local capability inspection may decide that the Message Server host
+is too small, but it never authorizes local project execution. Repository
+write, target retention and destruction remain separately confirmed stages.
+
+## 10. Secrets and remote MCP
+
+`P2P_AGENT_SECRET_KEYRING_FILE` points to the version-1 AES-256-GCM keyring.
+Each encrypted row pins envelope/AAD version, key ID, nonce and ciphertext.
+Canonical length-prefixed AAD binds secret domain, owner, entity,
+revision/version, purpose/reference and binding digest.
+
+Writes use the active key. Reads require the exact row key. Unknown keys,
+authentication failure, wrong AAD or unsupported versions fail the dependent
+Agent capability closed while ordinary Matrix/ProductCore service remains
+available.
+
+The undeployed branch needs no secret-schema compatibility migration. A fresh
+database receives the final encrypted columns from v78. Secret administration
+uses the same image and never accepts key material as a command-line argument.
+
+Remote MCP accepts pinned HTTPS Streamable HTTP only. stdio, local MCP,
+subprocesses and third-party Skill execution are rejected before side effects.
+Tool schemas, grants, installation version and canonical input are digest
+bound. Ambiguous mutation results become `uncertain` and are not replayed.
+
+The public `POST /mcp` remains an independent Dirextalk MCP server with its
+existing agent-token, Origin and room-permission enforcement.
+
+## 11. Required verification and enablement
+
+Before any Execution V2 capability is enabled:
+
+- fresh PostgreSQL v1–v78 migration and direct-final schema assertions;
+- strict snapshot, digest, owner/revision and idempotency tests;
+- DAG, confirmation, replay, lease takeover, restart and atomic terminal tests;
+- artifact path, symlink, content digest, size and secret-redaction tests;
+- typed CloudFormation/SSM mocks with response-loss fault injection;
+- GeoLibre and an unrelated container Recipe through the same generic path;
+- Flutter account/client/generation fences and generic confirmation tests;
+- full Go/Flutter analysis, test, build and diff checks;
+- real AWS account acceptance before production enablement.
+
+No legacy V1 count, drain, cutover or rollback procedure exists. Rollback of an
+undeployed V2 release restores the matching PostgreSQL, artifact store,
+keyring and application version as one consistent set.

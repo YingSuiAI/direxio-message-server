@@ -34,24 +34,28 @@ const (
 	TaskKindAgent            TaskKind = "agent"
 	TaskKindExtension        TaskKind = "extension"
 	TaskKindKnowledgeIndex   TaskKind = "knowledge_index"
-	TaskKindAWSChange        TaskKind = "aws_change"
-	TaskKindWorkload         TaskKind = "workload"
+	TaskKindExecutionStage   TaskKind = "execution_stage"
 	TaskKindConversationTool TaskKind = "conversation_tool"
 )
 
-// WorkloadTaskPayload is the immutable execution fence for a workload
-// operation.  It deliberately contains identifiers and digests only; provider
-// credentials and secret values remain behind their typed provider boundary.
-type WorkloadTaskPayload struct {
-	WorkloadID               string          `json:"workload_id"`
-	ExpectedWorkloadRevision uint64          `json:"expected_workload_revision"`
-	PlanID                   string          `json:"plan_id"`
-	OperationID              string          `json:"operation_id"`
-	PlanRevision             uint64          `json:"plan_revision"`
-	PlanDigest               string          `json:"plan_digest"`
-	TargetKind               string          `json:"target_kind"`
-	ConfirmationID           string          `json:"confirmation_id"`
-	ExecutionSnapshot        json.RawMessage `json:"execution_snapshot,omitempty"`
+// ExecutionStageTaskPayload is the immutable worker fence for one materialized
+// execution.v2 stage. It contains identities, revisions, and server-computed
+// digests only; executable content and credentials are resolved from the
+// authoritative plan and target snapshots after the task is claimed.
+type ExecutionStageTaskPayload struct {
+	PlanID         string `json:"plan_id"`
+	PlanRevision   uint64 `json:"plan_revision"`
+	PlanDigest     string `json:"plan_digest"`
+	DeploymentID   string `json:"deployment_id,omitempty"`
+	RunID          string `json:"run_id"`
+	RunRevision    uint64 `json:"run_revision"`
+	StageID        string `json:"stage_id"`
+	StageRevision  uint64 `json:"stage_revision"`
+	StageDigest    string `json:"stage_digest"`
+	TargetID       string `json:"target_id"`
+	TargetRevision uint64 `json:"target_revision"`
+	TargetDigest   string `json:"target_digest"`
+	ConfirmationID string `json:"confirmation_id,omitempty"`
 }
 
 type ExtensionOperation string
@@ -106,17 +110,12 @@ type KnowledgeIndexTaskPayload struct {
 	CollectionConfigDigest string   `json:"collection_config_digest"`
 }
 
-type AWSChangeTaskPayload struct {
-	ChangeID string `json:"change_id"`
-}
-
 // TaskPayload is a closed union; exactly one branch must match Kind.
 type TaskPayload struct {
 	ConversationTool *ConversationToolTaskPayload `json:"conversation_tool,omitempty"`
 	Extension        *ExtensionTaskPayload        `json:"extension,omitempty"`
 	KnowledgeIndex   *KnowledgeIndexTaskPayload   `json:"knowledge_index,omitempty"`
-	AWSChange        *AWSChangeTaskPayload        `json:"aws_change,omitempty"`
-	Workload         *WorkloadTaskPayload         `json:"workload,omitempty"`
+	ExecutionStage   *ExecutionStageTaskPayload   `json:"execution_stage,omitempty"`
 }
 
 var (
@@ -124,7 +123,6 @@ var (
 	ErrConflict         = errors.New("coretask: conflict")
 	ErrRevisionConflict = errors.New("coretask: revision conflict")
 	ErrLeaseConflict    = errors.New("coretask: lease conflict")
-	ErrDispatchStarted  = errors.New("coretask: workload dispatch already started")
 	ErrNotFound         = errors.New("coretask: not found")
 	ErrTerminal         = errors.New("coretask: terminal task")
 	ErrTimedOut         = errors.New("task_timed_out")
@@ -142,6 +140,9 @@ const (
 	MaxFilePathBytes    = 1024
 	MaxSummaryBytes     = 4 << 10
 	MaxLeaseHolderBytes = 256
+	// PostgreSQL and confirmation revisions are signed BIGINT/int64 values.
+	// Reject a task fence that cannot be represented identically downstream.
+	MaxPersistentRevision = uint64(1<<63 - 1)
 )
 
 type TaskSpec struct {
@@ -299,10 +300,7 @@ func normalizePayload(s *TaskSpec) error {
 	if s.Payload.KnowledgeIndex != nil {
 		count++
 	}
-	if s.Payload.AWSChange != nil {
-		count++
-	}
-	if s.Payload.Workload != nil {
+	if s.Payload.ExecutionStage != nil {
 		count++
 	}
 	if s.Payload.ConversationTool != nil {
@@ -378,31 +376,40 @@ func normalizePayload(s *TaskSpec) error {
 				return ErrInvalid
 			}
 		}
-	case TaskKindAWSChange:
-		if count != 1 || s.Payload.AWSChange == nil || !ValidUUID(strings.TrimSpace(s.Payload.AWSChange.ChangeID)) {
+	case TaskKindExecutionStage:
+		if count != 1 || s.Payload.ExecutionStage == nil {
 			return ErrInvalid
 		}
-		s.Payload.AWSChange.ChangeID = strings.TrimSpace(s.Payload.AWSChange.ChangeID)
-	case TaskKindWorkload:
-		if count != 1 || s.Payload.Workload == nil {
-			return ErrInvalid
-		}
-		p := s.Payload.Workload
-		if !ValidUUID(strings.TrimSpace(p.WorkloadID)) || !ValidUUID(strings.TrimSpace(p.PlanID)) || !ValidUUID(strings.TrimSpace(p.OperationID)) || !ValidUUID(strings.TrimSpace(p.ConfirmationID)) || p.PlanRevision == 0 || !ValidDigest(p.PlanDigest) || !validWorkloadTarget(p.TargetKind) || len(p.ExecutionSnapshot) > MaxResultBytes || (len(p.ExecutionSnapshot) > 0 && !json.Valid(p.ExecutionSnapshot)) {
-			return ErrInvalid
-		}
-		p.WorkloadID = strings.TrimSpace(p.WorkloadID)
-		p.PlanID = strings.TrimSpace(p.PlanID)
-		p.OperationID = strings.TrimSpace(p.OperationID)
-		p.ConfirmationID = strings.TrimSpace(p.ConfirmationID)
-		p.PlanDigest = strings.TrimSpace(p.PlanDigest)
-		if len(p.ExecutionSnapshot) > 0 {
-			var v any
-			if json.Unmarshal(p.ExecutionSnapshot, &v) != nil {
+		p := s.Payload.ExecutionStage
+		for _, id := range []string{p.PlanID, p.RunID, p.StageID, p.TargetID} {
+			if !ValidUUID(strings.TrimSpace(id)) {
 				return ErrInvalid
 			}
-			p.ExecutionSnapshot, _ = json.Marshal(v)
 		}
+		if p.DeploymentID != "" && !ValidUUID(strings.TrimSpace(p.DeploymentID)) {
+			return ErrInvalid
+		}
+		if p.ConfirmationID != "" && !ValidUUID(strings.TrimSpace(p.ConfirmationID)) {
+			return ErrInvalid
+		}
+		if p.PlanRevision == 0 || p.PlanRevision > MaxPersistentRevision ||
+			p.RunRevision == 0 || p.RunRevision > MaxPersistentRevision ||
+			p.StageRevision == 0 || p.StageRevision > MaxPersistentRevision ||
+			p.TargetRevision == 0 || p.TargetRevision > MaxPersistentRevision ||
+			!ValidDigest(strings.TrimSpace(p.PlanDigest)) ||
+			!ValidDigest(strings.TrimSpace(p.StageDigest)) ||
+			!ValidDigest(strings.TrimSpace(p.TargetDigest)) {
+			return ErrInvalid
+		}
+		p.PlanID = strings.TrimSpace(p.PlanID)
+		p.PlanDigest = strings.TrimSpace(p.PlanDigest)
+		p.DeploymentID = strings.TrimSpace(p.DeploymentID)
+		p.RunID = strings.TrimSpace(p.RunID)
+		p.StageID = strings.TrimSpace(p.StageID)
+		p.StageDigest = strings.TrimSpace(p.StageDigest)
+		p.TargetID = strings.TrimSpace(p.TargetID)
+		p.TargetDigest = strings.TrimSpace(p.TargetDigest)
+		p.ConfirmationID = strings.TrimSpace(p.ConfirmationID)
 	default:
 		return ErrInvalid
 	}
@@ -415,15 +422,6 @@ func ValidDigest(value string) bool {
 	}
 	_, err := hex.DecodeString(value)
 	return err == nil
-}
-
-func validWorkloadTarget(value string) bool {
-	switch strings.TrimSpace(value) {
-	case "CORE_RUNNER", "AWS_EC2_SSM", "AWS_ECS":
-		return true
-	default:
-		return false
-	}
 }
 
 func containsForbiddenInput(v any) bool {

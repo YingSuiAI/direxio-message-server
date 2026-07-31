@@ -34,12 +34,14 @@ func TestEmbeddedDirextalkToolUsesExactControlAllowlist(t *testing.T) {
 		}
 	}
 	for _, name := range []string{
-		"native_agent_aws_credentials_list",
-		"native_agent_deployments_events", "native_agent_schedules_list",
-		"native_agent_workload_actual_get", "native_agent_aws_ec2_provisions_plan",
-		"native_agent_aws_ec2_provisions_get", "native_agent_aws_ec2_provisions_list",
-		"native_agent_aws_ec2_provisions_events", "native_agent_aws_ec2_provisions_create_request",
-		"native_agent_aws_ec2_provisions_destroy_request", "native_agent_aws_ec2_geolibre_install_plan", "native_agent_aws_ec2_geolibre_install_request",
+		"native_agent_aws_credentials_list", "native_agent_aws_credentials_test",
+		"native_agent_execution_v2_projects_analyze",
+		"native_agent_execution_v2_targets_list", "native_agent_execution_v2_targets_get",
+		"native_agent_execution_v2_plans_create", "native_agent_execution_v2_plans_get",
+		"native_agent_execution_v2_runs_create", "native_agent_execution_v2_runs_get",
+		"native_agent_execution_v2_runs_status", "native_agent_execution_v2_runs_events",
+		"native_agent_execution_v2_service_bindings_list", "native_agent_execution_v2_service_bindings_get",
+		"native_agent_execution_v2_service_bindings_invoke",
 	} {
 		if !embeddedDirextalkTool(name) {
 			t.Fatalf("allowlisted tool %q was rejected", name)
@@ -52,6 +54,9 @@ func TestEmbeddedDirextalkToolUsesExactControlAllowlist(t *testing.T) {
 		"native_agent_schedules_confirm",
 		"native_agent_deployments_destroy", "native_agent_aws_credentials_delete",
 		"native_agent_aws_ec2_provisions_retry", "native_agent_aws_ec2_provisions_confirm",
+		"native_agent_execution_v2_confirmations_get", "native_agent_execution_v2_confirmations_confirm", "native_agent_execution_v2_confirmations_reject",
+		"native_agent_execution_v2_plans_revise", "native_agent_execution_v2_runs_cancel", "native_agent_execution_v2_runs_retry", "native_agent_execution_v2_runs_reconcile",
+		"native_agent_execution_v2_ssm_send_command", "native_agent_execution_v2_ssh_shell", "native_agent_execution_v2_aws_sdk", "native_agent_execution_v2_url_invoke",
 	} {
 		if embeddedDirextalkTool(name) {
 			t.Fatalf("unallowlisted tool %q was accepted", name)
@@ -59,25 +64,40 @@ func TestEmbeddedDirextalkToolUsesExactControlAllowlist(t *testing.T) {
 	}
 }
 
-func TestEC2ControlAliasesResolveOnlyTypedNames(t *testing.T) {
-	for _, alias := range []string{
-		"agent.core.aws.ec2_provisions.plan", "agent.core.aws.ec2_provisions.get",
-		"agent.core.aws.ec2_provisions.list", "agent.core.aws.ec2_provisions.events",
-		"agent.core.aws.ec2_provisions.create.request", "agent.core.aws.ec2_provisions.destroy.request",
-		"agent.core.aws.ec2_provisions.geolibre_install.plan",
-		"agent.core.aws.ec2_provisions.geolibre_install.request",
-		"agent.core.workloads.actual.get",
-	} {
-		if got := nativeToolAlias(alias); got == "" || !embeddedDirextalkTool(got) {
-			t.Fatalf("typed control alias %q unavailable: %q", alias, got)
+func TestRetiredProvisionAliasesAreUnavailable(t *testing.T) {
+	for _, alias := range []string{"agent.core.aws.ec2_provisions.plan", "agent.core.aws.ec2_provisions.create.request", "agent.core.workloads.actual.get"} {
+		if got := nativeToolAlias(alias); got != "" {
+			t.Fatalf("retired alias %q resolved to %q", alias, got)
 		}
 	}
-	for _, alias := range []string{
-		"agent.core.aws.ec2_provisions.retry", "agent.core.aws.ec2_provisions.confirm",
-		"agent.core.aws.ec2_provisions.execute", "agent.core.aws.ec2_provisions.raw",
+}
+
+func TestExecutionV2AliasesRequireExactPublicActionNames(t *testing.T) {
+	want := map[string]string{
+		"agent.execution.v2.projects.analyze":        "native_agent_execution_v2_projects_analyze",
+		"agent.execution.v2.targets.list":            "native_agent_execution_v2_targets_list",
+		"agent.execution.v2.targets.get":             "native_agent_execution_v2_targets_get",
+		"agent.execution.v2.plans.create":            "native_agent_execution_v2_plans_create",
+		"agent.execution.v2.plans.get":               "native_agent_execution_v2_plans_get",
+		"agent.execution.v2.runs.create":             "native_agent_execution_v2_runs_create",
+		"agent.execution.v2.runs.get":                "native_agent_execution_v2_runs_get",
+		"agent.execution.v2.runs.events":             "native_agent_execution_v2_runs_events",
+		"agent.execution.v2.service_bindings.list":   "native_agent_execution_v2_service_bindings_list",
+		"agent.execution.v2.service_bindings.get":    "native_agent_execution_v2_service_bindings_get",
+		"agent.execution.v2.service_bindings.invoke": "native_agent_execution_v2_service_bindings_invoke",
+	}
+	for action, tool := range want {
+		if got := nativeToolAlias(action); got != tool {
+			t.Fatalf("alias %q = %q, want %q", action, got, tool)
+		}
+	}
+	for _, action := range []string{
+		"execution.v2.runs.get", "agent.execution.runs.get", "agent.execution.v2.runs.status",
+		"agent.execution.v2.confirmations.get", "agent.execution.v2.confirmations.confirm",
+		"agent.execution.v2.plans.revise", "agent.execution.v2.runs.cancel", "agent.execution.v2.runs.retry", "agent.execution.v2.runs.reconcile",
 	} {
-		if got := nativeToolAlias(alias); got != "" {
-			t.Fatalf("forbidden EC2 alias %q resolved to %q", alias, got)
+		if got := nativeToolAlias(action); got != "" {
+			t.Fatalf("unsafe or non-public alias %q resolved to %q", action, got)
 		}
 	}
 }
@@ -100,12 +120,12 @@ func TestScheduleMutationAliasesAreUnavailableToNativeAgent(t *testing.T) {
 
 func TestAvailableToolsFiltersDynamicReadiness(t *testing.T) {
 	ready := false
-	runtime := New(Config{Tools: []Tool{{Name: "native_agent_workload_operations_get", Available: func() bool { return ready }}}})
+	runtime := New(Config{Tools: []Tool{{Name: "native_agent_aws_credentials_list", Available: func() bool { return ready }}}})
 	if got := runtime.availableTools(); len(got) != 0 {
 		t.Fatalf("unready tools = %#v", got)
 	}
 	ready = true
-	if got := runtime.availableTools(); len(got) != 1 || got[0].Name != "native_agent_workload_operations_get" {
+	if got := runtime.availableTools(); len(got) != 1 || got[0].Name != "native_agent_aws_credentials_list" {
 		t.Fatalf("ready tools = %#v", got)
 	}
 }

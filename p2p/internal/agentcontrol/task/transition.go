@@ -142,6 +142,9 @@ type ReclaimCommand struct {
 }
 
 func ValidateClaim(task Task, c ClaimCommand) error {
+	if task.Spec.Kind == TaskKindExecutionStage {
+		return ErrConflict
+	}
 	if task.ID != c.TaskID || task.Status != StatusQueued || c.ExpectedRevision == 0 || task.Revision != c.ExpectedRevision || !validHolder(c.Holder) || c.LeaseTTL <= 0 || c.At.IsZero() || c.At.Location() != time.UTC {
 		return ErrConflict
 	}
@@ -156,6 +159,9 @@ func (c ClaimCommand) LeaseEpochKnown(task Task, epoch uint64) bool {
 }
 
 func ValidateRenewLease(task Task, c RenewLeaseCommand) error {
+	if task.Spec.Kind == TaskKindExecutionStage {
+		return ErrConflict
+	}
 	if c.LeaseTTL <= 0 || !validHolder(c.Holder) || c.At.IsZero() || c.At.Location() != time.UTC {
 		return ErrInvalid
 	}
@@ -169,6 +175,9 @@ func ValidateRenewLease(task Task, c RenewLeaseCommand) error {
 }
 
 func ValidateProgress(task Task, c ProgressCommand) error {
+	if task.Spec.Kind == TaskKindExecutionStage {
+		return ErrConflict
+	}
 	if err := c.Fence.validate(task, true, c.Progress.At); err != nil {
 		return err
 	}
@@ -199,6 +208,9 @@ func AllocateProgress(task Task, c ProgressCommand) (Progress, error) {
 }
 
 func ValidateWaitUser(task Task, c WaitUserCommand) error {
+	if task.Spec.Kind == TaskKindExecutionStage {
+		return ErrConflict
+	}
 	if err := c.Fence.validate(task, true, c.At); err != nil {
 		return err
 	}
@@ -209,6 +221,9 @@ func ValidateWaitUser(task Task, c WaitUserCommand) error {
 }
 
 func ValidateResume(task Task, c ResumeCommand) error {
+	if task.Spec.Kind == TaskKindExecutionStage {
+		return ErrConflict
+	}
 	if task.ID != c.TaskID || task.Status != StatusWaitingUser || c.ExpectedRevision == 0 || task.Revision != c.ExpectedRevision {
 		return ErrConflict
 	}
@@ -216,6 +231,9 @@ func ValidateResume(task Task, c ResumeCommand) error {
 }
 
 func ValidateComplete(task Task, c CompleteCommand) error {
+	if task.Spec.Kind == TaskKindExecutionStage {
+		return ErrConflict
+	}
 	if err := c.Fence.validate(task, true, c.At); err != nil {
 		return err
 	}
@@ -228,6 +246,11 @@ func ValidateCancel(task Task, c CancelCommand) error {
 	}
 	if err := c.Mutation.ValidateExpectedRevision(); err != nil {
 		return err
+	}
+	if task.Spec.Kind == TaskKindExecutionStage {
+		// A remote stage can be terminalized only by the execution.v2
+		// coordinator, which owns provider dispatch/readback uncertainty.
+		return ErrConflict
 	}
 	if task.ID != c.TaskID || task.Revision != c.Mutation.ExpectedRevision || !task.CanTransition(StatusCanceled) {
 		return ErrConflict
@@ -258,12 +281,18 @@ func ValidateDeleteCommand(task Task, c DeleteTaskCommand) error {
 }
 
 func ValidateTimeout(task Task, c TimeoutCommand) error {
+	if task.Spec.Kind == TaskKindExecutionStage {
+		return ErrConflict
+	}
 	if c.At.IsZero() || c.At.Location() != time.UTC {
 		return ErrInvalid
 	}
 	return c.Fence.validate(task, true, c.At)
 }
 func ValidateFail(task Task, c FailCommand) error {
+	if task.Spec.Kind == TaskKindExecutionStage {
+		return ErrConflict
+	}
 	if c.At.IsZero() || c.At.Location() != time.UTC || strings.TrimSpace(c.ErrorCode) == "" || len([]byte(c.ErrorCode)) > 128 || len([]byte(c.ErrorSummary)) > MaxSummaryBytes || !utf8.ValidString(c.ErrorCode) || !utf8.ValidString(c.ErrorSummary) {
 		return ErrInvalid
 	}
@@ -271,6 +300,9 @@ func ValidateFail(task Task, c FailCommand) error {
 }
 
 func ValidateReclaim(task Task, c ReclaimCommand) error {
+	if task.Spec.Kind == TaskKindExecutionStage {
+		return ErrConflict
+	}
 	if task.ID != c.TaskID || task.Status != StatusRunning || task.Attempt != 1 || task.Lease == nil || task.Lease.Epoch != task.LeaseEpoch || c.ExpectedRevision == 0 || task.Revision != c.ExpectedRevision || c.LeaseEpoch != task.LeaseEpoch+1 || !validHolder(c.Holder) || c.LeaseTTL <= 0 || c.At.IsZero() || c.At.Location() != time.UTC || c.At.Before(task.Lease.ExpiresAt) {
 		return ErrConflict
 	}

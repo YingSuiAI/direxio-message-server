@@ -7,8 +7,6 @@ import (
 
 	schedulesmodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agent/schedules"
 	agenttask "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcontrol/task"
-	agentcoreledger "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcore"
-	agentembedded "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentembedded"
 	p2pstorage "github.com/YingSuiAI/dirextalk-message-server/p2p/storage"
 )
 
@@ -42,44 +40,6 @@ func (a embeddedScheduleMaterializer) MaterializeOccurrence(ctx context.Context,
 		return p2pstorage.ScheduleRun{}, p2pstorage.ErrScheduleNotFound
 	}
 	return run, nil
-}
-
-// embeddedDeploymentSource is the retained durable ledger contract. It
-// contains no transport methods; the adapter exists only because the legacy
-// ledger page-options type lives beside the projection helpers.
-type embeddedDeploymentSource interface {
-	ListDeployments(context.Context, string, agentcoreledger.DeploymentListOptions) ([]map[string]any, string, error)
-	GetDeploymentByID(context.Context, string, string) (map[string]any, bool, error)
-	GetDeploymentByWorkloadID(context.Context, string, string) (map[string]any, bool, error)
-	ListDeploymentEventsByID(context.Context, string, string, int64, int) ([]map[string]any, int64, error)
-	ListDeploymentEventsByWorkloadID(context.Context, string, string, int64, int) ([]map[string]any, int64, error)
-}
-
-type embeddedDeploymentAdapter struct{ source embeddedDeploymentSource }
-
-func (a embeddedDeploymentAdapter) ListDeployments(ctx context.Context, owner string, opts agentembedded.DeploymentListOptions) ([]map[string]any, string, error) {
-	return a.source.ListDeployments(ctx, owner, agentcoreledger.DeploymentListOptions{
-		PageSize:   opts.PageSize,
-		PageToken:  opts.PageToken,
-		Status:     opts.Status,
-		TargetKind: opts.TargetKind,
-	})
-}
-
-func (a embeddedDeploymentAdapter) GetDeploymentByID(ctx context.Context, owner, deploymentID string) (map[string]any, bool, error) {
-	return a.source.GetDeploymentByID(ctx, owner, deploymentID)
-}
-
-func (a embeddedDeploymentAdapter) GetDeploymentByWorkloadID(ctx context.Context, owner, workloadID string) (map[string]any, bool, error) {
-	return a.source.GetDeploymentByWorkloadID(ctx, owner, workloadID)
-}
-
-func (a embeddedDeploymentAdapter) ListDeploymentEventsByID(ctx context.Context, owner, deploymentID string, after int64, limit int) ([]map[string]any, int64, error) {
-	return a.source.ListDeploymentEventsByID(ctx, owner, deploymentID, after, limit)
-}
-
-func (a embeddedDeploymentAdapter) ListDeploymentEventsByWorkloadID(ctx context.Context, owner, workloadID string, after int64, limit int) ([]map[string]any, int64, error) {
-	return a.source.ListDeploymentEventsByWorkloadID(ctx, owner, workloadID, after, limit)
 }
 
 type embeddedTaskRetryAdapter struct{ store *p2pstorage.DatabaseTaskStore }

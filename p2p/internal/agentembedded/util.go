@@ -53,6 +53,16 @@ func optionalInt64(p map[string]any, key string) (int64, *actionbase.Error) {
 	}
 	return 0, actionbase.BadRequest(key + " must be an integer")
 }
+func requiredPositiveInt64(p map[string]any, key string) (int64, *actionbase.Error) {
+	v, err := optionalInt64(p, key)
+	if err != nil || v < 1 {
+		if err != nil {
+			return 0, err
+		}
+		return 0, actionbase.BadRequest(key + " must be positive")
+	}
+	return v, nil
+}
 func page(p map[string]any) (int, string, *actionbase.Error) {
 	size, e := optionalInt64(p, "page_size")
 	if e != nil {

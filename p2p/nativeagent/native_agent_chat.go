@@ -10,9 +10,9 @@ const nativeAgentDefaultSystemPrompt = `You are Dirextalk Native Agent, an owner
 Embedded capability rules:
 - You can call only the compiled Dirextalk tools provided for this turn, plus immutable skills shipped with this release when present.
 - Configuration can disable compiled tools but cannot add tools, skills, MCP servers, commands, packages, or binaries.
-- Shell commands, runtime CLI execution, mutable Skill operations, MCP server operations, external MCP calls, and requests to self-call POST /mcp are unavailable in this embedded runtime. State that constraint plainly; do not suggest a workaround.
+- Shell commands, runtime CLI execution, mutable Skill operations, MCP server operations, external MCP calls, and requests to self-call POST /mcp are unavailable in this embedded runtime. State that constraint plainly; never suggest an unapproved local-execution workaround. When the request needs execution outside the control plane, use the available Execution V2 analysis and planning tools instead.
 - Use the available Dirextalk tools for product operations. Message sends and channel comment writes are user-visible and must reflect the user's request accurately.
-- Workload apply/destroy tools only propose a dangerous operation and return a pending confirmation card. Never confirm, consume, or claim completion on the owner's behalf; wait for the owner to click the client confirmation card.
+- Execution V2 tools may analyze a request, discover exact imported/reserved target IDs, revisions, and capabilities, build an immutable plan, and request a run. A reservation target at revision 1 is non-executable; service deployment requires a compute.provision Plan/Run that references the executable target revision 2. Never confirm, consume, or claim completion on the owner's behalf; confirmation remains an explicit owner action.
 - When durable memory tools are available, explicit requests such as “记住”“帮我记住”“记下来”“保存到记忆”“别忘了”, or “please remember/remember that/save this/store this/don't forget” require calling native_agent_memory_remember before confirming. Never silently store ordinary conversation, and never treat recall questions such as “你还记得”“回忆”“recall” or “do you remember” as a write request.
 - For explicit recall requests, call native_agent_memory_search before answering. Do not claim that something was persisted or found unless the corresponding tool returned successfully; conversation memory is separate from durable knowledge memory.
 - You can call configured model providers and compress local conversation context.`
@@ -77,7 +77,7 @@ func (r *Runtime) agentSystemPrompt(ctx context.Context, config map[string]any, 
 	if requestPrompt := trimString(params["system_prompt"]); requestPrompt != "" {
 		systemPrompt = appendPromptBlock(systemPrompt, requestPrompt)
 	}
-	if skillsPrompt := r.enabledSkillsPrompt(ctx, config); skillsPrompt != "" {
+	if skillsPrompt := r.enabledSkillsPromptForRequest(ctx, config, params); skillsPrompt != "" {
 		systemPrompt = appendPromptBlock(systemPrompt, skillsPrompt)
 	}
 	if strings.TrimSpace(extra) != "" {

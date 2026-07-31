@@ -206,13 +206,13 @@ func TestPostgresDueMaterializationLinksAndExplicitReplay(t *testing.T) {
 		t.Fatalf("due occurrence created_at=%s, want %s", occurrenceCreatedAt, materializedAt)
 	}
 
-	// Simulate the v102 upgrade shape: the task and occurrence survived, but
-	// the legacy run has nullable links. Both materializers must repair it.
+	// An existing run can be missing its optional task/occurrence links. Both
+	// materializers must restore the deterministic relationship.
 	if _, err := s.db.ExecContext(ctx, `UPDATE p2p_agent_schedule_runs SET occurrence_id=NULL,task_id=NULL WHERE owner_id=$1 AND schedule_id=$2 AND scheduled_for=$3`, owner, schedule, at); err != nil {
 		t.Fatal(err)
 	}
 	if occ, task, err := s.MaterializeScheduleTask(ctx, owner, schedule, at); err != nil || occ != occurrenceID || task != taskID {
-		t.Fatalf("explicit legacy replay occurrence=%s task=%s err=%v", occ, task, err)
+		t.Fatalf("explicit replay occurrence=%s task=%s err=%v", occ, task, err)
 	}
 	if _, err := s.db.ExecContext(ctx, `UPDATE p2p_agent_schedule_runs SET occurrence_id=NULL,task_id=NULL WHERE owner_id=$1 AND schedule_id=$2 AND scheduled_for=$3`, owner, schedule, at); err != nil {
 		t.Fatal(err)
@@ -221,7 +221,7 @@ func TestPostgresDueMaterializationLinksAndExplicitReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	if materialized, err := s.MaterializeNextDue(ctx, materializedAt, nil); err != nil || !materialized {
-		t.Fatalf("due legacy replay=%v err=%v", materialized, err)
+		t.Fatalf("due replay=%v err=%v", materialized, err)
 	}
 	if _, err := s.db.ExecContext(ctx, `UPDATE p2p_agent_schedule_runs SET occurrence_id=NULL,task_id=NULL WHERE owner_id=$1 AND schedule_id=$2 AND scheduled_for=$3`, owner, schedule, at); err != nil {
 		t.Fatal(err)

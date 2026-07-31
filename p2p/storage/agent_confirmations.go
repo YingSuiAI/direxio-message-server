@@ -23,10 +23,12 @@ const AgentConfirmationDDL = `
 CREATE TABLE IF NOT EXISTS agent_confirmations (
  confirmation_id uuid PRIMARY KEY, owner_id text NOT NULL, operation_domain text NOT NULL,
 	 target_id text NOT NULL, target_revision bigint NOT NULL, binding_digest text NOT NULL, binding_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+	 preview_json jsonb, preview_digest text,
  task_id uuid NOT NULL, state text NOT NULL CHECK(state IN ('pending','confirmed','consumed','rejected','expired')),
  revision bigint NOT NULL DEFAULT 1, expires_at timestamptz NOT NULL, reservation_json jsonb,
  terminal_reason text NOT NULL DEFAULT '', created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
- FOREIGN KEY(owner_id,task_id) REFERENCES agent_tasks(owner_id,task_id)
+	 FOREIGN KEY(owner_id,task_id) REFERENCES agent_tasks(owner_id,task_id)
+	 ,CHECK (operation_domain NOT LIKE 'execution:v2%' OR (jsonb_typeof(preview_json)='object' AND preview_json<>'{}'::jsonb AND preview_digest ~ '^[a-f0-9]{64}$' AND expires_at>created_at))
 );
 CREATE UNIQUE INDEX IF NOT EXISTS agent_confirmations_owner_confirmation_idx ON agent_confirmations(owner_id,confirmation_id);
 CREATE UNIQUE INDEX IF NOT EXISTS agent_confirmations_live_target_idx ON agent_confirmations(owner_id,operation_domain,target_id) WHERE state IN ('pending','confirmed') OR (state='consumed' AND reservation_json IS NOT NULL);
@@ -87,7 +89,7 @@ func getConfirmationForUpdateTx(ctx context.Context, tx *sql.Tx, owner, id strin
 // partial or ambiguous confirmation relationship.
 func getExternalTaskConfirmationForUpdateTx(ctx context.Context, tx *sql.Tx, owner, taskID string, kind coretask.TaskKind) (confirmation.Confirmation, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT confirmation_id::text,owner_id,operation_domain,target_id,target_revision,binding_digest,binding_json,task_id::text,state,revision,created_at,updated_at,expires_at,terminal_reason
-		FROM agent_confirmations WHERE owner_id=$1 AND task_id=$2 AND (operation_domain='aws' OR operation_domain LIKE 'workload:%')`+
+		FROM agent_confirmations WHERE owner_id=$1 AND task_id=$2 AND operation_domain='aws'`+
 		` AND state IN ('pending','confirmed') AND reservation_json IS NULL FOR UPDATE`, owner, taskID)
 	if err != nil {
 		return confirmation.Confirmation{}, err
@@ -108,10 +110,6 @@ func getExternalTaskConfirmationForUpdateTx(ctx context.Context, tx *sql.Tx, own
 	}
 	if err = rows.Err(); err != nil {
 		return confirmation.Confirmation{}, err
-	}
-	if (kind == coretask.TaskKindAWSChange && stored.Binding.OperationDomain != "aws") ||
-		(kind == coretask.TaskKindWorkload && !strings.HasPrefix(stored.Binding.OperationDomain, "workload:")) {
-		return confirmation.Confirmation{}, confirmation.ErrConflict
 	}
 	return stored, nil
 }
@@ -245,6 +243,12 @@ func (s *DatabaseConfirmationStore) Request(ctx context.Context, c confirmation.
 	c.TaskID = strings.TrimSpace(c.TaskID)
 	c.IdempotencyKey = strings.TrimSpace(c.IdempotencyKey)
 	c.Binding = b
+	if strings.HasPrefix(b.OperationDomain, "execution:v2:") {
+		return confirmation.Confirmation{}, confirmation.ErrConflict
+	}
+	if !b.MatchesOwner(c.OwnerID) {
+		return confirmation.Confirmation{}, confirmation.ErrInvalid
+	}
 	c.RequestDigest = confirmation.RequestDigestForRequest(c)
 	if c.OwnerID == "" || !validConfirmationUUID(c.TaskID) || !validConfirmationUUID(c.IdempotencyKey) {
 		return confirmation.Confirmation{}, confirmation.ErrInvalid
@@ -256,6 +260,9 @@ func (s *DatabaseConfirmationStore) Request(ctx context.Context, c confirmation.
 	}
 	expiresAt := c.ExpiresAt.UTC()
 	if c.ExpiresAt.IsZero() || !expiresAt.After(at) {
+		return confirmation.Confirmation{}, confirmation.ErrInvalid
+	}
+	if !b.MatchesConfirmationExpiry(expiresAt) {
 		return confirmation.Confirmation{}, confirmation.ErrInvalid
 	}
 	// Release an expired live target before the new insert. This is a bounded
@@ -345,12 +352,26 @@ func (s *DatabaseConfirmationStore) Confirm(ctx context.Context, c confirmation.
 		return confirmation.Confirmation{}, e
 	}
 	defer tx.Rollback()
+	preflight, e := getConfirmationForUpdateTx(ctx, tx, c.OwnerID, c.ID)
+	if e != nil {
+		return confirmation.Confirmation{}, e
+	}
+	if strings.HasPrefix(preflight.Binding.OperationDomain, "execution:v2:") {
+		return confirmation.Confirmation{}, confirmation.ErrConflict
+	}
 	replay, found, replayEnabled, e := replayConfirmationMutationTx(ctx, tx, c.OwnerID, "confirm", c.IdempotencyKey, c.RequestDigest, true)
-	if found || e != nil {
+	if e != nil {
 		return replay, e
 	}
-	if e = lockAWSPreProviderByConfirmationTx(ctx, tx, c.OwnerID, c.ID); e != nil {
-		return confirmation.Confirmation{}, e
+	if found {
+		stored, readErr := getConfirmationForUpdateTx(ctx, tx, c.OwnerID, c.ID)
+		if readErr != nil {
+			return confirmation.Confirmation{}, readErr
+		}
+		if strings.HasPrefix(stored.Binding.OperationDomain, "execution:v2:") {
+			return confirmation.Confirmation{}, confirmation.ErrConflict
+		}
+		return replay, nil
 	}
 	_, taskID, e := confirmationIdentityTx(ctx, tx, c.OwnerID, c.ID)
 	if e != nil {
@@ -365,6 +386,9 @@ func (s *DatabaseConfirmationStore) Confirm(ctx context.Context, c confirmation.
 		return confirmation.Confirmation{}, e
 	}
 	if stored.TaskID != taskID {
+		return confirmation.Confirmation{}, confirmation.ErrConflict
+	}
+	if strings.HasPrefix(stored.Binding.OperationDomain, "execution:v2:") {
 		return confirmation.Confirmation{}, confirmation.ErrConflict
 	}
 	if stored.Revision != c.ExpectedRevision {
@@ -446,12 +470,16 @@ func (s *DatabaseConfirmationStore) Reject(ctx context.Context, c confirmation.R
 		return confirmation.Confirmation{}, e
 	}
 	defer tx.Rollback()
+	preflight, e := getConfirmationForUpdateTx(ctx, tx, c.OwnerID, c.ID)
+	if e != nil {
+		return confirmation.Confirmation{}, e
+	}
+	if strings.HasPrefix(preflight.Binding.OperationDomain, "execution:v2:") {
+		return confirmation.Confirmation{}, confirmation.ErrConflict
+	}
 	replay, found, _, e := replayConfirmationMutationTx(ctx, tx, c.OwnerID, "reject", c.IdempotencyKey, c.RequestDigest, false)
 	if found || e != nil {
 		return replay, e
-	}
-	if e = lockAWSPreProviderByConfirmationTx(ctx, tx, c.OwnerID, c.ID); e != nil {
-		return confirmation.Confirmation{}, e
 	}
 	_, taskID, e := confirmationIdentityTx(ctx, tx, c.OwnerID, c.ID)
 	if e != nil {
@@ -494,9 +522,6 @@ func (s *DatabaseConfirmationStore) Reject(ctx context.Context, c confirmation.R
 	if taskRow.Status != "waiting_user" && taskRow.Status != "queued" {
 		return confirmation.Confirmation{}, confirmation.ErrConflict
 	}
-	if e = terminalizeAWSPreProviderChangeTx(ctx, tx, stored, taskRow, confirmation.ReasonUserRejected, at); e != nil {
-		return confirmation.Confirmation{}, e
-	}
 	result, e := tx.ExecContext(ctx, `UPDATE agent_confirmations SET state='rejected',terminal_reason=$1,revision=revision+1,updated_at=$2 WHERE confirmation_id=$3 AND owner_id=$4 AND state IN ('pending','confirmed') AND revision=$5`, c.Reason, at, c.ID, c.OwnerID, c.ExpectedRevision)
 	if e != nil {
 		return confirmation.Confirmation{}, e
@@ -513,11 +538,6 @@ func (s *DatabaseConfirmationStore) Reject(ctx context.Context, c confirmation.R
 	}
 	if e = terminalizeConfirmationsTx(ctx, tx, taskID, confirmation.ReasonUserRejected, at); e != nil {
 		return confirmation.Confirmation{}, e
-	}
-	if strings.HasPrefix(stored.Binding.OperationDomain, "workload:") {
-		if e = terminalizeWorkloadOperationTx(ctx, tx, stored, "rejected", "user_rejected", c.Reason, at); e != nil {
-			return confirmation.Confirmation{}, e
-		}
 	}
 	if _, e = tx.ExecContext(ctx, `INSERT INTO agent_task_events(owner_id,task_id,sequence,event_type,status,payload_json,occurred_at) SELECT owner_id,task_id,progress_sequence,'confirmation_rejected','canceled',jsonb_build_object('reason',$2::text),$3 FROM agent_tasks WHERE task_id=$1 AND owner_id=$4`, taskID, c.Reason, at, c.OwnerID); e != nil {
 		return confirmation.Confirmation{}, e
@@ -556,9 +576,29 @@ func (s *DatabaseConfirmationStore) Consume(ctx context.Context, c confirmation.
 		return confirmation.Confirmation{}, e
 	}
 	defer tx.Rollback()
+	preflight, e := getConfirmationForUpdateTx(ctx, tx, c.OwnerID, c.ID)
+	if e != nil {
+		return confirmation.Confirmation{}, e
+	}
+	if strings.HasPrefix(preflight.Binding.OperationDomain, "execution:v2:") {
+		return confirmation.Confirmation{}, confirmation.ErrConflict
+	}
 	replay, found, _, e := replayConfirmationMutationTx(ctx, tx, c.OwnerID, "consume", c.IdempotencyKey, c.RequestDigest, false)
-	if found || e != nil {
+	if e != nil {
 		return replay, e
+	}
+	if found {
+		stored, readErr := getConfirmationForUpdateTx(ctx, tx, c.OwnerID, c.ID)
+		if readErr != nil {
+			if errors.Is(readErr, confirmation.ErrNotFound) {
+				return confirmation.Confirmation{}, confirmation.ErrConflict
+			}
+			return confirmation.Confirmation{}, readErr
+		}
+		if strings.HasPrefix(stored.Binding.OperationDomain, "execution:v2:") {
+			return confirmation.Confirmation{}, confirmation.ErrConflict
+		}
+		return replay, nil
 	}
 	taskRow, e := lockConfirmationTaskTx(ctx, tx, c.OwnerID, c.TaskID)
 	if e != nil {
@@ -577,6 +617,9 @@ func (s *DatabaseConfirmationStore) Consume(ctx context.Context, c confirmation.
 	}
 	if stored.TaskID != c.TaskID || stored.Revision != c.ExpectedRevision || stored.State != confirmation.StateConfirmed ||
 		stored.Binding.Digest != c.Binding.Digest || !stored.Binding.Equal(c.Binding) {
+		return confirmation.Confirmation{}, confirmation.ErrConflict
+	}
+	if strings.HasPrefix(stored.Binding.OperationDomain, "execution:v2:") {
 		return confirmation.Confirmation{}, confirmation.ErrConflict
 	}
 	if !stored.ExpiresAt.After(at) {
@@ -617,8 +660,23 @@ func (s *DatabaseConfirmationStore) Consume(ctx context.Context, c confirmation.
 	return out, nil
 }
 func (s *DatabaseConfirmationStore) Release(ctx context.Context, c confirmation.ReleaseCommand) (confirmation.Confirmation, error) {
-	_, e := s.db.ExecContext(ctx, `UPDATE agent_confirmations SET reservation_json=NULL,updated_at=$1 WHERE confirmation_id=$2 AND owner_id=$3`, c.At.UTC(), c.ID, c.OwnerID)
+	tx, e := s.db.BeginTx(ctx, nil)
 	if e != nil {
+		return confirmation.Confirmation{}, e
+	}
+	defer tx.Rollback()
+	stored, e := getConfirmationForUpdateTx(ctx, tx, c.OwnerID, c.ID)
+	if e != nil {
+		return confirmation.Confirmation{}, e
+	}
+	if strings.HasPrefix(stored.Binding.OperationDomain, "execution:v2:") {
+		return confirmation.Confirmation{}, confirmation.ErrConflict
+	}
+	_, e = tx.ExecContext(ctx, `UPDATE agent_confirmations SET reservation_json=NULL,updated_at=$1 WHERE confirmation_id=$2 AND owner_id=$3`, c.At.UTC(), c.ID, c.OwnerID)
+	if e != nil {
+		return confirmation.Confirmation{}, e
+	}
+	if e = tx.Commit(); e != nil {
 		return confirmation.Confirmation{}, e
 	}
 	return s.get(ctx, c.OwnerID, c.ID)
@@ -642,6 +700,13 @@ func (s *DatabaseConfirmationStore) ReleaseReservation(ctx context.Context, c co
 	owner, taskID, e := confirmationIdentityTx(ctx, tx, "", c.ConfirmationID)
 	if e != nil {
 		return confirmation.Confirmation{}, e
+	}
+	preflight, e := getConfirmationForUpdateTx(ctx, tx, owner, c.ConfirmationID)
+	if e != nil {
+		return confirmation.Confirmation{}, e
+	}
+	if strings.HasPrefix(preflight.Binding.OperationDomain, "execution:v2:") {
+		return confirmation.Confirmation{}, confirmation.ErrConflict
 	}
 	replay, found, _, e := replayConfirmationMutationTx(ctx, tx, owner, "release", c.IdempotencyKey, c.RequestDigest, false)
 	if found || e != nil {
@@ -700,9 +765,6 @@ func (s *DatabaseConfirmationStore) ReleaseReservation(ctx context.Context, c co
 	return out, nil
 }
 func expireConfirmationAndTaskTx(ctx context.Context, tx *sql.Tx, stored confirmation.Confirmation, taskRow confirmationTaskRow, reason string, at time.Time) error {
-	if err := terminalizeAWSPreProviderChangeTx(ctx, tx, stored, taskRow, reason, at); err != nil {
-		return err
-	}
 	result, err := tx.ExecContext(ctx, `UPDATE agent_confirmations SET state='expired',terminal_reason=$1,revision=revision+1,updated_at=$2 WHERE confirmation_id=$3 AND owner_id=$4 AND state IN ('pending','confirmed') AND revision=$5`, reason, at.UTC(), stored.ID, stored.OwnerID, stored.Revision)
 	if err != nil {
 		return err
@@ -730,95 +792,12 @@ func expireConfirmationAndTaskTx(ctx context.Context, tx *sql.Tx, stored confirm
 	if err = terminalizeConfirmationsTx(ctx, tx, stored.TaskID, reason, at.UTC()); err != nil {
 		return err
 	}
-	if strings.HasPrefix(stored.Binding.OperationDomain, "workload:") {
-		if err = terminalizeWorkloadOperationTx(ctx, tx, stored, "expired", reason, reason, at.UTC()); err != nil {
-			return err
-		}
-	}
 	if taskIsMutable {
 		if _, err = tx.ExecContext(ctx, `INSERT INTO agent_task_events(owner_id,task_id,sequence,event_type,status,payload_json,occurred_at) SELECT owner_id,task_id,progress_sequence,$1::text,'failed',jsonb_build_object('reason',$1::text),$2 FROM agent_tasks WHERE task_id=$3 AND owner_id=$4`, reason, at.UTC(), stored.TaskID, stored.OwnerID); err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-// terminalizeWorkloadOperationTx keeps the workload operation projection in
-// lockstep with its confirmation/task terminal transition. Workload
-// operations have their own live index; leaving one in waiting_user would
-// incorrectly block a subsequent operation for the same workload forever.
-// The operation row is locked by task identity (the task was already locked
-// by the caller), then transitioned and given one terminal event in the same
-// transaction. Non-workload confirmations simply have no matching row.
-func terminalizeWorkloadOperationTx(ctx context.Context, tx *sql.Tx, stored confirmation.Confirmation, status, code, summary string, at time.Time) error {
-	owner, taskID, confirmationID, targetID := stored.OwnerID, stored.TaskID, stored.ID, stored.Binding.TargetID
-	rows, err := tx.QueryContext(ctx, `SELECT operation_id::text,workload_id::text,confirmation_id::text,plan_revision,operation,status,dispatch_state,revision,expected_workload_revision
-		FROM core_workload_operations WHERE owner_id=$1 AND task_id=$2 FOR UPDATE`, owner, taskID)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	if !rows.Next() {
-		if err = rows.Err(); err != nil {
-			return err
-		}
-		return confirmation.ErrNotFound
-	}
-	var operationID, workloadID, operationConfirmationID, operationKind, operationStatus, dispatchState string
-	var planRevision, revision, expectedWorkloadRevision int64
-	if err = rows.Scan(&operationID, &workloadID, &operationConfirmationID, &planRevision, &operationKind, &operationStatus, &dispatchState, &revision, &expectedWorkloadRevision); err != nil {
-		return err
-	}
-	if rows.Next() {
-		return confirmation.ErrConflict
-	}
-	if err = rows.Err(); err != nil {
-		return err
-	}
-	expectedOperation := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(stored.Binding.OperationDomain, "workload:")))
-	if expectedOperation == "" || operationConfirmationID != confirmationID || workloadID != targetID ||
-		planRevision != stored.Binding.TargetRevision || strings.ToLower(strings.TrimSpace(operationKind)) != expectedOperation {
-		return confirmation.ErrConflict
-	}
-	if operationStatus != "waiting_user" || dispatchState != "prepared" || revision < 1 {
-		return confirmation.ErrConflict
-	}
-	result, err := tx.ExecContext(ctx, `UPDATE core_workload_operations
-		SET status=$1,dispatch_state='terminal',failure_code=$2,failure_summary=$3,
-			revision=revision+1,updated_at=$4
-		WHERE owner_id=$5 AND operation_id=$6 AND task_id=$7 AND status='waiting_user'
-		  AND dispatch_state='prepared' AND revision=$8`, status, code, summary, at.UTC(), owner, operationID, taskID, revision)
-	if err != nil {
-		return err
-	}
-	if count, _ := result.RowsAffected(); count != 1 {
-		return confirmation.ErrRevisionConflict
-	}
-	if operationKind == "apply" && (status == "expired" || status == "rejected" || status == "canceled") {
-		result, err = tx.ExecContext(ctx, `UPDATE core_workloads SET state='failed',revision=revision+1,updated_at=$1 WHERE owner_id=$2 AND workload_id=$3 AND state='pending' AND revision=$4 AND (actual_snapshot_json IS NULL OR actual_snapshot_json='{}'::jsonb OR actual_snapshot_json='null'::jsonb)`, at.UTC(), owner, workloadID, expectedWorkloadRevision)
-		if err != nil {
-			return err
-		}
-		if count, _ := result.RowsAffected(); count != 1 {
-			var currentState string
-			var currentRevision int64
-			if err = tx.QueryRowContext(ctx, `SELECT state,revision FROM core_workloads WHERE owner_id=$1 AND workload_id=$2 FOR UPDATE`, owner, workloadID).Scan(&currentState, &currentRevision); err != nil {
-				return err
-			}
-			if currentRevision != expectedWorkloadRevision || (currentState != "destroyed" && currentState != "ready" && currentState != "failed") {
-				return confirmation.ErrConflict
-			}
-		}
-	}
-	var sequence uint64
-	if err = tx.QueryRowContext(ctx, `INSERT INTO core_workload_event_counters(owner_id,operation_id,next_sequence)
-		VALUES($1,$2,2)
-		ON CONFLICT(owner_id,operation_id) DO UPDATE
-		SET next_sequence=core_workload_event_counters.next_sequence+1
-		RETURNING next_sequence-1`, owner, operationID).Scan(&sequence); err != nil {
-		return err
-	}
-	return insertWorkloadEventTx(ctx, tx, owner, operationID, sequence, "terminal", status, summary, nil, at.UTC())
 }
 
 func (s *DatabaseConfirmationStore) ExpireAt(ctx context.Context, owner, id string, at time.Time) error {
@@ -836,9 +815,6 @@ func (s *DatabaseConfirmationStore) ExpireAt(ctx context.Context, owner, id stri
 		return err
 	}
 	defer tx.Rollback()
-	if err = lockAWSPreProviderByConfirmationTx(ctx, tx, owner, id); err != nil {
-		return err
-	}
 	_, taskID, err := confirmationIdentityTx(ctx, tx, owner, id)
 	if errors.Is(err, confirmation.ErrNotFound) {
 		return nil
@@ -853,6 +829,9 @@ func (s *DatabaseConfirmationStore) ExpireAt(ctx context.Context, owner, id stri
 	stored, err := getConfirmationForUpdateTx(ctx, tx, owner, id)
 	if err != nil {
 		return err
+	}
+	if strings.HasPrefix(stored.Binding.OperationDomain, "execution:v2:") {
+		return confirmation.ErrConflict
 	}
 	if stored.TaskID != taskID {
 		return confirmation.ErrConflict
@@ -884,12 +863,16 @@ func (s *DatabaseConfirmationStore) Expire(ctx context.Context, c confirmation.E
 		return confirmation.Confirmation{}, err
 	}
 	defer tx.Rollback()
-	if err = lockAWSPreProviderByConfirmationTx(ctx, tx, "", c.ConfirmationID); err != nil {
-		return confirmation.Confirmation{}, err
-	}
 	owner, taskID, err := confirmationIdentityTx(ctx, tx, "", c.ConfirmationID)
 	if err != nil {
 		return confirmation.Confirmation{}, err
+	}
+	preflight, err := getConfirmationForUpdateTx(ctx, tx, owner, c.ConfirmationID)
+	if err != nil {
+		return confirmation.Confirmation{}, err
+	}
+	if strings.HasPrefix(preflight.Binding.OperationDomain, "execution:v2:") {
+		return confirmation.Confirmation{}, confirmation.ErrConflict
 	}
 	replay, found, _, err := replayConfirmationMutationTx(ctx, tx, owner, "expire", c.IdempotencyKey, c.RequestDigest, false)
 	if found || err != nil {

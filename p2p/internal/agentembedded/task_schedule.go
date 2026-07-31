@@ -154,9 +154,6 @@ func taskMap(v task.Task) map[string]any {
 	attachmentRefs := append([]string{}, v.Spec.AttachmentRefs...)
 	knowledgeRefs := append([]string{}, v.Spec.KnowledgeRefs...)
 	out := map[string]any{"task_id": v.ID, "goal": v.Spec.Goal, "conversation_id": v.Spec.ConversationID, "model_profile_id": v.Spec.ModelProfileID, "attachment_refs": attachmentRefs, "knowledge_refs": knowledgeRefs, "timeout_seconds": v.Spec.TimeoutSeconds, "status": string(v.Status), "attempt": v.Attempt, "lease_epoch": v.LeaseEpoch, "available_at": v.AvailableAt.UTC().Format(time.RFC3339Nano), "retry_of_task_id": v.RetryOfTaskID, "failure_code": v.FailureCode, "failure_summary": v.FailureSummary, "revision": v.Revision, "kind": string(v.Spec.Kind), "created_at": v.CreatedAt.UTC().Format(time.RFC3339Nano), "updated_at": v.UpdatedAt.UTC().Format(time.RFC3339Nano)}
-	if v.Spec.Payload.Workload != nil {
-		out["expected_workload_revision"] = v.Spec.Payload.Workload.ExpectedWorkloadRevision
-	}
 	return out
 }
 func eventMap(v task.Progress) map[string]any {

@@ -91,13 +91,16 @@ replayed, switched to another transport, or run locally. Only typed
 read-only reconciliation or explicitly authorized destroy/recovery can
 continue.
 
-V1 create remains until V2 acceptance and deployment enablement, then may be
-retired. V1 read, observe, reconcile and destroy remain retained for
-compatibility and operational recovery. The first production slice is AWS SSM
+The deployment/workload V1 implementation was never deployed and has no
+historical user data. Its create/read/observe/reconcile/destroy contracts,
+database objects and compatibility adapters are removed; V2 is the only
+deployment/execution contract. The first production slice is AWS SSM
 long-running services. SSH, generic HTTP, DNS, TLS and Coding Worker are
 deferred and must not be advertised.
 
-The server must omit `execution.v2.*` capabilities and actions until the
+The server must omit `execution.v2.*` capabilities and execution ProductCore
+actions (`projects.*`, `analyses.*`, `targets.*`, `plans.*`, `deployments.*`,
+`runs.*`, `confirmations.*`, `artifacts.get`, `service_bindings.*`) until the
 corresponding route, durable storage, typed executor/transport, focused tests,
 and explicit enablement all exist. This document does not describe any
 unimplemented V2 phase as live.

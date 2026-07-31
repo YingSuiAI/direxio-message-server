@@ -37,12 +37,26 @@ func (m *Module) backendsGet(_ context.Context, _ map[string]any) (any, *actionb
 	if m != nil && m.capabilityReady("aws.control", m.cfg.AWS != nil) {
 		capabilities = append(capabilities, "aws.control")
 	}
-	if m != nil && m.capabilityReady("workload.aws_ssm", m.cfg.Workloads != nil) &&
-		m.capabilityReady("workload.aws_ecs", m.cfg.Workloads != nil) {
-		capabilities = append(capabilities, "workload.aws_ssm", "workload.aws_ecs")
-	}
-	if m != nil && m.capabilityReady("deployments.server", m.cfg.Deployments != nil) {
-		capabilities = append(capabilities, "deployments.server")
+	if m != nil && m.capabilityReady("execution.v2", m.cfg.ExecutionV2 != nil) {
+		capabilities = append(capabilities, "execution.v2")
+		for _, token := range []string{
+			"execution.v2.plan",
+			"execution.v2.secrets",
+			"execution.v2.observe",
+			"execution.v2.run",
+			"execution.v2.provision",
+			"execution.v2.bindings",
+			"execution.v2.transport.aws_ssm",
+			"execution.v2.transport.http_api",
+		} {
+			dependency := true
+			if token == "execution.v2.plan" {
+				dependency = m.cfg.ExecutionV2PlanReady
+			}
+			if m.capabilityReady(token, dependency) {
+				capabilities = append(capabilities, token)
+			}
+		}
 	}
 	return map[string]any{
 		"embedded": map[string]any{"available": true, "configured": true, "status": "ready", "capabilities": capabilities},

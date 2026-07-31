@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/YingSuiAI/dirextalk-message-server/p2p/agentrecipes"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 	"github.com/YingSuiAI/dirextalk-message-server/internal/releasecontrol"
 	agentmodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agent"
 	schedulesmodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agent/schedules"
+	executionplanning "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcontrol/executionplanning"
 	agentruntime "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcontrol/runtime"
 	agentembeddedmodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentembedded"
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentturns"
@@ -61,8 +63,15 @@ type Config struct {
 	NativeAgentDataDir              string
 	ModelProfileKeyFile             string
 	AgentSecretKeyringFile          string
+	AgentArtifactDir                string
 	ReleaseController               releasecontrol.Controller
 	CentralVersionSource            releasecontrol.CentralVersionSource
+	// ExecutionV2 is an explicit, dedicated action-port seam. It is never
+	// routed through the generic embedded task worker.
+	ExecutionV2               agentembeddedmodule.ExecutionV2Config
+	ExecutionPlanningSources  executionplanning.SourceResolver
+	ExecutionPlanningTargets  executionplanning.TargetResolver
+	ExecutionPlanningBindings executionplanning.StepBindingResolver
 }
 
 const (
@@ -120,24 +129,31 @@ type Service struct {
 	agentTaskRuntime          *agentruntime.Worker
 	agentScheduleLoop         *agentruntime.ScheduleLoop
 	agentRuntimeInitErr       error
+	executionV2Ready          func() bool
+	executionV2PlanReady      func() bool
+	executionV2ObserveReady   func() bool
+	executionV2RunReady       func() bool
+	executionV2BindingsReady  func() bool
+	executionV2InvokeReady    func() bool
+	executionV2TransportReady func() bool
+	executionV2ProvisionReady func() bool
+	executionV2SecretsReady   func() bool
+	executionV2Runtime        *ExecutionV2Runtime
+	executionV2RuntimeInitErr error
 
 	agentConfirmationSweep         func(context.Context, string, time.Time) error
 	agentConfirmationSweepInterval time.Duration
-	// deploymentSourceReady is set only when the v106 PostgreSQL deployment
-	// projection is wired into the embedded module. Legacy in-memory and
-	// DatabaseStore ledger methods deliberately never set this flag.
-	deploymentSourceReady     bool
-	agentSecretGuard          *p2pstorage.AgentSecretRuntimeGuard
-	agentSecretGuardCloseOnce sync.Once
-	agentSecretEnveloper      *p2pstorage.AgentSecretEnveloper
-	agentSecretKeyringFile    string
-	agentSecretReady          bool
-	modelProfiles             p2pstorage.ModelProfileStore
-	modelProfileInitErr       error
-	mcpModule                 *mcpmodule.Module
-	mcpCapabilities           *dirextalkmcp.Service
-	releaseController         releasecontrol.Controller
-	legacyAgentGatewayModule  *legacygatewaymodule.Module
+	agentSecretGuard               *p2pstorage.AgentSecretRuntimeGuard
+	agentSecretGuardCloseOnce      sync.Once
+	agentSecretEnveloper           *p2pstorage.AgentSecretEnveloper
+	agentSecretKeyringFile         string
+	agentSecretReady               bool
+	modelProfiles                  p2pstorage.ModelProfileStore
+	modelProfileInitErr            error
+	mcpModule                      *mcpmodule.Module
+	mcpCapabilities                *dirextalkmcp.Service
+	releaseController              releasecontrol.Controller
+	legacyAgentGatewayModule       *legacygatewaymodule.Module
 
 	servicePortalState
 	actions              map[string]actionHandler
@@ -160,6 +176,14 @@ type Service struct {
 	socialModule         *socialmodule.Module
 
 	serviceOperationState
+}
+
+func executionV2BindingReadsReady(cfg agentembeddedmodule.ExecutionV2Config) bool {
+	return cfg.Store != nil && cfg.BindingsReady != nil && cfg.BindingsReady()
+}
+
+func executionV2HTTPAPIInvokeReady(cfg agentembeddedmodule.ExecutionV2Config) bool {
+	return cfg.Invoke != nil && cfg.InvokeReady != nil && cfg.InvokeReady()
 }
 
 type PushRuleManager interface {
@@ -609,6 +633,15 @@ func newService(cfg Config, store Store, transport Transport, state portalState,
 			portalSessionGeneration: 1,
 		},
 	}
+	service.executionV2Ready = cfg.ExecutionV2.Ready
+	service.executionV2PlanReady = cfg.ExecutionV2.PlanReady
+	service.executionV2ObserveReady = cfg.ExecutionV2.ObserveReady
+	service.executionV2RunReady = cfg.ExecutionV2.RunReady
+	service.executionV2BindingsReady = cfg.ExecutionV2.BindingsReady
+	service.executionV2InvokeReady = cfg.ExecutionV2.InvokeReady
+	service.executionV2TransportReady = cfg.ExecutionV2.TransportAWSReady
+	service.executionV2ProvisionReady = cfg.ExecutionV2.TargetReserveReady
+	service.executionV2SecretsReady = cfg.ExecutionV2.SecretsReady
 	service.eventsModule = eventsmodule.New(service.store, eventsmodule.Config{
 		RetentionMaxRows:      cfg.P2PEventRetentionMaxRows,
 		RetentionPruneOnWrite: cfg.P2PEventRetentionPruneOnWrite,
@@ -969,6 +1002,134 @@ func newService(cfg Config, store Store, transport Transport, state portalState,
 		Schedules:       scheduleStore,
 		CapabilityReady: service.embeddedAgentCapabilityReady,
 	}
+	// Execution.v2 has an independent port and readiness hook. The generic
+	// embedded task worker is intentionally not used for this surface.
+	executionV2Config := cfg.ExecutionV2
+	if dbStore, ok := store.(*p2pstorage.DatabaseStore); ok {
+		if executionV2Config.Store == nil {
+			executionV2Config.Store = p2pstorage.NewDatabaseExecutionStore(dbStore.DB(), time.Now)
+		}
+		if executionV2Config.Secrets == nil && service.agentSecretEnveloper != nil {
+			secretStore := p2pstorage.NewDatabaseExecutionSecretStore(dbStore.DB(), service.agentSecretEnveloper, time.Now)
+			executionV2Config.Secrets = secretStore
+			executionV2Config.SecretsReady = secretStore.Ready
+		}
+		artifactDir := strings.TrimSpace(cfg.AgentArtifactDir)
+		if artifactDir == "" {
+			artifactDir = strings.TrimSpace(os.Getenv("P2P_AGENT_ARTIFACT_DIR"))
+		}
+		if artifactDir != "" && service.agentSecretEnveloper != nil {
+			service.executionV2Runtime, service.executionV2RuntimeInitErr = NewExecutionV2Runtime(ExecutionV2RuntimeConfig{
+				Store:           dbStore,
+				OwnerID:         strings.TrimSpace(service.OwnerMXID()),
+				ArtifactDir:     artifactDir,
+				SecretEnveloper: service.agentSecretEnveloper,
+				WorkerID:        "execution-v2",
+				Clock:           time.Now,
+			})
+			if service.executionV2RuntimeInitErr == nil {
+				// The runtime store/coordinator share one authoritative executor
+				// catalog. Publishing a separately constructed coordinator would
+				// bypass admission checks for unavailable executors.
+				if executionV2Config.Coordinator == nil {
+					executionV2Config.Coordinator = service.executionV2Runtime.coord
+				}
+				if executionV2Config.Ready == nil {
+					executionV2Config.Ready = service.executionV2Runtime.Ready
+				}
+				if executionV2Config.Observe == nil {
+					executionV2Config.Observe = service.executionV2Runtime
+				}
+				if executionV2Config.TargetImport == nil {
+					executionV2Config.TargetImport = service.executionV2Runtime
+				}
+				if executionV2Config.ObserveReady == nil {
+					executionV2Config.ObserveReady = service.executionV2Runtime.ObserveReady
+				}
+				if executionV2Config.TargetImportReady == nil {
+					executionV2Config.TargetImportReady = service.executionV2Runtime.TargetImportReady
+				}
+				if executionV2Config.TargetReserve == nil {
+					executionV2Config.TargetReserve = service.executionV2Runtime
+				}
+				if executionV2Config.TargetReserveReady == nil {
+					executionV2Config.TargetReserveReady = service.executionV2Runtime.ProvisionReady
+				}
+				if executionV2Config.RunReady == nil {
+					executionV2Config.RunReady = service.executionV2Runtime.Ready
+				}
+				if executionV2Config.Reconcile == nil {
+					executionV2Config.Reconcile = service.executionV2Runtime
+				}
+				if executionV2Config.ReconcileReady == nil {
+					executionV2Config.ReconcileReady = service.executionV2Runtime.ReconcileReady
+				}
+				if executionV2Config.BindingsReady == nil {
+					executionV2Config.BindingsReady = service.executionV2Runtime.BindingsReady
+				}
+				if executionV2Config.TransportAWSReady == nil {
+					executionV2Config.TransportAWSReady = service.executionV2Runtime.Ready
+				}
+			}
+		}
+		if executionV2Config.Ready == nil {
+			executionV2Config.Ready = func() bool { return false }
+		}
+		planningSources := cfg.ExecutionPlanningSources
+		planningTargets := cfg.ExecutionPlanningTargets
+		planningBindings := cfg.ExecutionPlanningBindings
+		if executionStore, storeOK := executionV2Config.Store.(*p2pstorage.DatabaseExecutionStore); storeOK {
+			if planningTargets == nil {
+				planningTargets = executionplanning.NewDatabaseTargetResolver(executionStore)
+			}
+			if planningSources == nil && service.executionV2Runtime != nil {
+				planningSources = executionplanning.NewProductionSourceResolver(executionStore, service.executionV2Runtime.artifacts)
+			}
+			if planningBindings == nil {
+				planningBindings = executionplanning.NewProductionBindingResolver(executionStore, time.Now)
+			}
+		}
+		if executionV2Config.Analyze == nil || executionV2Config.PlanCompiler == nil {
+			if recipes, recipeErr := agentrecipes.Builtin(); recipeErr == nil {
+				var revisionWriter executionplanning.PlanRevisionWriter
+				if rw, ok := executionV2Config.Store.(executionplanning.PlanRevisionWriter); ok {
+					revisionWriter = rw
+				}
+				var executorSealer executionplanning.ExecutorSealer
+				if service.executionV2Runtime != nil {
+					executorSealer = executionplanning.NewArtifactExecutorSealer(service.executionV2Runtime.artifacts)
+				}
+				var credentials executionplanning.CredentialResolver
+				if resolver, ok := executionV2Config.Secrets.(executionplanning.CredentialResolver); ok {
+					credentials = resolver
+				}
+				planner := executionplanning.New(executionplanning.Config{AnalysisStore: executionV2Config.Store, PlanStore: executionV2Config.Store, RevisionWriter: revisionWriter, Sources: planningSources, Targets: planningTargets, ExecutionSecrets: credentials, Bindings: planningBindings, Executors: executorSealer, Recipes: recipes})
+				if executionV2Config.Analyze == nil {
+					executionV2Config.Analyze = planner
+				}
+				if executionV2Config.PlanCompiler == nil {
+					executionV2Config.PlanCompiler = planner
+				}
+				if executionV2Config.PlanReady == nil {
+					executionV2Config.PlanReady = planner.PlanReady
+				}
+				service.executionV2PlanReady = executionV2Config.PlanReady
+			}
+		}
+	}
+	service.executionV2Ready = executionV2Config.Ready
+	service.executionV2ObserveReady = executionV2Config.ObserveReady
+	service.executionV2RunReady = executionV2Config.RunReady
+	service.executionV2BindingsReady = func() bool { return executionV2BindingReadsReady(executionV2Config) }
+	service.executionV2InvokeReady = func() bool { return executionV2HTTPAPIInvokeReady(executionV2Config) }
+	service.executionV2TransportReady = executionV2Config.TransportAWSReady
+	service.executionV2ProvisionReady = executionV2Config.TargetReserveReady
+	service.executionV2SecretsReady = executionV2Config.SecretsReady
+	embeddedConfig.ExecutionV2 = agentembeddedmodule.NewExecutionV2ActionPort(executionV2Config)
+	embeddedConfig.ExecutionV2PlanReady = executionV2Config.PlanReady != nil && executionV2Config.PlanReady()
+	if service.executionV2PlanReady == nil {
+		service.executionV2PlanReady = func() bool { return false }
+	}
 	if dbStore, ok := store.(*p2pstorage.DatabaseStore); ok {
 		ownerID := strings.TrimSpace(service.OwnerMXID())
 		taskStore := p2pstorage.NewDatabaseTaskStore(dbStore.DB())
@@ -976,11 +1137,9 @@ func newService(cfg Config, store Store, transport Transport, state portalState,
 		service.agentConfirmationSweep = confirmationStore.ExpireOverdue
 		controls := newEmbeddedControlRuntime(dbStore, taskStore, confirmationStore, ownerID, service.agentSecretEnveloper)
 		service.agentTaskExecutor = &embeddedTaskExecutor{
-			agent:           service.agentModule,
-			aws:             controls.aws,
-			workloadService: controls.workload,
-			workloadHandler: controls.handler,
-			mcp:             controls.mcp,
+			agent: service.agentModule,
+			aws:   controls.aws,
+			mcp:   controls.mcp,
 		}
 		service.agentTaskRuntime, service.agentRuntimeInitErr = agentruntime.New(agentruntime.Config{
 			Store: taskStore, Executor: service.agentTaskExecutor, MaxConcurrent: 4,
@@ -994,12 +1153,6 @@ func newService(cfg Config, store Store, transport Transport, state portalState,
 		embeddedConfig.Confirmations = confirmationStore
 		embeddedConfig.MCP = controls.mcpPort
 		embeddedConfig.AWS = controls.awsPort
-		embeddedConfig.GeoLibre = controls.geolibrePort
-		embeddedConfig.Workloads = controls.workloadPort
-		if deployments := p2pstorage.NewWorkloadDeploymentSource(dbStore); deployments != nil && unifiedDeploymentSchemaReady(context.Background(), dbStore.DB()) {
-			embeddedConfig.Deployments = embeddedDeploymentAdapter{source: deployments}
-			service.deploymentSourceReady = true
-		}
 		if trigger, ok := any(dbStore).(interface {
 			TriggerSchedule(context.Context, string, string, string) (p2pstorage.Schedule, string, string, error)
 		}); ok {

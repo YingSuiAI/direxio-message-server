@@ -9,10 +9,6 @@ import (
 )
 
 func (s *DatabaseStore) migrate(ctx context.Context) error {
-	return s.migrateTo(ctx, "")
-}
-
-func (s *DatabaseStore) migrateTo(ctx context.Context, target string) error {
 	m := sqlutil.NewMigrator(s.db)
 	m.AddMigrations(sqlutil.Migration{
 		Version: "p2p: integrated appservice tables v1",
@@ -818,36 +814,6 @@ func (s *DatabaseStore) migrateTo(ctx context.Context, target string) error {
 		},
 	})
 	m.AddMigrations(sqlutil.Migration{
-		Version: "p2p: durable agent core turns v78",
-		Up: func(ctx context.Context, txn *sql.Tx) error {
-			return execMigrationStatements(ctx, txn, []string{
-				`CREATE TABLE IF NOT EXISTS p2p_agent_core_turns (
-					owner_id TEXT NOT NULL CHECK (owner_id <> ''),
-					client_turn_id TEXT NOT NULL CHECK (client_turn_id <> ''),
-					core_turn_id TEXT NOT NULL DEFAULT '',
-					core_profile_id TEXT NOT NULL DEFAULT '',
-					conversation_id TEXT NOT NULL DEFAULT '',
-					request_digest BYTEA NOT NULL CHECK (octet_length(request_digest) = 32),
-					status TEXT NOT NULL CHECK (status <> ''),
-					last_sequence BIGINT NOT NULL DEFAULT 0 CHECK (last_sequence >= 0),
-					core_revision BIGINT NOT NULL DEFAULT 0,
-					model_profile_revision BIGINT NOT NULL DEFAULT 0,
-					last_event_kind TEXT NOT NULL DEFAULT '',
-					terminal_code TEXT NOT NULL DEFAULT '',
-					terminal_summary TEXT NOT NULL DEFAULT '',
-					created_at TIMESTAMPTZ NOT NULL,
-					updated_at TIMESTAMPTZ NOT NULL,
-					PRIMARY KEY (owner_id, client_turn_id)
-				)`,
-				`CREATE INDEX IF NOT EXISTS p2p_agent_core_turns_owner_conversation_idx ON p2p_agent_core_turns(owner_id, conversation_id, created_at, client_turn_id)`,
-				`ALTER TABLE p2p_agent_core_turns ADD COLUMN IF NOT EXISTS core_revision BIGINT NOT NULL DEFAULT 0`,
-				`ALTER TABLE p2p_agent_core_turns ADD COLUMN IF NOT EXISTS core_profile_id TEXT NOT NULL DEFAULT ''`,
-				`ALTER TABLE p2p_agent_core_turns ADD COLUMN IF NOT EXISTS model_profile_revision BIGINT NOT NULL DEFAULT 0`,
-				`ALTER TABLE p2p_agent_core_turns ADD COLUMN IF NOT EXISTS last_event_kind TEXT NOT NULL DEFAULT ''`,
-			})
-		},
-	})
-	m.AddMigrations(sqlutil.Migration{
 		Version: "p2p: canonical Matrix member membership v76",
 		Up: func(ctx context.Context, txn *sql.Tx) error {
 			exists, err := productTableExists(ctx, txn, "p2p_members")
@@ -869,821 +835,225 @@ func (s *DatabaseStore) migrateTo(ctx context.Context, target string) error {
 		},
 	})
 	m.AddMigrations(sqlutil.Migration{
-		Version: "p2p: encrypted server model profiles v79",
-		Up: func(ctx context.Context, txn *sql.Tx) error {
-			return execMigrationStatements(ctx, txn, []string{
-				`CREATE TABLE IF NOT EXISTS p2p_agent_model_profiles (
-					owner_id TEXT NOT NULL CHECK (owner_id <> ''),
-					profile_id TEXT NOT NULL CHECK (profile_id <> ''),
-					client_profile_id TEXT NOT NULL CHECK (client_profile_id <> ''),
-					display_name TEXT NOT NULL DEFAULT '',
-					provider TEXT NOT NULL,
-					base_url TEXT NOT NULL DEFAULT '',
-					model TEXT NOT NULL DEFAULT '',
-					system_prompt TEXT NOT NULL DEFAULT '',
-					temperature DOUBLE PRECISION,
-					top_p DOUBLE PRECISION,
-					max_output_tokens BIGINT NOT NULL DEFAULT 0,
-					context_window BIGINT NOT NULL DEFAULT 0,
-					reasoning_effort TEXT NOT NULL DEFAULT '',
-					model_kind TEXT NOT NULL DEFAULT 'conversation',
-					input_modalities JSONB NOT NULL DEFAULT '["text"]'::jsonb,
-					provider_config JSONB NOT NULL DEFAULT '{}'::jsonb,
-					revision BIGINT NOT NULL CHECK (revision > 0),
-					api_key_version BIGINT NOT NULL DEFAULT 1,
-					api_key_nonce BYTEA NOT NULL DEFAULT ''::bytea,
-					api_key_ciphertext BYTEA NOT NULL DEFAULT ''::bytea,
-					credential_version BIGINT NOT NULL DEFAULT 0,
-					created_at TIMESTAMPTZ NOT NULL,
-					updated_at TIMESTAMPTZ NOT NULL,
-					PRIMARY KEY (owner_id, profile_id),
-					UNIQUE (owner_id, client_profile_id)
-				)`,
-				`CREATE TABLE IF NOT EXISTS p2p_agent_model_profile_credentials (
-					owner_id TEXT NOT NULL,
-					profile_id TEXT NOT NULL,
-					credential_version BIGINT NOT NULL CHECK (credential_version > 0),
-					provider TEXT NOT NULL,
-					api_key_nonce BYTEA NOT NULL,
-					api_key_ciphertext BYTEA NOT NULL,
-					created_at TIMESTAMPTZ NOT NULL,
-					PRIMARY KEY (owner_id, profile_id, credential_version),
-					FOREIGN KEY (owner_id, profile_id) REFERENCES p2p_agent_model_profiles(owner_id, profile_id) ON DELETE CASCADE
-				)`,
-				`CREATE INDEX IF NOT EXISTS p2p_agent_model_profiles_owner_idx ON p2p_agent_model_profiles(owner_id, client_profile_id, profile_id)`,
-				`CREATE TABLE IF NOT EXISTS p2p_agent_model_profile_defaults (
-					owner_id TEXT PRIMARY KEY NOT NULL,
-					profile_id TEXT,
-					client_profile_id TEXT NOT NULL,
-					embedding_profile_id TEXT,
-					embedding_client_profile_id TEXT NOT NULL DEFAULT '',
-					speech_profile_id TEXT,
-					speech_client_profile_id TEXT NOT NULL DEFAULT ''
-				)`,
-				`CREATE TABLE IF NOT EXISTS p2p_agent_model_profile_syncs (
-					owner_id TEXT NOT NULL,
-					idempotency_key TEXT NOT NULL,
-					request_digest BYTEA NOT NULL CHECK (octet_length(request_digest) = 32),
-					response_json JSONB NOT NULL,
-					created_at TIMESTAMPTZ NOT NULL,
-					PRIMARY KEY (owner_id, idempotency_key)
-				)`,
-				`CREATE TABLE IF NOT EXISTS p2p_agent_model_profile_deletes (
-					owner_id TEXT NOT NULL,
-					idempotency_key TEXT NOT NULL,
-					profile_id TEXT NOT NULL,
-					created_at TIMESTAMPTZ NOT NULL,
-					PRIMARY KEY (owner_id, idempotency_key)
-				)`,
-				`ALTER TABLE p2p_agent_model_profiles ADD COLUMN IF NOT EXISTS credential_version BIGINT NOT NULL DEFAULT 0`,
-			})
-		},
+		Version: "p2p: agent and execution v2 fresh schema v78",
+		Up:      agentAndExecutionV2FreshSchema,
 	})
-	m.AddMigrations(sqlutil.Migration{
-		Version: "p2p: immutable model profile revisions v80",
-		Up: func(ctx context.Context, txn *sql.Tx) error {
-			return execMigrationStatements(ctx, txn, []string{
-				`ALTER TABLE p2p_agent_model_profiles ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ`,
-				`ALTER TABLE p2p_agent_model_profile_credentials DROP CONSTRAINT IF EXISTS p2p_agent_model_profile_credentials_owner_id_profile_id_fkey`,
-				`CREATE TABLE IF NOT EXISTS p2p_agent_model_profile_revisions (
-					owner_id TEXT NOT NULL,
-					profile_id TEXT NOT NULL,
-					profile_revision BIGINT NOT NULL CHECK (profile_revision > 0),
-					client_profile_id TEXT NOT NULL,
-					display_name TEXT NOT NULL DEFAULT '',
-					provider TEXT NOT NULL,
-					base_url TEXT NOT NULL DEFAULT '',
-					model TEXT NOT NULL DEFAULT '',
-					system_prompt TEXT NOT NULL DEFAULT '',
-					temperature DOUBLE PRECISION,
-					top_p DOUBLE PRECISION,
-					max_output_tokens BIGINT NOT NULL DEFAULT 0,
-					context_window BIGINT NOT NULL DEFAULT 0,
-					reasoning_effort TEXT NOT NULL DEFAULT '',
-					model_kind TEXT NOT NULL DEFAULT 'conversation',
-					input_modalities JSONB NOT NULL DEFAULT '["text"]'::jsonb,
-					provider_config JSONB NOT NULL DEFAULT '{}'::jsonb,
-					credential_version BIGINT NOT NULL DEFAULT 0,
-					deleted_at TIMESTAMPTZ,
-					created_at TIMESTAMPTZ NOT NULL,
-					PRIMARY KEY (owner_id, profile_id, profile_revision)
-				)`,
-				`CREATE INDEX IF NOT EXISTS p2p_agent_model_profile_revisions_lookup_idx ON p2p_agent_model_profile_revisions(owner_id, profile_id, profile_revision)`,
-				`INSERT INTO p2p_agent_model_profile_revisions(owner_id,profile_id,profile_revision,client_profile_id,display_name,provider,base_url,model,system_prompt,temperature,top_p,max_output_tokens,context_window,reasoning_effort,credential_version,deleted_at,created_at) SELECT owner_id,profile_id,revision,client_profile_id,display_name,provider,base_url,model,system_prompt,temperature,top_p,max_output_tokens,context_window,reasoning_effort,credential_version,deleted_at,updated_at FROM p2p_agent_model_profiles ON CONFLICT DO NOTHING`,
-			})
-		},
-	})
-	m.AddMigrations(sqlutil.Migration{
-		Version: "p2p: model profile credential integrity and delete idempotency v81",
-		Up: func(ctx context.Context, txn *sql.Tx) error {
-			return execMigrationStatements(ctx, txn, []string{
-				`DELETE FROM p2p_agent_model_profile_credentials c WHERE NOT EXISTS (SELECT 1 FROM p2p_agent_model_profiles p WHERE p.owner_id=c.owner_id AND p.profile_id=c.profile_id)`,
-				`ALTER TABLE p2p_agent_model_profile_credentials ADD CONSTRAINT p2p_agent_model_profile_credentials_owner_id_profile_id_fkey FOREIGN KEY (owner_id, profile_id) REFERENCES p2p_agent_model_profiles(owner_id, profile_id) ON DELETE RESTRICT`,
-				`ALTER TABLE p2p_agent_model_profile_deletes ADD COLUMN IF NOT EXISTS request_digest BYTEA`,
-				`ALTER TABLE p2p_agent_model_profile_deletes ADD COLUMN IF NOT EXISTS response_json JSONB NOT NULL DEFAULT '{}'::jsonb`,
-				`UPDATE p2p_agent_model_profile_deletes SET response_json=jsonb_build_object('deleted',true,'profile_id',profile_id) WHERE response_json='{}'::jsonb`,
-			})
-		},
-	})
-	m.AddMigrations(sqlutil.Migration{
-		Version: "p2p: pinned native agent turn profiles v82",
-		Up: func(ctx context.Context, txn *sql.Tx) error {
-			return execMigrationStatements(ctx, txn, []string{
-				`ALTER TABLE p2p_native_agent_turns ADD COLUMN IF NOT EXISTS model_profile_id TEXT NOT NULL DEFAULT ''`,
-				`ALTER TABLE p2p_native_agent_turns ADD COLUMN IF NOT EXISTS model_profile_revision BIGINT NOT NULL DEFAULT 0`,
-				`ALTER TABLE p2p_native_agent_turns ADD COLUMN IF NOT EXISTS credential_version BIGINT NOT NULL DEFAULT 0`,
-			})
-		},
-	})
-	m.AddMigrations(sqlutil.Migration{
-		Version: "p2p: embedded schedules v83",
-		Up: func(ctx context.Context, txn *sql.Tx) error {
-			return execMigrationStatements(ctx, txn, []string{
-				`CREATE TABLE IF NOT EXISTS p2p_agent_schedules (schedule_id TEXT NOT NULL, owner_id TEXT NOT NULL, name TEXT NOT NULL, prompt TEXT NOT NULL, trigger_kind TEXT NOT NULL, trigger_value TEXT NOT NULL, timezone TEXT NOT NULL, skip_if_running BOOLEAN NOT NULL DEFAULT FALSE, status TEXT NOT NULL, revision BIGINT NOT NULL DEFAULT 1, model_profile_id TEXT NOT NULL, model_profile_revision BIGINT NOT NULL, credential_version BIGINT NOT NULL, next_run_at TIMESTAMPTZ, latest_run_at TIMESTAMPTZ, lease_owner TEXT NOT NULL DEFAULT '', lease_until TIMESTAMPTZ, lease_epoch BIGINT NOT NULL DEFAULT 0, idempotency_key TEXT NOT NULL DEFAULT '', deleted_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL, PRIMARY KEY(owner_id,schedule_id))`,
-				`CREATE UNIQUE INDEX IF NOT EXISTS p2p_agent_schedules_idem_idx ON p2p_agent_schedules(owner_id,idempotency_key) WHERE idempotency_key <> ''`,
-				`CREATE INDEX IF NOT EXISTS p2p_agent_schedules_due_idx ON p2p_agent_schedules(status,next_run_at) WHERE deleted_at IS NULL`,
-				`CREATE TABLE IF NOT EXISTS p2p_agent_schedule_runs (run_id TEXT PRIMARY KEY NOT NULL, schedule_id TEXT NOT NULL, owner_id TEXT NOT NULL, status TEXT NOT NULL, scheduled_for TIMESTAMPTZ NOT NULL, started_at TIMESTAMPTZ, finished_at TIMESTAMPTZ, result TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', lease_epoch BIGINT NOT NULL DEFAULT 0, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`,
-				`CREATE INDEX IF NOT EXISTS p2p_agent_schedule_runs_owner_idx ON p2p_agent_schedule_runs(owner_id,schedule_id,run_id)`,
-			})
-		},
-	})
-	m.AddMigrations(sqlutil.Migration{
-		Version: "p2p: schedule mutation receipts and CAS v84",
-		Up: func(ctx context.Context, txn *sql.Tx) error {
-			return execMigrationStatements(ctx, txn, []string{
-				`CREATE TABLE IF NOT EXISTS p2p_agent_schedule_mutations (owner_id TEXT NOT NULL, action TEXT NOT NULL, idempotency_key TEXT NOT NULL, request_digest BYTEA NOT NULL CHECK (octet_length(request_digest)=32), response_json JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL, PRIMARY KEY(owner_id,action,idempotency_key))`,
-			})
-		},
-	})
-	m.AddMigrations(sqlutil.Migration{
-		Version: "p2p: embedded schedule occurrence fencing v84",
-		Up: func(ctx context.Context, txn *sql.Tx) error {
-			return execMigrationStatements(ctx, txn, []string{
-				`CREATE UNIQUE INDEX IF NOT EXISTS p2p_agent_schedule_runs_occurrence_idx ON p2p_agent_schedule_runs(owner_id,schedule_id,scheduled_for)`,
-			})
-		},
-	})
-	m.AddMigrations(sqlutil.Migration{
-		Version: "p2p: native schedule confirmations v85",
-		Up: func(ctx context.Context, txn *sql.Tx) error {
-			return execMigrationStatements(ctx, txn, []string{
-				`CREATE TABLE IF NOT EXISTS p2p_agent_schedule_confirmations (
-					confirmation_id TEXT NOT NULL, owner_id TEXT NOT NULL, conversation_id TEXT NOT NULL,
-					action TEXT NOT NULL, params_json JSONB NOT NULL, request_digest BYTEA NOT NULL CHECK (octet_length(request_digest)=32),
-					idempotency_key TEXT NOT NULL, summary TEXT NOT NULL, approval_code TEXT NOT NULL,
-					status TEXT NOT NULL CHECK (status IN ('pending','executing','completed','failed','expired','replaced')),
-					revision BIGINT NOT NULL DEFAULT 1, expires_at TIMESTAMPTZ NOT NULL, created_at TIMESTAMPTZ NOT NULL,
-					updated_at TIMESTAMPTZ NOT NULL, result_json JSONB NOT NULL DEFAULT '{}'::jsonb, error_text TEXT NOT NULL DEFAULT '',
-					PRIMARY KEY(owner_id,conversation_id,confirmation_id)
-				)`,
-				`CREATE INDEX IF NOT EXISTS p2p_agent_schedule_confirmations_pending_idx ON p2p_agent_schedule_confirmations(owner_id,conversation_id,status,updated_at)`,
-			})
-		},
-	})
-	m.AddMigrations(sqlutil.Migration{Version: "p2p: native schedule confirmation pending uniqueness v85b", Up: func(ctx context.Context, txn *sql.Tx) error {
-		return execMigrationStatements(ctx, txn, []string{`UPDATE p2p_agent_schedule_confirmations c SET status='replaced',revision=revision+1,updated_at=NOW() WHERE status IN ('pending','executing') AND EXISTS (SELECT 1 FROM p2p_agent_schedule_confirmations newer WHERE newer.owner_id=c.owner_id AND newer.conversation_id=c.conversation_id AND newer.status IN ('pending','executing') AND (newer.updated_at>c.updated_at OR (newer.updated_at=c.updated_at AND newer.confirmation_id>c.confirmation_id)))`, `CREATE UNIQUE INDEX IF NOT EXISTS p2p_agent_schedule_confirmations_active_idx ON p2p_agent_schedule_confirmations(owner_id,conversation_id) WHERE status IN ('pending','executing')`})
-	}})
-	m.AddMigrations(sqlutil.Migration{Version: "p2p: embedded native agent conversation memory v86", Up: func(ctx context.Context, txn *sql.Tx) error {
-		return execMigrationStatements(ctx, txn, []string{
-			`CREATE TABLE IF NOT EXISTS p2p_native_agent_conversations (
-				owner_id TEXT NOT NULL CHECK (owner_id <> ''), conversation_id TEXT NOT NULL CHECK (char_length(conversation_id) BETWEEN 1 AND 256),
-				title TEXT NOT NULL DEFAULT '', active BOOLEAN NOT NULL DEFAULT TRUE, deleted BOOLEAN NOT NULL DEFAULT FALSE,
-				revision BIGINT NOT NULL DEFAULT 1 CHECK (revision > 0), last_message_seq BIGINT NOT NULL DEFAULT 0 CHECK (last_message_seq >= 0),
-				summary TEXT NOT NULL DEFAULT '', summary_through_seq BIGINT NOT NULL DEFAULT 0 CHECK (summary_through_seq >= 0),
-				created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL, deleted_at TIMESTAMPTZ,
-				PRIMARY KEY(owner_id, conversation_id)
-			)`,
-			`CREATE INDEX IF NOT EXISTS p2p_native_agent_conversations_owner_cursor_idx ON p2p_native_agent_conversations(owner_id,updated_at,conversation_id)`,
-			`CREATE TABLE IF NOT EXISTS p2p_native_agent_messages (
-				owner_id TEXT NOT NULL, conversation_id TEXT NOT NULL, seq BIGINT NOT NULL CHECK (seq > 0), turn_id TEXT NOT NULL DEFAULT '', message_id TEXT NOT NULL,
-				role TEXT NOT NULL CHECK (role IN ('user','assistant')), content TEXT NOT NULL, references_json JSONB NOT NULL DEFAULT '[]'::jsonb, created_at TIMESTAMPTZ NOT NULL,
-				PRIMARY KEY(owner_id,conversation_id,seq), UNIQUE(owner_id,conversation_id,message_id),
-				FOREIGN KEY(owner_id,conversation_id) REFERENCES p2p_native_agent_conversations(owner_id,conversation_id) ON DELETE CASCADE
-			)`,
-			`CREATE UNIQUE INDEX IF NOT EXISTS p2p_native_agent_messages_turn_role_idx ON p2p_native_agent_messages(owner_id,conversation_id,turn_id,role) WHERE turn_id <> ''`,
-			`CREATE INDEX IF NOT EXISTS p2p_native_agent_messages_cursor_idx ON p2p_native_agent_messages(owner_id,conversation_id,seq DESC,message_id)`,
-			`CREATE TABLE IF NOT EXISTS p2p_native_agent_memory_turns (owner_id TEXT NOT NULL, conversation_id TEXT NOT NULL, turn_id TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL, PRIMARY KEY(owner_id,conversation_id,turn_id), FOREIGN KEY(owner_id,conversation_id) REFERENCES p2p_native_agent_conversations(owner_id,conversation_id) ON DELETE CASCADE)`,
-			`CREATE TABLE IF NOT EXISTS p2p_native_agent_memory_records (owner_id TEXT NOT NULL, memory_id TEXT NOT NULL, title TEXT NOT NULL, content TEXT NOT NULL, tags_json JSONB NOT NULL DEFAULT '[]'::jsonb, request_digest BYTEA NOT NULL CHECK (octet_length(request_digest)=32), created_at TIMESTAMPTZ NOT NULL, PRIMARY KEY(owner_id,memory_id), UNIQUE(owner_id,request_digest))`,
-			`CREATE INDEX IF NOT EXISTS p2p_native_agent_memory_records_cursor_idx ON p2p_native_agent_memory_records(owner_id,created_at,memory_id)`,
-			`CREATE TABLE IF NOT EXISTS p2p_native_agent_conversation_mutations (owner_id TEXT NOT NULL, action TEXT NOT NULL, idempotency_key TEXT NOT NULL, request_digest BYTEA NOT NULL CHECK (octet_length(request_digest)=32), response_json JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMPTZ NOT NULL, PRIMARY KEY(owner_id,action,idempotency_key))`,
-		})
-	}})
-	m.AddMigrations(sqlutil.Migration{Version: "p2p: native agent memory idempotency keys v87", Up: func(ctx context.Context, txn *sql.Tx) error {
-		return execMigrationStatements(ctx, txn, []string{
-			`ALTER TABLE p2p_native_agent_memory_records DROP CONSTRAINT IF EXISTS p2p_native_agent_memory_records_owner_id_request_digest_key`,
-		})
-	}})
-	m.AddMigrations(sqlutil.Migration{Version: "p2p: role-aware model profiles v89", Up: func(ctx context.Context, txn *sql.Tx) error {
-		return execMigrationStatements(ctx, txn, []string{
-			`ALTER TABLE p2p_agent_model_profiles ADD COLUMN IF NOT EXISTS model_kind TEXT NOT NULL DEFAULT 'conversation'`,
-			`ALTER TABLE p2p_agent_model_profiles ADD COLUMN IF NOT EXISTS input_modalities JSONB NOT NULL DEFAULT '["text"]'::jsonb`,
-			`ALTER TABLE p2p_agent_model_profiles ADD COLUMN IF NOT EXISTS provider_config JSONB NOT NULL DEFAULT '{}'::jsonb`,
-			`ALTER TABLE p2p_agent_model_profile_revisions ADD COLUMN IF NOT EXISTS model_kind TEXT NOT NULL DEFAULT 'conversation'`,
-			`ALTER TABLE p2p_agent_model_profile_revisions ADD COLUMN IF NOT EXISTS input_modalities JSONB NOT NULL DEFAULT '["text"]'::jsonb`,
-			`ALTER TABLE p2p_agent_model_profile_revisions ADD COLUMN IF NOT EXISTS provider_config JSONB NOT NULL DEFAULT '{}'::jsonb`,
-			`ALTER TABLE p2p_agent_model_profile_defaults ADD COLUMN IF NOT EXISTS embedding_profile_id TEXT`,
-			`ALTER TABLE p2p_agent_model_profile_defaults ADD COLUMN IF NOT EXISTS embedding_client_profile_id TEXT NOT NULL DEFAULT ''`,
-			`ALTER TABLE p2p_agent_model_profile_defaults ADD COLUMN IF NOT EXISTS speech_profile_id TEXT`,
-			`ALTER TABLE p2p_agent_model_profile_defaults ADD COLUMN IF NOT EXISTS speech_client_profile_id TEXT NOT NULL DEFAULT ''`,
-			`ALTER TABLE p2p_agent_model_profile_defaults DROP CONSTRAINT IF EXISTS p2p_agent_model_profile_defaults_owner_id_profile_id_fkey`,
-			`ALTER TABLE p2p_agent_model_profile_defaults ALTER COLUMN profile_id DROP NOT NULL`,
-			`ALTER TABLE p2p_agent_model_profile_defaults ALTER COLUMN embedding_profile_id DROP NOT NULL`,
-			`ALTER TABLE p2p_agent_model_profile_defaults ALTER COLUMN speech_profile_id DROP NOT NULL`,
-			`UPDATE p2p_agent_model_profile_defaults SET profile_id=NULLIF(profile_id,''),embedding_profile_id=NULLIF(embedding_profile_id,''),speech_profile_id=NULLIF(speech_profile_id,'')`,
-			`ALTER TABLE p2p_agent_model_profile_defaults ADD CONSTRAINT p2p_agent_model_profile_defaults_owner_profile_fkey FOREIGN KEY (owner_id, profile_id) REFERENCES p2p_agent_model_profiles(owner_id, profile_id) ON DELETE RESTRICT`,
-			`ALTER TABLE p2p_agent_model_profile_defaults ADD CONSTRAINT p2p_agent_model_profile_defaults_owner_embedding_fkey FOREIGN KEY (owner_id, embedding_profile_id) REFERENCES p2p_agent_model_profiles(owner_id, profile_id) ON DELETE RESTRICT`,
-			`ALTER TABLE p2p_agent_model_profile_defaults ADD CONSTRAINT p2p_agent_model_profile_defaults_owner_speech_fkey FOREIGN KEY (owner_id, speech_profile_id) REFERENCES p2p_agent_model_profiles(owner_id, profile_id) ON DELETE RESTRICT`,
-		})
-	}})
-	m.AddMigrations(sqlutil.Migration{Version: "p2p: semantic native agent memory vectors v90", Up: func(ctx context.Context, txn *sql.Tx) error {
-		return execMigrationStatements(ctx, txn, []string{
-			`CREATE TABLE IF NOT EXISTS p2p_native_agent_memory_embeddings (
-				owner_id TEXT NOT NULL, memory_id TEXT NOT NULL, profile_id TEXT NOT NULL,
-				profile_revision BIGINT NOT NULL CHECK (profile_revision > 0), model TEXT NOT NULL,
-				dimension BIGINT NOT NULL CHECK (dimension BETWEEN 1 AND 32768), content_digest BYTEA NOT NULL CHECK (octet_length(content_digest)=32),
-				vector DOUBLE PRECISION[] NOT NULL CHECK (COALESCE(array_length(vector,1),0)=dimension), indexed_at TIMESTAMPTZ NOT NULL,
-				PRIMARY KEY(owner_id,memory_id),
-				FOREIGN KEY(owner_id,memory_id) REFERENCES p2p_native_agent_memory_records(owner_id,memory_id) ON DELETE CASCADE
-			)`,
-			`CREATE INDEX IF NOT EXISTS p2p_native_agent_memory_embeddings_profile_idx ON p2p_native_agent_memory_embeddings(owner_id,profile_id,profile_revision,model,dimension)`,
-		})
-	}})
-	m.AddMigrations(sqlutil.Migration{Version: "p2p: managed native agent knowledge v91", Up: func(ctx context.Context, txn *sql.Tx) error {
-		return execMigrationStatements(ctx, txn, []string{
-			`ALTER TABLE p2p_native_agent_memory_records ADD COLUMN IF NOT EXISTS revision BIGINT NOT NULL DEFAULT 1 CHECK (revision > 0)`,
-			`ALTER TABLE p2p_native_agent_memory_records ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`,
-			`CREATE INDEX IF NOT EXISTS p2p_native_agent_memory_records_updated_idx ON p2p_native_agent_memory_records(owner_id,updated_at,memory_id)`,
-		})
-	}})
-	m.AddMigrations(sqlutil.Migration{Version: "p2p: native agent knowledge sources v92", Up: func(ctx context.Context, txn *sql.Tx) error {
-		return execMigrationStatements(ctx, txn, []string{
-			`CREATE TABLE IF NOT EXISTS p2p_native_agent_knowledge_sources (owner_id TEXT NOT NULL, source_id TEXT NOT NULL, kind TEXT NOT NULL, status TEXT NOT NULL, title TEXT NOT NULL DEFAULT '', mime_type TEXT NOT NULL, size BIGINT NOT NULL, total_chunks BIGINT NOT NULL DEFAULT 0, indexed_chunks BIGINT NOT NULL DEFAULT 0, revision BIGINT NOT NULL DEFAULT 1, error_text TEXT NOT NULL DEFAULT '', created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL, PRIMARY KEY(owner_id,source_id))`,
-			`CREATE INDEX IF NOT EXISTS p2p_native_agent_knowledge_sources_cursor_idx ON p2p_native_agent_knowledge_sources(owner_id,created_at,source_id)`,
-			`CREATE TABLE IF NOT EXISTS p2p_native_agent_knowledge_uploads (owner_id TEXT NOT NULL, upload_id TEXT NOT NULL, source_id TEXT NOT NULL, filename TEXT NOT NULL, mime_type TEXT NOT NULL, size BIGINT NOT NULL, received_size BIGINT NOT NULL DEFAULT 0, data BYTEA NOT NULL DEFAULT '', created_at TIMESTAMPTZ NOT NULL, PRIMARY KEY(owner_id,upload_id))`,
-		})
-	}})
-	m.AddMigrations(sqlutil.Migration{Version: "p2p: native agent knowledge source chunks v93", Up: func(ctx context.Context, txn *sql.Tx) error {
-		return execMigrationStatements(ctx, txn, []string{
-			`ALTER TABLE p2p_native_agent_memory_records ADD COLUMN IF NOT EXISTS source_id TEXT`,
-			`ALTER TABLE p2p_native_agent_memory_records ADD COLUMN IF NOT EXISTS chunk_ordinal BIGINT`,
-			`CREATE INDEX IF NOT EXISTS p2p_native_agent_memory_records_source_idx ON p2p_native_agent_memory_records(owner_id,source_id,chunk_ordinal)`,
-		})
-	}})
-	m.AddMigrations(sqlutil.Migration{Version: "p2p: agent deployment ledger v94", Up: func(ctx context.Context, txn *sql.Tx) error {
-		return execMigrationStatements(ctx, txn, []string{
-			`CREATE TABLE IF NOT EXISTS p2p_agent_deployments (
-				owner_id TEXT NOT NULL, workload_id TEXT NOT NULL, operation_id TEXT NOT NULL DEFAULT '',
-				status TEXT NOT NULL, target_kind TEXT NOT NULL DEFAULT '', object_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-				actual_json JSONB NOT NULL DEFAULT '{}'::jsonb, quote_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-				PRIMARY KEY(owner_id, workload_id)
-			)`,
-			`CREATE INDEX IF NOT EXISTS p2p_agent_deployments_owner_updated_idx ON p2p_agent_deployments(owner_id, updated_at DESC, workload_id)`,
-			`CREATE INDEX IF NOT EXISTS p2p_agent_deployments_owner_status_idx ON p2p_agent_deployments(owner_id, status, target_kind)`,
-			`CREATE TABLE IF NOT EXISTS p2p_agent_deployment_events (
-				owner_id TEXT NOT NULL, workload_id TEXT NOT NULL, operation_id TEXT NOT NULL, sequence BIGINT NOT NULL CHECK(sequence > 0),
-				event_json JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-				PRIMARY KEY(owner_id, operation_id, sequence)
-			)`,
-			`CREATE INDEX IF NOT EXISTS p2p_agent_deployment_events_owner_workload_idx ON p2p_agent_deployment_events(owner_id, workload_id, sequence)`,
-		})
-	}})
-	m.AddMigrations(sqlutil.Migration{Version: "p2p: agent deployment ledger operation snapshot v95", Up: func(ctx context.Context, txn *sql.Tx) error {
-		return execMigrationStatements(ctx, txn, []string{`ALTER TABLE p2p_agent_deployments ADD COLUMN IF NOT EXISTS operation_json JSONB NOT NULL DEFAULT '{}'::jsonb`, `ALTER TABLE p2p_agent_deployments ADD COLUMN IF NOT EXISTS revision BIGINT NOT NULL DEFAULT 1`, `ALTER TABLE p2p_agent_deployments ADD COLUMN IF NOT EXISTS lease_owner TEXT NOT NULL DEFAULT ''`, `ALTER TABLE p2p_agent_deployments ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ`})
-	}})
-	m.AddMigrations(sqlutil.Migration{Version: "p2p: agent deployment public event cursor v96", Up: func(ctx context.Context, txn *sql.Tx) error {
-		return execMigrationStatements(ctx, txn, []string{
-			`ALTER TABLE p2p_agent_deployment_events ADD COLUMN IF NOT EXISTS public_sequence BIGINT`,
-			`ALTER TABLE p2p_agent_deployment_events ADD COLUMN IF NOT EXISTS event_id TEXT`,
-			`WITH ranked AS (SELECT owner_id,workload_id,operation_id,sequence,ROW_NUMBER() OVER (PARTITION BY owner_id,workload_id ORDER BY created_at,operation_id,sequence) AS n FROM p2p_agent_deployment_events) UPDATE p2p_agent_deployment_events e SET public_sequence=r.n FROM ranked r WHERE e.owner_id=r.owner_id AND e.workload_id=r.workload_id AND e.operation_id=r.operation_id AND e.sequence=r.sequence AND e.public_sequence IS NULL`,
-			`CREATE UNIQUE INDEX IF NOT EXISTS p2p_agent_deployment_events_public_cursor_idx ON p2p_agent_deployment_events(owner_id,workload_id,public_sequence) WHERE public_sequence IS NOT NULL`,
-			`UPDATE p2p_agent_deployments SET operation_json=operation_json-'failure_summary', object_json=CASE WHEN object_json ? 'error' THEN jsonb_set(jsonb_set(object_json,'{error,summary}','"Deployment failed"'::jsonb,true),'{current_operation}',COALESCE(object_json->'current_operation','{}'::jsonb)-'failure_summary',true) ELSE object_json END`,
-			`UPDATE p2p_agent_deployment_events SET event_json=jsonb_set(event_json,'{message}','""'::jsonb,true) WHERE event_json ? 'message'`,
-		})
-	}})
-	m.AddMigrations(sqlutil.Migration{Version: "p2p: agent secret envelopes v97", Up: func(ctx context.Context, txn *sql.Tx) error {
-		return execMigrationStatements(ctx, txn, []string{
-			`CREATE TABLE IF NOT EXISTS p2p_agent_secrets (
-				secret_domain TEXT NOT NULL CHECK (secret_domain <> ''),
-				owner_id TEXT NOT NULL CHECK (owner_id <> ''),
-				entity_id TEXT NOT NULL CHECK (entity_id <> ''),
-				secret_revision BIGINT NOT NULL CHECK (secret_revision > 0),
-				purpose TEXT NOT NULL CHECK (purpose <> ''),
-				reference TEXT NOT NULL CHECK (reference <> ''),
-				binding_digest BYTEA NOT NULL CHECK (octet_length(binding_digest) = 32),
-				envelope_version SMALLINT NOT NULL DEFAULT 1 CHECK (envelope_version = 1),
-				aad_version SMALLINT NOT NULL DEFAULT 1 CHECK (aad_version = 1),
-				key_id TEXT NOT NULL CHECK (key_id <> ''),
-				nonce BYTEA NOT NULL CHECK (octet_length(nonce) = 12),
-				ciphertext BYTEA NOT NULL CHECK (octet_length(ciphertext) >= 16),
-				created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
-				PRIMARY KEY (secret_domain, owner_id, entity_id, secret_revision, purpose, reference)
-			)`,
-			`CREATE INDEX IF NOT EXISTS p2p_agent_secrets_key_usage_idx
-				ON p2p_agent_secrets(key_id, secret_domain, owner_id, entity_id, secret_revision)`,
-			`CREATE TABLE IF NOT EXISTS p2p_agent_secret_key_usage (
-				secret_domain TEXT NOT NULL,
-				owner_id TEXT NOT NULL,
-				entity_id TEXT NOT NULL,
-				secret_revision BIGINT NOT NULL CHECK (secret_revision > 0),
-				purpose TEXT NOT NULL,
-				reference TEXT NOT NULL,
-				key_id TEXT NOT NULL CHECK (key_id <> ''),
-				envelope_digest BYTEA NOT NULL CHECK (octet_length(envelope_digest) = 32),
-				updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
-				PRIMARY KEY (secret_domain, owner_id, entity_id, secret_revision, purpose, reference)
-			)`,
-			`CREATE INDEX IF NOT EXISTS p2p_agent_secret_key_usage_key_idx
-				ON p2p_agent_secret_key_usage(key_id, secret_domain)`,
-			`CREATE TABLE IF NOT EXISTS p2p_agent_secret_rotations (
-				rotation_id UUID PRIMARY KEY,
-				state TEXT NOT NULL CHECK (state IN ('rewrapping','verifying','complete','failed')),
-				from_key_ids TEXT[] NOT NULL,
-				to_key_id TEXT NOT NULL CHECK (to_key_id <> ''),
-				lease_owner TEXT NOT NULL DEFAULT '',
-				lease_epoch BIGINT NOT NULL DEFAULT 0 CHECK (lease_epoch >= 0),
-				lease_expires_at TIMESTAMPTZ,
-				cursor_domain TEXT NOT NULL DEFAULT '',
-				cursor_owner_id TEXT NOT NULL DEFAULT '',
-				cursor_entity_id TEXT NOT NULL DEFAULT '',
-				cursor_revision BIGINT NOT NULL DEFAULT 0 CHECK (cursor_revision >= 0),
-				rewrapped_rows BIGINT NOT NULL DEFAULT 0 CHECK (rewrapped_rows >= 0),
-				verified_rows BIGINT NOT NULL DEFAULT 0 CHECK (verified_rows >= 0),
-				error_code TEXT NOT NULL DEFAULT '',
-				created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
-				updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
-				completed_at TIMESTAMPTZ
-			)`,
-			`CREATE UNIQUE INDEX IF NOT EXISTS p2p_agent_secret_rotations_live_idx
-				ON p2p_agent_secret_rotations((TRUE))
-				WHERE state IN ('rewrapping','verifying')`,
-			`ALTER TABLE p2p_agent_model_profiles ADD COLUMN IF NOT EXISTS api_key_key_id TEXT NOT NULL DEFAULT ''`,
-			`ALTER TABLE p2p_agent_model_profiles ADD COLUMN IF NOT EXISTS api_key_profile_revision BIGINT NOT NULL DEFAULT 0`,
-			`ALTER TABLE p2p_agent_model_profile_credentials ADD COLUMN IF NOT EXISTS api_key_key_id TEXT NOT NULL DEFAULT ''`,
-			`ALTER TABLE p2p_agent_model_profile_credentials ADD COLUMN IF NOT EXISTS profile_revision BIGINT NOT NULL DEFAULT 0`,
-		})
-	}})
-	m.AddMigrations(sqlutil.Migration{Version: "p2p: agent tasks and confirmations v98", Up: func(ctx context.Context, txn *sql.Tx) error {
-		if err := execMigrationDDL(ctx, txn, AgentTaskDDL); err != nil {
-			return err
-		}
-		return execMigrationDDL(ctx, txn, AgentConfirmationDDL)
-	}})
-	m.AddMigrations(sqlutil.Migration{Version: "p2p: agent extension lifecycle v99", Up: func(ctx context.Context, txn *sql.Tx) error {
-		return execMigrationDDL(ctx, txn, AgentExtensionDDL)
-	}})
-	m.AddMigrations(sqlutil.Migration{Version: "p2p: AWS control plane v100", Up: func(ctx context.Context, txn *sql.Tx) error {
-		return execMigrationDDL(ctx, txn, AgentAWSDDL)
-	}})
-	m.AddMigrations(sqlutil.Migration{Version: "p2p: workload control plane v101", Up: func(ctx context.Context, txn *sql.Tx) error {
-		if err := execMigrationDDL(ctx, txn, AgentWorkloadDDL); err != nil {
-			return err
-		}
-		return execMigrationStatements(ctx, txn, []string{
-			`CREATE TABLE IF NOT EXISTS core_workload_event_counters (
-				owner_id text NOT NULL, operation_id uuid NOT NULL,
-				next_sequence bigint NOT NULL DEFAULT 1 CHECK (next_sequence > 0),
-				PRIMARY KEY(owner_id, operation_id)
-			)`,
-		})
-	}})
-	m.AddMigrations(sqlutil.Migration{Version: "p2p: generic schedules and deployment cursors v102", Up: func(ctx context.Context, txn *sql.Tx) error {
-		if err := execMigrationStatements(ctx, txn, []string{
-			`ALTER TABLE p2p_agent_schedules ADD COLUMN IF NOT EXISTS task_template JSONB NOT NULL DEFAULT '{}'::jsonb`,
-			`ALTER TABLE p2p_agent_schedules ADD COLUMN IF NOT EXISTS core_state TEXT NOT NULL DEFAULT 'active' CHECK (core_state IN ('active','paused'))`,
-			`ALTER TABLE p2p_agent_schedules ADD COLUMN IF NOT EXISTS trigger_json JSONB NOT NULL DEFAULT '{}'::jsonb`,
-			`UPDATE p2p_agent_schedules SET task_template=jsonb_strip_nulls(jsonb_build_object('goal',prompt,'model_profile_id',NULLIF(model_profile_id,''))) WHERE task_template='{}'::jsonb AND (prompt<>'' OR model_profile_id<>'')`,
-			`UPDATE p2p_agent_schedules SET core_state=CASE WHEN status='disabled' THEN 'paused' ELSE 'active' END`,
-			`UPDATE p2p_agent_schedules SET trigger_json=CASE LOWER(trigger_kind) WHEN 'run_at' THEN jsonb_build_object('kind','run_at','run_at',trigger_value) WHEN 'one_time' THEN jsonb_build_object('kind','run_at','run_at',trigger_value) WHEN 'cron' THEN jsonb_build_object('kind','cron','expression',trigger_value,'timezone',timezone) ELSE '{}'::jsonb END WHERE trigger_json='{}'::jsonb`,
-			`ALTER TABLE p2p_agent_schedule_runs ADD COLUMN IF NOT EXISTS occurrence_id UUID`,
-			`ALTER TABLE p2p_agent_schedule_runs ADD COLUMN IF NOT EXISTS task_id UUID`,
-			`CREATE UNIQUE INDEX IF NOT EXISTS p2p_agent_schedule_runs_occurrence_link_idx ON p2p_agent_schedule_runs(owner_id,schedule_id,occurrence_id) WHERE occurrence_id IS NOT NULL`,
-			`CREATE INDEX IF NOT EXISTS p2p_agent_schedule_runs_task_idx ON p2p_agent_schedule_runs(owner_id,task_id) WHERE task_id IS NOT NULL`,
-			`CREATE INDEX IF NOT EXISTS agent_schedule_occurrences_owner_schedule_idx ON agent_schedule_occurrences(owner_id,schedule_id,scheduled_for)`,
-			`CREATE INDEX IF NOT EXISTS agent_schedule_occurrences_owner_task_idx ON agent_schedule_occurrences(owner_id,task_id)`,
-			`UPDATE p2p_agent_schedule_runs r SET occurrence_id=o.occurrence_id,task_id=o.task_id FROM agent_schedule_occurrences o WHERE r.occurrence_id IS NULL AND o.run_id::text=r.run_id AND o.owner_id=r.owner_id`,
-			`CREATE TABLE IF NOT EXISTS p2p_agent_deployment_event_cursors (
-				owner_id TEXT NOT NULL, workload_id TEXT NOT NULL,
-				last_sequence BIGINT NOT NULL DEFAULT 0 CHECK (last_sequence >= 0),
-				updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-				PRIMARY KEY(owner_id, workload_id)
-			)`,
-			`ALTER TABLE core_workload_events ADD COLUMN IF NOT EXISTS workload_id UUID`,
-			`ALTER TABLE core_workload_events ADD COLUMN IF NOT EXISTS public_sequence BIGINT`,
-			`UPDATE core_workload_events e
-			 SET workload_id=o.workload_id
-			 FROM core_workload_operations o
-			 WHERE e.owner_id=o.owner_id AND e.operation_id=o.operation_id AND e.workload_id IS NULL`,
-			`WITH ranked AS (
-				SELECT e.owner_id,e.operation_id,e.sequence,
-				       ROW_NUMBER() OVER (PARTITION BY e.owner_id,e.workload_id ORDER BY e.at,e.operation_id,e.sequence) AS public_sequence
-				FROM core_workload_events e
-			 )
-			 UPDATE core_workload_events e
-			 SET public_sequence=r.public_sequence
-			 FROM ranked r
-			 WHERE e.owner_id=r.owner_id AND e.operation_id=r.operation_id AND e.sequence=r.sequence
-			   AND e.public_sequence IS NULL`,
-			`ALTER TABLE core_workload_events ALTER COLUMN workload_id SET NOT NULL`,
-			`ALTER TABLE core_workload_events ALTER COLUMN public_sequence SET NOT NULL`,
-			`CREATE UNIQUE INDEX IF NOT EXISTS core_workload_events_public_sequence_idx
-			 ON core_workload_events(owner_id,workload_id,public_sequence)`,
-			`DO $$ BEGIN
-			 IF NOT EXISTS (
-				SELECT 1 FROM pg_constraint
-				WHERE conname='core_workload_events_workload_fk'
-				  AND conrelid=to_regclass('core_workload_events')
-				  AND connamespace=(SELECT relnamespace FROM pg_class WHERE oid=to_regclass('core_workload_events'))
-			 ) THEN
-				ALTER TABLE core_workload_events
-				ADD CONSTRAINT core_workload_events_workload_fk
-				FOREIGN KEY(owner_id,workload_id) REFERENCES core_workloads(owner_id,workload_id) ON DELETE RESTRICT;
-			 END IF;
-			 END $$`,
-			`INSERT INTO p2p_agent_deployment_event_cursors(owner_id,workload_id,last_sequence,updated_at)
-			 SELECT owner_id,workload_id,COALESCE(MAX(public_sequence),0),COALESCE(MAX(created_at),NOW())
-			 FROM p2p_agent_deployment_events GROUP BY owner_id,workload_id
-			 ON CONFLICT(owner_id,workload_id) DO UPDATE SET last_sequence=GREATEST(p2p_agent_deployment_event_cursors.last_sequence,EXCLUDED.last_sequence),updated_at=GREATEST(p2p_agent_deployment_event_cursors.updated_at,EXCLUDED.updated_at)`,
-			`INSERT INTO p2p_agent_deployment_event_cursors(owner_id,workload_id,last_sequence,updated_at)
-			 SELECT owner_id,workload_id,COALESCE(MAX(public_sequence),0),COALESCE(MAX(at),NOW())
-			 FROM core_workload_events GROUP BY owner_id,workload_id
-			 ON CONFLICT(owner_id,workload_id) DO UPDATE SET last_sequence=GREATEST(p2p_agent_deployment_event_cursors.last_sequence,EXCLUDED.last_sequence),updated_at=GREATEST(p2p_agent_deployment_event_cursors.updated_at,EXCLUDED.updated_at)`,
-		}); err != nil {
-			return err
-		}
-		// A partially-applied deployment may already have created the named
-		// foreign key. Check the catalog before adding it so v102 remains
-		// restart-safe without registering a second migration version.
-		var exists bool
-		if err := txn.QueryRowContext(ctx, `SELECT EXISTS (
-			SELECT 1
-			FROM pg_constraint c
-			WHERE c.conname='p2p_agent_schedule_runs_task_fk'
-			  AND c.conrelid=to_regclass('p2p_agent_schedule_runs')
-			  AND c.connamespace=(SELECT relnamespace FROM pg_class WHERE oid=to_regclass('p2p_agent_schedule_runs'))
-		)`).Scan(&exists); err != nil {
-			return err
-		}
-		if !exists {
-			if _, err := txn.ExecContext(ctx, `ALTER TABLE p2p_agent_schedule_runs ADD CONSTRAINT p2p_agent_schedule_runs_task_fk FOREIGN KEY (owner_id,task_id) REFERENCES agent_tasks(owner_id,task_id) ON DELETE SET NULL (task_id)`); err != nil {
-				return err
-			}
-		}
-		if err := txn.QueryRowContext(ctx, `SELECT EXISTS (
-			SELECT 1
-			FROM pg_constraint c
-			WHERE c.conname='p2p_agent_schedule_runs_schedule_fk'
-			  AND c.conrelid=to_regclass('p2p_agent_schedule_runs')
-			  AND c.connamespace=(SELECT relnamespace FROM pg_class WHERE oid=to_regclass('p2p_agent_schedule_runs'))
-		)`).Scan(&exists); err != nil {
-			return err
-		}
-		if !exists {
-			if _, err := txn.ExecContext(ctx, `ALTER TABLE p2p_agent_schedule_runs ADD CONSTRAINT p2p_agent_schedule_runs_schedule_fk FOREIGN KEY (owner_id,schedule_id) REFERENCES p2p_agent_schedules(owner_id,schedule_id) ON DELETE RESTRICT`); err != nil {
-				return err
-			}
-		}
-		return nil
-	}})
-	m.AddMigrations(sqlutil.Migration{Version: "p2p: typed EC2 provision readback v103", Up: func(ctx context.Context, txn *sql.Tx) error {
-		return execMigrationStatements(ctx, txn, []string{
-			`CREATE TABLE IF NOT EXISTS core_aws_ec2_provisions (
-				owner_id TEXT NOT NULL, provision_id UUID NOT NULL, plan_id UUID NOT NULL,
-				credential_id UUID NOT NULL, credential_revision BIGINT NOT NULL CHECK (credential_revision > 0),
-				region TEXT NOT NULL, stack_name TEXT NOT NULL, profile TEXT NOT NULL,
-				owner_digest TEXT NOT NULL CHECK (owner_digest ~ '^sha256:[a-f0-9]{64}$'),
-				plan_revision BIGINT NOT NULL CHECK (plan_revision > 0), template_sha256 TEXT NOT NULL CHECK (template_sha256 ~ '^[a-f0-9]{64}$'),
-				plan_digest TEXT NOT NULL CHECK (plan_digest ~ '^[a-f0-9]{64}$'), state TEXT NOT NULL CHECK (state IN ('planned','creating','active','destroying','destroyed','uncertain','failed')),
-				revision BIGINT NOT NULL CHECK (revision > 0), create_change_id UUID, destroy_change_id UUID, active_change_id UUID,
-				stack_id TEXT NOT NULL DEFAULT '', instance_id TEXT NOT NULL DEFAULT '', public_ip TEXT NOT NULL DEFAULT '', security_group_id TEXT NOT NULL DEFAULT '',
-				output_digest TEXT NOT NULL DEFAULT '', observed_at TIMESTAMPTZ, reconciliation_required BOOLEAN NOT NULL DEFAULT FALSE,
-				error_code TEXT NOT NULL DEFAULT '', error_summary TEXT NOT NULL DEFAULT '', created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL,
-				PRIMARY KEY(owner_id,provision_id), UNIQUE(owner_id,plan_id),
-				FOREIGN KEY(owner_id,plan_id) REFERENCES core_aws_plans(owner_id,plan_id) ON DELETE RESTRICT,
-				FOREIGN KEY(owner_id,credential_id,credential_revision) REFERENCES core_aws_credentials(owner_id,credential_id,revision) ON DELETE RESTRICT
-			)`,
-			`CREATE TABLE IF NOT EXISTS core_aws_ec2_provision_events (
-				owner_id TEXT NOT NULL, provision_id UUID NOT NULL, change_id UUID, sequence BIGINT NOT NULL, event_id UUID NOT NULL, kind TEXT NOT NULL, revision BIGINT NOT NULL, at TIMESTAMPTZ NOT NULL,
-				PRIMARY KEY(owner_id,provision_id,sequence), FOREIGN KEY(owner_id,provision_id) REFERENCES core_aws_ec2_provisions(owner_id,provision_id) ON DELETE CASCADE
-			)`,
-			`ALTER TABLE core_aws_ec2_provision_events ADD COLUMN IF NOT EXISTS change_id UUID`,
-			`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='core_aws_ec2_provision_events_change_fk' AND conrelid='core_aws_ec2_provision_events'::regclass) THEN ALTER TABLE core_aws_ec2_provision_events ADD CONSTRAINT core_aws_ec2_provision_events_change_fk FOREIGN KEY(owner_id,change_id) REFERENCES core_aws_changes(owner_id,change_id) ON DELETE RESTRICT; END IF; END $$`,
-			`CREATE TABLE IF NOT EXISTS core_aws_ec2_provision_event_counters (owner_id TEXT NOT NULL, provision_id UUID NOT NULL, next_sequence BIGINT NOT NULL CHECK(next_sequence>0), PRIMARY KEY(owner_id,provision_id), FOREIGN KEY(owner_id,provision_id) REFERENCES core_aws_ec2_provisions(owner_id,provision_id) ON DELETE CASCADE)`,
-			`ALTER TABLE core_aws_changes ADD COLUMN IF NOT EXISTS provision_id UUID`,
-			`CREATE UNIQUE INDEX IF NOT EXISTS core_aws_changes_active_provision_idx ON core_aws_changes(owner_id,provision_id) WHERE provision_id IS NOT NULL AND status IN ('waiting_user','running')`,
-			`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='core_aws_changes_provision_fk' AND conrelid='core_aws_changes'::regclass) THEN ALTER TABLE core_aws_changes ADD CONSTRAINT core_aws_changes_provision_fk FOREIGN KEY(owner_id,provision_id) REFERENCES core_aws_ec2_provisions(owner_id,provision_id) ON DELETE RESTRICT; END IF; END $$`,
-		})
-	}})
-	m.AddMigrations(sqlutil.Migration{Version: "p2p: durable EC2 provision mutation leases v104", Up: func(ctx context.Context, txn *sql.Tx) error {
-		return execMigrationStatements(ctx, txn, []string{
-			`CREATE TABLE IF NOT EXISTS core_aws_ec2_provision_mutation_leases (
-				owner_id TEXT NOT NULL,
-				provision_id UUID NOT NULL,
-				token UUID,
-				epoch BIGINT NOT NULL DEFAULT 0 CHECK (epoch >= 0),
-				expires_at TIMESTAMPTZ,
-				state TEXT NOT NULL DEFAULT 'active' CHECK (state IN ('active','uncertain')),
-				operation_id UUID,
-				updated_at TIMESTAMPTZ NOT NULL,
-				PRIMARY KEY(owner_id,provision_id),
-				FOREIGN KEY(owner_id,provision_id) REFERENCES core_aws_ec2_provisions(owner_id,provision_id) ON DELETE CASCADE,
-				CHECK ((token IS NULL AND expires_at IS NULL) OR (token IS NOT NULL AND expires_at IS NOT NULL))
-			)`,
-			`CREATE INDEX IF NOT EXISTS core_aws_ec2_provision_mutation_leases_expiry_idx ON core_aws_ec2_provision_mutation_leases(owner_id,expires_at)`,
-			`ALTER TABLE core_aws_ec2_provision_mutation_leases ADD COLUMN IF NOT EXISTS state TEXT NOT NULL DEFAULT 'active' CHECK (state IN ('active','uncertain'))`,
-			`ALTER TABLE core_aws_ec2_provision_mutation_leases ADD COLUMN IF NOT EXISTS operation_id UUID`,
-			`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='core_aws_ec2_provision_mutation_leases_operation_fk' AND conrelid='core_aws_ec2_provision_mutation_leases'::regclass) THEN ALTER TABLE core_aws_ec2_provision_mutation_leases ADD CONSTRAINT core_aws_ec2_provision_mutation_leases_operation_fk FOREIGN KEY(owner_id,operation_id) REFERENCES core_workload_operations(owner_id,operation_id) ON DELETE RESTRICT; END IF; END $$`,
-			`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='core_aws_ec2_provision_mutation_leases_uncertain_op_check' AND conrelid='core_aws_ec2_provision_mutation_leases'::regclass) THEN ALTER TABLE core_aws_ec2_provision_mutation_leases ADD CONSTRAINT core_aws_ec2_provision_mutation_leases_uncertain_op_check CHECK (state <> 'uncertain' OR operation_id IS NOT NULL); END IF; END $$`,
-			`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='core_aws_ec2_provision_mutation_leases_unbound_check' AND conrelid='core_aws_ec2_provision_mutation_leases'::regclass) THEN ALTER TABLE core_aws_ec2_provision_mutation_leases ADD CONSTRAINT core_aws_ec2_provision_mutation_leases_unbound_check CHECK (token IS NOT NULL OR (expires_at IS NULL AND operation_id IS NULL)); END IF; END $$`,
-			`CREATE INDEX IF NOT EXISTS core_aws_ec2_provision_mutation_leases_operation_idx ON core_aws_ec2_provision_mutation_leases(owner_id,operation_id) WHERE operation_id IS NOT NULL`,
-		})
-	}})
-	m.AddMigrations(sqlutil.Migration{Version: "p2p: workload expected revision fence v105", Up: func(ctx context.Context, txn *sql.Tx) error {
-		return execMigrationStatements(ctx, txn, []string{
-			`ALTER TABLE core_workload_operations ADD COLUMN IF NOT EXISTS expected_workload_revision BIGINT NOT NULL DEFAULT 1 CHECK (expected_workload_revision > 0)`,
-			`UPDATE core_workload_operations o SET expected_workload_revision=w.revision FROM core_workloads w WHERE w.owner_id=o.owner_id AND w.workload_id=o.workload_id AND o.expected_workload_revision=1 AND w.revision<>1`,
-		})
-	}})
-	m.AddMigrations(sqlutil.Migration{Version: "p2p: unified deployment ledger v106", Up: func(ctx context.Context, txn *sql.Tx) error {
-		if err := execMigrationStatements(ctx, txn, []string{
-			`CREATE TABLE IF NOT EXISTS core_deployments (
-				owner_id TEXT NOT NULL,
-				deployment_id UUID NOT NULL,
-				provision_id UUID,
-				workload_id UUID,
-				state TEXT NOT NULL DEFAULT 'pending',
-				target_kind TEXT NOT NULL DEFAULT '',
-				revision BIGINT NOT NULL DEFAULT 1 CHECK (revision > 0),
-				object_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-				operation_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-				actual_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-				quote_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-				updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-				PRIMARY KEY(owner_id,deployment_id),
-				FOREIGN KEY(owner_id,provision_id) REFERENCES core_aws_ec2_provisions(owner_id,provision_id) ON DELETE RESTRICT,
-				FOREIGN KEY(owner_id,workload_id) REFERENCES core_workloads(owner_id,workload_id) ON DELETE RESTRICT
-			)`,
-			`CREATE UNIQUE INDEX IF NOT EXISTS core_deployments_owner_provision_uidx ON core_deployments(owner_id,provision_id) WHERE provision_id IS NOT NULL`,
-			`CREATE UNIQUE INDEX IF NOT EXISTS core_deployments_owner_workload_uidx ON core_deployments(owner_id,workload_id) WHERE workload_id IS NOT NULL`,
-			`CREATE INDEX IF NOT EXISTS core_deployments_owner_updated_idx ON core_deployments(owner_id,updated_at DESC,deployment_id DESC)`,
-			`CREATE TABLE IF NOT EXISTS core_deployment_event_counters (
-				owner_id TEXT NOT NULL,
-				deployment_id UUID NOT NULL,
-				next_sequence BIGINT NOT NULL DEFAULT 1 CHECK (next_sequence > 0),
-				PRIMARY KEY(owner_id,deployment_id),
-				FOREIGN KEY(owner_id,deployment_id) REFERENCES core_deployments(owner_id,deployment_id) ON DELETE CASCADE
-			)`,
-			`CREATE TABLE IF NOT EXISTS core_deployment_events (
-				owner_id TEXT NOT NULL,
-				deployment_id UUID NOT NULL,
-				event_id UUID NOT NULL,
-				sequence BIGINT NOT NULL CHECK (sequence > 0),
-				source_kind TEXT NOT NULL CHECK (source_kind IN ('provision','workload')),
-				source_id UUID NOT NULL,
-				source_sequence BIGINT NOT NULL CHECK (source_sequence > 0),
-				event_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-				PRIMARY KEY(owner_id,deployment_id,sequence),
-				UNIQUE(owner_id,deployment_id,source_kind,source_id,source_sequence),
-				FOREIGN KEY(owner_id,deployment_id) REFERENCES core_deployments(owner_id,deployment_id) ON DELETE CASCADE
-			)`,
-			`CREATE INDEX IF NOT EXISTS core_deployment_events_owner_source_idx ON core_deployment_events(owner_id,source_kind,source_id,source_sequence)`,
-		}); err != nil {
-			return err
-		}
-		// Reconstruct only mappings whose immutable typed identities prove the
-		// relation. Legacy Message Server ledger rows without a provision id are
-		// intentionally not imported into this deployment namespace.
-		if err := execMigrationStatements(ctx, txn, []string{
-			`INSERT INTO core_deployments(owner_id,deployment_id,provision_id,state,target_kind,revision,object_json,created_at,updated_at)
-			 SELECT p.owner_id,md5('dirextalk:deployment:v1:'||p.owner_id||':'||p.provision_id::text)::uuid,p.provision_id,p.state,'AWS_EC2',p.revision,
-			 jsonb_build_object('deployment_id',md5('dirextalk:deployment:v1:'||p.owner_id||':'||p.provision_id::text)::uuid,'provision_id',p.provision_id,'plan_id',p.plan_id,'plan_digest',p.plan_digest,'target_kind','AWS_EC2','status',p.state,'revision',p.revision),p.created_at,p.updated_at
-			 FROM core_aws_ec2_provisions p ON CONFLICT DO NOTHING`,
-			`UPDATE core_deployments d SET workload_id=w.workload_id,state='pending',target_kind=w.target_kind,revision=d.revision+1,object_json=jsonb_set(jsonb_set(d.object_json,'{workload_id}',to_jsonb(w.workload_id::text),true),'{target_kind}',to_jsonb(w.target_kind::text),true),updated_at=GREATEST(d.updated_at,w.updated_at)
-			 FROM core_workloads w JOIN core_workload_plans p ON p.owner_id=w.owner_id AND p.plan_id=w.plan_id
-			 JOIN core_aws_ec2_provisions ap ON ap.owner_id=w.owner_id AND ap.provision_id::text=(p.plan_json->'target'->'labels'->>'dirextalk:provision-id')
-			 JOIN p2p_agent_secrets sec ON sec.owner_id=ap.owner_id AND sec.entity_id=ap.credential_id::text AND sec.reference=ap.credential_id::text AND sec.secret_revision=ap.credential_revision AND sec.secret_domain='aws' AND sec.purpose='credential'
-			 WHERE d.owner_id=w.owner_id AND d.provision_id=ap.provision_id AND d.workload_id IS NULL
-			 AND p.plan_json->'target'->'required_instance_tags'->>'dirextalk:plan-id'=ap.plan_id::text
-			 AND p.plan_json->'target'->'labels'->>'dirextalk:provision-revision'=ap.revision::text
-			 AND p.plan_json->'target'->>'region'=ap.region
-			 AND p.plan_json->'target'->'required_instance_tags'->>'owner'=ap.owner_digest
-			 AND jsonb_array_length(COALESCE(p.plan_json->'secret_grant_refs','[]'::jsonb))=1
-			 AND p.plan_json->'secret_grant_refs'->0->>'reference_id'=ap.credential_id::text
-			 AND p.plan_json->'secret_grant_refs'->0->>'purpose'='aws_credential'
-			 AND (p.plan_json->'secret_grant_refs'->0->>'secret_revision')::bigint=ap.credential_revision
-			 AND p.plan_json->'secret_grant_refs'->0->>'binding_digest'=encode(sec.binding_digest,'hex')`,
-			`WITH source_events AS (
-			 SELECT d.owner_id,d.deployment_id,e.event_id,e.provision_id AS source_id,e.change_id::text,e.sequence AS source_sequence,'provision'::text AS source_kind,e.kind,''::text AS status,''::text AS operation,''::text AS message,NULL::jsonb AS readback_json,e.at
-			 FROM core_aws_ec2_provision_events e JOIN core_deployments d ON d.owner_id=e.owner_id AND d.provision_id=e.provision_id
-			 UNION ALL
-			 SELECT d.owner_id,d.deployment_id,md5(d.owner_id||':workload:'||e.operation_id::text||':'||e.sequence::text)::uuid,e.operation_id,NULL::text,e.sequence,'workload'::text,e.kind,e.status,o.operation,COALESCE(e.message,''),e.readback_json,e.at
-			 FROM core_workload_events e JOIN core_deployments d ON d.owner_id=e.owner_id AND d.workload_id=e.workload_id JOIN core_workload_operations o ON o.owner_id=e.owner_id AND o.operation_id=e.operation_id
-			 UNION ALL
-			 SELECT d.owner_id,d.deployment_id,md5(d.owner_id||':legacy:'||e.operation_id||':'||e.sequence::text)::uuid,md5(d.owner_id||':legacy:'||e.operation_id)::uuid,NULL::text,e.sequence,'workload'::text,COALESCE(e.event_json->>'type','legacy'),COALESCE(e.event_json->>'status',''),COALESCE(e.event_json->>'operation',''),'',NULL::jsonb,e.created_at
-			 FROM p2p_agent_deployment_events e JOIN core_deployments d ON d.owner_id=e.owner_id AND d.workload_id::text=e.workload_id
-			 WHERE e.operation_id<>'' AND NOT EXISTS (SELECT 1 FROM core_workload_events ce WHERE ce.owner_id=d.owner_id AND ce.workload_id=d.workload_id)
-			), ranked AS (
-			 SELECT s.*,row_number() OVER (PARTITION BY owner_id,deployment_id ORDER BY at,source_kind,source_id,source_sequence) AS public_sequence
-			 FROM source_events s
-			)
-			INSERT INTO core_deployment_events(owner_id,deployment_id,event_id,sequence,source_kind,source_id,source_sequence,event_json,created_at)
-			 SELECT owner_id,deployment_id,event_id,public_sequence,source_kind,source_id,source_sequence,jsonb_build_object('kind',kind,'status',status,'operation',operation,'message',message,'change_id',COALESCE(change_id,''),'actual',jsonb_build_object('state',readback_json->>'state','applied_plan_id',readback_json->>'applied_plan_id','applied_plan_digest',readback_json->>'applied_plan_digest','readback_digest',readback_json->>'readback_digest'),'at',at),at FROM ranked
-			 ON CONFLICT DO NOTHING`,
-			`INSERT INTO core_deployment_event_counters(owner_id,deployment_id,next_sequence)
-			 SELECT owner_id,deployment_id,COUNT(*)+1 FROM core_deployment_events GROUP BY owner_id,deployment_id
-			 ON CONFLICT(owner_id,deployment_id) DO UPDATE SET next_sequence=GREATEST(core_deployment_event_counters.next_sequence,EXCLUDED.next_sequence)`,
-			`WITH latest AS (SELECT DISTINCT ON (owner_id,deployment_id) owner_id,deployment_id,event_json->>'status' AS status,event_json->>'operation' AS operation,created_at FROM core_deployment_events WHERE event_json->>'status' IN ('succeeded','completed','failed','uncertain','destroyed') ORDER BY owner_id,deployment_id,sequence DESC)
-			 UPDATE core_deployments d SET state=CASE WHEN l.status IN ('succeeded','completed') AND l.operation='destroy' THEN 'destroyed' WHEN l.status IN ('succeeded','completed') THEN 'ready' WHEN l.status='failed' THEN 'failed' WHEN l.status='uncertain' THEN 'uncertain' WHEN l.status='destroyed' THEN 'destroyed' ELSE d.state END,revision=d.revision+1,object_json=jsonb_set(d.object_json,'{status}',to_jsonb(CASE WHEN l.status IN ('succeeded','completed') AND l.operation='destroy' THEN 'destroyed' WHEN l.status IN ('succeeded','completed') THEN 'succeeded' WHEN l.status='failed' THEN 'failed' WHEN l.status='uncertain' THEN 'uncertain' WHEN l.status='destroyed' THEN 'destroyed' ELSE d.object_json->>'status' END),true),updated_at=GREATEST(d.updated_at,l.created_at)
-			 FROM latest l WHERE d.owner_id=l.owner_id AND d.deployment_id=l.deployment_id AND l.status IN ('succeeded','completed','failed','uncertain','destroyed')`,
-		}); err != nil {
-			return err
-		}
-		// Source events are fanned out in their original transaction. The
-		// deployment counter row is the serialization point; the source tuple
-		// unique key makes retries/replayed provider responses idempotent.
-		if err := execMigrationStatements(ctx, txn, []string{
-			`CREATE OR REPLACE FUNCTION core_fanout_workload_event() RETURNS trigger LANGUAGE plpgsql AS $$
-			DECLARE d UUID; seq BIGINT; payload JSONB; op_kind TEXT; public_state TEXT;
-			BEGIN
-				SELECT deployment_id INTO d FROM core_deployments WHERE owner_id=NEW.owner_id AND workload_id=NEW.workload_id FOR UPDATE;
-				IF d IS NULL THEN RETURN NEW; END IF;
-				IF EXISTS (SELECT 1 FROM core_deployment_events WHERE owner_id=NEW.owner_id AND deployment_id=d AND source_kind='workload' AND source_id=NEW.operation_id AND source_sequence=NEW.sequence) THEN RETURN NEW; END IF;
-				INSERT INTO core_deployment_event_counters(owner_id,deployment_id,next_sequence) VALUES(NEW.owner_id,d,2)
-				ON CONFLICT(owner_id,deployment_id) DO UPDATE SET next_sequence=core_deployment_event_counters.next_sequence+1
-				RETURNING next_sequence-1 INTO seq;
-				payload := jsonb_build_object('kind',NEW.kind,'status',NEW.status,'message',COALESCE(NEW.message,''),'actual',jsonb_build_object('state',NEW.readback_json->>'state','applied_plan_id',NEW.readback_json->>'applied_plan_id','applied_plan_digest',NEW.readback_json->>'applied_plan_digest','readback_digest',NEW.readback_json->>'readback_digest','provider_version',NEW.readback_json->>'provider_version','observed_at',NEW.readback_json->>'observed_at'),'at',NEW.at);
-				INSERT INTO core_deployment_events(owner_id,deployment_id,event_id,sequence,source_kind,source_id,source_sequence,event_json,created_at)
-				VALUES(NEW.owner_id,d,md5(NEW.owner_id || ':workload:' || NEW.operation_id::text || ':' || NEW.sequence::text)::uuid,seq,'workload',NEW.operation_id,NEW.sequence,payload,NEW.at)
-				ON CONFLICT(owner_id,deployment_id,source_kind,source_id,source_sequence) DO NOTHING;
-				SELECT operation INTO op_kind FROM core_workload_operations WHERE owner_id=NEW.owner_id AND operation_id=NEW.operation_id;
-				public_state := CASE WHEN NEW.status IN ('succeeded','completed') AND op_kind='destroy' THEN 'destroyed' WHEN NEW.status IN ('succeeded','completed') THEN 'ready' WHEN NEW.status IN ('failed','uncertain','canceled','expired','rejected') THEN NEW.status WHEN NEW.status IN ('running','dispatched') THEN 'running' ELSE NULL END;
-				UPDATE core_deployments SET state=COALESCE(public_state,state),revision=revision+1,object_json=CASE WHEN public_state IS NULL THEN object_json ELSE jsonb_set(object_json,'{status}',to_jsonb(CASE WHEN public_state='ready' THEN 'succeeded' ELSE public_state END),true) END,actual_json=CASE WHEN NEW.readback_json IS NULL OR NEW.readback_json='null'::jsonb THEN actual_json ELSE NEW.readback_json END,updated_at=NEW.at WHERE owner_id=NEW.owner_id AND deployment_id=d;
-				RETURN NEW;
-			END $$`,
-			`CREATE OR REPLACE FUNCTION core_fanout_provision_event() RETURNS trigger LANGUAGE plpgsql AS $$
-			DECLARE d UUID; seq BIGINT; payload JSONB; current_state TEXT;
-			BEGIN
-				SELECT deployment_id INTO d FROM core_deployments WHERE owner_id=NEW.owner_id AND provision_id=NEW.provision_id FOR UPDATE;
-				IF d IS NULL THEN RETURN NEW; END IF;
-				IF EXISTS (SELECT 1 FROM core_deployment_events WHERE owner_id=NEW.owner_id AND deployment_id=d AND source_kind='provision' AND source_id=NEW.provision_id AND source_sequence=NEW.sequence) THEN RETURN NEW; END IF;
-				INSERT INTO core_deployment_event_counters(owner_id,deployment_id,next_sequence) VALUES(NEW.owner_id,d,2)
-				ON CONFLICT(owner_id,deployment_id) DO UPDATE SET next_sequence=core_deployment_event_counters.next_sequence+1
-				RETURNING next_sequence-1 INTO seq;
-				SELECT state INTO current_state FROM core_aws_ec2_provisions WHERE owner_id=NEW.owner_id AND provision_id=NEW.provision_id;
-				payload := jsonb_build_object('kind',NEW.kind,'status',COALESCE(current_state,''),'change_id',COALESCE(NEW.change_id::text,''),'at',NEW.at);
-				INSERT INTO core_deployment_events(owner_id,deployment_id,event_id,sequence,source_kind,source_id,source_sequence,event_json,created_at)
-				VALUES(NEW.owner_id,d,md5(NEW.owner_id || ':provision:' || NEW.provision_id::text || ':' || NEW.sequence::text)::uuid,seq,'provision',NEW.provision_id,NEW.sequence,payload,NEW.at)
-				ON CONFLICT(owner_id,deployment_id,source_kind,source_id,source_sequence) DO NOTHING;
-				UPDATE core_deployments SET state=COALESCE(NULLIF(current_state,''),state),revision=revision+1,object_json=jsonb_set(object_json,'{status}',to_jsonb(COALESCE(NULLIF(current_state,''),state)),true),updated_at=NEW.at WHERE owner_id=NEW.owner_id AND deployment_id=d;
-				RETURN NEW;
-			END $$`,
-			`DROP TRIGGER IF EXISTS core_workload_event_deployment_fanout ON core_workload_events`,
-			`CREATE TRIGGER core_workload_event_deployment_fanout AFTER INSERT ON core_workload_events FOR EACH ROW EXECUTE FUNCTION core_fanout_workload_event()`,
-			`DROP TRIGGER IF EXISTS core_provision_event_deployment_fanout ON core_aws_ec2_provision_events`,
-			`CREATE TRIGGER core_provision_event_deployment_fanout AFTER INSERT ON core_aws_ec2_provision_events FOR EACH ROW EXECUTE FUNCTION core_fanout_provision_event()`,
-		}); err != nil {
-			return err
-		}
-		return nil
-	}})
-	m.AddMigrations(sqlutil.Migration{Version: "p2p: model credential envelope versions v107", Up: func(ctx context.Context, txn *sql.Tx) error {
-		return execMigrationStatements(ctx, txn, []string{
-			`ALTER TABLE p2p_agent_model_profiles ADD COLUMN IF NOT EXISTS api_key_envelope_version BIGINT NOT NULL DEFAULT 0`,
-			`ALTER TABLE p2p_agent_model_profiles ADD COLUMN IF NOT EXISTS api_key_aad_version BIGINT NOT NULL DEFAULT 0`,
-			`ALTER TABLE p2p_agent_model_profile_credentials ADD COLUMN IF NOT EXISTS api_key_envelope_version BIGINT NOT NULL DEFAULT 0`,
-			`ALTER TABLE p2p_agent_model_profile_credentials ADD COLUMN IF NOT EXISTS api_key_aad_version BIGINT NOT NULL DEFAULT 0`,
-			`DO $$ BEGIN
-				IF EXISTS (SELECT 1 FROM p2p_agent_model_profiles WHERE
-					(octet_length(api_key_ciphertext)=0 AND NOT (credential_version=0 AND api_key_key_id='' AND octet_length(api_key_nonce)=0 AND api_key_envelope_version=0 AND api_key_aad_version=0)) OR
-					(octet_length(api_key_ciphertext)>0 AND NOT (((api_key_key_id='' AND api_key_envelope_version=0 AND api_key_aad_version=0) OR (api_key_key_id<>'' AND ((api_key_envelope_version=0 AND api_key_aad_version=0) OR (api_key_envelope_version=1 AND api_key_aad_version=1)))) AND credential_version>0 AND octet_length(api_key_nonce)=12 AND octet_length(api_key_ciphertext)>16))
-				) THEN RAISE EXCEPTION 'invalid pre-v107 model credential envelope'; END IF;
-				IF EXISTS (SELECT 1 FROM p2p_agent_model_profile_credentials WHERE
-					credential_version<=0 OR octet_length(api_key_ciphertext)<=16 OR octet_length(api_key_nonce)<>12 OR
-					NOT ((api_key_key_id='' AND api_key_envelope_version=0 AND api_key_aad_version=0) OR (api_key_key_id<>'' AND ((api_key_envelope_version=0 AND api_key_aad_version=0) OR (api_key_envelope_version=1 AND api_key_aad_version=1))))
-				) THEN RAISE EXCEPTION 'invalid pre-v107 model credential history envelope'; END IF;
-			END $$`,
-			`UPDATE p2p_agent_model_profiles SET api_key_envelope_version=1,api_key_aad_version=1 WHERE octet_length(api_key_ciphertext)>0 AND api_key_key_id<>'' AND api_key_envelope_version=0 AND api_key_aad_version=0`,
-			`UPDATE p2p_agent_model_profile_credentials SET api_key_envelope_version=1,api_key_aad_version=1 WHERE octet_length(api_key_ciphertext)>0 AND api_key_key_id<>'' AND api_key_envelope_version=0 AND api_key_aad_version=0`,
-			`ALTER TABLE p2p_agent_model_profiles DROP CONSTRAINT IF EXISTS p2p_agent_model_profiles_api_key_envelope_check`,
-			`ALTER TABLE p2p_agent_model_profiles ADD CONSTRAINT p2p_agent_model_profiles_api_key_envelope_check CHECK ((credential_version=0 AND octet_length(api_key_ciphertext)=0 AND api_key_key_id='' AND octet_length(api_key_nonce)=0 AND api_key_envelope_version=0 AND api_key_aad_version=0) OR (credential_version>0 AND octet_length(api_key_ciphertext)>16 AND octet_length(api_key_nonce)=12 AND ((api_key_key_id='' AND api_key_envelope_version=0 AND api_key_aad_version=0) OR (api_key_key_id<>'' AND api_key_envelope_version=1 AND api_key_aad_version=1))))`,
-			`ALTER TABLE p2p_agent_model_profile_credentials DROP CONSTRAINT IF EXISTS p2p_agent_model_profile_credentials_api_key_envelope_check`,
-			`ALTER TABLE p2p_agent_model_profile_credentials ADD CONSTRAINT p2p_agent_model_profile_credentials_api_key_envelope_check CHECK (credential_version>0 AND octet_length(api_key_ciphertext)>16 AND octet_length(api_key_nonce)=12 AND ((api_key_key_id='' AND api_key_envelope_version=0 AND api_key_aad_version=0) OR (api_key_key_id<>'' AND api_key_envelope_version=1 AND api_key_aad_version=1)))`,
-		})
-	}})
-	m.AddMigrations(sqlutil.Migration{Version: "p2p: public deployment UUIDs v108", Up: func(ctx context.Context, txn *sql.Tx) error {
-		return execMigrationStatements(ctx, txn, []string{
-			// The legacy IDs are durable internal keys. Public IDs retain all
-			// entropy but normalize the RFC UUID version and variant bits.
-			`CREATE OR REPLACE FUNCTION core_canonical_public_uuid(value UUID) RETURNS UUID LANGUAGE SQL IMMUTABLE STRICT AS $$
-				SELECT encode(set_byte(set_byte(uuid_send(value),6,(get_byte(uuid_send(value),6) & 15) | 48),8,(get_byte(uuid_send(value),8) & 63) | 128),'hex')::uuid
-			$$`,
-			`ALTER TABLE core_deployments ADD COLUMN IF NOT EXISTS public_deployment_id UUID`,
-			`ALTER TABLE core_deployment_events ADD COLUMN IF NOT EXISTS public_event_id UUID`,
-			`CREATE OR REPLACE FUNCTION core_fill_public_deployment_id() RETURNS trigger LANGUAGE plpgsql AS $$
-			BEGIN
-				IF NEW.public_deployment_id IS NULL THEN NEW.public_deployment_id:=core_canonical_public_uuid(NEW.deployment_id); END IF;
-				RETURN NEW;
-			END $$`,
-			`CREATE OR REPLACE FUNCTION core_fill_public_deployment_event_id() RETURNS trigger LANGUAGE plpgsql AS $$
-			BEGIN
-				IF NEW.public_event_id IS NULL THEN NEW.public_event_id:=core_canonical_public_uuid(NEW.event_id); END IF;
-				RETURN NEW;
-			END $$`,
-			`DROP TRIGGER IF EXISTS core_deployments_public_id_fill ON core_deployments`,
-			`CREATE TRIGGER core_deployments_public_id_fill BEFORE INSERT OR UPDATE OF deployment_id,public_deployment_id ON core_deployments FOR EACH ROW EXECUTE FUNCTION core_fill_public_deployment_id()`,
-			`DROP TRIGGER IF EXISTS core_deployment_events_public_id_fill ON core_deployment_events`,
-			`CREATE TRIGGER core_deployment_events_public_id_fill BEFORE INSERT OR UPDATE OF event_id,public_event_id ON core_deployment_events FOR EACH ROW EXECUTE FUNCTION core_fill_public_deployment_event_id()`,
-			`UPDATE core_deployments SET public_deployment_id=core_canonical_public_uuid(deployment_id) WHERE public_deployment_id IS NULL`,
-			`UPDATE core_deployment_events SET public_event_id=core_canonical_public_uuid(event_id) WHERE public_event_id IS NULL`,
-			`UPDATE core_deployments SET object_json=jsonb_set(COALESCE(object_json,'{}'::jsonb),'{deployment_id}',to_jsonb(public_deployment_id::text),true)`,
-			`ALTER TABLE core_deployments ALTER COLUMN public_deployment_id SET NOT NULL`,
-			`ALTER TABLE core_deployment_events ALTER COLUMN public_event_id SET NOT NULL`,
-			`CREATE UNIQUE INDEX IF NOT EXISTS core_deployments_owner_public_deployment_uidx ON core_deployments(owner_id,public_deployment_id)`,
-			`CREATE UNIQUE INDEX IF NOT EXISTS core_deployment_events_owner_public_event_uidx ON core_deployment_events(owner_id,public_event_id)`,
-			`CREATE OR REPLACE FUNCTION core_fanout_workload_event() RETURNS trigger LANGUAGE plpgsql AS $$
-			DECLARE d UUID; seq BIGINT; payload JSONB; op_kind TEXT; public_state TEXT;
-			BEGIN
-				SELECT deployment_id INTO d FROM core_deployments WHERE owner_id=NEW.owner_id AND workload_id=NEW.workload_id FOR UPDATE;
-				IF d IS NULL THEN RETURN NEW; END IF;
-				IF EXISTS (SELECT 1 FROM core_deployment_events WHERE owner_id=NEW.owner_id AND deployment_id=d AND source_kind='workload' AND source_id=NEW.operation_id AND source_sequence=NEW.sequence) THEN RETURN NEW; END IF;
-				INSERT INTO core_deployment_event_counters(owner_id,deployment_id,next_sequence) VALUES(NEW.owner_id,d,2)
-				ON CONFLICT(owner_id,deployment_id) DO UPDATE SET next_sequence=core_deployment_event_counters.next_sequence+1 RETURNING next_sequence-1 INTO seq;
-				payload := jsonb_build_object('kind',NEW.kind,'status',NEW.status,'message',COALESCE(NEW.message,''),'actual',jsonb_build_object('state',NEW.readback_json->>'state','applied_plan_id',NEW.readback_json->>'applied_plan_id','applied_plan_digest',NEW.readback_json->>'applied_plan_digest','readback_digest',NEW.readback_json->>'readback_digest','provider_version',NEW.readback_json->>'provider_version','observed_at',NEW.readback_json->>'observed_at'),'at',NEW.at);
-				INSERT INTO core_deployment_events(owner_id,deployment_id,event_id,public_event_id,sequence,source_kind,source_id,source_sequence,event_json,created_at)
-				VALUES(NEW.owner_id,d,md5(NEW.owner_id || ':workload:' || NEW.operation_id::text || ':' || NEW.sequence::text)::uuid,core_canonical_public_uuid(md5(NEW.owner_id || ':workload:' || NEW.operation_id::text || ':' || NEW.sequence::text)::uuid),seq,'workload',NEW.operation_id,NEW.sequence,payload,NEW.at)
-				ON CONFLICT(owner_id,deployment_id,source_kind,source_id,source_sequence) DO NOTHING;
-				SELECT operation INTO op_kind FROM core_workload_operations WHERE owner_id=NEW.owner_id AND operation_id=NEW.operation_id;
-				public_state := CASE WHEN NEW.status IN ('succeeded','completed') AND op_kind='destroy' THEN 'destroyed' WHEN NEW.status IN ('succeeded','completed') THEN 'ready' WHEN NEW.status IN ('failed','uncertain','canceled','expired','rejected') THEN NEW.status WHEN NEW.status IN ('running','dispatched') THEN 'running' ELSE NULL END;
-				UPDATE core_deployments SET state=COALESCE(public_state,state),revision=revision+1,object_json=CASE WHEN public_state IS NULL THEN object_json ELSE jsonb_set(object_json,'{status}',to_jsonb(CASE WHEN public_state='ready' THEN 'succeeded' ELSE public_state END),true) END,actual_json=CASE WHEN NEW.readback_json IS NULL OR NEW.readback_json='null'::jsonb THEN actual_json ELSE NEW.readback_json END,updated_at=NEW.at WHERE owner_id=NEW.owner_id AND deployment_id=d;
-				RETURN NEW;
-			END $$`,
-			`CREATE OR REPLACE FUNCTION core_fanout_provision_event() RETURNS trigger LANGUAGE plpgsql AS $$
-			DECLARE d UUID; seq BIGINT; payload JSONB; current_state TEXT;
-			BEGIN
-				SELECT deployment_id INTO d FROM core_deployments WHERE owner_id=NEW.owner_id AND provision_id=NEW.provision_id FOR UPDATE;
-				IF d IS NULL THEN RETURN NEW; END IF;
-				IF EXISTS (SELECT 1 FROM core_deployment_events WHERE owner_id=NEW.owner_id AND deployment_id=d AND source_kind='provision' AND source_id=NEW.provision_id AND source_sequence=NEW.sequence) THEN RETURN NEW; END IF;
-				INSERT INTO core_deployment_event_counters(owner_id,deployment_id,next_sequence) VALUES(NEW.owner_id,d,2)
-				ON CONFLICT(owner_id,deployment_id) DO UPDATE SET next_sequence=core_deployment_event_counters.next_sequence+1 RETURNING next_sequence-1 INTO seq;
-				SELECT state INTO current_state FROM core_aws_ec2_provisions WHERE owner_id=NEW.owner_id AND provision_id=NEW.provision_id;
-				payload := jsonb_build_object('kind',NEW.kind,'status',COALESCE(current_state,''),'change_id',COALESCE(NEW.change_id::text,''),'at',NEW.at);
-				INSERT INTO core_deployment_events(owner_id,deployment_id,event_id,public_event_id,sequence,source_kind,source_id,source_sequence,event_json,created_at)
-				VALUES(NEW.owner_id,d,md5(NEW.owner_id || ':provision:' || NEW.provision_id::text || ':' || NEW.sequence::text)::uuid,core_canonical_public_uuid(md5(NEW.owner_id || ':provision:' || NEW.provision_id::text || ':' || NEW.sequence::text)::uuid),seq,'provision',NEW.provision_id,NEW.sequence,payload,NEW.at)
-				ON CONFLICT(owner_id,deployment_id,source_kind,source_id,source_sequence) DO NOTHING;
-				UPDATE core_deployments SET state=COALESCE(NULLIF(current_state,''),state),revision=revision+1,object_json=jsonb_set(object_json,'{status}',to_jsonb(COALESCE(NULLIF(current_state,''),state)),true),updated_at=NEW.at WHERE owner_id=NEW.owner_id AND deployment_id=d;
-				RETURN NEW;
-			END $$`,
-		})
-	}})
-	// v109 repairs only reservations whose linked AWS/workload execution is
-	// durably terminal.  Older completion code retained an inactive JSON
-	// envelope; because the live-target index keys any non-NULL consumed
-	// reservation, those rows could block a subsequent retry.  Pending,
-	// confirmed, running, and uncertain/reconciling executions are deliberately
-	// excluded so their uniqueness fence remains intact.
-	m.AddMigrations(sqlutil.Migration{Version: "p2p: release terminal confirmation reservations v109", Up: func(ctx context.Context, txn *sql.Tx) error {
-		return execMigrationStatements(ctx, txn, []string{
-			`UPDATE agent_confirmations c
-			 SET reservation_json=NULL,revision=c.revision+1,updated_at=clock_timestamp()
-			 FROM core_aws_changes ch
-			 JOIN agent_tasks t ON t.owner_id=ch.owner_id AND t.task_id=ch.task_id
-			 WHERE c.owner_id=ch.owner_id AND c.confirmation_id=ch.confirmation_id AND c.task_id=ch.task_id
-			   AND c.state='consumed' AND c.reservation_json IS NOT NULL
-			   AND c.reservation_json ? 'active'
-			   AND jsonb_typeof(c.reservation_json->'active')='boolean'
-			   AND (c.reservation_json->>'active')::boolean=false
-			   AND ch.status IN ('succeeded','failed','canceled')
-			   AND ch.stage IN ('succeeded','failed','canceled')
-			   AND t.status IN ('succeeded','failed','canceled')
-			   AND NOT EXISTS (
-				 SELECT 1 FROM core_aws_changes live
-				 WHERE live.owner_id=ch.owner_id AND live.confirmation_id=ch.confirmation_id
-				   AND live.status IN ('waiting_user','running')
-			   )`,
-			`UPDATE agent_confirmations c
-			 SET reservation_json=NULL,revision=c.revision+1,updated_at=clock_timestamp()
-			 FROM core_workload_operations o
-			 JOIN agent_tasks t ON t.owner_id=o.owner_id AND t.task_id=o.task_id
-			 WHERE c.owner_id=o.owner_id AND c.confirmation_id=o.confirmation_id AND c.task_id=o.task_id
-			   AND c.state='consumed' AND c.reservation_json IS NOT NULL
-			   AND c.reservation_json ? 'active'
-			   AND jsonb_typeof(c.reservation_json->'active')='boolean'
-			   AND (c.reservation_json->>'active')::boolean=false
-			   AND o.status IN ('succeeded','failed') AND o.dispatch_state='terminal'
-			   AND t.status IN ('succeeded','failed','canceled')
-			   AND NOT EXISTS (
-				 SELECT 1 FROM core_workload_operations live
-				 WHERE live.owner_id=o.owner_id AND live.confirmation_id=o.confirmation_id
-				   AND live.status IN ('waiting_user','running')
-			   )`,
-		})
-	}})
-	if target == "" {
-		return m.Up(ctx)
+	return m.Up(ctx)
+}
+
+func agentAndExecutionV2FreshSchema(ctx context.Context, txn *sql.Tx) error {
+	if err := execMigrationStatements(ctx, txn, []string{
+		`ALTER TABLE p2p_native_agent_turns ADD COLUMN IF NOT EXISTS model_profile_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE p2p_native_agent_turns ADD COLUMN IF NOT EXISTS model_profile_revision BIGINT NOT NULL DEFAULT 0`,
+		`ALTER TABLE p2p_native_agent_turns ADD COLUMN IF NOT EXISTS credential_version BIGINT NOT NULL DEFAULT 0`,
+	}); err != nil {
+		return err
 	}
-	return m.UpTo(ctx, target)
+	if err := execMigrationDDL(ctx, txn, AgentTaskDDL); err != nil {
+		return err
+	}
+	if err := execMigrationDDL(ctx, txn, AgentConfirmationDDL); err != nil {
+		return err
+	}
+	if err := execMigrationDDL(ctx, txn, AgentExtensionDDL); err != nil {
+		return err
+	}
+	if err := execMigrationStatements(ctx, txn, []string{
+		`CREATE TABLE IF NOT EXISTS p2p_agent_core_turns (owner_id TEXT NOT NULL CHECK(owner_id<>''), client_turn_id TEXT NOT NULL CHECK(client_turn_id<>''), core_turn_id TEXT NOT NULL DEFAULT '', core_profile_id TEXT NOT NULL DEFAULT '', conversation_id TEXT NOT NULL DEFAULT '', request_digest BYTEA NOT NULL CHECK(octet_length(request_digest)=32), status TEXT NOT NULL CHECK(status<>''), last_sequence BIGINT NOT NULL DEFAULT 0 CHECK(last_sequence>=0), core_revision BIGINT NOT NULL DEFAULT 0, model_profile_revision BIGINT NOT NULL DEFAULT 0, last_event_kind TEXT NOT NULL DEFAULT '', terminal_code TEXT NOT NULL DEFAULT '', terminal_summary TEXT NOT NULL DEFAULT '', created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL, PRIMARY KEY(owner_id,client_turn_id))`,
+		`CREATE INDEX IF NOT EXISTS p2p_agent_core_turns_owner_conversation_idx ON p2p_agent_core_turns(owner_id,conversation_id,created_at,client_turn_id)`,
+		`CREATE TABLE IF NOT EXISTS p2p_native_agent_conversations (owner_id TEXT NOT NULL CHECK(owner_id<>''),conversation_id TEXT NOT NULL CHECK(char_length(conversation_id) BETWEEN 1 AND 256),title TEXT NOT NULL DEFAULT '',active BOOLEAN NOT NULL DEFAULT TRUE,deleted BOOLEAN NOT NULL DEFAULT FALSE,revision BIGINT NOT NULL DEFAULT 1 CHECK(revision>0),last_message_seq BIGINT NOT NULL DEFAULT 0 CHECK(last_message_seq>=0),summary TEXT NOT NULL DEFAULT '',summary_through_seq BIGINT NOT NULL DEFAULT 0 CHECK(summary_through_seq>=0),created_at TIMESTAMPTZ NOT NULL,updated_at TIMESTAMPTZ NOT NULL,deleted_at TIMESTAMPTZ,PRIMARY KEY(owner_id,conversation_id))`,
+		`CREATE TABLE IF NOT EXISTS p2p_native_agent_messages (owner_id TEXT NOT NULL,conversation_id TEXT NOT NULL,seq BIGINT NOT NULL CHECK(seq>0),turn_id TEXT NOT NULL DEFAULT '',message_id TEXT NOT NULL,role TEXT NOT NULL CHECK(role IN ('user','assistant')),content TEXT NOT NULL,references_json JSONB NOT NULL DEFAULT '[]'::jsonb,created_at TIMESTAMPTZ NOT NULL,PRIMARY KEY(owner_id,conversation_id,seq),UNIQUE(owner_id,conversation_id,message_id),FOREIGN KEY(owner_id,conversation_id) REFERENCES p2p_native_agent_conversations(owner_id,conversation_id) ON DELETE CASCADE)`,
+		`CREATE TABLE IF NOT EXISTS p2p_native_agent_memory_records (owner_id TEXT NOT NULL,memory_id TEXT NOT NULL,title TEXT NOT NULL,content TEXT NOT NULL,tags_json JSONB NOT NULL DEFAULT '[]'::jsonb,request_digest BYTEA NOT NULL CHECK(octet_length(request_digest)=32),revision BIGINT NOT NULL DEFAULT 1 CHECK(revision>0),source_id TEXT,chunk_ordinal BIGINT,created_at TIMESTAMPTZ NOT NULL,updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),PRIMARY KEY(owner_id,memory_id))`,
+		`CREATE TABLE IF NOT EXISTS p2p_agent_schedules (schedule_id TEXT NOT NULL,owner_id TEXT NOT NULL,name TEXT NOT NULL,prompt TEXT NOT NULL,trigger_kind TEXT NOT NULL,trigger_value TEXT NOT NULL,timezone TEXT NOT NULL,skip_if_running BOOLEAN NOT NULL DEFAULT FALSE,status TEXT NOT NULL,revision BIGINT NOT NULL DEFAULT 1,model_profile_id TEXT NOT NULL,model_profile_revision BIGINT NOT NULL,credential_version BIGINT NOT NULL,next_run_at TIMESTAMPTZ,latest_run_at TIMESTAMPTZ,lease_owner TEXT NOT NULL DEFAULT '',lease_until TIMESTAMPTZ,lease_epoch BIGINT NOT NULL DEFAULT 0,idempotency_key TEXT NOT NULL DEFAULT '',task_template JSONB NOT NULL DEFAULT '{}'::jsonb,core_state TEXT NOT NULL DEFAULT 'active' CHECK(core_state IN ('active','paused')),trigger_json JSONB NOT NULL DEFAULT '{}'::jsonb,deleted_at TIMESTAMPTZ,created_at TIMESTAMPTZ NOT NULL,updated_at TIMESTAMPTZ NOT NULL,PRIMARY KEY(owner_id,schedule_id))`,
+		`CREATE TABLE IF NOT EXISTS p2p_agent_model_profiles (owner_id TEXT NOT NULL CHECK(owner_id<>''), profile_id TEXT NOT NULL CHECK(profile_id<>''), client_profile_id TEXT NOT NULL CHECK(client_profile_id<>''), display_name TEXT NOT NULL DEFAULT '', provider TEXT NOT NULL, base_url TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT '', system_prompt TEXT NOT NULL DEFAULT '', temperature DOUBLE PRECISION, top_p DOUBLE PRECISION, max_output_tokens BIGINT NOT NULL DEFAULT 0, context_window BIGINT NOT NULL DEFAULT 0, reasoning_effort TEXT NOT NULL DEFAULT '', model_kind TEXT NOT NULL DEFAULT 'conversation', input_modalities JSONB NOT NULL DEFAULT '["text"]'::jsonb, provider_config JSONB NOT NULL DEFAULT '{}'::jsonb, revision BIGINT NOT NULL CHECK(revision>0), api_key_version BIGINT NOT NULL DEFAULT 1, credential_version BIGINT NOT NULL DEFAULT 0, api_key_key_id TEXT NOT NULL DEFAULT '', api_key_envelope_version BIGINT NOT NULL DEFAULT 0, api_key_aad_version BIGINT NOT NULL DEFAULT 0, api_key_nonce BYTEA NOT NULL DEFAULT ''::bytea, api_key_ciphertext BYTEA NOT NULL DEFAULT ''::bytea, api_key_profile_revision BIGINT NOT NULL DEFAULT 0, deleted_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL, PRIMARY KEY(owner_id,profile_id), UNIQUE(owner_id,client_profile_id), CONSTRAINT p2p_agent_model_profiles_api_key_envelope_check CHECK((credential_version=0 AND octet_length(api_key_ciphertext)=0 AND api_key_key_id='' AND octet_length(api_key_nonce)=0 AND api_key_envelope_version=0 AND api_key_aad_version=0) OR (credential_version>0 AND octet_length(api_key_ciphertext)>16 AND octet_length(api_key_nonce)=12 AND api_key_key_id<>'' AND api_key_envelope_version=1 AND api_key_aad_version=1)))`,
+		`CREATE TABLE IF NOT EXISTS p2p_agent_model_profile_credentials (owner_id TEXT NOT NULL, profile_id TEXT NOT NULL, credential_version BIGINT NOT NULL CHECK(credential_version>0), profile_revision BIGINT NOT NULL DEFAULT 0, provider TEXT NOT NULL, api_key_key_id TEXT NOT NULL DEFAULT '', api_key_envelope_version BIGINT NOT NULL DEFAULT 0, api_key_aad_version BIGINT NOT NULL DEFAULT 0, api_key_nonce BYTEA NOT NULL, api_key_ciphertext BYTEA NOT NULL, created_at TIMESTAMPTZ NOT NULL, PRIMARY KEY(owner_id,profile_id,credential_version), CONSTRAINT p2p_agent_model_profile_credentials_owner_id_profile_id_fkey FOREIGN KEY(owner_id,profile_id) REFERENCES p2p_agent_model_profiles(owner_id,profile_id) ON DELETE RESTRICT, CONSTRAINT p2p_agent_model_profile_credentials_api_key_envelope_check CHECK(credential_version>0 AND octet_length(api_key_ciphertext)>16 AND octet_length(api_key_nonce)=12 AND api_key_key_id<>'' AND api_key_envelope_version=1 AND api_key_aad_version=1))`,
+		`CREATE TABLE IF NOT EXISTS p2p_agent_model_profile_revisions (owner_id TEXT NOT NULL, profile_id TEXT NOT NULL, profile_revision BIGINT NOT NULL CHECK(profile_revision>0), client_profile_id TEXT NOT NULL, display_name TEXT NOT NULL DEFAULT '', provider TEXT NOT NULL, base_url TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT '', system_prompt TEXT NOT NULL DEFAULT '', temperature DOUBLE PRECISION, top_p DOUBLE PRECISION, max_output_tokens BIGINT NOT NULL DEFAULT 0, context_window BIGINT NOT NULL DEFAULT 0, reasoning_effort TEXT NOT NULL DEFAULT '', model_kind TEXT NOT NULL DEFAULT 'conversation', input_modalities JSONB NOT NULL DEFAULT '["text"]'::jsonb, provider_config JSONB NOT NULL DEFAULT '{}'::jsonb, credential_version BIGINT NOT NULL DEFAULT 0, deleted_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL, PRIMARY KEY(owner_id,profile_id,profile_revision))`,
+		`CREATE TABLE IF NOT EXISTS p2p_agent_model_profile_defaults (owner_id TEXT PRIMARY KEY, profile_id TEXT, client_profile_id TEXT NOT NULL, embedding_profile_id TEXT, embedding_client_profile_id TEXT NOT NULL DEFAULT '', speech_profile_id TEXT, speech_client_profile_id TEXT NOT NULL DEFAULT '', CONSTRAINT p2p_agent_model_profile_defaults_owner_profile_fkey FOREIGN KEY(owner_id,profile_id) REFERENCES p2p_agent_model_profiles(owner_id,profile_id) ON DELETE RESTRICT, CONSTRAINT p2p_agent_model_profile_defaults_owner_embedding_fkey FOREIGN KEY(owner_id,embedding_profile_id) REFERENCES p2p_agent_model_profiles(owner_id,profile_id) ON DELETE RESTRICT, CONSTRAINT p2p_agent_model_profile_defaults_owner_speech_fkey FOREIGN KEY(owner_id,speech_profile_id) REFERENCES p2p_agent_model_profiles(owner_id,profile_id) ON DELETE RESTRICT)`,
+		`CREATE TABLE IF NOT EXISTS p2p_agent_model_profile_syncs (owner_id TEXT NOT NULL,idempotency_key TEXT NOT NULL,request_digest BYTEA NOT NULL CHECK(octet_length(request_digest)=32),response_json JSONB NOT NULL,created_at TIMESTAMPTZ NOT NULL,PRIMARY KEY(owner_id,idempotency_key))`,
+		`CREATE TABLE IF NOT EXISTS p2p_agent_model_profile_deletes (owner_id TEXT NOT NULL,idempotency_key TEXT NOT NULL,profile_id TEXT NOT NULL,request_digest BYTEA,response_json JSONB NOT NULL DEFAULT '{}'::jsonb,created_at TIMESTAMPTZ NOT NULL,PRIMARY KEY(owner_id,idempotency_key))`,
+		`CREATE TABLE IF NOT EXISTS p2p_agent_schedule_runs (run_id TEXT PRIMARY KEY NOT NULL,schedule_id TEXT NOT NULL,owner_id TEXT NOT NULL,status TEXT NOT NULL,scheduled_for TIMESTAMPTZ NOT NULL,started_at TIMESTAMPTZ,finished_at TIMESTAMPTZ,result TEXT NOT NULL DEFAULT '',error TEXT NOT NULL DEFAULT '',lease_epoch BIGINT NOT NULL DEFAULT 0,occurrence_id UUID,task_id UUID,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS p2p_agent_schedule_runs_occurrence_idx ON p2p_agent_schedule_runs(owner_id,schedule_id,scheduled_for)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS p2p_agent_schedule_runs_occurrence_link_idx ON p2p_agent_schedule_runs(owner_id,schedule_id,occurrence_id) WHERE occurrence_id IS NOT NULL`,
+		`CREATE INDEX IF NOT EXISTS p2p_agent_schedule_runs_task_idx ON p2p_agent_schedule_runs(owner_id,task_id) WHERE task_id IS NOT NULL`,
+		`CREATE TABLE IF NOT EXISTS p2p_agent_schedule_mutations (owner_id TEXT NOT NULL,action TEXT NOT NULL,idempotency_key TEXT NOT NULL,request_digest BYTEA NOT NULL CHECK(octet_length(request_digest)=32),response_json JSONB NOT NULL,created_at TIMESTAMPTZ NOT NULL,PRIMARY KEY(owner_id,action,idempotency_key))`,
+		`CREATE TABLE IF NOT EXISTS p2p_agent_schedule_confirmations (confirmation_id TEXT NOT NULL,owner_id TEXT NOT NULL,conversation_id TEXT NOT NULL,action TEXT NOT NULL,params_json JSONB NOT NULL,request_digest BYTEA NOT NULL CHECK(octet_length(request_digest)=32),idempotency_key TEXT NOT NULL,summary TEXT NOT NULL,approval_code TEXT NOT NULL,status TEXT NOT NULL CHECK(status IN ('pending','executing','completed','failed','expired','replaced')),revision BIGINT NOT NULL DEFAULT 1,expires_at TIMESTAMPTZ NOT NULL,created_at TIMESTAMPTZ NOT NULL,updated_at TIMESTAMPTZ NOT NULL,result_json JSONB NOT NULL DEFAULT '{}'::jsonb,error_text TEXT NOT NULL DEFAULT '',PRIMARY KEY(owner_id,conversation_id,confirmation_id))`,
+		`CREATE INDEX IF NOT EXISTS p2p_agent_schedule_confirmations_pending_idx ON p2p_agent_schedule_confirmations(owner_id,conversation_id,status,updated_at)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS p2p_agent_schedule_confirmations_active_idx ON p2p_agent_schedule_confirmations(owner_id,conversation_id) WHERE status IN ('pending','executing')`,
+		`CREATE TABLE IF NOT EXISTS p2p_native_agent_memory_turns (owner_id TEXT NOT NULL,conversation_id TEXT NOT NULL,turn_id TEXT NOT NULL,created_at TIMESTAMPTZ NOT NULL,PRIMARY KEY(owner_id,conversation_id,turn_id),FOREIGN KEY(owner_id,conversation_id) REFERENCES p2p_native_agent_conversations(owner_id,conversation_id) ON DELETE CASCADE)`,
+		`CREATE TABLE IF NOT EXISTS p2p_native_agent_conversation_mutations (owner_id TEXT NOT NULL,action TEXT NOT NULL,idempotency_key TEXT NOT NULL,request_digest BYTEA NOT NULL CHECK(octet_length(request_digest)=32),response_json JSONB NOT NULL DEFAULT '{}'::jsonb,created_at TIMESTAMPTZ NOT NULL,PRIMARY KEY(owner_id,action,idempotency_key))`,
+		`CREATE TABLE IF NOT EXISTS p2p_native_agent_memory_embeddings (owner_id TEXT NOT NULL,memory_id TEXT NOT NULL,profile_id TEXT NOT NULL,profile_revision BIGINT NOT NULL CHECK(profile_revision>0),model TEXT NOT NULL,dimension BIGINT NOT NULL CHECK(dimension BETWEEN 1 AND 32768),content_digest BYTEA NOT NULL CHECK(octet_length(content_digest)=32),vector DOUBLE PRECISION[] NOT NULL CHECK(COALESCE(array_length(vector,1),0)=dimension),indexed_at TIMESTAMPTZ NOT NULL,PRIMARY KEY(owner_id,memory_id),FOREIGN KEY(owner_id,memory_id) REFERENCES p2p_native_agent_memory_records(owner_id,memory_id) ON DELETE CASCADE)`,
+		`CREATE INDEX IF NOT EXISTS p2p_native_agent_memory_embeddings_profile_idx ON p2p_native_agent_memory_embeddings(owner_id,profile_id,profile_revision,model,dimension)`,
+		`CREATE TABLE IF NOT EXISTS p2p_native_agent_knowledge_sources (owner_id TEXT NOT NULL,source_id TEXT NOT NULL,kind TEXT NOT NULL,status TEXT NOT NULL,title TEXT NOT NULL DEFAULT '',mime_type TEXT NOT NULL,size BIGINT NOT NULL,total_chunks BIGINT NOT NULL DEFAULT 0,indexed_chunks BIGINT NOT NULL DEFAULT 0,revision BIGINT NOT NULL DEFAULT 1,error_text TEXT NOT NULL DEFAULT '',created_at TIMESTAMPTZ NOT NULL,updated_at TIMESTAMPTZ NOT NULL,PRIMARY KEY(owner_id,source_id))`,
+		`CREATE INDEX IF NOT EXISTS p2p_native_agent_knowledge_sources_cursor_idx ON p2p_native_agent_knowledge_sources(owner_id,created_at,source_id)`,
+		`CREATE TABLE IF NOT EXISTS p2p_native_agent_knowledge_uploads (owner_id TEXT NOT NULL,upload_id TEXT NOT NULL,source_id TEXT NOT NULL,filename TEXT NOT NULL,mime_type TEXT NOT NULL,size BIGINT NOT NULL,received_size BIGINT NOT NULL DEFAULT 0,data BYTEA NOT NULL DEFAULT '',created_at TIMESTAMPTZ NOT NULL,PRIMARY KEY(owner_id,upload_id))`,
+		`CREATE TABLE IF NOT EXISTS p2p_agent_secrets (secret_domain TEXT NOT NULL, owner_id TEXT NOT NULL, entity_id TEXT NOT NULL, secret_revision BIGINT NOT NULL CHECK(secret_revision>0), purpose TEXT NOT NULL, reference TEXT NOT NULL, binding_digest BYTEA NOT NULL CHECK(octet_length(binding_digest)=32), envelope_version SMALLINT NOT NULL DEFAULT 1 CHECK(envelope_version=1), aad_version SMALLINT NOT NULL DEFAULT 1 CHECK(aad_version=1), key_id TEXT NOT NULL, nonce BYTEA NOT NULL CHECK(octet_length(nonce)=12), ciphertext BYTEA NOT NULL CHECK(octet_length(ciphertext)>=16), created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(), PRIMARY KEY(secret_domain,owner_id,entity_id,secret_revision,purpose,reference))`,
+		`CREATE TABLE IF NOT EXISTS core_execution_secrets (owner_id TEXT NOT NULL CHECK(owner_id<>''),secret_ref UUID NOT NULL,revision BIGINT NOT NULL CHECK(revision>0),purpose TEXT NOT NULL CHECK(purpose='ai_provider_api_key'),provider TEXT NOT NULL CHECK(provider ~ '^[a-z0-9]+([._-][a-z0-9]+)*$' AND char_length(provider)<=64),binding_digest TEXT NOT NULL CHECK(binding_digest ~ '^[a-f0-9]{64}$'),status TEXT NOT NULL CHECK(status IN ('active','revoked')),mutation_kind TEXT NOT NULL CHECK(mutation_kind IN ('create','revoke')),idempotency_key UUID NOT NULL,created_at TIMESTAMPTZ NOT NULL,updated_at TIMESTAMPTZ NOT NULL,PRIMARY KEY(owner_id,secret_ref,revision),UNIQUE(owner_id,idempotency_key),CHECK((revision=1 AND status='active' AND mutation_kind='create') OR (revision>1 AND status='revoked' AND mutation_kind='revoke')))`,
+		`CREATE INDEX IF NOT EXISTS core_execution_secrets_current_idx ON core_execution_secrets(owner_id,secret_ref,revision DESC)`,
+		`CREATE OR REPLACE FUNCTION core_execution_secret_immutable() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'execution secret metadata is append-only'; END $$`,
+		`DROP TRIGGER IF EXISTS core_execution_secrets_immutable ON core_execution_secrets`, `CREATE TRIGGER core_execution_secrets_immutable BEFORE UPDATE OR DELETE ON core_execution_secrets FOR EACH ROW EXECUTE FUNCTION core_execution_secret_immutable()`,
+		`CREATE TABLE IF NOT EXISTS p2p_agent_secret_key_usage (secret_domain TEXT NOT NULL, owner_id TEXT NOT NULL, entity_id TEXT NOT NULL, secret_revision BIGINT NOT NULL CHECK(secret_revision>0), purpose TEXT NOT NULL, reference TEXT NOT NULL, key_id TEXT NOT NULL, envelope_digest BYTEA NOT NULL CHECK(octet_length(envelope_digest)=32), updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(), PRIMARY KEY(secret_domain,owner_id,entity_id,secret_revision,purpose,reference))`,
+		`CREATE TABLE IF NOT EXISTS p2p_agent_secret_rotations (rotation_id UUID PRIMARY KEY,state TEXT NOT NULL CHECK(state IN ('rewrapping','verifying','complete','failed')),from_key_ids TEXT[] NOT NULL,to_key_id TEXT NOT NULL,lease_owner TEXT NOT NULL DEFAULT '',lease_epoch BIGINT NOT NULL DEFAULT 0,lease_expires_at TIMESTAMPTZ,cursor_domain TEXT NOT NULL DEFAULT '',cursor_owner_id TEXT NOT NULL DEFAULT '',cursor_entity_id TEXT NOT NULL DEFAULT '',cursor_revision BIGINT NOT NULL DEFAULT 0,rewrapped_rows BIGINT NOT NULL DEFAULT 0,verified_rows BIGINT NOT NULL DEFAULT 0,error_code TEXT NOT NULL DEFAULT '',created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),completed_at TIMESTAMPTZ)`,
+		`CREATE TABLE IF NOT EXISTS core_aws_credentials (owner_id TEXT NOT NULL,credential_id UUID NOT NULL,revision BIGINT NOT NULL CHECK(revision>0),envelope_version INTEGER NOT NULL,aad_version INTEGER NOT NULL,key_id TEXT,nonce BYTEA,ciphertext BYTEA,envelope_digest TEXT NOT NULL CHECK(envelope_digest ~ '^[a-f0-9]{64}$'),name TEXT NOT NULL,region TEXT NOT NULL,account_id TEXT NOT NULL DEFAULT '',user_arn TEXT NOT NULL DEFAULT '',verified_revision BIGINT NOT NULL DEFAULT 0,created_at TIMESTAMPTZ NOT NULL,updated_at TIMESTAMPTZ NOT NULL,PRIMARY KEY(owner_id,credential_id,revision))`,
+		`CREATE TABLE IF NOT EXISTS core_aws_credential_current (owner_id TEXT NOT NULL,credential_id UUID NOT NULL,revision BIGINT NOT NULL CHECK(revision>0),deleted_at TIMESTAMPTZ,PRIMARY KEY(owner_id,credential_id),FOREIGN KEY(owner_id,credential_id,revision) REFERENCES core_aws_credentials(owner_id,credential_id,revision) ON DELETE RESTRICT)`,
+		`CREATE TABLE IF NOT EXISTS core_aws_replays (owner_id TEXT NOT NULL,operation TEXT NOT NULL,idempotency_key UUID NOT NULL,request_hash TEXT NOT NULL CHECK(request_hash ~ '^[a-f0-9]{64}$'),response_json JSONB NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),PRIMARY KEY(owner_id,operation,idempotency_key))`,
+		`CREATE INDEX IF NOT EXISTS core_aws_replays_owner_created_idx ON core_aws_replays(owner_id,created_at DESC,operation,idempotency_key)`,
+		`CREATE TABLE IF NOT EXISTS core_execution_deployments (owner_id TEXT NOT NULL,deployment_id UUID NOT NULL,project_id UUID NOT NULL,current_run_id UUID NOT NULL,current_stage_id UUID,release_id TEXT,state TEXT NOT NULL DEFAULT 'pending',revision BIGINT NOT NULL DEFAULT 1 CHECK(revision>0),object_json JSONB NOT NULL DEFAULT '{}'::jsonb,actual_json JSONB NOT NULL DEFAULT '{}'::jsonb,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),PRIMARY KEY(owner_id,deployment_id))`,
+		`CREATE TABLE IF NOT EXISTS core_execution_deployment_counters (owner_id TEXT NOT NULL,deployment_id UUID NOT NULL,next_sequence BIGINT NOT NULL DEFAULT 1 CHECK(next_sequence>0),PRIMARY KEY(owner_id,deployment_id),FOREIGN KEY(owner_id,deployment_id) REFERENCES core_execution_deployments(owner_id,deployment_id) ON DELETE RESTRICT)`,
+		`CREATE TABLE IF NOT EXISTS core_execution_deployment_events (owner_id TEXT NOT NULL,deployment_id UUID NOT NULL,event_id UUID NOT NULL,sequence BIGINT NOT NULL CHECK(sequence>0),event_digest TEXT NOT NULL CHECK(event_digest ~ '^[a-f0-9]{64}$'),event_json JSONB NOT NULL DEFAULT '{}'::jsonb,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),PRIMARY KEY(owner_id,deployment_id,sequence),UNIQUE(owner_id,event_id),FOREIGN KEY(owner_id,deployment_id) REFERENCES core_execution_deployments(owner_id,deployment_id) ON DELETE RESTRICT)`,
+	}); err != nil {
+		return err
+	}
+	if err := execMigrationStatements(ctx, txn, []string{
+		`CREATE TABLE IF NOT EXISTS core_execution_projects (owner_id TEXT NOT NULL, project_id UUID NOT NULL, revision BIGINT NOT NULL DEFAULT 1 CHECK (revision>0), status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','archived')), schema_version TEXT NOT NULL DEFAULT 'execution-project/v2' CHECK (schema_version='execution-project/v2'), project_digest TEXT NOT NULL CHECK (project_digest ~ '^[a-f0-9]{64}$'), snapshot_json JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(owner_id,project_id))`,
+		`CREATE TABLE IF NOT EXISTS core_execution_source_artifacts (owner_id TEXT NOT NULL CHECK(owner_id<>''), artifact_id UUID NOT NULL, project_id UUID NOT NULL, content_digest TEXT NOT NULL CHECK(content_digest ~ '^[a-f0-9]{64}$'), storage_backend TEXT NOT NULL DEFAULT 'filesystem' CHECK(storage_backend='filesystem'), storage_ref TEXT NOT NULL CHECK(storage_ref ~ '^sha256/[a-f0-9]{2}/[a-f0-9]{64}$'), size_bytes BIGINT NOT NULL CHECK(size_bytes BETWEEN 1 AND 1073741824), media_type TEXT NOT NULL CHECK(char_length(media_type) BETWEEN 3 AND 255 AND media_type ~ '^[a-z0-9]([a-z0-9._+*-]*[a-z0-9])?/[a-z0-9]([a-z0-9._+*-]*[a-z0-9])?$'), revision BIGINT NOT NULL DEFAULT 1 CHECK(revision=1), status TEXT NOT NULL DEFAULT 'available' CHECK(status='available'), schema_version TEXT NOT NULL DEFAULT 'execution-source-artifact/v2' CHECK(schema_version='execution-source-artifact/v2'), metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb CHECK(jsonb_typeof(metadata_json)='object'), created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(owner_id,artifact_id), CHECK(right(storage_ref,64)=content_digest AND substring(storage_ref FROM 8 FOR 2)=left(content_digest,2)), FOREIGN KEY(owner_id,project_id) REFERENCES core_execution_projects(owner_id,project_id) ON DELETE RESTRICT)`,
+		`CREATE INDEX IF NOT EXISTS core_execution_source_artifacts_project_idx ON core_execution_source_artifacts(owner_id,project_id,created_at,artifact_id)`,
+		`CREATE INDEX IF NOT EXISTS core_execution_source_artifacts_content_idx ON core_execution_source_artifacts(owner_id,content_digest)`,
+		`CREATE OR REPLACE FUNCTION core_execution_source_artifact_immutable() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'execution source artifacts are immutable'; END $$`,
+		`DROP TRIGGER IF EXISTS core_execution_source_artifacts_immutable ON core_execution_source_artifacts`, `CREATE TRIGGER core_execution_source_artifacts_immutable BEFORE UPDATE OR DELETE ON core_execution_source_artifacts FOR EACH ROW EXECUTE FUNCTION core_execution_source_artifact_immutable()`,
+		`CREATE TABLE IF NOT EXISTS core_execution_analyses (owner_id TEXT NOT NULL, analysis_id UUID NOT NULL, project_id UUID NOT NULL, revision BIGINT NOT NULL DEFAULT 1 CHECK (revision>0), status TEXT NOT NULL DEFAULT 'ready' CHECK (status IN ('pending','ready','completed','failed','superseded')), schema_version TEXT NOT NULL DEFAULT 'execution-analysis/v2' CHECK (schema_version='execution-analysis/v2'), analysis_digest TEXT NOT NULL CHECK (analysis_digest ~ '^[a-f0-9]{64}$'), snapshot_json JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(owner_id,analysis_id), UNIQUE(owner_id,project_id,analysis_id), FOREIGN KEY(owner_id,project_id) REFERENCES core_execution_projects(owner_id,project_id) ON DELETE RESTRICT)`,
+		`CREATE INDEX IF NOT EXISTS core_execution_projects_owner_status_idx ON core_execution_projects(owner_id,status,updated_at DESC,project_id)`,
+		`CREATE INDEX IF NOT EXISTS core_execution_analyses_project_idx ON core_execution_analyses(owner_id,project_id,created_at DESC,analysis_id)`,
+		`CREATE OR REPLACE FUNCTION core_execution_analysis_immutable() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'execution analysis snapshots are immutable'; END $$`,
+		`DROP TRIGGER IF EXISTS core_execution_analyses_immutable ON core_execution_analyses`, `CREATE TRIGGER core_execution_analyses_immutable BEFORE UPDATE OR DELETE ON core_execution_analyses FOR EACH ROW EXECUTE FUNCTION core_execution_analysis_immutable()`,
+		`CREATE TABLE IF NOT EXISTS core_execution_targets (owner_id TEXT NOT NULL, target_id UUID NOT NULL, target_revision BIGINT NOT NULL DEFAULT 1 CHECK (target_revision>0), status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','archived')), schema_version TEXT NOT NULL DEFAULT 'execution-target/v2' CHECK (schema_version='execution-target/v2'), provider TEXT NOT NULL DEFAULT '', target_digest TEXT NOT NULL CHECK (target_digest ~ '^[a-f0-9]{64}$'), snapshot_json JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(owner_id,target_id,target_revision), UNIQUE(owner_id,target_id,target_revision,target_digest))`,
+		`CREATE OR REPLACE FUNCTION core_execution_target_immutable() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'execution target snapshots are immutable'; END $$`,
+		`DROP TRIGGER IF EXISTS core_execution_targets_immutable ON core_execution_targets`, `CREATE TRIGGER core_execution_targets_immutable BEFORE UPDATE OR DELETE ON core_execution_targets FOR EACH ROW EXECUTE FUNCTION core_execution_target_immutable()`,
+		`CREATE INDEX IF NOT EXISTS core_execution_targets_owner_status_provider_idx ON core_execution_targets(owner_id,status,provider,target_id,target_revision DESC)`,
+		`CREATE TABLE IF NOT EXISTS core_execution_target_observations (owner_id TEXT NOT NULL, observation_id UUID NOT NULL, target_id UUID NOT NULL, target_revision BIGINT NOT NULL CHECK (target_revision>0), revision BIGINT NOT NULL DEFAULT 1 CHECK (revision>0), status TEXT NOT NULL DEFAULT 'observed' CHECK (status IN ('observed','failed')), schema_version TEXT NOT NULL DEFAULT 'execution-observation/v2' CHECK (schema_version='execution-observation/v2'), observation_digest TEXT NOT NULL CHECK (observation_digest ~ '^[a-f0-9]{64}$'), snapshot_json JSONB NOT NULL DEFAULT '{}'::jsonb, observed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(owner_id,observation_id), FOREIGN KEY(owner_id,target_id,target_revision) REFERENCES core_execution_targets(owner_id,target_id,target_revision) ON DELETE RESTRICT)`,
+		`CREATE INDEX IF NOT EXISTS core_execution_target_observations_target_idx ON core_execution_target_observations(owner_id,target_id,target_revision,observed_at DESC,observation_id)`,
+		`CREATE OR REPLACE FUNCTION core_execution_target_observation_immutable() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF TG_OP='DELETE' OR NEW.owner_id IS DISTINCT FROM OLD.owner_id OR NEW.observation_id IS DISTINCT FROM OLD.observation_id OR NEW.target_id IS DISTINCT FROM OLD.target_id OR NEW.target_revision IS DISTINCT FROM OLD.target_revision OR NEW.revision IS DISTINCT FROM OLD.revision OR NEW.status IS DISTINCT FROM OLD.status OR NEW.schema_version IS DISTINCT FROM OLD.schema_version OR NEW.observation_digest IS DISTINCT FROM OLD.observation_digest OR NEW.snapshot_json IS DISTINCT FROM OLD.snapshot_json OR NEW.observed_at IS DISTINCT FROM OLD.observed_at THEN RAISE EXCEPTION 'execution target observations are immutable'; END IF; RETURN NEW; END $$`,
+		`DROP TRIGGER IF EXISTS core_execution_target_observations_immutable ON core_execution_target_observations`, `CREATE TRIGGER core_execution_target_observations_immutable BEFORE UPDATE OR DELETE ON core_execution_target_observations FOR EACH ROW EXECUTE FUNCTION core_execution_target_observation_immutable()`,
+		`CREATE TABLE IF NOT EXISTS core_execution_skill_versions (owner_id TEXT NOT NULL, id TEXT NOT NULL CHECK (id ~ '^[a-z0-9][a-z0-9._-]*$'), version TEXT NOT NULL CHECK (version ~ '^[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?$'), revision BIGINT NOT NULL DEFAULT 1 CHECK (revision>0), status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','ready','deprecated','revoked')), schema_version TEXT NOT NULL DEFAULT 'execution-skill/v2' CHECK (schema_version='execution-skill/v2'), content_digest TEXT NOT NULL CHECK (content_digest ~ '^[a-f0-9]{64}$'), snapshot_json JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(owner_id,id,version))`,
+		`CREATE INDEX IF NOT EXISTS core_execution_skill_versions_owner_id_idx ON core_execution_skill_versions(owner_id,id,version)`,
+		`DROP INDEX IF EXISTS core_execution_skill_versions_owner_digest_uidx`, `CREATE INDEX IF NOT EXISTS core_execution_skill_versions_owner_digest_idx ON core_execution_skill_versions(owner_id,content_digest)`,
+		`CREATE TABLE IF NOT EXISTS core_execution_recipe_versions (owner_id TEXT NOT NULL, id TEXT NOT NULL CHECK (id ~ '^[a-z0-9][a-z0-9._-]*$'), version TEXT NOT NULL CHECK (version ~ '^[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?$'), revision BIGINT NOT NULL DEFAULT 1 CHECK (revision>0), status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','ready','deprecated','revoked')), schema_version TEXT NOT NULL DEFAULT 'execution-recipe/v2' CHECK (schema_version='execution-recipe/v2'), content_digest TEXT NOT NULL CHECK (content_digest ~ '^[a-f0-9]{64}$'), snapshot_json JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(owner_id,id,version))`,
+		`CREATE INDEX IF NOT EXISTS core_execution_recipe_versions_owner_id_idx ON core_execution_recipe_versions(owner_id,id,version)`,
+		`DROP INDEX IF EXISTS core_execution_recipe_versions_owner_digest_uidx`, `CREATE INDEX IF NOT EXISTS core_execution_recipe_versions_owner_digest_idx ON core_execution_recipe_versions(owner_id,content_digest)`,
+		`CREATE OR REPLACE FUNCTION core_execution_version_immutable() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF TG_OP='DELETE' OR NEW.owner_id IS DISTINCT FROM OLD.owner_id OR NEW.id IS DISTINCT FROM OLD.id OR NEW.version IS DISTINCT FROM OLD.version OR NEW.revision IS DISTINCT FROM OLD.revision OR NEW.schema_version IS DISTINCT FROM OLD.schema_version OR NEW.content_digest IS DISTINCT FROM OLD.content_digest OR NEW.snapshot_json IS DISTINCT FROM OLD.snapshot_json THEN RAISE EXCEPTION 'execution skill/recipe version is immutable'; END IF; RETURN NEW; END $$`,
+		`DROP TRIGGER IF EXISTS core_execution_skill_versions_immutable ON core_execution_skill_versions`, `CREATE TRIGGER core_execution_skill_versions_immutable BEFORE UPDATE OR DELETE ON core_execution_skill_versions FOR EACH ROW EXECUTE FUNCTION core_execution_version_immutable()`,
+		`DROP TRIGGER IF EXISTS core_execution_recipe_versions_immutable ON core_execution_recipe_versions`, `CREATE TRIGGER core_execution_recipe_versions_immutable BEFORE UPDATE OR DELETE ON core_execution_recipe_versions FOR EACH ROW EXECUTE FUNCTION core_execution_version_immutable()`,
+		`CREATE TABLE IF NOT EXISTS core_execution_plans (owner_id TEXT NOT NULL, plan_id UUID NOT NULL, project_id UUID NOT NULL, revision BIGINT NOT NULL DEFAULT 1 CHECK (revision>0), status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','ready','expired','superseded')), schema_version TEXT NOT NULL DEFAULT 'execution-plan/v2' CHECK (schema_version='execution-plan/v2'), snapshot_json JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(owner_id,plan_id), FOREIGN KEY(owner_id,project_id) REFERENCES core_execution_projects(owner_id,project_id) ON DELETE RESTRICT)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS core_execution_plans_project_pin_uidx ON core_execution_plans(owner_id,project_id,plan_id)`,
+		`CREATE INDEX IF NOT EXISTS core_execution_plans_project_status_idx ON core_execution_plans(owner_id,project_id,status,updated_at DESC,plan_id)`,
+		`CREATE OR REPLACE FUNCTION core_execution_plan_immutable() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF TG_OP='DELETE' OR NEW.owner_id IS DISTINCT FROM OLD.owner_id OR NEW.plan_id IS DISTINCT FROM OLD.plan_id OR NEW.project_id IS DISTINCT FROM OLD.project_id OR NEW.revision <= OLD.revision OR NEW.schema_version IS DISTINCT FROM OLD.schema_version OR NEW.snapshot_json IS DISTINCT FROM OLD.snapshot_json OR (OLD.status IN ('ready','expired','superseded') AND NEW.status='draft') THEN RAISE EXCEPTION 'execution plan identity/state is immutable or non-monotonic'; END IF; RETURN NEW; END $$`,
+		`DROP TRIGGER IF EXISTS core_execution_plans_immutable ON core_execution_plans`, `CREATE TRIGGER core_execution_plans_immutable BEFORE UPDATE OR DELETE ON core_execution_plans FOR EACH ROW EXECUTE FUNCTION core_execution_plan_immutable()`,
+		`CREATE TABLE IF NOT EXISTS core_execution_plan_revisions (owner_id TEXT NOT NULL, plan_id UUID NOT NULL, plan_revision_id UUID NOT NULL, revision BIGINT NOT NULL CHECK (revision>0), project_id UUID NOT NULL, analysis_id UUID NOT NULL, status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','ready','expired','superseded')), schema_version TEXT NOT NULL DEFAULT 'execution-plan/v2' CHECK (schema_version='execution-plan/v2'), plan_digest TEXT NOT NULL CHECK (plan_digest ~ '^[a-f0-9]{64}$'), snapshot_json JSONB NOT NULL CHECK(jsonb_typeof(snapshot_json)='object' AND snapshot_json<>'{}'::jsonb), expires_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(owner_id,plan_id,revision), UNIQUE(owner_id,plan_revision_id), FOREIGN KEY(owner_id,project_id,plan_id) REFERENCES core_execution_plans(owner_id,project_id,plan_id) ON DELETE RESTRICT, FOREIGN KEY(owner_id,project_id,analysis_id) REFERENCES core_execution_analyses(owner_id,project_id,analysis_id) ON DELETE RESTRICT)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS core_execution_plan_revisions_pin_uidx ON core_execution_plan_revisions(owner_id,project_id,plan_id,revision,plan_digest)`,
+		`CREATE INDEX IF NOT EXISTS core_execution_plan_revisions_plan_idx ON core_execution_plan_revisions(owner_id,plan_id,revision DESC)`,
+		`CREATE TABLE IF NOT EXISTS core_execution_plan_stages (owner_id TEXT NOT NULL, plan_id UUID NOT NULL, plan_revision BIGINT NOT NULL, stage_key TEXT NOT NULL CHECK(stage_key<>''), stage_revision BIGINT NOT NULL DEFAULT 1 CHECK(stage_revision>0), stage_digest TEXT NOT NULL CHECK(stage_digest ~ '^[a-f0-9]{64}$'), ordinal BIGINT NOT NULL CHECK(ordinal>=1), status TEXT NOT NULL DEFAULT 'ready' CHECK(status IN ('draft','ready','expired','superseded')), schema_version TEXT NOT NULL DEFAULT 'execution-plan/v2' CHECK(schema_version='execution-plan/v2'), snapshot_json JSONB NOT NULL DEFAULT '{}'::jsonb, PRIMARY KEY(owner_id,plan_id,plan_revision,stage_key), UNIQUE(owner_id,plan_id,plan_revision,ordinal), FOREIGN KEY(owner_id,plan_id,plan_revision) REFERENCES core_execution_plan_revisions(owner_id,plan_id,revision) ON DELETE RESTRICT)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS core_execution_plan_stages_pin_uidx ON core_execution_plan_stages(owner_id,plan_id,plan_revision,stage_key,stage_revision,stage_digest)`,
+		`CREATE INDEX IF NOT EXISTS core_execution_plan_stages_order_idx ON core_execution_plan_stages(owner_id,plan_id,plan_revision,ordinal,stage_key)`,
+		`CREATE TABLE IF NOT EXISTS core_execution_plan_steps (owner_id TEXT NOT NULL, plan_id UUID NOT NULL, plan_revision BIGINT NOT NULL, stage_key TEXT NOT NULL CHECK(stage_key<>''), step_key TEXT NOT NULL CHECK(step_key<>''), step_set TEXT NOT NULL DEFAULT 'forward' CHECK(step_set IN ('forward','rollback')), step_revision BIGINT NOT NULL DEFAULT 1 CHECK(step_revision>0), step_digest TEXT NOT NULL CHECK(step_digest ~ '^[a-f0-9]{64}$'), ordinal BIGINT NOT NULL CHECK(ordinal>=1), status TEXT NOT NULL DEFAULT 'ready' CHECK(status IN ('draft','ready','expired','superseded')), schema_version TEXT NOT NULL DEFAULT 'execution-plan/v2' CHECK(schema_version='execution-plan/v2'), snapshot_json JSONB NOT NULL CHECK(jsonb_typeof(snapshot_json)='object' AND snapshot_json<>'{}'::jsonb), PRIMARY KEY(owner_id,plan_id,plan_revision,stage_key,step_set,step_key), UNIQUE(owner_id,plan_id,plan_revision,stage_key,step_set,ordinal), FOREIGN KEY(owner_id,plan_id,plan_revision,stage_key) REFERENCES core_execution_plan_stages(owner_id,plan_id,plan_revision,stage_key) ON DELETE RESTRICT)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS core_execution_plan_steps_pin_uidx ON core_execution_plan_steps(owner_id,plan_id,plan_revision,stage_key,step_set,step_key,step_revision,step_digest)`,
+		`CREATE OR REPLACE FUNCTION core_execution_plan_snapshot_immutable() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF TG_OP='DELETE' OR NEW.owner_id IS DISTINCT FROM OLD.owner_id OR NEW.project_id IS DISTINCT FROM OLD.project_id OR NEW.plan_id IS DISTINCT FROM OLD.plan_id OR NEW.plan_revision_id IS DISTINCT FROM OLD.plan_revision_id OR NEW.revision IS DISTINCT FROM OLD.revision OR NEW.analysis_id IS DISTINCT FROM OLD.analysis_id OR NEW.schema_version IS DISTINCT FROM OLD.schema_version OR NEW.plan_digest IS DISTINCT FROM OLD.plan_digest OR NEW.snapshot_json IS DISTINCT FROM OLD.snapshot_json OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN RAISE EXCEPTION 'execution plan snapshot is immutable'; END IF; RETURN NEW; END $$`,
+		`DROP TRIGGER IF EXISTS core_execution_plan_revisions_immutable ON core_execution_plan_revisions`, `CREATE TRIGGER core_execution_plan_revisions_immutable BEFORE UPDATE OR DELETE ON core_execution_plan_revisions FOR EACH ROW EXECUTE FUNCTION core_execution_plan_snapshot_immutable()`,
+		`CREATE OR REPLACE FUNCTION core_execution_plan_stage_snapshot_immutable() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF TG_OP='DELETE' OR NEW.owner_id IS DISTINCT FROM OLD.owner_id OR NEW.plan_id IS DISTINCT FROM OLD.plan_id OR NEW.plan_revision IS DISTINCT FROM OLD.plan_revision OR NEW.stage_key IS DISTINCT FROM OLD.stage_key OR NEW.stage_revision IS DISTINCT FROM OLD.stage_revision OR NEW.stage_digest IS DISTINCT FROM OLD.stage_digest OR NEW.ordinal IS DISTINCT FROM OLD.ordinal OR NEW.schema_version IS DISTINCT FROM OLD.schema_version OR NEW.snapshot_json IS DISTINCT FROM OLD.snapshot_json THEN RAISE EXCEPTION 'execution plan stage snapshot is immutable'; END IF; RETURN NEW; END $$`,
+		`DROP TRIGGER IF EXISTS core_execution_plan_stages_immutable ON core_execution_plan_stages`, `CREATE TRIGGER core_execution_plan_stages_immutable BEFORE UPDATE OR DELETE ON core_execution_plan_stages FOR EACH ROW EXECUTE FUNCTION core_execution_plan_stage_snapshot_immutable()`,
+		`CREATE OR REPLACE FUNCTION core_execution_plan_step_snapshot_immutable() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF TG_OP='DELETE' OR NEW.owner_id IS DISTINCT FROM OLD.owner_id OR NEW.plan_id IS DISTINCT FROM OLD.plan_id OR NEW.plan_revision IS DISTINCT FROM OLD.plan_revision OR NEW.stage_key IS DISTINCT FROM OLD.stage_key OR NEW.step_key IS DISTINCT FROM OLD.step_key OR NEW.step_set IS DISTINCT FROM OLD.step_set OR NEW.step_revision IS DISTINCT FROM OLD.step_revision OR NEW.step_digest IS DISTINCT FROM OLD.step_digest OR NEW.ordinal IS DISTINCT FROM OLD.ordinal OR NEW.schema_version IS DISTINCT FROM OLD.schema_version OR NEW.snapshot_json IS DISTINCT FROM OLD.snapshot_json THEN RAISE EXCEPTION 'execution plan step snapshot is immutable'; END IF; RETURN NEW; END $$`,
+		`DROP TRIGGER IF EXISTS core_execution_plan_steps_immutable ON core_execution_plan_steps`, `CREATE TRIGGER core_execution_plan_steps_immutable BEFORE UPDATE OR DELETE ON core_execution_plan_steps FOR EACH ROW EXECUTE FUNCTION core_execution_plan_step_snapshot_immutable()`,
+		`CREATE INDEX IF NOT EXISTS core_execution_plan_steps_order_idx ON core_execution_plan_steps(owner_id,plan_id,plan_revision,stage_key,ordinal,step_key)`,
+	}); err != nil {
+		return err
+	}
+	if err := execMigrationStatements(ctx, txn, []string{
+		`CREATE TABLE IF NOT EXISTS core_execution_runs (owner_id TEXT NOT NULL, run_id UUID NOT NULL, project_id UUID NOT NULL, plan_id UUID NOT NULL, plan_revision BIGINT NOT NULL CHECK(plan_revision>0), rollback_of_run_id UUID, deployment_id UUID, operation TEXT NOT NULL DEFAULT 'execute' CHECK(operation IN ('deploy','upgrade','repair','destroy','rollback','execute')), purpose TEXT NOT NULL DEFAULT 'job' CHECK(purpose IN ('job','service')), trigger_kind TEXT NOT NULL DEFAULT 'manual' CHECK(trigger_kind IN ('manual','schedule','retry','reconcile','rollback')), plan_digest TEXT NOT NULL CHECK(plan_digest ~ '^[a-f0-9]{64}$'), current_stage TEXT NOT NULL DEFAULT '', current_stage_id UUID, revision BIGINT NOT NULL DEFAULT 1 CHECK(revision>0), status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','waiting_user','queued','running','succeeded','failed','uncertain','canceled','rejected','expired')), terminal_reason TEXT NOT NULL DEFAULT '', started_at TIMESTAMPTZ, completed_at TIMESTAMPTZ, schema_version TEXT NOT NULL DEFAULT 'execution-run/v2' CHECK(schema_version='execution-run/v2'), run_digest TEXT NOT NULL CHECK(run_digest ~ '^[a-f0-9]{64}$'), snapshot_json JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(owner_id,run_id), CHECK((operation='rollback')=(rollback_of_run_id IS NOT NULL)), FOREIGN KEY(owner_id,rollback_of_run_id) REFERENCES core_execution_runs(owner_id,run_id) ON DELETE RESTRICT, UNIQUE(owner_id,run_id,project_id), UNIQUE(owner_id,run_id,project_id,plan_id,plan_revision), UNIQUE(owner_id,project_id,plan_id,plan_revision,run_id), UNIQUE(owner_id,run_id,revision), FOREIGN KEY(owner_id,project_id) REFERENCES core_execution_projects(owner_id,project_id) ON DELETE RESTRICT, FOREIGN KEY(owner_id,project_id,plan_id,plan_revision,plan_digest) REFERENCES core_execution_plan_revisions(owner_id,project_id,plan_id,revision,plan_digest) ON DELETE RESTRICT)`,
+		`CREATE INDEX IF NOT EXISTS core_execution_runs_project_status_idx ON core_execution_runs(owner_id,project_id,status,updated_at DESC,run_id)`,
+		`CREATE TABLE IF NOT EXISTS core_execution_run_revisions (owner_id TEXT NOT NULL, run_id UUID NOT NULL, revision BIGINT NOT NULL CHECK(revision>0), project_id UUID NOT NULL, plan_id UUID NOT NULL, plan_revision BIGINT NOT NULL CHECK(plan_revision>0), rollback_of_run_id UUID, deployment_id UUID, operation TEXT NOT NULL CHECK(operation IN ('deploy','upgrade','repair','destroy','rollback','execute')), purpose TEXT NOT NULL CHECK(purpose IN ('job','service')), trigger_kind TEXT NOT NULL CHECK(trigger_kind IN ('manual','schedule','retry','reconcile','rollback')), plan_digest TEXT NOT NULL CHECK(plan_digest ~ '^[a-f0-9]{64}$'), current_stage TEXT NOT NULL DEFAULT '', current_stage_id UUID, status TEXT NOT NULL CHECK(status IN ('pending','waiting_user','queued','running','succeeded','failed','uncertain','canceled','rejected','expired')), terminal_reason TEXT NOT NULL DEFAULT '', started_at TIMESTAMPTZ, completed_at TIMESTAMPTZ, schema_version TEXT NOT NULL CHECK(schema_version='execution-run/v2'), run_digest TEXT NOT NULL CHECK(run_digest ~ '^[a-f0-9]{64}$'), snapshot_json JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL, PRIMARY KEY(owner_id,run_id,revision), CHECK((operation='rollback')=(rollback_of_run_id IS NOT NULL)), FOREIGN KEY(owner_id,run_id) REFERENCES core_execution_runs(owner_id,run_id) ON DELETE RESTRICT, FOREIGN KEY(owner_id,project_id) REFERENCES core_execution_projects(owner_id,project_id) ON DELETE RESTRICT, FOREIGN KEY(owner_id,project_id,plan_id,plan_revision,plan_digest) REFERENCES core_execution_plan_revisions(owner_id,project_id,plan_id,revision,plan_digest) ON DELETE RESTRICT)`,
+		`CREATE INDEX IF NOT EXISTS core_execution_run_revisions_owner_run_idx ON core_execution_run_revisions(owner_id,run_id,revision)`,
+		`CREATE OR REPLACE FUNCTION core_execution_run_revision_immutable() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'execution run revisions are append-only'; END $$`,
+		`DROP TRIGGER IF EXISTS core_execution_run_revisions_immutable ON core_execution_run_revisions`, `CREATE TRIGGER core_execution_run_revisions_immutable BEFORE UPDATE OR DELETE ON core_execution_run_revisions FOR EACH ROW EXECUTE FUNCTION core_execution_run_revision_immutable()`,
+		`CREATE OR REPLACE FUNCTION core_execution_run_revision_insert_guard() RETURNS trigger LANGUAGE plpgsql AS $$ DECLARE current_run core_execution_runs%ROWTYPE; BEGIN SELECT * INTO current_run FROM core_execution_runs WHERE owner_id=NEW.owner_id AND run_id=NEW.run_id FOR KEY SHARE; IF NOT FOUND THEN RAISE EXCEPTION 'execution run revision identity mismatch'; END IF; IF NEW.revision<>current_run.revision THEN RAISE EXCEPTION 'execution run revision is future or non-current'; END IF; IF NEW.project_id IS DISTINCT FROM current_run.project_id OR NEW.plan_id IS DISTINCT FROM current_run.plan_id OR NEW.plan_revision IS DISTINCT FROM current_run.plan_revision OR NEW.rollback_of_run_id IS DISTINCT FROM current_run.rollback_of_run_id OR NEW.deployment_id IS DISTINCT FROM current_run.deployment_id OR NEW.operation IS DISTINCT FROM current_run.operation OR NEW.purpose IS DISTINCT FROM current_run.purpose OR NEW.trigger_kind IS DISTINCT FROM current_run.trigger_kind OR NEW.plan_digest IS DISTINCT FROM current_run.plan_digest OR NEW.current_stage IS DISTINCT FROM current_run.current_stage OR NEW.current_stage_id IS DISTINCT FROM current_run.current_stage_id OR NEW.status IS DISTINCT FROM current_run.status OR NEW.terminal_reason IS DISTINCT FROM current_run.terminal_reason OR NEW.started_at IS DISTINCT FROM current_run.started_at OR NEW.completed_at IS DISTINCT FROM current_run.completed_at OR NEW.schema_version IS DISTINCT FROM current_run.schema_version OR NEW.run_digest IS DISTINCT FROM current_run.run_digest OR NEW.snapshot_json IS DISTINCT FROM current_run.snapshot_json OR NEW.created_at IS DISTINCT FROM current_run.created_at OR NEW.updated_at IS DISTINCT FROM current_run.updated_at THEN RAISE EXCEPTION 'execution run revision identity mismatch'; END IF; IF NEW.revision>1 AND NOT EXISTS (SELECT 1 FROM core_execution_run_revisions WHERE owner_id=NEW.owner_id AND run_id=NEW.run_id AND revision=NEW.revision-1) THEN RAISE EXCEPTION 'execution run revision must be consecutive'; END IF; RETURN NEW; END $$`,
+		`DROP TRIGGER IF EXISTS core_execution_run_revisions_insert_guard ON core_execution_run_revisions`, `CREATE TRIGGER core_execution_run_revisions_insert_guard BEFORE INSERT ON core_execution_run_revisions FOR EACH ROW EXECUTE FUNCTION core_execution_run_revision_insert_guard()`,
+		`CREATE OR REPLACE FUNCTION core_execution_run_revision_completion_guard() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NOT EXISTS (SELECT 1 FROM core_execution_run_revisions WHERE owner_id=NEW.owner_id AND run_id=NEW.run_id AND revision=NEW.revision) THEN RAISE EXCEPTION 'execution run current revision requires matching history'; END IF; RETURN NULL; END $$`,
+		`DROP TRIGGER IF EXISTS core_execution_runs_revision_completion_guard ON core_execution_runs`, `CREATE CONSTRAINT TRIGGER core_execution_runs_revision_completion_guard AFTER INSERT OR UPDATE OF revision ON core_execution_runs DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION core_execution_run_revision_completion_guard()`,
+		`CREATE OR REPLACE FUNCTION core_execution_run_immutable() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF TG_OP='DELETE' OR NEW.owner_id IS DISTINCT FROM OLD.owner_id OR NEW.run_id IS DISTINCT FROM OLD.run_id OR NEW.project_id IS DISTINCT FROM OLD.project_id OR NEW.plan_id IS DISTINCT FROM OLD.plan_id OR NEW.plan_revision IS DISTINCT FROM OLD.plan_revision OR NEW.rollback_of_run_id IS DISTINCT FROM OLD.rollback_of_run_id OR NEW.deployment_id IS DISTINCT FROM OLD.deployment_id OR NEW.operation IS DISTINCT FROM OLD.operation OR NEW.purpose IS DISTINCT FROM OLD.purpose OR NEW.trigger_kind IS DISTINCT FROM OLD.trigger_kind OR NEW.plan_digest IS DISTINCT FROM OLD.plan_digest OR NEW.schema_version IS DISTINCT FROM OLD.schema_version OR NEW.run_digest IS DISTINCT FROM OLD.run_digest OR NEW.created_at IS DISTINCT FROM OLD.created_at OR NEW.revision<>OLD.revision+1 OR (OLD.started_at IS NOT NULL AND NEW.started_at IS DISTINCT FROM OLD.started_at) OR (OLD.completed_at IS NOT NULL AND NEW.completed_at IS DISTINCT FROM OLD.completed_at) OR (OLD.terminal_reason<>'' AND NEW.terminal_reason IS DISTINCT FROM OLD.terminal_reason) OR (OLD.status IN ('running','succeeded','failed','uncertain','canceled','rejected','expired') AND NEW.status IN ('pending','waiting_user','queued')) OR (OLD.status IN ('succeeded','failed','uncertain','canceled','rejected','expired') AND NEW.status IS DISTINCT FROM OLD.status) THEN RAISE EXCEPTION 'execution run identity/lifecycle is immutable or revision is not consecutive'; END IF; RETURN NEW; END $$`,
+		`DROP TRIGGER IF EXISTS core_execution_runs_immutable ON core_execution_runs`, `CREATE TRIGGER core_execution_runs_immutable BEFORE UPDATE OR DELETE ON core_execution_runs FOR EACH ROW EXECUTE FUNCTION core_execution_run_immutable()`,
+		`CREATE TABLE IF NOT EXISTS core_execution_run_stages (owner_id TEXT NOT NULL, run_id UUID NOT NULL, stage_id UUID NOT NULL, project_id UUID NOT NULL, plan_id UUID NOT NULL, plan_revision BIGINT NOT NULL CHECK(plan_revision>0), plan_digest TEXT NOT NULL CHECK(plan_digest ~ '^[a-f0-9]{64}$'), run_revision BIGINT NOT NULL CHECK(run_revision>0), plan_stage_key TEXT NOT NULL, stage_revision BIGINT NOT NULL CHECK(stage_revision>0), plan_stage_digest TEXT NOT NULL CHECK(plan_stage_digest ~ '^[a-f0-9]{64}$'), target_id UUID, target_revision BIGINT, target_digest TEXT CHECK(target_digest IS NULL OR target_digest ~ '^[a-f0-9]{64}$'), task_id UUID, confirmation_id UUID, ordinal BIGINT NOT NULL CHECK(ordinal>=0), revision BIGINT NOT NULL DEFAULT 1 CHECK(revision>0), status TEXT NOT NULL DEFAULT 'blocked' CHECK(status IN ('blocked','waiting_user','queued','running','succeeded','failed','uncertain','skipped','canceled','rejected','expired')), schema_version TEXT NOT NULL DEFAULT 'execution-run-stage/v2' CHECK(schema_version='execution-run-stage/v2'), snapshot_json JSONB NOT NULL DEFAULT '{}'::jsonb, started_at TIMESTAMPTZ, completed_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(owner_id,run_id,stage_id), UNIQUE(owner_id,run_id,ordinal), UNIQUE(owner_id,run_id,plan_id,plan_revision,plan_stage_key,stage_id), UNIQUE(owner_id,run_id,stage_id,project_id,plan_id,plan_revision,plan_stage_key), UNIQUE(owner_id,task_id), UNIQUE(owner_id,confirmation_id), CHECK((target_id IS NULL AND target_revision IS NULL AND target_digest IS NULL) OR (target_id IS NOT NULL AND target_revision IS NOT NULL AND target_revision>0 AND target_digest IS NOT NULL)), FOREIGN KEY(owner_id,run_id,project_id,plan_id,plan_revision) REFERENCES core_execution_runs(owner_id,run_id,project_id,plan_id,plan_revision) ON DELETE RESTRICT, FOREIGN KEY(owner_id,run_id,run_revision) REFERENCES core_execution_run_revisions(owner_id,run_id,revision) ON DELETE RESTRICT, FOREIGN KEY(owner_id,project_id,plan_id,plan_revision,plan_digest) REFERENCES core_execution_plan_revisions(owner_id,project_id,plan_id,revision,plan_digest) ON DELETE RESTRICT, FOREIGN KEY(owner_id,plan_id,plan_revision,plan_stage_key,stage_revision,plan_stage_digest) REFERENCES core_execution_plan_stages(owner_id,plan_id,plan_revision,stage_key,stage_revision,stage_digest) ON DELETE RESTRICT, FOREIGN KEY(owner_id,target_id,target_revision,target_digest) REFERENCES core_execution_targets(owner_id,target_id,target_revision,target_digest) ON DELETE RESTRICT)`,
+		`CREATE TABLE IF NOT EXISTS core_execution_run_stage_dependencies (owner_id TEXT NOT NULL,run_id UUID NOT NULL,stage_id UUID NOT NULL,depends_on_stage_id UUID NOT NULL,PRIMARY KEY(owner_id,run_id,stage_id,depends_on_stage_id),CHECK(stage_id<>depends_on_stage_id),FOREIGN KEY(owner_id,run_id,stage_id) REFERENCES core_execution_run_stages(owner_id,run_id,stage_id) ON DELETE RESTRICT,FOREIGN KEY(owner_id,run_id,depends_on_stage_id) REFERENCES core_execution_run_stages(owner_id,run_id,stage_id) ON DELETE RESTRICT)`,
+		`CREATE INDEX IF NOT EXISTS core_execution_run_stages_status_idx ON core_execution_run_stages(owner_id,run_id,status,ordinal)`,
+		`CREATE OR REPLACE FUNCTION core_execution_run_stage_immutable() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF TG_OP='DELETE' OR NEW.owner_id IS DISTINCT FROM OLD.owner_id OR NEW.run_id IS DISTINCT FROM OLD.run_id OR NEW.stage_id IS DISTINCT FROM OLD.stage_id OR NEW.project_id IS DISTINCT FROM OLD.project_id OR NEW.plan_id IS DISTINCT FROM OLD.plan_id OR NEW.plan_revision IS DISTINCT FROM OLD.plan_revision OR NEW.plan_digest IS DISTINCT FROM OLD.plan_digest OR NEW.run_revision IS DISTINCT FROM OLD.run_revision OR NEW.plan_stage_key IS DISTINCT FROM OLD.plan_stage_key OR NEW.stage_revision IS DISTINCT FROM OLD.stage_revision OR NEW.plan_stage_digest IS DISTINCT FROM OLD.plan_stage_digest OR NEW.created_at IS DISTINCT FROM OLD.created_at OR (OLD.started_at IS NOT NULL AND NEW.started_at IS DISTINCT FROM OLD.started_at) OR (OLD.completed_at IS NOT NULL AND NEW.completed_at IS DISTINCT FROM OLD.completed_at) OR (OLD.status IN ('running','succeeded','failed','uncertain','skipped','canceled','rejected','expired') AND NEW.status IN ('blocked','waiting_user','queued')) OR (OLD.status IN ('succeeded','failed','uncertain','skipped','canceled','rejected','expired') AND NEW.status IS DISTINCT FROM OLD.status) THEN RAISE EXCEPTION 'execution run stage identity/state is immutable'; END IF; RETURN NEW; END $$`,
+		`DROP TRIGGER IF EXISTS core_execution_run_stages_immutable ON core_execution_run_stages`, `CREATE TRIGGER core_execution_run_stages_immutable BEFORE UPDATE OR DELETE ON core_execution_run_stages FOR EACH ROW EXECUTE FUNCTION core_execution_run_stage_immutable()`,
+		`CREATE TABLE IF NOT EXISTS core_execution_step_attempts (owner_id TEXT NOT NULL, attempt_id UUID NOT NULL, run_id UUID NOT NULL, stage_id UUID NOT NULL, project_id UUID NOT NULL, plan_id UUID NOT NULL, plan_revision BIGINT NOT NULL CHECK(plan_revision>0), plan_stage_key TEXT NOT NULL, step_key TEXT NOT NULL, step_set TEXT NOT NULL DEFAULT 'forward' CHECK(step_set IN ('forward','rollback')), step_revision BIGINT NOT NULL CHECK(step_revision>0), step_digest TEXT NOT NULL CHECK(step_digest ~ '^[a-f0-9]{64}$'), attempt_no BIGINT NOT NULL CHECK(attempt_no>0), revision BIGINT NOT NULL DEFAULT 1 CHECK(revision>0), status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','queued','running','succeeded','failed','uncertain','canceled')), schema_version TEXT NOT NULL DEFAULT 'execution-step-attempt/v2' CHECK(schema_version='execution-step-attempt/v2'), input_digest TEXT CHECK(input_digest IS NULL OR input_digest ~ '^[a-f0-9]{64}$'), output_digest TEXT CHECK(output_digest IS NULL OR output_digest ~ '^[a-f0-9]{64}$'), snapshot_json JSONB NOT NULL DEFAULT '{}'::jsonb, started_at TIMESTAMPTZ, completed_at TIMESTAMPTZ, PRIMARY KEY(owner_id,attempt_id), UNIQUE(owner_id,run_id,attempt_id), UNIQUE(owner_id,run_id,stage_id,step_key,attempt_no), FOREIGN KEY(owner_id,run_id,stage_id,project_id,plan_id,plan_revision,plan_stage_key) REFERENCES core_execution_run_stages(owner_id,run_id,stage_id,project_id,plan_id,plan_revision,plan_stage_key) ON DELETE RESTRICT, FOREIGN KEY(owner_id,plan_id,plan_revision,plan_stage_key,step_set,step_key,step_revision,step_digest) REFERENCES core_execution_plan_steps(owner_id,plan_id,plan_revision,stage_key,step_set,step_key,step_revision,step_digest) ON DELETE RESTRICT)`,
+		`CREATE INDEX IF NOT EXISTS core_execution_step_attempts_run_idx ON core_execution_step_attempts(owner_id,run_id,stage_id,step_key,attempt_no DESC)`,
+		`CREATE OR REPLACE FUNCTION core_execution_step_attempt_immutable() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF TG_OP='DELETE' OR NEW.owner_id IS DISTINCT FROM OLD.owner_id OR NEW.attempt_id IS DISTINCT FROM OLD.attempt_id OR NEW.run_id IS DISTINCT FROM OLD.run_id OR NEW.stage_id IS DISTINCT FROM OLD.stage_id OR NEW.project_id IS DISTINCT FROM OLD.project_id OR NEW.plan_id IS DISTINCT FROM OLD.plan_id OR NEW.plan_revision IS DISTINCT FROM OLD.plan_revision OR NEW.plan_stage_key IS DISTINCT FROM OLD.plan_stage_key OR NEW.step_key IS DISTINCT FROM OLD.step_key OR NEW.step_revision IS DISTINCT FROM OLD.step_revision OR NEW.step_digest IS DISTINCT FROM OLD.step_digest OR (OLD.status IN ('running','succeeded','failed','uncertain','canceled') AND NEW.status IN ('pending','queued')) OR (OLD.status IN ('succeeded','failed','uncertain','canceled') AND NEW.status IS DISTINCT FROM OLD.status) THEN RAISE EXCEPTION 'execution step attempt identity/state is immutable'; END IF; RETURN NEW; END $$`,
+		`DROP TRIGGER IF EXISTS core_execution_step_attempts_immutable ON core_execution_step_attempts`, `CREATE TRIGGER core_execution_step_attempts_immutable BEFORE UPDATE OR DELETE ON core_execution_step_attempts FOR EACH ROW EXECUTE FUNCTION core_execution_step_attempt_immutable()`,
+		`CREATE TABLE IF NOT EXISTS core_execution_receipts (owner_id TEXT NOT NULL, receipt_id UUID NOT NULL, run_id UUID NOT NULL, attempt_id UUID, provider_operation_id TEXT NOT NULL DEFAULT '', command_id TEXT NOT NULL DEFAULT '', idempotency_digest TEXT NOT NULL CHECK(idempotency_digest ~ '^[a-f0-9]{64}$'), request_digest TEXT NOT NULL CHECK(request_digest ~ '^[a-f0-9]{64}$'), fence_digest TEXT NOT NULL CHECK(fence_digest ~ '^[a-f0-9]{64}$'), response_digest TEXT CHECK(response_digest IS NULL OR response_digest ~ '^[a-f0-9]{64}$'), revision BIGINT NOT NULL DEFAULT 1 CHECK(revision>0), status TEXT NOT NULL DEFAULT 'accepted' CHECK(status IN ('accepted','running','succeeded','failed','uncertain','canceled')), schema_version TEXT NOT NULL DEFAULT 'execution-receipt/v2' CHECK(schema_version='execution-receipt/v2'), snapshot_json JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(owner_id,receipt_id), UNIQUE(owner_id,run_id,receipt_id), UNIQUE(owner_id,run_id,idempotency_digest), UNIQUE(owner_id,fence_digest), FOREIGN KEY(owner_id,run_id) REFERENCES core_execution_runs(owner_id,run_id) ON DELETE RESTRICT, FOREIGN KEY(owner_id,run_id,attempt_id) REFERENCES core_execution_step_attempts(owner_id,run_id,attempt_id) ON DELETE RESTRICT)`,
+		`CREATE INDEX IF NOT EXISTS core_execution_receipts_run_idx ON core_execution_receipts(owner_id,run_id,created_at,receipt_id)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS core_execution_receipts_provider_uidx ON core_execution_receipts(owner_id,provider_operation_id) WHERE provider_operation_id<>''`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS core_execution_receipts_command_uidx ON core_execution_receipts(owner_id,command_id) WHERE command_id<>''`,
+		`CREATE OR REPLACE FUNCTION core_execution_receipt_immutable() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF TG_OP='DELETE' OR NEW.owner_id IS DISTINCT FROM OLD.owner_id OR NEW.receipt_id IS DISTINCT FROM OLD.receipt_id OR NEW.run_id IS DISTINCT FROM OLD.run_id OR NEW.attempt_id IS DISTINCT FROM OLD.attempt_id OR NEW.schema_version IS DISTINCT FROM OLD.schema_version OR NEW.created_at IS DISTINCT FROM OLD.created_at OR NEW.request_digest IS DISTINCT FROM OLD.request_digest OR NEW.fence_digest IS DISTINCT FROM OLD.fence_digest OR (OLD.provider_operation_id<>'' AND NEW.provider_operation_id IS DISTINCT FROM OLD.provider_operation_id) OR (OLD.command_id<>'' AND NEW.command_id IS DISTINCT FROM OLD.command_id) OR NEW.idempotency_digest IS DISTINCT FROM OLD.idempotency_digest OR (OLD.status='accepted' AND NEW.status NOT IN ('accepted','running','succeeded','failed','uncertain','canceled')) OR (OLD.status='running' AND NEW.status NOT IN ('running','succeeded','failed','uncertain','canceled')) OR (NEW.status IN ('succeeded','failed','canceled') AND (NEW.response_digest IS NULL OR (NEW.provider_operation_id='' AND NEW.command_id=''))) OR (NEW.status='uncertain' AND NEW.response_digest IS NULL) OR (OLD.status IN ('succeeded','failed','uncertain','canceled') AND (NEW.status IS DISTINCT FROM OLD.status OR NEW.provider_operation_id IS DISTINCT FROM OLD.provider_operation_id OR NEW.command_id IS DISTINCT FROM OLD.command_id OR NEW.response_digest IS DISTINCT FROM OLD.response_digest OR NEW.snapshot_json IS DISTINCT FROM OLD.snapshot_json OR NEW.revision IS DISTINCT FROM OLD.revision)) THEN RAISE EXCEPTION 'execution receipt pin is immutable or regressive'; END IF; RETURN NEW; END $$`,
+		`DROP TRIGGER IF EXISTS core_execution_receipts_immutable ON core_execution_receipts`, `CREATE TRIGGER core_execution_receipts_immutable BEFORE UPDATE OR DELETE ON core_execution_receipts FOR EACH ROW EXECUTE FUNCTION core_execution_receipt_immutable()`,
+		`CREATE TABLE IF NOT EXISTS core_execution_artifacts (owner_id TEXT NOT NULL, artifact_id UUID NOT NULL, project_id UUID, plan_id UUID, plan_revision BIGINT, run_id UUID, attempt_id UUID, content_digest TEXT NOT NULL CHECK(content_digest ~ '^[a-f0-9]{64}$'), storage_backend TEXT NOT NULL DEFAULT 'filesystem' CHECK(storage_backend='filesystem'), storage_ref TEXT NOT NULL CHECK(storage_ref ~ '^sha256/[a-f0-9]{2}/[a-f0-9]{64}$'), size_bytes BIGINT NOT NULL DEFAULT 0 CHECK(size_bytes>=0), media_type TEXT NOT NULL DEFAULT 'application/octet-stream', revision BIGINT NOT NULL DEFAULT 1 CHECK(revision>0), status TEXT NOT NULL DEFAULT 'available' CHECK(status IN ('pending','available','unavailable')), schema_version TEXT NOT NULL DEFAULT 'execution-artifact/v2' CHECK(schema_version='execution-artifact/v2'), metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(owner_id,artifact_id), CHECK(project_id IS NOT NULL AND plan_id IS NOT NULL AND plan_revision IS NOT NULL), CHECK((attempt_id IS NULL OR run_id IS NOT NULL) AND (run_id IS NULL OR attempt_id IS NULL OR (run_id IS NOT NULL AND attempt_id IS NOT NULL))), CHECK(right(storage_ref,64)=content_digest), FOREIGN KEY(owner_id,project_id) REFERENCES core_execution_projects(owner_id,project_id) ON DELETE RESTRICT, FOREIGN KEY(owner_id,plan_id,plan_revision) REFERENCES core_execution_plan_revisions(owner_id,plan_id,revision) ON DELETE RESTRICT, FOREIGN KEY(owner_id,run_id) REFERENCES core_execution_runs(owner_id,run_id) ON DELETE RESTRICT, FOREIGN KEY(owner_id,run_id,attempt_id) REFERENCES core_execution_step_attempts(owner_id,run_id,attempt_id) ON DELETE RESTRICT)`,
+		`CREATE INDEX IF NOT EXISTS core_execution_artifacts_scope_idx ON core_execution_artifacts(owner_id,project_id,plan_id,plan_revision,run_id,created_at)`,
+		`DROP INDEX IF EXISTS core_execution_artifacts_storage_uidx`, `CREATE INDEX IF NOT EXISTS core_execution_artifacts_storage_idx ON core_execution_artifacts(owner_id,storage_backend,storage_ref)`,
+		`CREATE OR REPLACE FUNCTION core_execution_artifact_scope_guard() RETURNS trigger LANGUAGE plpgsql AS $$ DECLARE run_project UUID; plan_project UUID; BEGIN IF TG_OP='DELETE' THEN RAISE EXCEPTION 'execution artifacts are immutable'; END IF; IF TG_OP='UPDATE' AND (NEW.owner_id IS DISTINCT FROM OLD.owner_id OR NEW.artifact_id IS DISTINCT FROM OLD.artifact_id OR NEW.project_id IS DISTINCT FROM OLD.project_id OR NEW.plan_id IS DISTINCT FROM OLD.plan_id OR NEW.plan_revision IS DISTINCT FROM OLD.plan_revision OR NEW.run_id IS DISTINCT FROM OLD.run_id OR NEW.attempt_id IS DISTINCT FROM OLD.attempt_id OR NEW.content_digest IS DISTINCT FROM OLD.content_digest OR NEW.storage_backend IS DISTINCT FROM OLD.storage_backend OR NEW.storage_ref IS DISTINCT FROM OLD.storage_ref OR NEW.size_bytes IS DISTINCT FROM OLD.size_bytes OR NEW.media_type IS DISTINCT FROM OLD.media_type OR NEW.revision IS DISTINCT FROM OLD.revision OR NEW.status IS DISTINCT FROM OLD.status OR NEW.schema_version IS DISTINCT FROM OLD.schema_version OR NEW.metadata_json IS DISTINCT FROM OLD.metadata_json OR NEW.created_at IS DISTINCT FROM OLD.created_at) THEN RAISE EXCEPTION 'artifact identity or evidence is immutable'; END IF; IF NEW.run_id IS NOT NULL THEN SELECT project_id INTO run_project FROM core_execution_runs WHERE owner_id=NEW.owner_id AND run_id=NEW.run_id; IF NEW.project_id IS DISTINCT FROM run_project THEN RAISE EXCEPTION 'artifact project/run scope mismatch'; END IF; END IF; IF NEW.plan_id IS NOT NULL THEN SELECT project_id INTO plan_project FROM core_execution_plans WHERE owner_id=NEW.owner_id AND plan_id=NEW.plan_id; IF NEW.project_id IS DISTINCT FROM plan_project THEN RAISE EXCEPTION 'artifact project/plan scope mismatch'; END IF; END IF; RETURN NEW; END $$`,
+		`DROP TRIGGER IF EXISTS core_execution_artifacts_scope_guard ON core_execution_artifacts`, `CREATE TRIGGER core_execution_artifacts_scope_guard BEFORE INSERT OR UPDATE OR DELETE ON core_execution_artifacts FOR EACH ROW EXECUTE FUNCTION core_execution_artifact_scope_guard()`,
+		`CREATE TABLE IF NOT EXISTS core_execution_service_bindings (owner_id TEXT NOT NULL, binding_id UUID NOT NULL, deployment_id UUID NOT NULL, release_id TEXT NOT NULL DEFAULT '', project_id UUID NOT NULL, run_id UUID NOT NULL, target_id UUID, target_revision BIGINT, protocol TEXT NOT NULL, endpoint TEXT NOT NULL, binding_digest TEXT NOT NULL CHECK(binding_digest ~ '^[a-f0-9]{64}$'), operation_schema_digest TEXT NOT NULL CHECK(operation_schema_digest ~ '^[a-f0-9]{64}$'), usage_artifact_id UUID, health_artifact_id UUID, revision BIGINT NOT NULL DEFAULT 1 CHECK(revision>0), status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','disabled','revoked')), schema_version TEXT NOT NULL DEFAULT 'execution-service-binding/v2' CHECK(schema_version='execution-service-binding/v2'), snapshot_json JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(owner_id,binding_id), UNIQUE(owner_id,deployment_id,protocol,endpoint), CHECK((target_id IS NULL AND target_revision IS NULL) OR (target_id IS NOT NULL AND target_revision IS NOT NULL AND target_revision>0)), FOREIGN KEY(owner_id,deployment_id) REFERENCES core_execution_deployments(owner_id,deployment_id) ON DELETE RESTRICT, FOREIGN KEY(owner_id,project_id) REFERENCES core_execution_projects(owner_id,project_id) ON DELETE RESTRICT, FOREIGN KEY(owner_id,run_id) REFERENCES core_execution_runs(owner_id,run_id) ON DELETE RESTRICT, FOREIGN KEY(owner_id,target_id,target_revision) REFERENCES core_execution_targets(owner_id,target_id,target_revision) ON DELETE RESTRICT, FOREIGN KEY(owner_id,usage_artifact_id) REFERENCES core_execution_artifacts(owner_id,artifact_id) ON DELETE RESTRICT, FOREIGN KEY(owner_id,health_artifact_id) REFERENCES core_execution_artifacts(owner_id,artifact_id) ON DELETE RESTRICT)`,
+		`CREATE TABLE IF NOT EXISTS core_execution_event_counters (
+				owner_id TEXT NOT NULL, run_id UUID NOT NULL, next_sequence BIGINT NOT NULL DEFAULT 1 CHECK(next_sequence>0), PRIMARY KEY(owner_id,run_id), FOREIGN KEY(owner_id,run_id) REFERENCES core_execution_runs(owner_id,run_id) ON DELETE CASCADE
+			)`,
+		`CREATE TABLE IF NOT EXISTS core_execution_events (owner_id TEXT NOT NULL, run_id UUID NOT NULL, event_id UUID NOT NULL, sequence BIGINT NOT NULL CHECK(sequence>0), stage_id UUID, attempt_id UUID, step_key TEXT, kind TEXT NOT NULL CHECK(kind ~ '^[a-z][a-z0-9_.-]*$'), event_key TEXT NOT NULL DEFAULT '', event_digest TEXT CHECK(event_digest IS NULL OR event_digest ~ '^[a-f0-9]{64}$'), status TEXT NOT NULL DEFAULT 'recorded' CHECK(status IN ('recorded','pending','running','succeeded','failed','uncertain','canceled')), revision BIGINT NOT NULL DEFAULT 1 CHECK(revision>0), schema_version TEXT NOT NULL DEFAULT 'execution-event/v2' CHECK(schema_version='execution-event/v2'), event_json JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(owner_id,run_id,sequence), UNIQUE(owner_id,event_id), CHECK(event_digest IS NOT NULL OR event_json ? 'digest'), FOREIGN KEY(owner_id,run_id) REFERENCES core_execution_runs(owner_id,run_id) ON DELETE RESTRICT, FOREIGN KEY(owner_id,run_id,stage_id) REFERENCES core_execution_run_stages(owner_id,run_id,stage_id) ON DELETE RESTRICT, FOREIGN KEY(owner_id,run_id,attempt_id) REFERENCES core_execution_step_attempts(owner_id,run_id,attempt_id) ON DELETE RESTRICT)`,
+		`CREATE INDEX IF NOT EXISTS core_execution_events_run_idx ON core_execution_events(owner_id,run_id,created_at,sequence)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS core_execution_events_key_uidx ON core_execution_events(owner_id,run_id,event_key) WHERE event_key<>''`,
+		`CREATE OR REPLACE FUNCTION core_execution_event_scope_guard() RETURNS trigger LANGUAGE plpgsql AS $$ DECLARE attempt_stage UUID; attempt_step TEXT; BEGIN IF NEW.attempt_id IS NOT NULL THEN SELECT stage_id,step_key INTO attempt_stage,attempt_step FROM core_execution_step_attempts WHERE owner_id=NEW.owner_id AND run_id=NEW.run_id AND attempt_id=NEW.attempt_id; IF NEW.stage_id IS DISTINCT FROM attempt_stage OR NEW.step_key IS DISTINCT FROM attempt_step THEN RAISE EXCEPTION 'event stage/attempt scope mismatch'; END IF; END IF; RETURN NEW; END $$`,
+		`DROP TRIGGER IF EXISTS core_execution_events_scope_guard ON core_execution_events`, `CREATE TRIGGER core_execution_events_scope_guard BEFORE INSERT OR UPDATE ON core_execution_events FOR EACH ROW EXECUTE FUNCTION core_execution_event_scope_guard()`,
+		`CREATE OR REPLACE FUNCTION core_execution_event_append_only() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'execution events are append-only'; END $$`,
+		`DROP TRIGGER IF EXISTS core_execution_events_append_only ON core_execution_events`, `CREATE TRIGGER core_execution_events_append_only BEFORE UPDATE OR DELETE ON core_execution_events FOR EACH ROW EXECUTE FUNCTION core_execution_event_append_only()`,
+		`CREATE TABLE IF NOT EXISTS core_execution_idempotency (owner_id TEXT NOT NULL, idempotency_id UUID NOT NULL, run_id UUID, key_digest TEXT NOT NULL CHECK(key_digest ~ '^[a-f0-9]{64}$'), request_digest TEXT NOT NULL CHECK(request_digest ~ '^[a-f0-9]{64}$'), response_digest TEXT CHECK(response_digest IS NULL OR response_digest ~ '^[a-f0-9]{64}$'), revision BIGINT NOT NULL DEFAULT 1 CHECK(revision>0), status TEXT NOT NULL DEFAULT 'accepted' CHECK(status IN ('accepted','running','succeeded','failed','uncertain','canceled')), schema_version TEXT NOT NULL DEFAULT 'execution-idempotency/v2' CHECK(schema_version='execution-idempotency/v2'), response_json JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(owner_id,idempotency_id), UNIQUE(owner_id,key_digest), CHECK(status IN ('accepted','running') OR response_digest IS NOT NULL), FOREIGN KEY(owner_id,run_id) REFERENCES core_execution_runs(owner_id,run_id) ON DELETE RESTRICT)`,
+		`CREATE INDEX IF NOT EXISTS core_execution_idempotency_run_idx ON core_execution_idempotency(owner_id,run_id,created_at) WHERE run_id IS NOT NULL`,
+		`CREATE OR REPLACE FUNCTION core_execution_idempotency_immutable() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF TG_OP='DELETE' OR NEW.owner_id IS DISTINCT FROM OLD.owner_id OR NEW.idempotency_id IS DISTINCT FROM OLD.idempotency_id OR NEW.schema_version IS DISTINCT FROM OLD.schema_version OR NEW.created_at IS DISTINCT FROM OLD.created_at OR NEW.key_digest IS DISTINCT FROM OLD.key_digest OR NEW.request_digest IS DISTINCT FROM OLD.request_digest OR NEW.run_id IS DISTINCT FROM OLD.run_id OR (OLD.response_digest IS NOT NULL AND (NEW.response_digest IS DISTINCT FROM OLD.response_digest OR NEW.response_json IS DISTINCT FROM OLD.response_json)) OR (OLD.status='accepted' AND NEW.status NOT IN ('accepted','running','succeeded','failed','uncertain','canceled')) OR (OLD.status='running' AND NEW.status NOT IN ('running','succeeded','failed','uncertain','canceled')) OR (OLD.status IN ('succeeded','failed','uncertain','canceled') AND NEW.status IS DISTINCT FROM OLD.status) OR (NEW.status IN ('succeeded','failed','uncertain','canceled') AND NEW.response_digest IS NULL) THEN RAISE EXCEPTION 'execution idempotency evidence is immutable or regressive'; END IF; RETURN NEW; END $$`,
+		`DROP TRIGGER IF EXISTS core_execution_idempotency_immutable ON core_execution_idempotency`, `CREATE TRIGGER core_execution_idempotency_immutable BEFORE UPDATE OR DELETE ON core_execution_idempotency FOR EACH ROW EXECUTE FUNCTION core_execution_idempotency_immutable()`,
+		`CREATE TABLE IF NOT EXISTS core_execution_target_mutation_leases (owner_id TEXT NOT NULL, target_id UUID NOT NULL, target_revision BIGINT NOT NULL CHECK(target_revision>0), lease_id UUID NOT NULL, run_id UUID, stage_id UUID, provider_operation_id TEXT NOT NULL DEFAULT '', receipt_id UUID, token UUID, epoch BIGINT NOT NULL DEFAULT 0 CHECK(epoch>=0), expires_at TIMESTAMPTZ, revision BIGINT NOT NULL DEFAULT 1 CHECK(revision>0), status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','uncertain','released')), schema_version TEXT NOT NULL DEFAULT 'execution-target-lease/v2' CHECK(schema_version='execution-target-lease/v2'), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(owner_id,target_id,target_revision), UNIQUE(owner_id,lease_id), CHECK((status='uncertain' AND run_id IS NOT NULL AND receipt_id IS NOT NULL) OR status<>'uncertain'), CHECK((status<>'active') OR (run_id IS NOT NULL AND token IS NOT NULL AND expires_at IS NOT NULL)), FOREIGN KEY(owner_id,target_id,target_revision) REFERENCES core_execution_targets(owner_id,target_id,target_revision) ON DELETE RESTRICT, FOREIGN KEY(owner_id,run_id) REFERENCES core_execution_runs(owner_id,run_id) ON DELETE RESTRICT, FOREIGN KEY(owner_id,run_id,stage_id) REFERENCES core_execution_run_stages(owner_id,run_id,stage_id) ON DELETE RESTRICT, FOREIGN KEY(owner_id,run_id,receipt_id) REFERENCES core_execution_receipts(owner_id,run_id,receipt_id) ON DELETE RESTRICT)`,
+		`CREATE INDEX IF NOT EXISTS core_execution_target_mutation_leases_expiry_idx ON core_execution_target_mutation_leases(owner_id,target_id,target_revision,expires_at)`,
+		`CREATE TABLE IF NOT EXISTS core_execution_dispatch_intents (owner_id TEXT NOT NULL, intent_id UUID NOT NULL, run_id UUID NOT NULL, stage_id UUID NOT NULL, attempt_id UUID NOT NULL, receipt_id UUID NOT NULL, task_id UUID NOT NULL, task_lease_epoch BIGINT NOT NULL CHECK(task_lease_epoch>0), target_id UUID NOT NULL, target_revision BIGINT NOT NULL CHECK(target_revision>0), target_digest TEXT NOT NULL CHECK(target_digest ~ '^[a-f0-9]{64}$'), plan_id UUID NOT NULL, plan_revision BIGINT NOT NULL CHECK(plan_revision>0), plan_digest TEXT NOT NULL CHECK(plan_digest ~ '^[a-f0-9]{64}$'), stage_revision BIGINT NOT NULL CHECK(stage_revision>0), stage_digest TEXT NOT NULL CHECK(stage_digest ~ '^[a-f0-9]{64}$'), step_key TEXT NOT NULL, step_set TEXT NOT NULL CHECK(step_set IN ('forward','rollback')), step_revision BIGINT NOT NULL CHECK(step_revision>0), step_digest TEXT NOT NULL CHECK(step_digest ~ '^[a-f0-9]{64}$'), attempt_no BIGINT NOT NULL CHECK(attempt_no>0), lease_id UUID NOT NULL, lease_token UUID NOT NULL, lease_epoch BIGINT NOT NULL CHECK(lease_epoch>0), request_digest TEXT NOT NULL CHECK(request_digest ~ '^[a-f0-9]{64}$'), fence_digest TEXT NOT NULL CHECK(fence_digest ~ '^[a-f0-9]{64}$'), status TEXT NOT NULL DEFAULT 'intent' CHECK(status IN ('intent','uncertain','accepted','succeeded','failed','canceled')), revision BIGINT NOT NULL DEFAULT 1 CHECK(revision>0), schema_version TEXT NOT NULL DEFAULT 'execution-dispatch-intent/v2' CHECK(schema_version='execution-dispatch-intent/v2'), snapshot_json JSONB NOT NULL CHECK(jsonb_typeof(snapshot_json)='object' AND snapshot_json<>'{}'::jsonb), created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(owner_id,intent_id), UNIQUE(owner_id,fence_digest), UNIQUE(owner_id,run_id,stage_id,step_key,step_set,attempt_no), FOREIGN KEY(owner_id,run_id,stage_id) REFERENCES core_execution_run_stages(owner_id,run_id,stage_id) ON DELETE RESTRICT, FOREIGN KEY(owner_id,run_id,attempt_id) REFERENCES core_execution_step_attempts(owner_id,run_id,attempt_id) ON DELETE RESTRICT, FOREIGN KEY(owner_id,run_id,receipt_id) REFERENCES core_execution_receipts(owner_id,run_id,receipt_id) ON DELETE RESTRICT, FOREIGN KEY(owner_id,task_id) REFERENCES agent_tasks(owner_id,task_id) ON DELETE RESTRICT, FOREIGN KEY(owner_id,target_id,target_revision) REFERENCES core_execution_targets(owner_id,target_id,target_revision) ON DELETE RESTRICT, FOREIGN KEY(owner_id,lease_id) REFERENCES core_execution_target_mutation_leases(owner_id,lease_id) ON DELETE RESTRICT)`,
+		`CREATE INDEX IF NOT EXISTS core_execution_dispatch_intents_run_idx ON core_execution_dispatch_intents(owner_id,run_id,stage_id,status,created_at)`,
+		`CREATE OR REPLACE FUNCTION core_execution_dispatch_intent_immutable() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF TG_OP='DELETE' OR NEW.owner_id IS DISTINCT FROM OLD.owner_id OR NEW.intent_id IS DISTINCT FROM OLD.intent_id OR NEW.run_id IS DISTINCT FROM OLD.run_id OR NEW.stage_id IS DISTINCT FROM OLD.stage_id OR NEW.attempt_id IS DISTINCT FROM OLD.attempt_id OR NEW.receipt_id IS DISTINCT FROM OLD.receipt_id OR NEW.task_id IS DISTINCT FROM OLD.task_id OR NEW.task_lease_epoch IS DISTINCT FROM OLD.task_lease_epoch OR NEW.target_id IS DISTINCT FROM OLD.target_id OR NEW.target_revision IS DISTINCT FROM OLD.target_revision OR NEW.target_digest IS DISTINCT FROM OLD.target_digest OR NEW.plan_id IS DISTINCT FROM OLD.plan_id OR NEW.plan_revision IS DISTINCT FROM OLD.plan_revision OR NEW.plan_digest IS DISTINCT FROM OLD.plan_digest OR NEW.stage_revision IS DISTINCT FROM OLD.stage_revision OR NEW.stage_digest IS DISTINCT FROM OLD.stage_digest OR NEW.step_key IS DISTINCT FROM OLD.step_key OR NEW.step_set IS DISTINCT FROM OLD.step_set OR NEW.step_revision IS DISTINCT FROM OLD.step_revision OR NEW.step_digest IS DISTINCT FROM OLD.step_digest OR NEW.attempt_no IS DISTINCT FROM OLD.attempt_no OR NEW.lease_id IS DISTINCT FROM OLD.lease_id OR NEW.lease_token IS DISTINCT FROM OLD.lease_token OR NEW.lease_epoch IS DISTINCT FROM OLD.lease_epoch OR NEW.request_digest IS DISTINCT FROM OLD.request_digest OR NEW.fence_digest IS DISTINCT FROM OLD.fence_digest OR NEW.schema_version IS DISTINCT FROM OLD.schema_version OR NEW.snapshot_json IS DISTINCT FROM OLD.snapshot_json OR NEW.created_at IS DISTINCT FROM OLD.created_at OR (OLD.status='intent' AND NEW.status NOT IN ('intent','accepted','uncertain','succeeded','failed','canceled')) OR (OLD.status='accepted' AND NEW.status NOT IN ('accepted','uncertain','succeeded','failed','canceled')) OR (OLD.status='uncertain' AND NEW.status IS DISTINCT FROM 'uncertain') OR (OLD.status IN ('succeeded','failed','canceled') AND NEW.status IS DISTINCT FROM OLD.status) THEN RAISE EXCEPTION 'execution dispatch intent identity/state is immutable or regressive'; END IF; RETURN NEW; END $$`,
+		`DROP TRIGGER IF EXISTS core_execution_dispatch_intents_immutable ON core_execution_dispatch_intents`, `CREATE TRIGGER core_execution_dispatch_intents_immutable BEFORE UPDATE OR DELETE ON core_execution_dispatch_intents FOR EACH ROW EXECUTE FUNCTION core_execution_dispatch_intent_immutable()`,
+		`CREATE TABLE IF NOT EXISTS core_execution_secret_parameter_intents (owner_id TEXT NOT NULL CHECK(owner_id<>''),fence_digest TEXT NOT NULL CHECK(fence_digest ~ '^[a-f0-9]{64}$'),request_digest TEXT NOT NULL CHECK(request_digest ~ '^[a-f0-9]{64}$'),parameter_name TEXT NOT NULL CHECK(parameter_name ~ '^/dirextalk/execution-v2/[0-9a-f-]{36}/[0-9a-f-]{36}/[a-f0-9]{32}$'),run_id UUID NOT NULL,provision_stage_id UUID NOT NULL,provision_attempt_id UUID NOT NULL,target_id UUID NOT NULL,target_revision BIGINT NOT NULL CHECK(target_revision>0),target_digest TEXT NOT NULL CHECK(target_digest ~ '^[a-f0-9]{64}$'),secret_ref UUID NOT NULL,secret_revision BIGINT NOT NULL CHECK(secret_revision>0),secret_purpose TEXT NOT NULL CHECK(secret_purpose='ai_provider_api_key'),secret_binding_digest TEXT NOT NULL CHECK(secret_binding_digest ~ '^[a-f0-9]{64}$'),confirmation_id UUID NOT NULL,status TEXT NOT NULL DEFAULT 'reserved' CHECK(status IN ('reserved','versioned','uncertain','completed','revoked')),provider_version BIGINT NOT NULL DEFAULT 0 CHECK(provider_version>=0),revision BIGINT NOT NULL DEFAULT 1 CHECK(revision>0),schema_version TEXT NOT NULL DEFAULT 'execution-secret-parameter-intent/v1' CHECK(schema_version='execution-secret-parameter-intent/v1'),request_json JSONB NOT NULL CHECK(jsonb_typeof(request_json)='object' AND request_json<>'{}'::jsonb),lease_json JSONB,lease_digest TEXT CHECK(lease_digest IS NULL OR lease_digest ~ '^[a-f0-9]{64}$'),created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),PRIMARY KEY(owner_id,fence_digest),UNIQUE(owner_id,parameter_name),CHECK((lease_json IS NULL)=(lease_digest IS NULL)),CHECK(status NOT IN ('versioned','completed') OR provider_version>0),CHECK(status<>'completed' OR lease_json IS NOT NULL),FOREIGN KEY(owner_id,fence_digest) REFERENCES core_execution_dispatch_intents(owner_id,fence_digest) ON DELETE RESTRICT,FOREIGN KEY(owner_id,run_id,provision_stage_id) REFERENCES core_execution_run_stages(owner_id,run_id,stage_id) ON DELETE RESTRICT,FOREIGN KEY(owner_id,run_id,provision_attempt_id) REFERENCES core_execution_step_attempts(owner_id,run_id,attempt_id) ON DELETE RESTRICT,FOREIGN KEY(owner_id,target_id,target_revision,target_digest) REFERENCES core_execution_targets(owner_id,target_id,target_revision,target_digest) ON DELETE RESTRICT,FOREIGN KEY(owner_id,secret_ref,secret_revision) REFERENCES core_execution_secrets(owner_id,secret_ref,revision) ON DELETE RESTRICT,FOREIGN KEY(owner_id,confirmation_id) REFERENCES agent_confirmations(owner_id,confirmation_id) ON DELETE RESTRICT)`,
+		`CREATE INDEX IF NOT EXISTS core_execution_secret_parameter_intents_run_idx ON core_execution_secret_parameter_intents(owner_id,run_id,provision_stage_id,status,updated_at)`,
+		`CREATE INDEX IF NOT EXISTS core_execution_secret_parameter_intents_secret_idx ON core_execution_secret_parameter_intents(owner_id,secret_ref,secret_revision,status)`,
+		`CREATE OR REPLACE FUNCTION core_execution_secret_parameter_intent_guard() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF TG_OP='DELETE' OR NEW.owner_id IS DISTINCT FROM OLD.owner_id OR NEW.fence_digest IS DISTINCT FROM OLD.fence_digest OR NEW.request_digest IS DISTINCT FROM OLD.request_digest OR NEW.parameter_name IS DISTINCT FROM OLD.parameter_name OR NEW.run_id IS DISTINCT FROM OLD.run_id OR NEW.provision_stage_id IS DISTINCT FROM OLD.provision_stage_id OR NEW.provision_attempt_id IS DISTINCT FROM OLD.provision_attempt_id OR NEW.target_id IS DISTINCT FROM OLD.target_id OR NEW.target_revision IS DISTINCT FROM OLD.target_revision OR NEW.target_digest IS DISTINCT FROM OLD.target_digest OR NEW.secret_ref IS DISTINCT FROM OLD.secret_ref OR NEW.secret_revision IS DISTINCT FROM OLD.secret_revision OR NEW.secret_purpose IS DISTINCT FROM OLD.secret_purpose OR NEW.secret_binding_digest IS DISTINCT FROM OLD.secret_binding_digest OR NEW.confirmation_id IS DISTINCT FROM OLD.confirmation_id OR NEW.schema_version IS DISTINCT FROM OLD.schema_version OR NEW.request_json IS DISTINCT FROM OLD.request_json OR NEW.created_at IS DISTINCT FROM OLD.created_at OR NEW.revision<>OLD.revision+1 OR (OLD.provider_version>0 AND NEW.provider_version IS DISTINCT FROM OLD.provider_version) OR (OLD.lease_json IS NOT NULL AND (NEW.lease_json IS DISTINCT FROM OLD.lease_json OR NEW.lease_digest IS DISTINCT FROM OLD.lease_digest)) OR (OLD.status='reserved' AND NEW.status NOT IN ('reserved','versioned','uncertain','revoked')) OR (OLD.status='versioned' AND NEW.status NOT IN ('versioned','uncertain','completed','revoked')) OR (OLD.status='uncertain' AND NEW.status NOT IN ('uncertain','completed','revoked')) OR (OLD.status='completed' AND NEW.status NOT IN ('completed','revoked')) OR (OLD.status='revoked' AND NEW.status<>'revoked') THEN RAISE EXCEPTION 'secret parameter intent identity/evidence is immutable or regressive'; END IF; RETURN NEW; END $$`,
+		`DROP TRIGGER IF EXISTS core_execution_secret_parameter_intents_guard ON core_execution_secret_parameter_intents`, `CREATE TRIGGER core_execution_secret_parameter_intents_guard BEFORE UPDATE OR DELETE ON core_execution_secret_parameter_intents FOR EACH ROW EXECUTE FUNCTION core_execution_secret_parameter_intent_guard()`,
+		`CREATE TABLE IF NOT EXISTS core_execution_ec2_provision_intents (owner_id TEXT NOT NULL CHECK(owner_id<>''),fence_digest TEXT NOT NULL CHECK(fence_digest ~ '^[a-f0-9]{64}$'),request_digest TEXT NOT NULL CHECK(request_digest ~ '^[a-f0-9]{64}$'),provider_operation_key TEXT NOT NULL CHECK(provider_operation_key<>''),provider_operation_id TEXT NOT NULL DEFAULT '',run_id UUID NOT NULL,stage_id UUID NOT NULL,attempt_id UUID NOT NULL,receipt_id UUID NOT NULL,target_id UUID NOT NULL,target_revision BIGINT NOT NULL CHECK(target_revision=1),target_digest TEXT NOT NULL CHECK(target_digest ~ '^[a-f0-9]{64}$'),plan_id UUID NOT NULL,plan_revision BIGINT NOT NULL CHECK(plan_revision>0),plan_digest TEXT NOT NULL CHECK(plan_digest ~ '^[a-f0-9]{64}$'),policy_digest TEXT NOT NULL CHECK(policy_digest ~ '^[a-f0-9]{64}$'),cost_quote_digest TEXT NOT NULL CHECK(cost_quote_digest ~ '^[a-f0-9]{64}$'),status TEXT NOT NULL DEFAULT 'intent' CHECK(status IN ('intent','accepted','pending','uncertain','succeeded','failed')),revision BIGINT NOT NULL DEFAULT 1 CHECK(revision>0),schema_version TEXT NOT NULL DEFAULT 'execution-ec2-provision-intent/v2' CHECK(schema_version='execution-ec2-provision-intent/v2'),request_json JSONB NOT NULL CHECK(jsonb_typeof(request_json)='object' AND request_json<>'{}'::jsonb),readback_digest TEXT CHECK(readback_digest IS NULL OR readback_digest ~ '^[a-f0-9]{64}$'),readback_json JSONB,CHECK((readback_digest IS NULL)=(readback_json IS NULL)),created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),PRIMARY KEY(owner_id,fence_digest),UNIQUE(owner_id,provider_operation_key),FOREIGN KEY(owner_id,fence_digest) REFERENCES core_execution_dispatch_intents(owner_id,fence_digest) ON DELETE RESTRICT,FOREIGN KEY(owner_id,run_id,stage_id) REFERENCES core_execution_run_stages(owner_id,run_id,stage_id) ON DELETE RESTRICT,FOREIGN KEY(owner_id,run_id,attempt_id) REFERENCES core_execution_step_attempts(owner_id,run_id,attempt_id) ON DELETE RESTRICT,FOREIGN KEY(owner_id,run_id,receipt_id) REFERENCES core_execution_receipts(owner_id,run_id,receipt_id) ON DELETE RESTRICT,FOREIGN KEY(owner_id,target_id,target_revision,target_digest) REFERENCES core_execution_targets(owner_id,target_id,target_revision,target_digest) ON DELETE RESTRICT,FOREIGN KEY(owner_id,plan_id,plan_revision) REFERENCES core_execution_plan_revisions(owner_id,plan_id,revision) ON DELETE RESTRICT)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS core_execution_ec2_provision_provider_uidx ON core_execution_ec2_provision_intents(owner_id,provider_operation_id) WHERE provider_operation_id<>''`,
+		`CREATE INDEX IF NOT EXISTS core_execution_ec2_provision_intents_run_idx ON core_execution_ec2_provision_intents(owner_id,run_id,stage_id,status,updated_at)`,
+		`CREATE OR REPLACE FUNCTION core_execution_ec2_provision_intent_guard() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF TG_OP='DELETE' OR NEW.owner_id IS DISTINCT FROM OLD.owner_id OR NEW.fence_digest IS DISTINCT FROM OLD.fence_digest OR NEW.request_digest IS DISTINCT FROM OLD.request_digest OR NEW.provider_operation_key IS DISTINCT FROM OLD.provider_operation_key OR NEW.run_id IS DISTINCT FROM OLD.run_id OR NEW.stage_id IS DISTINCT FROM OLD.stage_id OR NEW.attempt_id IS DISTINCT FROM OLD.attempt_id OR NEW.receipt_id IS DISTINCT FROM OLD.receipt_id OR NEW.target_id IS DISTINCT FROM OLD.target_id OR NEW.target_revision IS DISTINCT FROM OLD.target_revision OR NEW.target_digest IS DISTINCT FROM OLD.target_digest OR NEW.plan_id IS DISTINCT FROM OLD.plan_id OR NEW.plan_revision IS DISTINCT FROM OLD.plan_revision OR NEW.plan_digest IS DISTINCT FROM OLD.plan_digest OR NEW.policy_digest IS DISTINCT FROM OLD.policy_digest OR NEW.cost_quote_digest IS DISTINCT FROM OLD.cost_quote_digest OR NEW.schema_version IS DISTINCT FROM OLD.schema_version OR NEW.request_json IS DISTINCT FROM OLD.request_json OR NEW.created_at IS DISTINCT FROM OLD.created_at OR NEW.revision<>OLD.revision+1 OR (OLD.provider_operation_id<>'' AND NEW.provider_operation_id IS DISTINCT FROM OLD.provider_operation_id) OR (OLD.status='intent' AND NEW.status NOT IN ('intent','accepted','pending','uncertain','succeeded','failed')) OR (OLD.status='accepted' AND NEW.status NOT IN ('accepted','pending','uncertain','succeeded','failed')) OR (OLD.status='pending' AND NEW.status NOT IN ('pending','uncertain','succeeded','failed')) OR (OLD.status='uncertain' AND NEW.status NOT IN ('uncertain','succeeded','failed')) OR (OLD.status IN ('succeeded','failed') AND (NEW.status IS DISTINCT FROM OLD.status OR NEW.readback_digest IS DISTINCT FROM OLD.readback_digest OR NEW.readback_json IS DISTINCT FROM OLD.readback_json)) THEN RAISE EXCEPTION 'ec2 provision intent identity/evidence is immutable or regressive'; END IF; RETURN NEW; END $$`,
+		`DROP TRIGGER IF EXISTS core_execution_ec2_provision_intents_guard ON core_execution_ec2_provision_intents`, `CREATE TRIGGER core_execution_ec2_provision_intents_guard BEFORE UPDATE OR DELETE ON core_execution_ec2_provision_intents FOR EACH ROW EXECUTE FUNCTION core_execution_ec2_provision_intent_guard()`,
+	}); err != nil {
+		return err
+	}
+	if err := execMigrationStatements(ctx, txn, []string{
+		`CREATE TABLE IF NOT EXISTS core_execution_runtime_concurrency (singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK(singleton),running_count BIGINT NOT NULL DEFAULT 0 CHECK(running_count>=0),max_concurrent BIGINT NOT NULL DEFAULT 1 CHECK(max_concurrent>0),revision BIGINT NOT NULL DEFAULT 1 CHECK(revision>0),updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`,
+		`CREATE TABLE IF NOT EXISTS core_execution_reconciliation_resolutions (owner_id TEXT NOT NULL,run_id UUID NOT NULL,stage_id UUID NOT NULL,lease_id UUID NOT NULL,token UUID NOT NULL,epoch BIGINT NOT NULL CHECK(epoch>=0),receipt_id UUID NOT NULL,provider_operation_id TEXT NOT NULL,request_digest TEXT NOT NULL CHECK(request_digest ~ '^[a-f0-9]{64}$'),outcome TEXT NOT NULL CHECK(outcome IN ('succeeded','failed','uncertain','canceled')),outcome_digest TEXT NOT NULL CHECK(outcome_digest ~ '^[a-f0-9]{64}$'),observed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),PRIMARY KEY(owner_id,run_id,stage_id,lease_id,epoch),UNIQUE(owner_id,run_id,stage_id,request_digest),FOREIGN KEY(owner_id,run_id,stage_id) REFERENCES core_execution_run_stages(owner_id,run_id,stage_id) ON DELETE RESTRICT,FOREIGN KEY(owner_id,run_id,receipt_id) REFERENCES core_execution_receipts(owner_id,run_id,receipt_id) ON DELETE RESTRICT,FOREIGN KEY(owner_id,lease_id) REFERENCES core_execution_target_mutation_leases(owner_id,lease_id) ON DELETE RESTRICT)`,
+		`CREATE OR REPLACE FUNCTION core_execution_run_stage_task_scope_guard() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.task_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM agent_tasks WHERE owner_id=NEW.owner_id AND task_id=NEW.task_id AND spec_json->>'kind'='execution_stage') THEN RAISE EXCEPTION 'execution stage task must be owner-scoped execution_stage'; END IF; IF NEW.confirmation_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM agent_confirmations WHERE owner_id=NEW.owner_id AND confirmation_id=NEW.confirmation_id AND task_id=NEW.task_id) THEN RAISE EXCEPTION 'execution stage confirmation must bind its owner-scoped task'; END IF; RETURN NEW; END $$`,
+		`CREATE OR REPLACE FUNCTION core_execution_run_stage_exact_scope_guard() RETURNS trigger LANGUAGE plpgsql AS $$ DECLARE p JSONB; b JSONB; BEGIN IF NEW.task_id IS NOT NULL THEN SELECT spec_json->'payload'->'execution_stage' INTO p FROM agent_tasks WHERE owner_id=NEW.owner_id AND task_id=NEW.task_id; IF p IS NULL OR p->>'plan_id'<>NEW.plan_id::text OR (p->>'plan_revision')::bigint<>NEW.plan_revision OR p->>'plan_digest' IS DISTINCT FROM NEW.plan_digest OR p->>'run_id'<>NEW.run_id::text OR COALESCE(p->>'run_revision','') IS DISTINCT FROM NEW.run_revision::text OR p->>'stage_id'<>NEW.stage_id::text OR (p->>'stage_revision')::bigint<>NEW.stage_revision OR p->>'stage_digest'<>NEW.plan_stage_digest OR p->>'target_id' IS DISTINCT FROM COALESCE(NEW.target_id::text,'') OR COALESCE(p->>'target_revision','') IS DISTINCT FROM COALESCE(NEW.target_revision::text,'') OR p->>'target_digest' IS DISTINCT FROM COALESCE(NEW.target_digest,'') THEN RAISE EXCEPTION 'execution stage task immutable scope mismatch'; END IF; END IF; IF NEW.confirmation_id IS NOT NULL THEN SELECT binding_json INTO b FROM agent_confirmations WHERE owner_id=NEW.owner_id AND confirmation_id=NEW.confirmation_id; IF b->>'plan_id'<>NEW.plan_id::text OR (b->>'plan_revision')::bigint<>NEW.plan_revision OR b->>'plan_digest' IS DISTINCT FROM NEW.plan_digest OR b->>'run_id'<>NEW.run_id::text OR COALESCE(b->>'run_revision','') IS DISTINCT FROM NEW.run_revision::text OR b->>'stage_id'<>NEW.stage_id::text OR (b->>'stage_revision')::bigint<>NEW.stage_revision OR b->>'stage_digest'<>NEW.plan_stage_digest OR b->>'target_id' IS DISTINCT FROM COALESCE(NEW.target_id::text,'') OR COALESCE(b->>'target_revision','') IS DISTINCT FROM COALESCE(NEW.target_revision::text,'') OR b->>'target_digest' IS DISTINCT FROM COALESCE(NEW.target_digest,'') THEN RAISE EXCEPTION 'execution confirmation binding scope mismatch'; END IF; END IF; RETURN NEW; END $$`,
+		`CREATE TRIGGER core_execution_run_stages_exact_scope_guard BEFORE INSERT OR UPDATE ON core_execution_run_stages FOR EACH ROW EXECUTE FUNCTION core_execution_run_stage_exact_scope_guard()`,
+		`CREATE OR REPLACE FUNCTION core_execution_confirmation_preview_guard() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.operation_domain LIKE 'execution:v2%' AND (NEW.preview_digest IS NULL OR NEW.binding_json->>'preview_digest' IS DISTINCT FROM NEW.preview_digest OR NEW.binding_json->>'plan_id'='' OR NEW.binding_json->>'run_id'='' OR NEW.binding_json->>'stage_id'='') THEN RAISE EXCEPTION 'execution confirmation preview/binding mismatch'; END IF; RETURN NEW; END $$`,
+		`CREATE TRIGGER agent_confirmations_execution_preview_guard BEFORE INSERT OR UPDATE ON agent_confirmations FOR EACH ROW EXECUTE FUNCTION core_execution_confirmation_preview_guard()`,
+		`CREATE TRIGGER core_execution_run_stages_task_scope_guard BEFORE INSERT OR UPDATE ON core_execution_run_stages FOR EACH ROW EXECUTE FUNCTION core_execution_run_stage_task_scope_guard()`,
+		`CREATE OR REPLACE FUNCTION core_execution_reconciliation_scope_guard() RETURNS trigger LANGUAGE plpgsql AS $$ DECLARE lease core_execution_target_mutation_leases%ROWTYPE; receipt core_execution_receipts%ROWTYPE; BEGIN IF TG_OP<>'INSERT' THEN RAISE EXCEPTION 'execution reconciliation resolutions are append-only'; END IF; SELECT * INTO lease FROM core_execution_target_mutation_leases WHERE owner_id=NEW.owner_id AND lease_id=NEW.lease_id; IF NOT FOUND THEN RAISE EXCEPTION 'reconciliation resolution must match uncertain lease and receipt evidence'; END IF; SELECT * INTO receipt FROM core_execution_receipts WHERE owner_id=NEW.owner_id AND run_id=NEW.run_id AND receipt_id=NEW.receipt_id; IF NOT FOUND OR lease.status IS DISTINCT FROM 'uncertain' OR lease.run_id IS DISTINCT FROM NEW.run_id OR lease.stage_id IS DISTINCT FROM NEW.stage_id OR lease.receipt_id IS DISTINCT FROM NEW.receipt_id OR lease.token IS DISTINCT FROM NEW.token OR lease.epoch IS DISTINCT FROM NEW.epoch OR lease.provider_operation_id IS DISTINCT FROM NEW.provider_operation_id OR receipt.status IS DISTINCT FROM 'uncertain' OR receipt.provider_operation_id IS DISTINCT FROM NEW.provider_operation_id OR receipt.request_digest IS DISTINCT FROM NEW.request_digest THEN RAISE EXCEPTION 'reconciliation resolution must match uncertain lease and receipt evidence'; END IF; RETURN NEW; END $$`,
+		`CREATE TRIGGER core_execution_reconciliation_scope_guard BEFORE INSERT OR UPDATE OR DELETE ON core_execution_reconciliation_resolutions FOR EACH ROW EXECUTE FUNCTION core_execution_reconciliation_scope_guard()`,
+	}); err != nil {
+		return err
+	}
+	return execMigrationStatements(ctx, txn, []string{
+		`CREATE OR REPLACE FUNCTION core_execution_run_immutable() RETURNS trigger LANGUAGE plpgsql AS $$ DECLARE reconciled BOOLEAN; BEGIN SELECT EXISTS(SELECT 1 FROM core_execution_reconciliation_resolutions r WHERE r.owner_id=OLD.owner_id AND r.run_id=OLD.run_id AND r.stage_id=OLD.current_stage_id AND (NEW.status='running' OR r.outcome=NEW.status)) INTO reconciled; IF TG_OP='DELETE' OR NEW.owner_id IS DISTINCT FROM OLD.owner_id OR NEW.run_id IS DISTINCT FROM OLD.run_id OR NEW.project_id IS DISTINCT FROM OLD.project_id OR NEW.plan_id IS DISTINCT FROM OLD.plan_id OR NEW.plan_revision IS DISTINCT FROM OLD.plan_revision OR NEW.rollback_of_run_id IS DISTINCT FROM OLD.rollback_of_run_id OR NEW.deployment_id IS DISTINCT FROM OLD.deployment_id OR NEW.operation IS DISTINCT FROM OLD.operation OR NEW.purpose IS DISTINCT FROM OLD.purpose OR NEW.trigger_kind IS DISTINCT FROM OLD.trigger_kind OR NEW.plan_digest IS DISTINCT FROM OLD.plan_digest OR NEW.schema_version IS DISTINCT FROM OLD.schema_version OR NEW.run_digest IS DISTINCT FROM OLD.run_digest OR NEW.created_at IS DISTINCT FROM OLD.created_at OR NEW.revision<>OLD.revision+1 OR (OLD.started_at IS NOT NULL AND NEW.started_at IS DISTINCT FROM OLD.started_at) OR (OLD.completed_at IS NOT NULL AND NEW.completed_at IS DISTINCT FROM OLD.completed_at AND NOT reconciled) OR (OLD.terminal_reason<>'' AND NEW.terminal_reason IS DISTINCT FROM OLD.terminal_reason AND NOT reconciled) OR (OLD.status IN ('running','succeeded','failed','uncertain','canceled','rejected','expired') AND NEW.status IN ('pending','waiting_user','queued')) OR (OLD.status='uncertain' AND NEW.status IS DISTINCT FROM OLD.status AND NOT reconciled) OR (OLD.status IN ('succeeded','failed','canceled','rejected','expired') AND NEW.status IS DISTINCT FROM OLD.status) THEN RAISE EXCEPTION 'execution run identity/lifecycle is immutable or revision is not consecutive'; END IF; RETURN NEW; END $$`,
+		`CREATE OR REPLACE FUNCTION core_execution_run_stage_immutable() RETURNS trigger LANGUAGE plpgsql AS $$ DECLARE reconciled BOOLEAN; BEGIN SELECT EXISTS(SELECT 1 FROM core_execution_reconciliation_resolutions r WHERE r.owner_id=OLD.owner_id AND r.run_id=OLD.run_id AND r.stage_id=OLD.stage_id AND r.outcome=NEW.status) INTO reconciled; IF TG_OP='DELETE' OR NEW.owner_id IS DISTINCT FROM OLD.owner_id OR NEW.run_id IS DISTINCT FROM OLD.run_id OR NEW.stage_id IS DISTINCT FROM OLD.stage_id OR NEW.project_id IS DISTINCT FROM OLD.project_id OR NEW.plan_id IS DISTINCT FROM OLD.plan_id OR NEW.plan_revision IS DISTINCT FROM OLD.plan_revision OR NEW.plan_digest IS DISTINCT FROM OLD.plan_digest OR NEW.run_revision IS DISTINCT FROM OLD.run_revision OR NEW.plan_stage_key IS DISTINCT FROM OLD.plan_stage_key OR NEW.stage_revision IS DISTINCT FROM OLD.stage_revision OR NEW.plan_stage_digest IS DISTINCT FROM OLD.plan_stage_digest OR NEW.created_at IS DISTINCT FROM OLD.created_at OR (OLD.started_at IS NOT NULL AND NEW.started_at IS DISTINCT FROM OLD.started_at) OR (OLD.completed_at IS NOT NULL AND NEW.completed_at IS DISTINCT FROM OLD.completed_at) OR (OLD.status IN ('running','succeeded','failed','uncertain','skipped','canceled','rejected','expired') AND NEW.status IN ('blocked','waiting_user','queued')) OR (OLD.status='uncertain' AND NEW.status IS DISTINCT FROM OLD.status AND NOT reconciled) OR (OLD.status IN ('succeeded','failed','skipped','canceled','rejected','expired') AND NEW.status IS DISTINCT FROM OLD.status) THEN RAISE EXCEPTION 'execution run stage identity/state is immutable'; END IF; RETURN NEW; END $$`,
+		`CREATE OR REPLACE FUNCTION core_execution_step_attempt_immutable() RETURNS trigger LANGUAGE plpgsql AS $$ DECLARE reconciled BOOLEAN; BEGIN SELECT EXISTS(SELECT 1 FROM core_execution_reconciliation_resolutions r JOIN core_execution_receipts receipt ON receipt.owner_id=r.owner_id AND receipt.run_id=r.run_id AND receipt.receipt_id=r.receipt_id WHERE r.owner_id=OLD.owner_id AND r.run_id=OLD.run_id AND r.stage_id=OLD.stage_id AND receipt.attempt_id=OLD.attempt_id AND r.outcome=NEW.status) INTO reconciled; IF TG_OP='DELETE' OR NEW.owner_id IS DISTINCT FROM OLD.owner_id OR NEW.attempt_id IS DISTINCT FROM OLD.attempt_id OR NEW.run_id IS DISTINCT FROM OLD.run_id OR NEW.stage_id IS DISTINCT FROM OLD.stage_id OR NEW.project_id IS DISTINCT FROM OLD.project_id OR NEW.plan_id IS DISTINCT FROM OLD.plan_id OR NEW.plan_revision IS DISTINCT FROM OLD.plan_revision OR NEW.plan_stage_key IS DISTINCT FROM OLD.plan_stage_key OR NEW.step_key IS DISTINCT FROM OLD.step_key OR NEW.step_revision IS DISTINCT FROM OLD.step_revision OR NEW.step_digest IS DISTINCT FROM OLD.step_digest OR NEW.revision<>OLD.revision+1 OR (OLD.status IN ('running','succeeded','failed','uncertain','canceled') AND NEW.status IN ('pending','queued')) OR (OLD.status='uncertain' AND NEW.status IS DISTINCT FROM OLD.status AND NOT reconciled) OR (OLD.status IN ('succeeded','failed','canceled') AND NEW.status IS DISTINCT FROM OLD.status) THEN RAISE EXCEPTION 'execution step attempt identity/state is immutable'; END IF; RETURN NEW; END $$`,
+		`CREATE OR REPLACE FUNCTION core_execution_receipt_immutable() RETURNS trigger LANGUAGE plpgsql AS $$ DECLARE reconciled BOOLEAN; BEGIN SELECT EXISTS(SELECT 1 FROM core_execution_reconciliation_resolutions r WHERE r.owner_id=OLD.owner_id AND r.run_id=OLD.run_id AND r.receipt_id=OLD.receipt_id AND r.outcome=NEW.status) INTO reconciled; IF TG_OP='DELETE' OR NEW.owner_id IS DISTINCT FROM OLD.owner_id OR NEW.receipt_id IS DISTINCT FROM OLD.receipt_id OR NEW.run_id IS DISTINCT FROM OLD.run_id OR NEW.attempt_id IS DISTINCT FROM OLD.attempt_id OR NEW.schema_version IS DISTINCT FROM OLD.schema_version OR NEW.created_at IS DISTINCT FROM OLD.created_at OR NEW.request_digest IS DISTINCT FROM OLD.request_digest OR NEW.fence_digest IS DISTINCT FROM OLD.fence_digest OR (OLD.provider_operation_id<>'' AND NEW.provider_operation_id IS DISTINCT FROM OLD.provider_operation_id) OR (OLD.command_id<>'' AND NEW.command_id IS DISTINCT FROM OLD.command_id) OR NEW.idempotency_digest IS DISTINCT FROM OLD.idempotency_digest OR (OLD.status='accepted' AND NEW.status NOT IN ('accepted','running','succeeded','failed','uncertain','canceled')) OR (OLD.status='running' AND NEW.status NOT IN ('running','succeeded','failed','uncertain','canceled')) OR (NEW.status IN ('succeeded','failed','canceled') AND (NEW.response_digest IS NULL OR (NEW.provider_operation_id='' AND NEW.command_id=''))) OR (NEW.status='uncertain' AND NEW.response_digest IS NULL) OR (OLD.status='uncertain' AND NEW.status IS DISTINCT FROM OLD.status AND (NOT reconciled OR NEW.revision<>OLD.revision+1 OR NEW.snapshot_json IS DISTINCT FROM OLD.snapshot_json)) OR (OLD.status IN ('succeeded','failed','canceled') AND (NEW.status IS DISTINCT FROM OLD.status OR NEW.provider_operation_id IS DISTINCT FROM OLD.provider_operation_id OR NEW.command_id IS DISTINCT FROM OLD.command_id OR NEW.response_digest IS DISTINCT FROM OLD.response_digest OR NEW.snapshot_json IS DISTINCT FROM OLD.snapshot_json OR NEW.revision IS DISTINCT FROM OLD.revision)) THEN RAISE EXCEPTION 'execution receipt pin is immutable or regressive'; END IF; RETURN NEW; END $$`,
+		`CREATE OR REPLACE FUNCTION core_execution_dispatch_intent_immutable() RETURNS trigger LANGUAGE plpgsql AS $$ DECLARE reconciled BOOLEAN; BEGIN SELECT EXISTS(SELECT 1 FROM core_execution_reconciliation_resolutions r WHERE r.owner_id=OLD.owner_id AND r.run_id=OLD.run_id AND r.stage_id=OLD.stage_id AND r.receipt_id=OLD.receipt_id AND r.outcome=NEW.status) INTO reconciled; IF TG_OP='DELETE' OR NEW.owner_id IS DISTINCT FROM OLD.owner_id OR NEW.intent_id IS DISTINCT FROM OLD.intent_id OR NEW.run_id IS DISTINCT FROM OLD.run_id OR NEW.stage_id IS DISTINCT FROM OLD.stage_id OR NEW.attempt_id IS DISTINCT FROM OLD.attempt_id OR NEW.receipt_id IS DISTINCT FROM OLD.receipt_id OR NEW.task_id IS DISTINCT FROM OLD.task_id OR NEW.task_lease_epoch IS DISTINCT FROM OLD.task_lease_epoch OR NEW.target_id IS DISTINCT FROM OLD.target_id OR NEW.target_revision IS DISTINCT FROM OLD.target_revision OR NEW.target_digest IS DISTINCT FROM OLD.target_digest OR NEW.plan_id IS DISTINCT FROM OLD.plan_id OR NEW.plan_revision IS DISTINCT FROM OLD.plan_revision OR NEW.plan_digest IS DISTINCT FROM OLD.plan_digest OR NEW.stage_revision IS DISTINCT FROM OLD.stage_revision OR NEW.stage_digest IS DISTINCT FROM OLD.stage_digest OR NEW.step_key IS DISTINCT FROM OLD.step_key OR NEW.step_set IS DISTINCT FROM OLD.step_set OR NEW.step_revision IS DISTINCT FROM OLD.step_revision OR NEW.step_digest IS DISTINCT FROM OLD.step_digest OR NEW.attempt_no IS DISTINCT FROM OLD.attempt_no OR NEW.lease_id IS DISTINCT FROM OLD.lease_id OR NEW.lease_token IS DISTINCT FROM OLD.lease_token OR NEW.lease_epoch IS DISTINCT FROM OLD.lease_epoch OR NEW.request_digest IS DISTINCT FROM OLD.request_digest OR NEW.fence_digest IS DISTINCT FROM OLD.fence_digest OR NEW.schema_version IS DISTINCT FROM OLD.schema_version OR NEW.snapshot_json IS DISTINCT FROM OLD.snapshot_json OR NEW.created_at IS DISTINCT FROM OLD.created_at OR NEW.revision<>OLD.revision+1 OR (OLD.status='intent' AND NEW.status NOT IN ('intent','accepted','uncertain','succeeded','failed','canceled')) OR (OLD.status='accepted' AND NEW.status NOT IN ('accepted','uncertain','succeeded','failed','canceled')) OR (OLD.status='uncertain' AND NEW.status IS DISTINCT FROM OLD.status AND NOT reconciled) OR (OLD.status IN ('succeeded','failed','canceled') AND NEW.status IS DISTINCT FROM OLD.status) THEN RAISE EXCEPTION 'execution dispatch intent identity/state is immutable or regressive'; END IF; RETURN NEW; END $$`,
+		`CREATE OR REPLACE FUNCTION core_execution_receipt_terminal_evidence_guard() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF TG_OP<>'UPDATE' THEN RETURN NEW; END IF; IF OLD.status IN ('succeeded','failed','canceled') AND (NEW.provider_operation_id IS DISTINCT FROM OLD.provider_operation_id OR NEW.command_id IS DISTINCT FROM OLD.command_id OR NEW.request_digest IS DISTINCT FROM OLD.request_digest OR NEW.fence_digest IS DISTINCT FROM OLD.fence_digest OR NEW.response_digest IS DISTINCT FROM OLD.response_digest) THEN RAISE EXCEPTION 'execution receipt terminal evidence is immutable'; END IF; IF OLD.status='uncertain' AND (NEW.provider_operation_id IS DISTINCT FROM OLD.provider_operation_id OR NEW.command_id IS DISTINCT FROM OLD.command_id OR NEW.request_digest IS DISTINCT FROM OLD.request_digest OR NEW.fence_digest IS DISTINCT FROM OLD.fence_digest) THEN RAISE EXCEPTION 'execution receipt terminal evidence is immutable during reconciliation'; END IF; IF OLD.status IN ('accepted','running') AND NEW.status=OLD.status AND (NEW.provider_operation_id IS DISTINCT FROM OLD.provider_operation_id OR NEW.command_id IS DISTINCT FROM OLD.command_id OR NEW.response_digest IS DISTINCT FROM OLD.response_digest) THEN RAISE EXCEPTION 'execution receipt evidence may only be filled while advancing or terminalizing'; END IF; IF NEW.status='uncertain' AND OLD.status IN ('accepted','running') AND ((OLD.provider_operation_id<>'' AND NEW.provider_operation_id IS DISTINCT FROM OLD.provider_operation_id) OR (OLD.command_id<>'' AND NEW.command_id IS DISTINCT FROM OLD.command_id)) THEN RAISE EXCEPTION 'execution receipt uncertain evidence may only fill an empty provider identifier'; END IF; RETURN NEW; END $$`,
+		`DROP TRIGGER IF EXISTS core_execution_receipts_terminal_evidence_guard ON core_execution_receipts`, `DROP TRIGGER IF EXISTS core_execution_receipt_terminal_evidence_guard ON core_execution_receipts`, `CREATE TRIGGER core_execution_receipt_terminal_evidence_guard BEFORE UPDATE ON core_execution_receipts FOR EACH ROW EXECUTE FUNCTION core_execution_receipt_terminal_evidence_guard()`,
+		`CREATE OR REPLACE FUNCTION core_execution_deployment_immutable() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF TG_OP='DELETE' THEN RAISE EXCEPTION 'execution deployments cannot be deleted'; END IF; IF NEW.owner_id IS DISTINCT FROM OLD.owner_id OR NEW.deployment_id IS DISTINCT FROM OLD.deployment_id OR NEW.project_id IS DISTINCT FROM OLD.project_id OR NEW.created_at IS DISTINCT FROM OLD.created_at OR NEW.revision<>OLD.revision+1 OR NEW.state NOT IN ('pending','waiting_user','queued','running','succeeded','failed','uncertain','canceled','rejected','expired') OR (NEW.current_run_id=OLD.current_run_id AND ((OLD.state='pending' AND NEW.state NOT IN ('pending','waiting_user','queued','running','succeeded','failed','uncertain','canceled','rejected','expired')) OR (OLD.state='waiting_user' AND NEW.state NOT IN ('waiting_user','queued','running','succeeded','failed','uncertain','canceled','rejected','expired')) OR (OLD.state='queued' AND NEW.state NOT IN ('queued','running','succeeded','failed','uncertain','canceled','rejected','expired')) OR (OLD.state='running' AND NEW.state NOT IN ('running','succeeded','failed','uncertain','canceled')) OR (OLD.state IN ('succeeded','failed','uncertain','canceled','rejected','expired') AND NEW.state IS DISTINCT FROM OLD.state))) THEN RAISE EXCEPTION 'execution deployment identity/state is immutable or revision is not consecutive'; END IF; RETURN NEW; END $$`,
+		`DROP TRIGGER IF EXISTS core_execution_deployments_immutable ON core_execution_deployments`, `CREATE TRIGGER core_execution_deployments_immutable BEFORE UPDATE OR DELETE ON core_execution_deployments FOR EACH ROW EXECUTE FUNCTION core_execution_deployment_immutable()`,
+		`CREATE OR REPLACE FUNCTION core_execution_deployment_event_append_only() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'execution deployment events are append-only'; END $$`,
+		`DROP TRIGGER IF EXISTS core_execution_deployment_events_append_only ON core_execution_deployment_events`, `CREATE TRIGGER core_execution_deployment_events_append_only BEFORE UPDATE OR DELETE ON core_execution_deployment_events FOR EACH ROW EXECUTE FUNCTION core_execution_deployment_event_append_only()`,
+		`CREATE OR REPLACE FUNCTION core_execution_deployment_scope_guard() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF TG_TABLE_NAME='core_execution_deployments' THEN IF NOT EXISTS (SELECT 1 FROM core_execution_runs WHERE owner_id=NEW.owner_id AND run_id=NEW.current_run_id AND project_id=NEW.project_id AND purpose='service' AND deployment_id=NEW.deployment_id) THEN RAISE EXCEPTION 'execution deployment requires reciprocal service run'; END IF; ELSE IF NEW.purpose='job' AND NEW.deployment_id IS NOT NULL THEN RAISE EXCEPTION 'job run cannot bind deployment'; END IF; IF NEW.purpose='service' AND NOT EXISTS (SELECT 1 FROM core_execution_deployments WHERE owner_id=NEW.owner_id AND deployment_id=NEW.deployment_id AND project_id=NEW.project_id) THEN RAISE EXCEPTION 'service run requires deployment'; END IF; END IF; RETURN NEW; END $$`,
+		`CREATE CONSTRAINT TRIGGER core_execution_deployments_reciprocal_guard AFTER INSERT OR UPDATE ON core_execution_deployments DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION core_execution_deployment_scope_guard()`,
+		`CREATE CONSTRAINT TRIGGER core_execution_runs_deployment_reciprocal_guard AFTER INSERT OR UPDATE ON core_execution_runs DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION core_execution_deployment_scope_guard()`,
+		`CREATE OR REPLACE FUNCTION core_execution_service_binding_scope_guard() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF TG_OP='DELETE' THEN RAISE EXCEPTION 'service bindings are immutable'; END IF; IF NOT EXISTS (SELECT 1 FROM core_execution_deployments WHERE owner_id=NEW.owner_id AND deployment_id=NEW.deployment_id AND project_id=NEW.project_id AND current_run_id=NEW.run_id) OR NOT EXISTS (SELECT 1 FROM core_execution_runs WHERE owner_id=NEW.owner_id AND run_id=NEW.run_id AND deployment_id=NEW.deployment_id AND project_id=NEW.project_id AND purpose='service') THEN RAISE EXCEPTION 'service binding deployment scope mismatch'; END IF; IF TG_OP='UPDATE' AND (NEW.owner_id IS DISTINCT FROM OLD.owner_id OR NEW.binding_id IS DISTINCT FROM OLD.binding_id OR NEW.deployment_id IS DISTINCT FROM OLD.deployment_id OR NEW.project_id IS DISTINCT FROM OLD.project_id OR NEW.run_id IS DISTINCT FROM OLD.run_id OR NEW.target_id IS DISTINCT FROM OLD.target_id OR NEW.target_revision IS DISTINCT FROM OLD.target_revision OR NEW.schema_version IS DISTINCT FROM OLD.schema_version OR NEW.created_at IS DISTINCT FROM OLD.created_at OR NEW.revision<>OLD.revision+1) THEN RAISE EXCEPTION 'service binding identity or revision is immutable'; END IF; IF NEW.snapshot_json->>'owner_id' IS DISTINCT FROM NEW.owner_id OR NEW.snapshot_json->>'binding_id' IS DISTINCT FROM NEW.binding_id::text OR NEW.snapshot_json->>'deployment_id' IS DISTINCT FROM NEW.deployment_id::text OR NEW.snapshot_json->>'project_id' IS DISTINCT FROM NEW.project_id::text OR NEW.snapshot_json->>'run_id' IS DISTINCT FROM NEW.run_id::text OR NEW.snapshot_json->>'target_id' IS DISTINCT FROM COALESCE(NEW.target_id::text,'') OR NEW.snapshot_json->>'target_revision' IS DISTINCT FROM COALESCE(NEW.target_revision::text,'') OR NEW.snapshot_json->>'target_digest' IS DISTINCT FROM COALESCE((SELECT target_digest FROM core_execution_targets WHERE owner_id=NEW.owner_id AND target_id=NEW.target_id AND target_revision=NEW.target_revision),'') OR NEW.snapshot_json->>'protocol' IS DISTINCT FROM NEW.protocol OR NEW.snapshot_json->>'endpoint' IS DISTINCT FROM NEW.endpoint OR NEW.snapshot_json->>'digest' IS DISTINCT FROM NEW.binding_digest OR COALESCE((NEW.snapshot_json->>'revision')::bigint,0)<>NEW.revision THEN RAISE EXCEPTION 'service binding snapshot mismatch'; END IF; RETURN NEW; END $$`,
+		`CREATE TRIGGER core_execution_service_bindings_scope_guard BEFORE INSERT OR UPDATE OR DELETE ON core_execution_service_bindings FOR EACH ROW EXECUTE FUNCTION core_execution_service_binding_scope_guard()`,
+	})
 }
 
 // backfillLegacyChannelFavorites preserves the owner-local channel-post

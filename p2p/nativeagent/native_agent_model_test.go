@@ -292,8 +292,10 @@ func TestModelRequestedSkillInstallIsDenied(t *testing.T) {
 		t.Fatalf("list skills: %v", err)
 	}
 	skills := list["skills"].([]map[string]any)
-	if len(skills) != 0 {
-		t.Fatalf("mutable skill must not be installed, got %#v", list)
+	for _, skill := range skills {
+		if trimString(skill["id"]) == "dialogue-skill" {
+			t.Fatalf("mutable skill must not be installed, got %#v", list)
+		}
 	}
 	config, _, err := runtime.agentConfig(context.Background())
 	if err != nil {

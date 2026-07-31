@@ -87,8 +87,8 @@ func TestDatabaseStoreMigratesLegacyAgentPluginConfigToNativePortalConfig(t *tes
 	if servers := configRecords(loaded, "mcp_servers"); len(servers) != 1 || servers[0]["id"] != "legacy-mcp" {
 		t.Fatalf("legacy MCP servers must remain durably migrated, got %#v", servers)
 	}
-	if skills := mustHandle[map[string]any](t, service, "agent.skills.list", nil)["skills"].([]map[string]any); len(skills) != 0 {
-		t.Fatalf("embedded skills list must hide migrated third-party records, got %#v", skills)
+	if skills := mustHandle[map[string]any](t, service, "agent.skills.list", nil)["skills"].([]map[string]any); len(skills) == 0 || containsSkillID(skills, "legacy-skill") {
+		t.Fatalf("embedded skills list must expose built-ins but hide migrated third-party records, got %#v", skills)
 	}
 	if servers := mustHandle[map[string]any](t, service, "agent.mcp.servers.list", nil)["servers"].([]map[string]any); len(servers) != 0 {
 		t.Fatalf("embedded MCP list must hide migrated third-party records, got %#v", servers)
@@ -110,8 +110,8 @@ func TestDatabaseStoreMigratesLegacyAgentPluginConfigToNativePortalConfig(t *tes
 	if skills := configRecords(reloadedConfig, "skills"); len(skills) != 1 || skills[0]["id"] != "legacy-skill" {
 		t.Fatalf("migrated skills must survive restart in durable config, got %#v", skills)
 	}
-	if skills := mustHandle[map[string]any](t, reloaded, "agent.skills.list", nil)["skills"].([]map[string]any); len(skills) != 0 {
-		t.Fatalf("embedded skills list must remain hidden after restart, got %#v", skills)
+	if skills := mustHandle[map[string]any](t, reloaded, "agent.skills.list", nil)["skills"].([]map[string]any); len(skills) == 0 || containsSkillID(skills, "legacy-skill") {
+		t.Fatalf("embedded skills list must keep built-ins and hide migrated records after restart, got %#v", skills)
 	}
 	secondReload, err := NewServiceWithStore(ctx, Config{ServerName: "example.com"}, reloadedStore)
 	if err != nil {
@@ -136,6 +136,15 @@ func configRecords(config map[string]any, key string) []map[string]any {
 		}
 	}
 	return records
+}
+
+func containsSkillID(skills []map[string]any, want string) bool {
+	for _, skill := range skills {
+		if id, _ := skill["id"].(string); id == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestDatabaseStoreRestoresPortalAndBusinessState(t *testing.T) {

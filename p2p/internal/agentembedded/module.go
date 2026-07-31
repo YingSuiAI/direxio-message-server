@@ -50,37 +50,19 @@ type ScheduleTriggerPort interface {
 	TriggerSchedule(context.Context, string, string, string) (storage.Schedule, string, string, error)
 }
 
-// DeploymentLedger is the dashboard projection port. It intentionally mirrors
-// the deployment-ledger contract without importing the retired gRPC adapter.
-type DeploymentLedger interface {
-	ListDeployments(context.Context, string, DeploymentListOptions) ([]map[string]any, string, error)
-	GetDeploymentByID(context.Context, string, string) (map[string]any, bool, error)
-	GetDeploymentByWorkloadID(context.Context, string, string) (map[string]any, bool, error)
-	ListDeploymentEventsByID(context.Context, string, string, int64, int) ([]map[string]any, int64, error)
-	ListDeploymentEventsByWorkloadID(context.Context, string, string, int64, int) ([]map[string]any, int64, error)
-}
-
-type DeploymentListOptions struct {
-	PageSize   int
-	PageToken  string
-	Status     string
-	TargetKind string
-}
-
 type Config struct {
-	OwnerID         func() string
-	ModelProfiles   storage.ModelProfileStore
-	Tasks           task.Store
-	TaskRetry       TaskRetryPort
-	Confirmations   confirmation.Repository
-	Schedules       storage.ScheduleStore
-	ScheduleTrigger ScheduleTriggerPort
-	MCP             ActionPort
-	Skills          ActionPort
-	AWS             ActionPort
-	GeoLibre        ActionPort
-	Workloads       ActionPort
-	Deployments     DeploymentLedger
+	OwnerID              func() string
+	ModelProfiles        storage.ModelProfileStore
+	Tasks                task.Store
+	TaskRetry            TaskRetryPort
+	Confirmations        confirmation.Repository
+	Schedules            storage.ScheduleStore
+	ScheduleTrigger      ScheduleTriggerPort
+	MCP                  ActionPort
+	Skills               ActionPort
+	AWS                  ActionPort
+	ExecutionV2          ActionPort
+	ExecutionV2PlanReady bool
 	// CapabilityReady is an optional dynamic fail-closed readiness gate. A
 	// capability is published only when its concrete dependency is present and
 	// this callback returns true. Tests and small in-memory callers may omit it.
@@ -125,10 +107,16 @@ func (m *Module) requireCapability(ctx context.Context, params map[string]any, t
 
 func (m *Module) delegated(port ActionPort, action, capability string) actionbase.Handler {
 	return func(ctx context.Context, params map[string]any) (any, *actionbase.Error) {
+		if port == nil && strings.HasPrefix(capability, "execution.v2") {
+			return nil, actionbase.CodedError(http.StatusPreconditionFailed, "execution_v2_not_ready", "execution.v2 capability is not ready")
+		}
 		if _, e := m.requireCapability(ctx, params, capability, port != nil); e != nil {
 			return nil, e
 		}
 		if port == nil {
+			if strings.HasPrefix(capability, "execution.v2") {
+				return nil, actionbase.CodedError(http.StatusPreconditionFailed, "execution_v2_not_ready", "execution.v2 capability is not ready")
+			}
 			return unavailable(ctx, params)
 		}
 		result, actionErr := port.Handle(ctx, m.owner(), action, params)
@@ -166,72 +154,39 @@ func (m *Module) Handlers() map[string]actionbase.Handler {
 		// process, even if a caller accidentally supplies a port.
 		h[name] = unavailable
 	}
-	for _, name := range []string{"agent.core.aws.credentials.create", "agent.core.aws.credentials.update", "agent.core.aws.credentials.delete", "agent.core.aws.credentials.list", "agent.core.aws.credentials.test", "agent.core.aws.plans.get", "agent.core.aws.plans.list", "agent.core.aws.plans.quote", "agent.core.aws.changes.get", "agent.core.aws.changes.list", "agent.core.aws.changes.status", "agent.core.aws.ec2_provisions.plan", "agent.core.aws.ec2_provisions.get", "agent.core.aws.ec2_provisions.list", "agent.core.aws.ec2_provisions.events", "agent.core.aws.ec2_provisions.create.request", "agent.core.aws.ec2_provisions.destroy.request", "agent.core.aws.ec2_provisions.retry"} {
+	for _, name := range []string{"agent.core.aws.credentials.create", "agent.core.aws.credentials.update", "agent.core.aws.credentials.delete", "agent.core.aws.credentials.list", "agent.core.aws.credentials.test"} {
 		h[name] = m.delegated(m.cfg.AWS, name, "aws.control")
 	}
-	for _, name := range []string{"agent.core.aws.ec2_provisions.geolibre_install.plan", "agent.core.aws.ec2_provisions.geolibre_install.request"} {
-		h[name] = m.delegatedGeoLibre(name)
-	}
-	for _, name := range []string{"agent.core.workloads.plan", "agent.core.workloads.get", "agent.core.workloads.list", "agent.core.workloads.quote", "agent.core.workloads.apply", "agent.core.workloads.destroy", "agent.core.workloads.operations.get", "agent.core.workloads.operations.events", "agent.core.workloads.operations.reconcile", "agent.core.workloads.actual.get"} {
-		h[name] = m.delegatedWorkload(name)
-	}
-	for _, name := range []string{"agent.core.dashboard.get", "agent.core.deployments.list", "agent.core.deployments.get", "agent.core.deployments.events"} {
-		h[name] = m.deploymentHandler(name)
+	for _, name := range executionV2Actions() {
+		h[name] = m.delegated(m.cfg.ExecutionV2, name, executionV2Capability(name))
 	}
 	return h
 }
 
-func (m *Module) delegatedGeoLibre(action string) actionbase.Handler {
-	return func(ctx context.Context, params map[string]any) (any, *actionbase.Error) {
-		if _, e := m.requireCapability(ctx, params, "aws.control", m.cfg.GeoLibre != nil); e != nil {
-			return nil, e
-		}
-		if _, e := m.requireCapability(ctx, params, "workload.aws_ssm", m.cfg.GeoLibre != nil); e != nil {
-			return nil, e
-		}
-		return m.cfg.GeoLibre.Handle(ctx, m.owner(), action, params)
-	}
-}
-
-func (m *Module) delegatedWorkload(action string) actionbase.Handler {
-	return func(ctx context.Context, params map[string]any) (any, *actionbase.Error) {
-		// Keep the public plan seam fail-closed before capability resolution. Raw
-		// EC2 SSM requests must use the typed provision/install workflow even when
-		// the embedded workload runtime is not ready.
-		if action == "agent.core.workloads.plan" {
-			if _, ae := rejectRawSSMWorkloadPlan(params); ae != nil {
-				return nil, ae
-			}
-		}
-		if target, ok := params["target_kind"].(string); ok && strings.EqualFold(strings.ReplaceAll(target, "-", "_"), "core_runner") {
-			return nil, actionbase.BadRequest("CORE_RUNNER workload targets are not supported")
-		}
-		if target, ok := params["kind"].(string); ok && strings.EqualFold(strings.ReplaceAll(target, "-", "_"), "core_runner") {
-			return nil, actionbase.BadRequest("CORE_RUNNER workload targets are not supported")
-		}
-		token := "workload.aws_ssm"
-		hasTarget := false
-		if target, ok := params["target_kind"].(string); ok {
-			hasTarget = true
-			if strings.Contains(strings.ToUpper(strings.ReplaceAll(target, "-", "_")), "ECS") {
-				token = "workload.aws_ecs"
-			}
-		}
-		if !hasTarget {
-			if !m.capabilityReady("workload.aws_ssm", m.cfg.Workloads != nil) && !m.capabilityReady("workload.aws_ecs", m.cfg.Workloads != nil) {
-				return unavailable(ctx, params)
-			}
-		} else if _, e := m.requireCapability(ctx, params, token, m.cfg.Workloads != nil); e != nil {
-			return nil, e
-		}
-		port := m.cfg.Workloads
-		if port == nil {
-			return unavailable(ctx, params)
-		}
-		result, actionErr := port.Handle(ctx, m.owner(), action, params)
-		if actionErr != nil {
-			return nil, actionErr
-		}
-		return result, nil
+func executionV2Capability(name string) string {
+	name = strings.TrimPrefix(name, "agent.execution.v2.")
+	switch name {
+	case "projects.analyze", "plans.create", "plans.revise":
+		return "execution.v2.plan"
+	case "analyses.get", "targets.list", "targets.get", "plans.get", "plans.list":
+		return "execution.v2"
+	case "targets.observe":
+		return "execution.v2.observe"
+	case "targets.import":
+		return "execution.v2.transport.aws_ssm"
+	case "targets.reserve":
+		// Published only while the production reservation catalog,
+		// CloudFormation mutation/readback loop, and worker lifecycle are ready.
+		return "execution.v2.provision"
+	case "runs.create", "runs.get", "runs.list", "runs.cancel", "runs.retry", "runs.reconcile", "runs.events", "confirmations.get", "confirmations.list", "confirmations.confirm", "confirmations.reject":
+		return "execution.v2.run"
+	case "artifacts.get", "service_bindings.list", "service_bindings.get":
+		return "execution.v2.bindings"
+	case "service_bindings.invoke":
+		return "execution.v2.transport.http_api"
+	case "secrets.create", "secrets.get", "secrets.list", "secrets.revoke":
+		return "execution.v2.secrets"
+	default:
+		return "execution.v2"
 	}
 }

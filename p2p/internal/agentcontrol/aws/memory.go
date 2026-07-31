@@ -2,779 +2,165 @@ package aws
 
 import (
 	"context"
-	"encoding/base64"
-	coreconfirmation "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcontrol/confirmation"
-	"github.com/google/uuid"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
-func encodeChangeCursor(planID, id string) string {
-	return base64.RawURLEncoding.EncodeToString([]byte(planID + "\x00" + id))
+type memoryReplay struct {
+	digest string
+	view   CredentialView
+	delete bool
 }
-func decodeChangeCursor(planID, token string) (string, error) {
-	if token == "" {
-		return "", nil
-	}
-	raw, err := base64.RawURLEncoding.DecodeString(token)
-	if err != nil {
-		return "", err
-	}
-	parts := strings.Split(string(raw), "\x00")
-	if len(parts) != 2 || parts[0] != planID || uuid.Validate(parts[1]) != nil {
-		return "", ErrInvalid
-	}
-	return parts[1], nil
+type memoryTestReplay struct {
+	digest string
+	tested CredentialTest
 }
 
 type MemoryRepository struct {
-	mu                sync.RWMutex
-	credentials       map[string]Credentials
-	credentialHistory map[string]map[int64]Credentials
-	credentialDeleted map[string]bool
-	plans             map[string]Plan
-	provisions        map[string]Provision
-	changes           map[string]Change
-	tasks             map[string]Task
-	confirmations     map[string]coreconfirmation.Confirmation
-	reservations      map[string]Reservation
-	events            []ChangeEvent
-	replays           map[string]memoryReplay
-	provisionLeases   map[string]memoryProvisionLease
-}
-
-const memoryProvisionMutationLeaseDuration = 10 * time.Minute
-
-type memoryProvisionLease struct {
-	token       string
-	epoch       int64
-	expiresAt   time.Time
-	state       string
-	operationID string
-}
-
-type memoryProvisionMutationLease struct {
-	repo        *MemoryRepository
-	provisionID string
-	token       string
-	epoch       int64
 	mu          sync.Mutex
-	released    bool
-}
-
-type ChangeEvent struct {
-	ChangeID    string
-	TaskID      string
-	ProvisionID string
-	EventID     string
-	Sequence    uint64
-	Kind        string
-	Revision    int64
-	At          time.Time
-}
-
-type memoryReplay struct {
-	digest     string
-	err        error
-	credential *CredentialView
-	plan       *PlanView
-	change     *ChangeRequestResult
-	provision  *Provision
-	deleted    bool
+	credentials map[string]Credentials
+	history     map[string]map[int64]Credentials
+	deleted     map[string]bool
+	replays     map[string]memoryReplay
+	testReplays map[string]memoryTestReplay
 }
 
 func NewMemoryRepository() *MemoryRepository {
-	return &MemoryRepository{credentials: map[string]Credentials{}, credentialHistory: map[string]map[int64]Credentials{}, credentialDeleted: map[string]bool{}, plans: map[string]Plan{}, provisions: map[string]Provision{}, changes: map[string]Change{}, tasks: map[string]Task{}, confirmations: map[string]coreconfirmation.Confirmation{}, reservations: map[string]Reservation{}, replays: map[string]memoryReplay{}, provisionLeases: map[string]memoryProvisionLease{}}
+	return &MemoryRepository{credentials: map[string]Credentials{}, history: map[string]map[int64]Credentials{}, deleted: map[string]bool{}, replays: map[string]memoryReplay{}, testReplays: map[string]memoryTestReplay{}}
 }
-
-func (r *MemoryRepository) AcquireProvisionMutation(ctx context.Context, provisionID string) (ProvisionMutationLease, error) {
-	if r == nil || !validUUID(provisionID) {
-		return nil, ErrInvalid
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	now := time.Now().UTC()
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if _, ok := r.provisions[provisionID]; !ok {
-		return nil, ErrNotFound
-	}
-	if r.provisionLeases == nil {
-		r.provisionLeases = map[string]memoryProvisionLease{}
-	}
-	if existing, ok := r.provisionLeases[provisionID]; ok && (existing.state == "uncertain" || existing.expiresAt.After(now)) {
-		return nil, ErrConflict
-	}
-	token := uuid.NewString()
-	lease := memoryProvisionLease{token: token, epoch: 1, expiresAt: now.Add(memoryProvisionMutationLeaseDuration), state: "active"}
-	if existing, ok := r.provisionLeases[provisionID]; ok {
-		lease.epoch = existing.epoch + 1
-	}
-	r.provisionLeases[provisionID] = lease
-	return &memoryProvisionMutationLease{repo: r, provisionID: provisionID, token: token, epoch: lease.epoch}, nil
-}
-
-func (r *MemoryRepository) ResolveProvisionMutation(ctx context.Context, provisionID, operationID string) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	lease, ok := r.provisionLeases[provisionID]
-	if !ok || lease.state != "uncertain" || lease.operationID != operationID {
-		return ErrConflict
-	}
-	delete(r.provisionLeases, provisionID)
-	return nil
-}
-
-func (r *MemoryRepository) ClaimProvisionMutation(ctx context.Context, provisionID, operationID string) (ProvisionMutationLease, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	lease, ok := r.provisionLeases[provisionID]
-	if !ok || lease.operationID != operationID || (lease.state != "uncertain" && !(lease.state == "active" && !lease.expiresAt.After(time.Now().UTC()))) {
-		return nil, ErrConflict
-	}
-	lease.token = uuid.NewString()
-	lease.epoch++
-	lease.state = "active"
-	lease.expiresAt = time.Now().UTC().Add(memoryProvisionMutationLeaseDuration)
-	r.provisionLeases[provisionID] = lease
-	return &memoryProvisionMutationLease{repo: r, provisionID: provisionID, token: lease.token, epoch: lease.epoch}, nil
-}
-
-func (l *memoryProvisionMutationLease) Renew(ctx context.Context) error {
-	return l.withLease(ctx, true)
-}
-
-func (l *memoryProvisionMutationLease) Token() string {
-	if l == nil {
-		return ""
-	}
-	return l.token
-}
-func (l *memoryProvisionMutationLease) Epoch() int64 {
-	if l == nil {
-		return 0
-	}
-	return l.epoch
-}
-
-func (l *memoryProvisionMutationLease) BindOperation(ctx context.Context, operationID string) error {
-	if l == nil || l.repo == nil || operationID == "" {
-		return ErrInvalid
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.repo.mu.Lock()
-	defer l.repo.mu.Unlock()
-	current, ok := l.repo.provisionLeases[l.provisionID]
-	if !ok || current.token != l.token || current.epoch != l.epoch || current.state != "active" || !current.expiresAt.After(time.Now().UTC()) {
-		return ErrConflict
-	}
-	if current.operationID != "" && current.operationID != operationID {
-		return ErrConflict
-	}
-	current.operationID = operationID
-	l.repo.provisionLeases[l.provisionID] = current
-	return nil
-}
-
-func (l *memoryProvisionMutationLease) Assert(ctx context.Context) error {
-	return l.withLease(ctx, false)
-}
-
-func (l *memoryProvisionMutationLease) withLease(ctx context.Context, renew bool) error {
-	if l == nil || l.repo == nil {
-		return ErrInvalid
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.released {
-		return ErrConflict
-	}
-	now := time.Now().UTC()
-	l.repo.mu.Lock()
-	defer l.repo.mu.Unlock()
-	current, ok := l.repo.provisionLeases[l.provisionID]
-	if !ok || current.token != l.token || current.epoch != l.epoch || !current.expiresAt.After(now) {
-		return ErrConflict
-	}
-	if renew {
-		current.expiresAt = now.Add(memoryProvisionMutationLeaseDuration)
-		l.repo.provisionLeases[l.provisionID] = current
-	}
-	return nil
-}
-
-func (l *memoryProvisionMutationLease) MarkUncertain(ctx context.Context, operationID string) error {
-	if l == nil || l.repo == nil || operationID == "" {
-		return ErrInvalid
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.repo.mu.Lock()
-	defer l.repo.mu.Unlock()
-	current, ok := l.repo.provisionLeases[l.provisionID]
-	if !ok || current.token != l.token || current.epoch != l.epoch || current.state != "active" {
-		return ErrConflict
-	}
-	current.state = "uncertain"
-	current.operationID = operationID
-	current.expiresAt = time.Now().UTC().Add(24 * time.Hour)
-	l.repo.provisionLeases[l.provisionID] = current
-	return nil
-}
-
-func (l *memoryProvisionMutationLease) Release(ctx context.Context) error {
-	if l == nil || l.repo == nil {
-		return ErrInvalid
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.released {
-		return nil
-	}
-	l.repo.mu.Lock()
-	defer l.repo.mu.Unlock()
-	current, ok := l.repo.provisionLeases[l.provisionID]
-	if ok && current.token == l.token && current.epoch == l.epoch && current.state == "active" {
-		delete(l.repo.provisionLeases, l.provisionID)
-		l.released = true
-		return nil
-	}
-	return ErrConflict
-}
-
-func (r *MemoryRepository) CreateProvision(_ context.Context, p Provision) (Provision, error) {
-	if p.Validate() != nil {
-		return Provision{}, ErrInvalid
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	plan, ok := r.plans[p.PlanID]
-	if !ok {
-		return Provision{}, ErrNotFound
-	}
-	if !ProvisionPlanMatches(p, plan) {
-		return Provision{}, ErrRevisionConflict
-	}
-	if _, ok := r.provisions[p.ID]; ok {
-		return Provision{}, ErrConflict
-	}
-	r.provisions[p.ID] = p
-	return p, nil
-}
-
-func (r *MemoryRepository) CreateEC2Provision(_ context.Context, plan Plan, p Provision, key, digest string) (Plan, Provision, error) {
-	if r == nil || plan.Validate() != nil || p.Validate() != nil || !validUUID(key) || strings.TrimSpace(digest) == "" {
-		return Plan{}, Provision{}, ErrInvalid
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.replays == nil {
-		r.replays = map[string]memoryReplay{}
-	}
-	if v, ok, e := r.replayLocked("ec2-provision-create", key, digest); ok {
-		if e != nil || v.plan == nil || v.provision == nil {
-			return Plan{}, Provision{}, e
-		}
-		stored, found := r.plans[v.plan.ID]
-		if !found {
-			return Plan{}, Provision{}, ErrConflict
-		}
-		return clonePlan(stored), *v.provision, nil
-	}
-	if _, ok := r.plans[plan.ID]; ok {
-		return Plan{}, Provision{}, ErrConflict
-	}
-	if current, ok := r.credentials[plan.CredentialID]; !ok || current.Revision != plan.CredentialRevision {
-		return Plan{}, Provision{}, ErrRevisionConflict
-	}
-	if _, ok := r.provisions[p.ID]; ok {
-		return Plan{}, Provision{}, ErrConflict
-	}
-	if !ProvisionPlanMatches(p, plan) {
-		return Plan{}, Provision{}, ErrRevisionConflict
-	}
-	r.plans[plan.ID] = clonePlan(plan)
-	r.provisions[p.ID] = p
-	pv, pr := plan.View(), p
-	r.replays[replayKey("ec2-provision-create", key)] = memoryReplay{digest: digest, plan: &pv, provision: &pr}
-	return clonePlan(plan), p, nil
-}
-
-// CreateDerivedDeletePlan persists a delete plan against the historical
-// credential revision captured by the active provision.
-func (r *MemoryRepository) CreateDerivedDeletePlan(_ context.Context, p Plan) (Plan, error) {
-	if r == nil || p.Validate() != nil || p.Operation != OperationDelete {
-		return Plan{}, ErrInvalid
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if existing, ok := r.plans[p.ID]; ok {
-		if planDigest(existing) != planDigest(p) {
-			return Plan{}, ErrConflict
-		}
-		return clonePlan(existing), nil
-	}
-	if _, ok := r.credentialHistory[p.CredentialID][p.CredentialRevision]; !ok {
-		return Plan{}, ErrNotFound
-	}
-	r.plans[p.ID] = clonePlan(p)
-	return clonePlan(p), nil
-}
-
-func (r *MemoryRepository) ListProvisions(_ context.Context, owner, state string, size int, token string) (Page[Provision], error) {
-	if size < 0 || size > 100 {
-		return Page[Provision]{}, ErrInvalid
-	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	ids := make([]string, 0, len(r.provisions))
-	for id, p := range r.provisions {
-		if strings.TrimSpace(owner) == "" || p.OwnerDigest != OwnerBindingDigest(owner) || (state != "" && p.State != state) {
-			continue
-		}
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	start, err := startAfter(ids, token)
-	if err != nil || start > len(ids) {
-		return Page[Provision]{}, ErrInvalid
-	}
-	end := len(ids)
-	if size > 0 && end > start+size {
-		end = start + size
-	}
-	out := make([]Provision, 0, end-start)
-	for _, id := range ids[start:end] {
-		out = append(out, r.provisions[id])
-	}
-	next := ""
-	if end < len(ids) {
-		next = ids[end-1]
-	}
-	return Page[Provision]{Items: out, NextPageToken: next}, nil
-}
-
-func (r *MemoryRepository) ListProvisionEvents(_ context.Context, provisionID, owner string, after uint64, limit int) ([]ProvisionEvent, uint64, error) {
-	if !validUUID(provisionID) || strings.TrimSpace(owner) == "" || limit < 0 || limit > 100 {
-		return nil, 0, ErrInvalid
-	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	items := make([]ProvisionEvent, 0)
-	for _, e := range r.events {
-		pid := e.ProvisionID
-		if pid == "" && e.ChangeID != "" {
-			if c, ok := r.changes[e.ChangeID]; ok {
-				pid = c.ProvisionID
-			}
-		}
-		if pid != provisionID {
-			continue
-		}
-		if p, ok := r.provisions[pid]; !ok || p.OwnerDigest != OwnerBindingDigest(owner) {
-			continue
-		}
-		seq := e.Sequence
-		if seq == 0 {
-			continue
-		}
-		if seq <= after {
-			continue
-		}
-		eventID := e.EventID
-		if eventID == "" {
-			eventID = uuid.NewSHA1(uuid.Nil, []byte(pid+":"+strconv.FormatUint(seq, 10))).String()
-		}
-		items = append(items, ProvisionEvent{ProvisionID: pid, EventID: eventID, ChangeID: e.ChangeID, TaskID: e.TaskID, Kind: e.Kind, Sequence: seq, Revision: e.Revision, At: e.At})
-	}
-	if limit > 0 && len(items) > limit {
-		items = items[:limit]
-	}
-	next := after
-	if len(items) > 0 {
-		next = items[len(items)-1].Sequence
-	}
-	return items, next, nil
-}
-
-func (r *MemoryRepository) RetryProvision(_ context.Context, provisionID string, expectedRevision int64, idempotencyKey string) (Provision, error) {
-	if !validUUID(provisionID) || !validUUID(idempotencyKey) || expectedRevision < 1 {
-		return Provision{}, ErrInvalid
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.replays == nil {
-		r.replays = map[string]memoryReplay{}
-	}
-	digest := canonicalDigest(struct {
-		ProvisionID string
-		Revision    int64
-	}{provisionID, expectedRevision})
-	if v, ok, err := r.replayLocked("provision-retry", idempotencyKey, digest); ok {
-		if err != nil {
-			return Provision{}, err
-		}
-		if v.provision == nil {
-			return Provision{}, ErrConflict
-		}
-		return *v.provision, nil
-	}
-	p, ok := r.provisions[provisionID]
-	if !ok {
-		return Provision{}, ErrNotFound
-	}
-	plan, ok := r.plans[p.PlanID]
-	if !ok {
-		return Provision{}, ErrNotFound
-	}
-	if p.Revision != expectedRevision || (p.State != "failed" && p.State != "destroyed" && p.State != "creating") || !provisionSnapshotMatches(p, plan) {
-		return Provision{}, ErrRevisionConflict
-	}
-	now := time.Now().UTC()
-	// A failed delete means the provider may still have the active service.
-	// Restore the verified readback and require a new explicit delete request;
-	// failed creates and destroyed resources are safe to re-arm as planned.
-	retryState := "planned"
-	clearReadback := true
-	selectedChangeID := ""
-	preProviderRearmed := false
-	if p.State == "creating" {
-		change, found := r.changes[p.ActiveChangeID]
-		confirmation, confirmationFound := r.confirmations[change.ConfirmationID]
-		task, taskFound := r.tasks[change.TaskID]
-		credential, credentialFound := r.credentialHistory[p.CredentialID][p.CredentialRevision]
-		_, reserved := r.reservations[change.ConfirmationID]
-		consumedReplay := false
-		for key, replay := range r.replays {
-			if strings.HasPrefix(key, "change-consume:") && replay.change != nil && replay.change.Change.ConfirmationID == change.ConfirmationID {
-				consumedReplay = true
-			}
-		}
-		if !found || !confirmationFound || !taskFound || !credentialFound || reserved || consumedReplay || change.ProvisionID != p.ID || change.PlanID != p.PlanID || change.CredentialID != p.CredentialID || change.Operation != OperationCreate || change.Status != ChangeWaitingUser || change.Stage != StageRequested || change.ChangeSetID != "" || change.ProviderToken != confirmation.ConfirmationID || change.ProviderRequestDigest != providerRequestDigest(plan, change.ProviderToken) || !confirmation.Binding.Equal(bindingForPlanOwner(plan, credential, confirmation.OwnerID)) || task.ID != change.TaskID || task.PlanID != plan.ID || task.ConfirmationID != confirmation.ConfirmationID || task.Status != "failed" || task.FailureCode != "task_execution_failed" || confirmation.TaskID != task.ID || confirmation.State != coreconfirmation.StateExpired || confirmation.TerminalReason != "task_execution_failed" || p.Readback != (ProvisionReadback{}) || p.ReconciliationRequired || p.ErrorCode != "" || p.ErrorSummary != "" {
-			return Provision{}, ErrRevisionConflict
-		}
-		for _, event := range r.events {
-			if event.ChangeID == change.ID && event.Kind != "change_requested" {
-				return Provision{}, ErrRevisionConflict
-			}
-		}
-		change.Status, change.Stage, change.ErrorCode, change.ErrorSummary, change.Revision, change.UpdatedAt = ChangeCanceled, StageCanceled, "pre_provider_rearmed", "pre_provider_rearmed", change.Revision+1, now
-		r.changes[change.ID] = change
-		selectedChangeID, preProviderRearmed = change.ID, true
-	} else if p.State == "failed" {
-		var failed *Change
-		for _, changeID := range []string{p.CreateChangeID, p.DestroyChangeID} {
-			if changeID == "" {
-				continue
-			}
-			change, found := r.changes[changeID]
-			if !found || change.Status != ChangeFailed || change.ProvisionID != p.ID {
-				continue
-			}
-			if failed != nil || (change.Operation != OperationCreate && change.Operation != OperationDelete) {
-				return Provision{}, ErrRevisionConflict
-			}
-			candidate := change
-			failed = &candidate
-			selectedChangeID = changeID
-		}
-		if failed == nil {
-			return Provision{}, ErrRevisionConflict
-		}
-		if failed.Operation == OperationDelete {
-			if p.Readback.Validate() != nil {
-				return Provision{}, ErrRevisionConflict
-			}
-			retryState, clearReadback = "active", false
-		}
-	}
-	if selectedChangeID == "" {
-		selectedChangeID = p.DestroyChangeID
-		if selectedChangeID == "" {
-			selectedChangeID = p.CreateChangeID
-		}
-	}
-	p.State, p.ActiveChangeID = retryState, ""
-	if clearReadback {
-		p.Readback = ProvisionReadback{}
-	}
-	p.ReconciliationRequired, p.ErrorCode, p.ErrorSummary = false, "", ""
-	p.Revision, p.UpdatedAt = p.Revision+1, now
-	r.provisions[p.ID] = p
-	changeID := p.DestroyChangeID
-	if changeID == "" {
-		changeID = p.CreateChangeID
-	}
-	if selectedChangeID != "" {
-		changeID = selectedChangeID
-	}
-	kind := "provision_retry_requested"
-	if preProviderRearmed {
-		kind = "provision_preprovider_rearmed"
-	}
-	r.events = append(r.events, ChangeEvent{ChangeID: changeID, TaskID: "", Kind: kind, Revision: p.Revision, At: now})
-	copy := p
-	r.replays[replayKey("provision-retry", idempotencyKey)] = memoryReplay{digest: digest, provision: &copy}
-	return p, nil
-}
-func (r *MemoryRepository) GetProvision(_ context.Context, id string) (Provision, error) {
-	if !validUUID(id) {
-		return Provision{}, ErrInvalid
-	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	p, ok := r.provisions[id]
-	if !ok {
-		return Provision{}, ErrNotFound
-	}
-	return p, nil
-}
-func (r *MemoryRepository) GetProvisionByChange(_ context.Context, changeID string) (Provision, error) {
-	if !validUUID(changeID) {
-		return Provision{}, ErrInvalid
-	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	for _, p := range r.provisions {
-		if p.ActiveChangeID == changeID || p.CreateChangeID == changeID || p.DestroyChangeID == changeID {
-			return p, nil
-		}
-	}
-	return Provision{}, ErrNotFound
-}
-
-func (r *MemoryRepository) rememberCredentialLocked(c Credentials) {
-	if r.credentialHistory == nil {
-		r.credentialHistory = map[string]map[int64]Credentials{}
-	}
-	if r.credentialHistory[c.ID] == nil {
-		r.credentialHistory[c.ID] = map[int64]Credentials{}
-	}
-	r.credentialHistory[c.ID][c.Revision] = cloneCredential(c)
-}
-
-func replayKey(op, key string) string { return op + ":" + key }
-
-// ReplayCredential and ReplayPlan expose the durable idempotency snapshot for
-// restart/recovery tests without exposing credential secret bytes.
-func (r *MemoryRepository) ReplayCredential(_ context.Context, operation, key, digest string) (CredentialView, bool, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	v, ok, err := r.replayLocked(operation, key, digest)
-	if !ok || err != nil {
-		return CredentialView{}, ok, err
-	}
-	if v.credential == nil {
-		return CredentialView{}, true, ErrConflict
-	}
-	return *v.credential, true, nil
-}
-func (r *MemoryRepository) ReplayPlan(_ context.Context, operation, key, digest string) (PlanView, bool, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	v, ok, err := r.replayLocked(operation, key, digest)
-	if !ok || err != nil {
-		return PlanView{}, ok, err
-	}
-	if v.plan == nil {
-		return PlanView{}, true, ErrConflict
-	}
-	return *v.plan, true, nil
-}
-
-func (r *MemoryRepository) GetTask(_ context.Context, id string) (Task, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	t, ok := r.tasks[id]
-	if !ok {
-		return Task{}, ErrNotFound
-	}
-	return t, nil
-}
-
-func (r *MemoryRepository) GetConfirmation(_ context.Context, id string) (coreconfirmation.Confirmation, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	c, ok := r.confirmations[id]
-	if !ok {
-		return coreconfirmation.Confirmation{}, ErrNotFound
-	}
-	return c, nil
-}
-
-func (r *MemoryRepository) GetReservation(_ context.Context, id string) (Reservation, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	value, ok := r.reservations[id]
-	if !ok {
-		return Reservation{}, ErrNotFound
-	}
-	return value, nil
-}
-
-func (r *MemoryRepository) Events() []ChangeEvent {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return append([]ChangeEvent(nil), r.events...)
-}
-
-func (r *MemoryRepository) changesByConfirmationLocked(id string) (Change, bool) {
-	for _, c := range r.changes {
-		if c.ConfirmationID == id {
-			return c, true
-		}
-	}
-	return Change{}, false
-}
-func (r *MemoryRepository) replayLocked(op, key, digest string) (memoryReplay, bool, error) {
-	v, ok := r.replays[replayKey(op, key)]
+func (r *MemoryRepository) replayLocked(operation, key, digest string) (memoryReplay, bool, error) {
+	v, ok := r.replays[operation+":"+key]
 	if !ok {
 		return memoryReplay{}, false, nil
 	}
 	if v.digest != digest {
 		return memoryReplay{}, true, ErrIdempotencyConflict
 	}
-	if v.err != nil {
-		return v, true, v.err
-	}
 	return v, true, nil
 }
-func (r *MemoryRepository) saveCredentialIdempotent(_ context.Context, c Credentials, key, digest string) (CredentialView, error) {
+func (r *MemoryRepository) rememberLocked(operation, key, digest string, view CredentialView, deleted bool) {
+	r.replays[operation+":"+key] = memoryReplay{digest: digest, view: view, delete: deleted}
+}
+func (r *MemoryRepository) ReplayCredential(_ context.Context, operation, key, digest string) (CredentialView, bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.replays == nil {
-		r.replays = map[string]memoryReplay{}
-	}
-	if v, ok, e := r.replayLocked("credential-save", key, digest); ok {
-		if e != nil {
-			return CredentialView{}, e
+	v, hit, err := r.replayLocked(operation, key, digest)
+	return v.view, hit, err
+}
+func (r *MemoryRepository) ReplayCredentialTest(_ context.Context, id string, expected int64, key, digest string) (CredentialTest, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var v memoryTestReplay
+	ok := false
+	for replayKey, candidate := range r.testReplays {
+		if strings.HasPrefix(replayKey, id+":") && strings.HasSuffix(replayKey, ":"+key) {
+			v, ok = candidate, true
+			break
 		}
-		return *v.credential, nil
 	}
-	if _, ok := r.credentials[c.ID]; ok || r.credentialDeleted[c.ID] {
+	if !ok {
+		return CredentialTest{}, false, nil
+	}
+	if v.digest != digest {
+		return CredentialTest{}, true, ErrIdempotencyConflict
+	}
+	return v.tested, true, nil
+}
+func (r *MemoryRepository) TestCredentialIdempotent(ctx context.Context, id string, expected int64, identity Identity, key, digest string) (CredentialTest, error) {
+	r.mu.Lock()
+	replayKey := id + ":" + strconv.FormatInt(expected, 10) + ":" + key
+	if v, ok := r.testReplays[replayKey]; ok {
+		r.mu.Unlock()
+		if v.digest != digest {
+			return CredentialTest{}, ErrIdempotencyConflict
+		}
+		return v.tested, nil
+	}
+	r.mu.Unlock()
+	updated, err := r.RecordCredentialIdentity(ctx, id, expected, identity)
+	if err != nil {
+		return CredentialTest{}, err
+	}
+	tested := CredentialTest{CredentialID: id, Identity: identity, CredentialRevision: updated.Revision, TestedAt: updated.UpdatedAt}
+	r.mu.Lock()
+	r.testReplays[replayKey] = memoryTestReplay{digest: digest, tested: tested}
+	r.mu.Unlock()
+	return tested, nil
+}
+func (r *MemoryRepository) SaveCredentialIdempotent(_ context.Context, c Credentials, key, digest string) (CredentialView, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if v, hit, err := r.replayLocked("credential-save", key, digest); hit {
+		return v.view, err
+	}
+	if r.deleted[c.ID] || r.credentials[c.ID].ID != "" {
 		return CredentialView{}, ErrConflict
 	}
 	r.credentials[c.ID] = cloneCredential(c)
-	r.rememberCredentialLocked(c)
+	if r.history[c.ID] == nil {
+		r.history[c.ID] = map[int64]Credentials{}
+	}
+	r.history[c.ID][c.Revision] = cloneCredential(c)
 	v := c.View()
-	r.replays[replayKey("credential-save", key)] = memoryReplay{digest: digest, credential: &v}
+	r.rememberLocked("credential-save", key, digest, v, false)
 	return v, nil
 }
-func (r *MemoryRepository) replaceCredentialIdempotent(_ context.Context, c Credentials, expected int64, key, digest string) (CredentialView, error) {
+func (r *MemoryRepository) ReplaceCredentialIdempotent(_ context.Context, c Credentials, expected int64, key, digest string) (CredentialView, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.replays == nil {
-		r.replays = map[string]memoryReplay{}
-	}
-	if v, ok, e := r.replayLocked("credential-replace", key, digest); ok {
-		if e != nil {
-			return CredentialView{}, e
-		}
-		return *v.credential, nil
+	if v, hit, err := r.replayLocked("credential-replace", key, digest); hit {
+		return v.view, err
 	}
 	old, ok := r.credentials[c.ID]
 	if !ok {
 		return CredentialView{}, ErrNotFound
 	}
-	if old.Revision != expected || c.Revision != expected+1 {
+	if old.Revision != expected {
 		return CredentialView{}, ErrRevisionConflict
 	}
 	r.credentials[c.ID] = cloneCredential(c)
-	r.rememberCredentialLocked(c)
+	r.history[c.ID][c.Revision] = cloneCredential(c)
 	v := c.View()
-	r.replays[replayKey("credential-replace", key)] = memoryReplay{digest: digest, credential: &v}
+	r.rememberLocked("credential-replace", key, digest, v, false)
 	return v, nil
 }
-func (r *MemoryRepository) deleteCredentialIdempotent(_ context.Context, id string, expected int64, key, digest string) error {
+func (r *MemoryRepository) DeleteCredentialIdempotent(_ context.Context, id string, expected int64, key, digest string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.replays == nil {
-		r.replays = map[string]memoryReplay{}
+	if v, hit, err := r.replayLocked("credential-delete", key, digest); hit {
+		_ = v
+		return err
 	}
-	if v, ok, e := r.replayLocked("credential-delete", key, digest); ok {
-		if e != nil {
-			return e
-		}
-		if v.deleted {
-			return nil
-		}
-	}
-	old, ok := r.credentials[id]
-	if !ok {
-		return ErrNotFound
-	}
-	if old.Revision != expected {
+	c, ok := r.credentials[id]
+	if !ok || c.Revision != expected {
 		return ErrRevisionConflict
 	}
+	r.deleted[id] = true
 	delete(r.credentials, id)
-	r.credentialDeleted[id] = true
-	v := old.View()
-	r.replays[replayKey("credential-delete", key)] = memoryReplay{digest: digest, deleted: true, credential: &v}
+	r.rememberLocked("credential-delete", key, digest, CredentialView{}, true)
 	return nil
 }
-func (r *MemoryRepository) createPlanIdempotent(_ context.Context, p Plan, key, digest string) (PlanView, error) {
+func (r *MemoryRepository) CreateCredential(_ context.Context, c Credentials) (Credentials, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.replays == nil {
-		r.replays = map[string]memoryReplay{}
-	}
-	if v, ok, e := r.replayLocked("plan-create", key, digest); ok {
-		if e != nil {
-			return PlanView{}, e
-		}
-		return *v.plan, nil
-	}
-	if _, ok := r.plans[p.ID]; ok {
-		return PlanView{}, ErrConflict
-	}
-	if current, ok := r.credentials[p.CredentialID]; !ok || current.Revision != p.CredentialRevision {
-		return PlanView{}, ErrRevisionConflict
-	}
-	r.plans[p.ID] = clonePlan(p)
-	v := p.View()
-	r.replays[replayKey("plan-create", key)] = memoryReplay{digest: digest, plan: &v}
-	return v, nil
-}
-func (r *MemoryRepository) CreateCredential(_ context.Context, c Credentials) (Credentials, error) {
-	if r == nil || c.Validate() != nil {
+	if c.Validate() != nil {
 		return Credentials{}, ErrInvalid
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if _, ok := r.credentials[c.ID]; ok || r.credentialDeleted[c.ID] {
+	if r.deleted[c.ID] || r.credentials[c.ID].ID != "" {
 		return Credentials{}, ErrConflict
 	}
 	r.credentials[c.ID] = cloneCredential(c)
-	r.rememberCredentialLocked(c)
-	r.credentialDeleted[c.ID] = false
+	if r.history[c.ID] == nil {
+		r.history[c.ID] = map[int64]Credentials{}
+	}
+	r.history[c.ID][c.Revision] = cloneCredential(c)
 	return cloneCredential(c), nil
 }
 func (r *MemoryRepository) GetCredential(_ context.Context, id string) (Credentials, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	c, ok := r.credentials[id]
 	if !ok {
 		return Credentials{}, ErrNotFound
@@ -782,309 +168,76 @@ func (r *MemoryRepository) GetCredential(_ context.Context, id string) (Credenti
 	return cloneCredential(c), nil
 }
 func (r *MemoryRepository) GetCredentialRevision(_ context.Context, id string, revision int64) (Credentials, error) {
-	if revision < 1 {
-		return Credentials{}, ErrInvalid
-	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	c, ok := r.credentialHistory[id][revision]
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	c, ok := r.history[id][revision]
 	if !ok {
 		return Credentials{}, ErrNotFound
 	}
 	return cloneCredential(c), nil
 }
-
-func (r *MemoryRepository) GetCredentialRevisionMetadata(_ context.Context, id string, revision int64) (Credentials, error) {
-	if revision < 1 {
-		return Credentials{}, ErrInvalid
-	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	c, ok := r.credentialHistory[id][revision]
-	if !ok {
-		return Credentials{}, ErrNotFound
-	}
-	return RehydrateCredentialMetadata(c.ID, c.Name, c.Region, c.AccountID, c.UserARN, c.VerifiedRevision, c.Revision, c.CreatedAt, c.UpdatedAt), nil
-}
-
-func (r *MemoryRepository) ListCredentialRevisionMetadata(_ context.Context, refs []CredentialRevisionRef) (map[string]Credentials, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	out := make(map[string]Credentials, len(refs))
-	for _, ref := range refs {
-		if ref.Revision < 1 {
-			return nil, ErrInvalid
-		}
-		c, ok := r.credentialHistory[ref.ID][ref.Revision]
-		if !ok {
-			return nil, ErrNotFound
-		}
-		out[ref.ID+":"+strconv.FormatInt(ref.Revision, 10)] = RehydrateCredentialMetadata(c.ID, c.Name, c.Region, c.AccountID, c.UserARN, c.VerifiedRevision, c.Revision, c.CreatedAt, c.UpdatedAt)
-	}
-	return out, nil
-}
 func (r *MemoryRepository) ListCredentials(_ context.Context, size int, token string) (CredentialPage, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if size < 0 || size > 100 {
 		return CredentialPage{}, ErrInvalid
 	}
 	if size == 0 {
 		size = 25
 	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	ids := make([]string, 0, len(r.credentials))
-	for id := range r.credentials {
-		ids = append(ids, id)
+	out := CredentialPage{}
+	for _, c := range r.credentials {
+		if c.ID > token {
+			out.Items = append(out.Items, c.View())
+		}
 	}
-	sort.Strings(ids)
-	start, err := startAfter(ids, token)
-	if err != nil {
-		return CredentialPage{}, ErrInvalid
+	if len(out.Items) > size {
+		out.NextPageToken = out.Items[size-1].ID
+		out.Items = out.Items[:size]
 	}
-	if start > len(ids) {
-		return CredentialPage{}, ErrInvalid
-	}
-	end := len(ids)
-	if size > 0 && end > start+size {
-		end = start + size
-	}
-	out := make([]CredentialView, 0, end-start)
-	for _, id := range ids[start:end] {
-		out = append(out, r.credentials[id].View())
-	}
-	next := ""
-	if end < len(ids) {
-		next = ids[end-1]
-	}
-	return CredentialPage{Items: out, NextPageToken: next}, nil
+	return out, nil
 }
-func (r *MemoryRepository) UpdateCredential(_ context.Context, c Credentials, expected int64) (Credentials, error) {
-	if c.Validate() != nil {
-		return Credentials{}, ErrInvalid
+func (r *MemoryRepository) UpdateCredential(ctx context.Context, c Credentials, expected int64) (Credentials, error) {
+	v, err := r.ReplaceCredentialIdempotent(ctx, c, expected, newUUID(), canonicalDigest(c))
+	if err != nil {
+		return Credentials{}, err
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	old, ok := r.credentials[c.ID]
-	if !ok {
-		return Credentials{}, ErrNotFound
-	}
-	if old.Revision != expected {
-		return Credentials{}, ErrRevisionConflict
-	}
-	if c.Revision != expected+1 {
-		return Credentials{}, ErrRevisionConflict
-	}
-	r.credentials[c.ID] = cloneCredential(c)
-	r.rememberCredentialLocked(c)
-	return cloneCredential(c), nil
+	return r.GetCredentialRevision(ctx, v.ID, v.Revision)
 }
 func (r *MemoryRepository) DeleteCredential(_ context.Context, id string, expected int64) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	old, ok := r.credentials[id]
-	if !ok {
-		return ErrNotFound
-	}
-	if old.Revision != expected {
+	c, ok := r.credentials[id]
+	if !ok || c.Revision != expected {
 		return ErrRevisionConflict
 	}
+	r.deleted[id] = true
 	delete(r.credentials, id)
-	r.credentialDeleted[id] = true
 	return nil
 }
-
-func (r *MemoryRepository) RecordCredentialIdentity(_ context.Context, id string, expected int64, identity Identity) (Credentials, error) {
-	if strings.TrimSpace(identity.AccountID) == "" || strings.TrimSpace(identity.UserARN) == "" {
-		return Credentials{}, ErrInvalid
-	}
+func (r *MemoryRepository) RecordCredentialIdentity(_ context.Context, id string, revision int64, identity Identity) (Credentials, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	c, ok := r.credentials[id]
-	if !ok {
-		return Credentials{}, ErrNotFound
-	}
-	if c.Revision != expected {
+	if !ok || c.Revision != revision {
 		return Credentials{}, ErrRevisionConflict
 	}
-	if c.VerifiedRevision == c.Revision {
+	if c.VerifiedRevision == revision {
 		if c.AccountID != identity.AccountID || c.UserARN != identity.UserARN {
 			return Credentials{}, ErrConflict
 		}
 		return cloneCredential(c), nil
 	}
-	c.AccountID, c.UserARN, c.VerifiedRevision, c.UpdatedAt = identity.AccountID, identity.UserARN, c.Revision, time.Now().UTC()
+	c.AccountID, c.UserARN, c.VerifiedRevision, c.UpdatedAt = identity.AccountID, identity.UserARN, revision, time.Now().UTC()
 	r.credentials[id] = cloneCredential(c)
-	r.rememberCredentialLocked(c)
+	r.history[id][revision] = cloneCredential(c)
 	return cloneCredential(c), nil
 }
-func (r *MemoryRepository) CreatePlan(_ context.Context, p Plan) (Plan, error) {
-	if p.Validate() != nil {
-		return Plan{}, ErrInvalid
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if _, ok := r.plans[p.ID]; ok {
-		return Plan{}, ErrConflict
-	}
-	if current, ok := r.credentials[p.CredentialID]; !ok || current.Revision != p.CredentialRevision {
-		return Plan{}, ErrRevisionConflict
-	}
-	r.plans[p.ID] = clonePlan(p)
-	return clonePlan(p), nil
-}
-func (r *MemoryRepository) GetPlan(_ context.Context, id string) (Plan, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	p, ok := r.plans[id]
-	if !ok {
-		return Plan{}, ErrNotFound
-	}
-	return clonePlan(p), nil
-}
-func (r *MemoryRepository) ListPlans(_ context.Context, size int, token string) (PlanPage, error) {
-	if size < 0 || size > 100 {
-		return PlanPage{}, ErrInvalid
-	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	ids := make([]string, 0, len(r.plans))
-	for id := range r.plans {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	start, e := startAfter(ids, token)
-	if e != nil || start > len(ids) {
-		return PlanPage{}, ErrInvalid
-	}
-	end := len(ids)
-	if size > 0 && end > start+size {
-		end = start + size
-	}
-	out := make([]PlanView, 0, end-start)
-	for _, id := range ids[start:end] {
-		out = append(out, r.plans[id].View())
-	}
-	next := ""
-	if end < len(ids) {
-		next = ids[end-1]
-	}
-	return PlanPage{Items: out, NextPageToken: next}, nil
-}
-func (r *MemoryRepository) CreateChange(_ context.Context, c Change) (Change, error) {
-	if !validUUID(c.ID) || !validUUID(c.PlanID) || !validUUID(c.CredentialID) || !validUUID(c.TaskID) || !validUUID(c.ConfirmationID) || !validOperation(c.Operation) || !validStage(c.Stage) || c.Revision < 1 {
-		return Change{}, ErrInvalid
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if _, ok := r.changes[c.ID]; ok {
-		return Change{}, ErrConflict
-	}
-	r.changes[c.ID] = c
-	return c, nil
-}
-func (r *MemoryRepository) GetChange(_ context.Context, id string) (Change, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	c, ok := r.changes[id]
-	if !ok {
-		return Change{}, ErrNotFound
-	}
-	return c, nil
-}
-func (r *MemoryRepository) GetChangeByConfirmation(_ context.Context, id string) (Change, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	for _, c := range r.changes {
-		if c.ConfirmationID == id {
-			return c, nil
-		}
-	}
-	return Change{}, ErrNotFound
-}
-func (r *MemoryRepository) ListChanges(_ context.Context, size int, planID, token string) (ChangePage, error) {
-	if size < 0 || size > 100 {
-		return ChangePage{}, ErrInvalid
-	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	ids := make([]string, 0, len(r.changes))
-	for id, change := range r.changes {
-		if planID == "" || change.PlanID == planID {
-			ids = append(ids, id)
-		}
-	}
-	sort.Strings(ids)
-	lastID, err := decodeChangeCursor(planID, token)
-	if err != nil {
-		return ChangePage{}, ErrInvalid
-	}
-	start, err := startAfter(ids, lastID)
-	if err != nil || start > len(ids) {
-		return ChangePage{}, ErrInvalid
-	}
-	end := len(ids)
-	if size > 0 && end > start+size {
-		end = start + size
-	}
-	out := make([]Change, 0, end-start)
-	for _, id := range ids[start:end] {
-		out = append(out, r.changes[id])
-	}
-	next := ""
-	if end < len(ids) {
-		next = encodeChangeCursor(planID, ids[end-1])
-	}
-	return ChangePage{Items: out, NextPageToken: next}, nil
-}
-func (r *MemoryRepository) UpdateChange(_ context.Context, c Change, expected int64) (Change, error) {
-	if !validStage(c.Stage) {
-		return Change{}, ErrInvalid
-	}
-	if c.Revision != expected+1 {
-		return Change{}, ErrRevisionConflict
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	old, ok := r.changes[c.ID]
-	if !ok {
-		return Change{}, ErrNotFound
-	}
-	if old.Revision != expected {
-		return Change{}, ErrRevisionConflict
-	}
-	if (old.Stage == StageSucceeded || old.Stage == StageFailed || old.Stage == StageCanceled || old.Status == ChangeSucceeded || old.Status == ChangeFailed || old.Status == ChangeCanceled) && (c.Stage != old.Stage || c.Status != old.Status) {
-		return Change{}, ErrConflict
-	}
-	r.changes[c.ID] = c
-	return c, nil
-}
-func pageStart(token string) (int, error) {
-	if strings.TrimSpace(token) == "" {
-		return 0, nil
-	}
-	return strconv.Atoi(token)
-}
-func startAfter(ids []string, token string) (int, error) {
-	if strings.TrimSpace(token) == "" {
-		return 0, nil
-	}
-	for i, id := range ids {
-		if id > token {
-			return i, nil
-		}
-	}
-	return len(ids), nil
-}
+
 func cloneCredential(c Credentials) Credentials {
-	if c.private != nil {
-		c.private = &credentialPayload{accessKeyID: c.private.accessKeyID, secretAccessKey: c.private.secretAccessKey, sessionToken: c.private.sessionToken}
+	if c.private == nil {
+		return c
 	}
+	c.private = &credentialPayload{c.private.accessKeyID, c.private.secretAccessKey, c.private.sessionToken}
 	return c
-}
-func clonePlan(p Plan) Plan {
-	p.Template = append([]byte(nil), p.Template...)
-	p.Parameters = cloneMap(p.Parameters)
-	p.Tags = cloneMap(p.Tags)
-	p.Capabilities = append([]string(nil), p.Capabilities...)
-	return p
 }

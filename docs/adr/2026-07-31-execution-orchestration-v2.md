@@ -6,11 +6,11 @@ Status: Accepted contract; implementation and release gated
 ## Context
 
 The embedded Agent control plane owns durable tasks, confirmations, AWS
-providers, workloads, and deployment reads. V1 is deliberately typed and
-server-owned, but its create path is not the long-term boundary for remote
-execution. We need a contract that can compose declarative planning with a
-server-owned deterministic coordinator and remote target transports without
-turning the Message Server into a shell runner or a generic cloud proxy.
+credentials and Execution V2 planning/runtime state. The unreleased V1
+workload/provision surface has been removed. The active boundary composes
+declarative planning with a server-owned deterministic coordinator and remote
+target transports without turning the Message Server into a shell runner or a
+generic cloud proxy.
 
 This ADR is authoritative for the V2 orchestration boundary. It does not make
 any V2 route, storage, executor, capability, or action live by documentation
@@ -71,13 +71,22 @@ authorized destroy/recovery operation. A successful receipt, terminal failure,
 or reconciliation evidence must remain bound to the original plan/stage
 digests.
 
-### 4. V1 and V2 cutover
+### 4. Fresh-install V2 cutover
 
-V1 create remains available during V2 implementation and rollout. It may be
-retired only after the V2 acceptance gates in this ADR pass in the target
-deployment and the replacement path is enabled. V1 read, observe, reconcile,
-and destroy behavior remains retained for compatibility and operational
-recovery; V2 acceptance must not remove those legacy facts.
+V1 was never deployed and has no historical user or deployment data. The
+implementation therefore has no V1 compatibility, migration, read, observe,
+reconcile, destroy, or adapter obligation. V2 is the only deployment and
+execution contract. V1 workload, GeoLibre, deployment-ledger, public action,
+Flutter DTO/state, and database objects are removed rather than projected or
+silently converted.
+
+The PostgreSQL registry keeps the migrations already present on upstream
+`main` unchanged. All branch-only migrations after that baseline are replaced
+by one fresh-install migration that creates the final Agent and Execution V2
+schema directly. It contains no V1 backfill, `source_kind` bridge, compatibility
+alias, old-row rewrite, or staged V1-to-V2 upgrade path. GeoLibre remains only
+an explicitly selected V2 recipe fixture and never creates a project-specific
+schema or public action.
 
 The Message Server continues to reject local third-party shell/code/skill
 execution, raw SSM/SSH/AWS passthrough, and any mutation replay or fallback
@@ -108,6 +117,21 @@ and uncertain/reconciliation handling. SSH, generic HTTP, DNS, TLS, and the
 Coding Worker remain deferred; they are not implied by the V2 contract and
 must not be advertised until separately implemented and accepted.
 
+The initial EC2 profile enforces no public inbound traffic but does permit
+public IPv4 TCP/443 egress to any destination. The plan and confirmation must
+therefore represent that boundary as the explicit wildcard grant
+`scheme=https, host=*, port=443, scope=external`. A registry hostname or path
+is not an enforced network restriction and must not be shown or digested as
+one. OCI images remain independently pinned to an immutable SHA-256 digest.
+Both package bootstrap and image pull stages declare this broad grant.
+
+The first generic container Recipe supports initial deployment only. It has
+no cleanup rollback and will fail if a container with the stable service name
+already exists under a different execution-spec digest; it never deletes that
+container to perform an in-place replacement. Upgrade, repair, destroy and
+rollback operations are not selected or exposed for this Recipe until a
+versioned or blue-green deployment/rollback model is implemented and accepted.
+
 ## Acceptance gates
 
 - Planner/Recipe output is deterministic, immutable, digest-bound, and has no
@@ -119,10 +143,13 @@ must not be advertised until separately implemented and accepted.
   fallback.
 - Frozen plan/stage confirmation is owner-scoped, revision-checked,
   idempotent, expiry-aware, and independent of Native Agent confirmation.
+- Confirmation previews disclose the actual selected network grants and bind
+  both those grants and the target network policy into `network_digest`.
 - AWS SSM long-running service acceptance passes before publishing any
   `execution.v2.*` capability/action.
-- V1 create retirement is a post-acceptance release decision; legacy read,
-  observe, reconcile, and destroy remain covered by compatibility tests.
+- Fresh installation creates only the final V2 deployment/execution schema;
+  no branch-only V1 migration ID, table, backfill, action, DTO, or
+  compatibility test remains.
 - Deferred transports and GeoLibre fixture/recipe paths have no live action or
   capability claim.
 
@@ -132,5 +159,5 @@ Planning remains extensible without granting the Message Server arbitrary code
 execution. Provider execution can evolve in a remote control plane while the
 server retains owner authorization, immutable intent, policy, and evidence
 boundaries. The cost is an explicit typed schema and durable uncertainty path
-for every mutating stage, plus a staged rollout that keeps V1 create until V2
-is proven.
+for every mutating stage. Because there is no deployed V1 state, the branch
+uses a clean V2 cutover instead of maintaining parallel orchestration models.

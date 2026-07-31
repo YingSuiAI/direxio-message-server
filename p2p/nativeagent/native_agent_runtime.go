@@ -4,13 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/YingSuiAI/dirextalk-message-server/p2p/agentmemory"
-	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentturns"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/YingSuiAI/dirextalk-message-server/p2p/agentmemory"
+	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentskills"
+	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentturns"
 )
 
 const embeddedExtensionsForbiddenMessage = "embedded native agent extensions are forbidden"
@@ -44,6 +46,7 @@ type Config struct {
 	Conversations         ConversationStore
 	PersistentMemoryReady bool
 	EmbeddingSession      agentmemory.KnowledgeEmbeddingSessionFunc
+	PlanningSkills        *agentskills.Registry
 }
 
 // ServerModelProfile is a redacted profile projection with the key retained
@@ -92,6 +95,7 @@ type Runtime struct {
 	persistentMemoryReady bool
 	embedding             agentmemory.KnowledgeEmbeddingSessionFunc
 	conversations         ConversationStore
+	planningSkills        *agentskills.Registry
 }
 
 func New(config Config) *Runtime {
@@ -132,6 +136,10 @@ func New(config Config) *Runtime {
 			conversations = candidate
 		}
 	}
+	planningSkills := config.PlanningSkills
+	if planningSkills == nil {
+		planningSkills, _ = agentskills.Builtin()
+	}
 	return &Runtime{
 		store:                 config.Store,
 		dataDir:               filepath.Clean(dataDir),
@@ -145,6 +153,7 @@ func New(config Config) *Runtime {
 		persistentMemoryReady: config.PersistentMemoryReady,
 		embedding:             config.EmbeddingSession,
 		conversations:         conversations,
+		planningSkills:        planningSkills,
 	}
 }
 

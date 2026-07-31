@@ -144,9 +144,10 @@ base64 且每片不超过 256 KiB。上传阶段返回按字节计算的 `progre
 - `internal/dirextalkplugin`：非 Agent plugin catalog/instance/job/secret record shapes；`p2p/internal/plugins` 拥有 plugin action orchestration、Docker runner 和 Native Agent/plugin 隔离规则。
 - `p2p/projector.go`、`p2p/projector_ports.go`：只保留投影公开 facade、账户生命周期门禁和 Matrix/业务模块适配；纯投影 helper 由 `internal/dirextalkprojection` 持有。
 - `p2p/internal/agentcontrol` 与 `p2p/internal/agentembedded`：Message Server
-  进程内的任务/确认/调度、远程 HTTPS MCP、AWS、SSM/ECS Workload 与
-  deployment dashboard 边界。旧 `agent.core.*` 仅是 wire 兼容名称，不代表
-  第二个服务；Skill、stdio MCP、Core Runner 与 Core conversation 均不可用。
+  进程内的任务/确认/调度、远程 HTTPS MCP、AWS 凭据，以及通用 Execution
+  V2 Project/Analysis/Target/Plan/Run/Receipt/ServiceBinding 控制面。首个远程
+  Transport 是受控 AWS SSM；Message Server 不在本机执行第三方 Skill、项目
+  代码或 shell，也不暴露原始 SSM/SSH/AWS passthrough。
 - `p2p/internal/legacygateway`：历史 Release Gate M 兼容代码；它只保留
   内部解析/存储兼容，不再包含外部 gRPC Agent 客户端，也不属于
   embedded Agent control 的运行路径，更不参与生产单镜像 Agent 能力发布。

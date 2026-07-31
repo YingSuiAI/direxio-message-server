@@ -2,7 +2,6 @@ package p2p
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"strings"
 	"time"
@@ -154,39 +153,36 @@ func (s *Service) embeddedAgentCapabilityReady(capability string) bool {
 			s.scheduleRunning &&
 			s.agentTaskRuntime != nil &&
 			s.agentScheduleLoop != nil
-	case "mcp", "aws.control", "workload.aws_ssm", "workload.aws_ecs":
+	case "mcp", "aws.control":
 		return s.agentSecretRuntimeReadyLocked() &&
 			s.scheduleRunning &&
 			s.agentTaskRuntime != nil &&
 			s.agentTaskExecutor != nil &&
 			s.agentTaskExecutor.ready(capability)
-	case "deployments.server":
-		if !s.deploymentSourceReady {
-			return false
+	case "execution.v2":
+		return s.executionV2Ready != nil && s.executionV2Ready()
+	case "execution.v2.plan":
+		if s.executionV2PlanReady != nil {
+			return s.executionV2PlanReady()
 		}
-		dbStore, ok := s.store.(*p2pstorage.DatabaseStore)
-		return ok && unifiedDeploymentSchemaReady(context.Background(), dbStore.DB())
+		return s.executionV2Ready != nil && s.executionV2Ready()
+	case "execution.v2.observe":
+		return s.executionV2ObserveReady != nil && s.executionV2ObserveReady()
+	case "execution.v2.run":
+		return s.executionV2RunReady != nil && s.executionV2RunReady() && s.executionV2TransportReady != nil && s.executionV2TransportReady()
+	case "execution.v2.bindings":
+		return s.executionV2BindingsReady != nil && s.executionV2BindingsReady()
+	case "execution.v2.transport.http_api":
+		return s.executionV2InvokeReady != nil && s.executionV2InvokeReady()
+	case "execution.v2.transport.aws_ssm":
+		return s.executionV2TransportReady != nil && s.executionV2TransportReady()
+	case "execution.v2.provision":
+		return s.executionV2ProvisionReady != nil && s.executionV2ProvisionReady()
+	case "execution.v2.secrets":
+		return s.executionV2SecretsReady != nil && s.executionV2SecretsReady()
 	default:
 		return false
 	}
-}
-
-// unifiedDeploymentSchemaReady probes the v106 tables instead of relying on a
-// store method set. Both DatabaseStore and MemoryStore retain legacy ledger
-// methods for compatibility, so a type assertion alone would accidentally
-// publish deployments.server against the retired in-memory/legacy source.
-func unifiedDeploymentSchemaReady(ctx context.Context, db *sql.DB) bool {
-	if db == nil {
-		return false
-	}
-	probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-	var ready bool
-	err := db.QueryRowContext(probeCtx, `
-		SELECT to_regclass('core_deployments') IS NOT NULL
-		   AND to_regclass('core_deployment_event_counters') IS NOT NULL
-		   AND to_regclass('core_deployment_events') IS NOT NULL`).Scan(&ready)
-	return err == nil && ready
 }
 
 // StartEmbeddedScheduler starts the single generic schedule loop and task

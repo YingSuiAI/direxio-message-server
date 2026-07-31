@@ -36,6 +36,71 @@ func testDatabaseTaskSpec(t *testing.T, idempotencyKey string, availableAt time.
 	return spec
 }
 
+func testExecutionStageSpec(t *testing.T, idempotencyKey string, availableAt time.Time) task.TaskSpec {
+	t.Helper()
+	spec, err := (task.TaskSpec{Kind: task.TaskKindExecutionStage, Goal: "frozen stage", IdempotencyKey: idempotencyKey, AvailableAt: availableAt.UTC(), Payload: task.TaskPayload{ExecutionStage: &task.ExecutionStageTaskPayload{
+		PlanID: "11111111-1111-4111-8111-111111111111", PlanRevision: 1, PlanDigest: strings.Repeat("a", 64),
+		RunID: "22222222-2222-4222-8222-222222222222", RunRevision: 1, StageID: "33333333-3333-4333-8333-333333333333", StageRevision: 1, StageDigest: strings.Repeat("b", 64),
+		TargetID: "44444444-4444-4444-8444-444444444444", TargetRevision: 1, TargetDigest: strings.Repeat("c", 64),
+	}}}).Normalize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return spec
+}
+
+func TestDatabaseExecutionStageGenericTerminalizersRollback(t *testing.T) {
+	at := time.Date(2029, 1, 1, 0, 0, 0, 0, time.UTC)
+	for name, invoke := range map[string]func(*DatabaseTaskStore) error{
+		"complete": func(store *DatabaseTaskStore) error {
+			_, err := store.Complete(t.Context(), task.CompleteCommand{Fence: task.Fence{TaskID: testTaskID, Attempt: 1, LeaseEpoch: 1, ExpectedRevision: 2}, Result: task.Result{Summary: "done"}, At: at})
+			return err
+		},
+		"fail": func(store *DatabaseTaskStore) error {
+			_, err := store.Fail(t.Context(), task.FailCommand{Fence: task.Fence{TaskID: testTaskID, Attempt: 1, LeaseEpoch: 1, ExpectedRevision: 2}, ErrorCode: "failed", ErrorSummary: "failed", At: at})
+			return err
+		},
+		"timeout": func(store *DatabaseTaskStore) error {
+			return store.Timeout(t.Context(), task.TimeoutCommand{Fence: task.Fence{TaskID: testTaskID, Attempt: 1, LeaseEpoch: 1, ExpectedRevision: 2}, At: at})
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			mock.ExpectBegin()
+			mock.ExpectQuery(regexp.QuoteMeta("SELECT COALESCE(spec_json->>'kind','') FROM agent_tasks WHERE task_id=$1 FOR UPDATE")).WithArgs(testTaskID).WillReturnRows(sqlmock.NewRows([]string{"kind"}).AddRow(string(task.TaskKindExecutionStage)))
+			mock.ExpectRollback()
+			if err = invoke(NewDatabaseTaskStore(db)); !errors.Is(err, task.ErrConflict) {
+				t.Fatalf("%s error = %v, want ErrConflict", name, err)
+			}
+			if err = mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	t.Run("cancel", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		key := "55555555-5555-4555-8555-555555555555"
+		mock.ExpectBegin()
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT COALESCE(spec_json->>'kind','') FROM agent_tasks WHERE task_id=$1 FOR UPDATE")).WithArgs(testTaskID).WillReturnRows(sqlmock.NewRows([]string{"kind"}).AddRow(string(task.TaskKindExecutionStage)))
+		mock.ExpectRollback()
+		_, err = NewDatabaseTaskStore(db).Cancel(t.Context(), task.CancelCommand{OwnerID: testTaskOwnerA, TaskID: testTaskID, ExpectedRevision: 2, Mutation: task.MutationCommand{IdempotencyKey: key, ExpectedRevision: 2}, Reason: "stop", At: at})
+		if !errors.Is(err, task.ErrConflict) {
+			t.Fatalf("Cancel() error = %v, want ErrConflict", err)
+		}
+		if err = mock.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
 type testDatabaseTaskRow struct {
 	Owner          string
 	ID             string
@@ -218,10 +283,10 @@ func TestDatabaseTaskCancelPersistsAtomicReplayBeforeMutableChecks(t *testing.T)
 	digest := taskCancelRequestDigest(command)
 
 	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COALESCE(spec_json->>'kind','') FROM agent_tasks WHERE task_id=$1 FOR UPDATE")).
+		WithArgs(testTaskID).
+		WillReturnRows(sqlmock.NewRows([]string{"kind"}).AddRow(string(task.TaskKindAgent)))
 	expectTaskReplayMiss(mock, testTaskOwnerA, "cancel", key)
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT owner_id,COALESCE(provision_id::text,'') FROM core_aws_changes WHERE owner_id=$1 AND task_id=$2")).
-		WithArgs(testTaskOwnerA, testTaskID).
-		WillReturnRows(sqlmock.NewRows([]string{"owner_id", "provision_id"}))
 	mock.ExpectQuery(regexp.QuoteMeta(databaseTaskSelect+` WHERE task_id=$1 AND owner_id=$2 FOR UPDATE`)).
 		WithArgs(testTaskID, testTaskOwnerA).
 		WillReturnRows(testDatabaseTaskRows(t, testDatabaseTaskRow{
@@ -270,6 +335,9 @@ func TestDatabaseTaskCancelPersistsAtomicReplayBeforeMutableChecks(t *testing.T)
 	retry := command
 	retry.At = at.Add(time.Minute)
 	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COALESCE(spec_json->>'kind','') FROM agent_tasks WHERE task_id=$1 FOR UPDATE")).
+		WithArgs(testTaskID).
+		WillReturnRows(sqlmock.NewRows([]string{"kind"}).AddRow(string(task.TaskKindAgent)))
 	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")).
 		WithArgs(canonicalAdvisoryLockIdentity("agent-task", testTaskOwnerA, "cancel", key)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -288,6 +356,9 @@ func TestDatabaseTaskCancelPersistsAtomicReplayBeforeMutableChecks(t *testing.T)
 	conflict := retry
 	conflict.Reason = "different reason"
 	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COALESCE(spec_json->>'kind','') FROM agent_tasks WHERE task_id=$1 FOR UPDATE")).
+		WithArgs(testTaskID).
+		WillReturnRows(sqlmock.NewRows([]string{"kind"}).AddRow(string(task.TaskKindAgent)))
 	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")).
 		WithArgs(canonicalAdvisoryLockIdentity("agent-task", testTaskOwnerA, "cancel", key)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -343,6 +414,9 @@ func TestDatabaseTaskRetryPersistsSuccessorEventAndReplayAtomically(t *testing.T
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT owner_id FROM agent_tasks WHERE task_id=$1")).
 		WithArgs(testTaskID).
 		WillReturnRows(sqlmock.NewRows([]string{"owner_id"}).AddRow(testTaskOwnerA))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COALESCE(spec_json->>'kind','') FROM agent_tasks WHERE task_id=$1 FOR UPDATE")).
+		WithArgs(testTaskID).
+		WillReturnRows(sqlmock.NewRows([]string{"kind"}).AddRow(string(task.TaskKindAgent)))
 	expectTaskReplayMiss(mock, testTaskOwnerA, "retry", key)
 	mock.ExpectQuery(regexp.QuoteMeta(databaseTaskSelect+` WHERE task_id=$1 AND owner_id=$2 FOR UPDATE`)).
 		WithArgs(testTaskID, testTaskOwnerA).
@@ -388,6 +462,9 @@ func TestDatabaseTaskRetryPersistsSuccessorEventAndReplayAtomically(t *testing.T
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT owner_id FROM agent_tasks WHERE task_id=$1")).
 		WithArgs(testTaskID).
 		WillReturnRows(sqlmock.NewRows([]string{"owner_id"}).AddRow(testTaskOwnerA))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COALESCE(spec_json->>'kind','') FROM agent_tasks WHERE task_id=$1 FOR UPDATE")).
+		WithArgs(testTaskID).
+		WillReturnRows(sqlmock.NewRows([]string{"kind"}).AddRow(string(task.TaskKindAgent)))
 	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")).
 		WithArgs(canonicalAdvisoryLockIdentity("agent-task", testTaskOwnerA, "retry", key)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -409,6 +486,9 @@ func TestDatabaseTaskRetryPersistsSuccessorEventAndReplayAtomically(t *testing.T
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT owner_id FROM agent_tasks WHERE task_id=$1")).
 		WithArgs(testTaskID).
 		WillReturnRows(sqlmock.NewRows([]string{"owner_id"}).AddRow(testTaskOwnerA))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COALESCE(spec_json->>'kind','') FROM agent_tasks WHERE task_id=$1 FOR UPDATE")).
+		WithArgs(testTaskID).
+		WillReturnRows(sqlmock.NewRows([]string{"kind"}).AddRow(string(task.TaskKindAgent)))
 	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")).
 		WithArgs(canonicalAdvisoryLockIdentity("agent-task", testTaskOwnerA, "retry", key)).
 		WillReturnResult(sqlmock.NewResult(0, 1))

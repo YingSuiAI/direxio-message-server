@@ -34,6 +34,11 @@ func (r *Runtime) prepareEinoRun(ctx context.Context, config map[string]any, par
 		memoryDisabled: boolParam(params["memory_disabled"]) || boolParam(config["memory_disabled"]),
 		maxSteps:       nativeAgentMaxSteps(config, params),
 	}
+	if _, explicit := selectedSkillIDs(config, params); explicit {
+		if _, err := r.selectPlanningSkills(ctx, config, params); err != nil {
+			return run, fmt.Errorf("invalid planning skill selection: %w", err)
+		}
+	}
 	requestMessages := requestEinoMessages(params)
 	systemPrompt := r.agentSystemPrompt(ctx, config, params, "")
 	systemPrompt = appendPromptBlock(systemPrompt, profile.SystemPrompt)

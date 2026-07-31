@@ -24,8 +24,9 @@ func TestPostgresTaskQueueClaimAndReclaimEventPayloads(t *testing.T) {
 	defer store.Close()
 
 	const (
-		owner  = "@task-queue-owner:example.test"
-		taskID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+		owner   = "@task-queue-owner:example.test"
+		taskID  = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+		stageID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
 	)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	spec, err := json.Marshal(task.TaskSpec{
@@ -39,6 +40,10 @@ func TestPostgresTaskQueueClaimAndReclaimEventPayloads(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err = store.DB().ExecContext(ctx, `INSERT INTO agent_tasks(task_id,owner_id,spec_json,status,available_at,created_at,updated_at) VALUES($1,$2,$3,'queued',$4,$4,$4)`, taskID, owner, spec, now); err != nil {
+		t.Fatal(err)
+	}
+	stageSpec, _ := json.Marshal(map[string]any{"kind": string(task.TaskKindExecutionStage), "goal": "v2 stage", "idempotency_key": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", "available_at": now})
+	if _, err = store.DB().ExecContext(ctx, `INSERT INTO agent_tasks(task_id,owner_id,spec_json,status,available_at,created_at,updated_at) VALUES($1,$2,$3,'queued',$4,$4,$4)`, stageID, owner, stageSpec, now); err != nil {
 		t.Fatal(err)
 	}
 
@@ -73,5 +78,30 @@ func TestPostgresTaskQueueClaimAndReclaimEventPayloads(t *testing.T) {
 	}
 	if previousHolder != "claim-holder" || nextHolder != "reclaim-holder" || previousEpoch != "1" {
 		t.Fatalf("reclaimed event payload = previous=%q next=%q epoch=%q", previousHolder, nextHolder, previousEpoch)
+	}
+	if _, err = store.DB().ExecContext(ctx, `UPDATE agent_tasks SET status='succeeded' WHERE task_id=$1`, taskID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = queue.ClaimNextDue(ctx, "v2-guard", now.Add(3*time.Minute), time.Minute, 2); err != task.ErrNotFound {
+		t.Fatalf("execution_stage task was claimable by legacy queue: %v", err)
+	}
+	if _, err = store.DB().ExecContext(ctx, `UPDATE agent_tasks SET status='running',lease_expires_at=$2 WHERE task_id=$1`, stageID, now); err != nil {
+		t.Fatal(err)
+	}
+	if err = queue.ReclaimExpired(ctx, "v2-guard", now.Add(4*time.Minute), time.Minute, 2); err != task.ErrNotFound {
+		t.Fatalf("execution_stage task was reclaimable by legacy queue: %v", err)
+	}
+	if _, err = store.DB().ExecContext(ctx, `UPDATE agent_tasks SET status='running',attempt=1,lease_epoch=1,revision=2,lease_holder='v2',lease_expires_at=$2 WHERE task_id=$1`, stageID, now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	replayKey := "ffffffff-ffff-4fff-8fff-ffffffffffff"
+	if _, err = store.DB().ExecContext(ctx, `INSERT INTO agent_task_replays(owner_id,operation,idempotency_key,request_digest,response_json,created_at) VALUES($1,'cancel',$2,'stale-digest','{}',$3)`, owner, replayKey, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = queue.CancelTask(ctx, task.CancelCommand{OwnerID: owner, TaskID: stageID, ExpectedRevision: 2, Reason: "stop", At: now, Mutation: task.MutationCommand{IdempotencyKey: replayKey, ExpectedRevision: 2}}); err != task.ErrConflict {
+		t.Fatalf("execution_stage cancel replay bypassed kind fence: %v", err)
+	}
+	if _, err = queue.transition(ctx, task.Fence{TaskID: stageID, Attempt: 1, LeaseEpoch: 1, ExpectedRevision: 2}, task.StatusFailed, "legacy"); err != task.ErrLeaseConflict {
+		t.Fatalf("legacy transition mutated execution_stage task: %v", err)
 	}
 }

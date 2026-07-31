@@ -2,95 +2,33 @@ package aws
 
 import "context"
 
-// ProvisionMutationLocker acquires a bounded, owner/provision-scoped durable
-// lease for a GeoLibre provider mutation. Acquisition is non-blocking: a live
-// holder returns ErrConflict, and takeover is possible after expiry. The
-// release must be called even when the worker context is canceled.
-type ProvisionMutationLocker interface {
-	AcquireProvisionMutation(context.Context, string) (ProvisionMutationLease, error)
-}
-
-type ProvisionMutationReclaimer interface {
-	ClaimProvisionMutation(context.Context, string, string) (ProvisionMutationLease, error)
-}
-
-type ProvisionMutationLeaseIdentity interface {
-	Token() string
-	Epoch() int64
-}
-
-// ProvisionMutationOperationBinder associates the durable provider lease with
-// the operation before an external side effect starts. This lets a restarted
-// worker reclaim an expired active lease without ever stealing an unrelated
-// mutation.
-type ProvisionMutationOperationBinder interface {
-	BindOperation(context.Context, string) error
-}
-
-// ProvisionMutationLease is an owner/provision-scoped durable fencing handle.
-// Every operation is a token+epoch CAS; a stale holder cannot renew, assert,
-// or release a lease taken over after expiry.
-type ProvisionMutationLease interface {
-	Renew(context.Context) error
-	Assert(context.Context) error
-	MarkUncertain(context.Context, string) error
-	Release(context.Context) error
-}
-
-// Repository is the persistence boundary for AWS profiles, immutable plans
-// and change records. Implementations must serialize mutations and replay
-// identical idempotency keys without exposing credential bytes.
+// Repository is the owner-scoped credential persistence boundary. Secrets are
+// accepted only through Credentials and must be encrypted by the adapter.
 type Repository interface {
 	CreateCredential(context.Context, Credentials) (Credentials, error)
 	GetCredential(context.Context, string) (Credentials, error)
-	// GetCredentialRevision returns an immutable historical revision. It is
-	// intentionally separate from GetCredential, which is the current (and
-	// non-deleted) projection used by credential management.
 	GetCredentialRevision(context.Context, string, int64) (Credentials, error)
 	ListCredentials(context.Context, int, string) (CredentialPage, error)
 	UpdateCredential(context.Context, Credentials, int64) (Credentials, error)
 	DeleteCredential(context.Context, string, int64) error
 	RecordCredentialIdentity(context.Context, string, int64, Identity) (Credentials, error)
-	CreatePlan(context.Context, Plan) (Plan, error)
-	GetPlan(context.Context, string) (Plan, error)
-	ListPlans(context.Context, int, string) (PlanPage, error)
-	CreateChange(context.Context, Change) (Change, error)
-	GetChange(context.Context, string) (Change, error)
-	GetChangeByConfirmation(context.Context, string) (Change, error)
-	ListChanges(context.Context, int, string, string) (ChangePage, error)
-	UpdateChange(context.Context, Change, int64) (Change, error)
-	CreateProvision(context.Context, Provision) (Provision, error)
-	// RetryProvision explicitly re-arms a failed/destroyed deterministic
-	// provision after an owner-supplied revision and idempotency fence. It does
-	// not overwrite the row or erase prior change/event history.
-	RetryProvision(context.Context, string, int64, string) (Provision, error)
-	GetProvision(context.Context, string) (Provision, error)
-	GetProvisionByChange(context.Context, string) (Provision, error)
 }
 
-// CredentialMetadataRepository exposes immutable identity/revision metadata
-// without loading or decrypting the credential secret envelope. It is an
-// optional acceleration boundary used by plan read/list projections.
-type CredentialMetadataRepository interface {
-	GetCredentialRevisionMetadata(context.Context, string, int64) (Credentials, error)
+type CredentialReplayRepository interface {
+	ReplayCredential(context.Context, string, string, string) (CredentialView, bool, error)
+	ReplayCredentialTest(context.Context, string, int64, string, string) (CredentialTest, bool, error)
+	SaveCredentialIdempotent(context.Context, Credentials, string, string) (CredentialView, error)
+	ReplaceCredentialIdempotent(context.Context, Credentials, int64, string, string) (CredentialView, error)
+	DeleteCredentialIdempotent(context.Context, string, int64, string, string) error
+	TestCredentialIdempotent(context.Context, string, int64, Identity, string, string) (CredentialTest, error)
 }
 
 type CredentialRevisionRef struct {
 	ID       string
 	Revision int64
 }
-
 type CredentialMetadataBatchRepository interface {
 	ListCredentialRevisionMetadata(context.Context, []CredentialRevisionRef) (map[string]Credentials, error)
 }
 
-// EC2ProvisionRepository is the narrow atomic boundary for typed EC2 plans.
-// Implementations must persist the immutable plan and its planned provision in
-// one transaction and replay an identical idempotency key exactly.
-type EC2ProvisionRepository interface {
-	Repository
-	CreateEC2Provision(context.Context, Plan, Provision, string, string) (Plan, Provision, error)
-	CreateDerivedDeletePlan(context.Context, Plan) (Plan, error)
-	ListProvisions(context.Context, string, string, int, string) (Page[Provision], error)
-	ListProvisionEvents(context.Context, string, string, uint64, int) ([]ProvisionEvent, uint64, error)
-}
+type credentialReplayRepository = CredentialReplayRepository

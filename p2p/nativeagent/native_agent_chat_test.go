@@ -19,6 +19,8 @@ func TestAgentSystemPromptPrependsNativeProductRules(t *testing.T) {
 		"Dirextalk Native Agent",
 		"only the compiled Dirextalk tools",
 		"Shell commands, runtime CLI execution, mutable Skill operations",
+		"reservation target at revision 1 is non-executable",
+		"compute.provision Plan/Run",
 		"User configured system prompt.",
 		"Request scoped system prompt.",
 		"Extra prompt block.",
@@ -34,5 +36,8 @@ func TestAgentSystemPromptPrependsNativeProductRules(t *testing.T) {
 		if strings.Contains(prompt, forbidden) {
 			t.Fatalf("locked-down system prompt must not advertise %q: %q", forbidden, prompt)
 		}
+	}
+	if !strings.Contains(prompt, "Execution V2 tools") || strings.Contains(prompt, "Workload apply/destroy tools") {
+		t.Fatalf("system prompt must describe the Execution V2 planning boundary: %q", prompt)
 	}
 }

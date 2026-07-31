@@ -2,6 +2,22 @@
 
 Last updated: 2026-07-31
 
+## 2026-07-31 Execution V2 reset and direct-final schema
+
+The unreleased workload/provision/deployment V1 surface was removed rather
+than migrated. There is no V1 read, reconcile, destroy, retry, dashboard, or
+compatibility adapter, and no V1 row is converted into V2. GeoLibre exists
+only as a declarative recipe/test fixture.
+
+AWS credential CRUD/test remains available as reusable control-plane state.
+Execution V2 actions and capabilities stay unpublished until their
+PostgreSQL coordinator, durable dispatch fence, typed transport, and strict
+client contract are ready together.
+
+The migration history from upstream `main` through v77 is unchanged. All
+branch-only Agent and Execution V2 schema is created by one direct-final v78
+migration; there is no branch compatibility/backfill migration chain.
+
 ## 2026-07-31 Offline legacy model-secret upgrade
 
 `agent-secretctl upgrade` is the explicit one-shot migration for legacy
@@ -48,7 +64,7 @@ only one version field, or conflicting request/context pins, fails before a
 turn is reserved. Omitting the profile still resolves the owner's default
 conversation profile.
 
-## 2026-07-29 Single-service Embedded Eino ownership
+## 2026-07-29 Single-service Embedded Eino ownership (historical)
 
 The selectable/deployment-bound Agent Core service is retired. Message Server
 embeds Eino and publishes current Agent and management readiness only through
@@ -57,15 +73,10 @@ temporarily as an unavailable compatibility projection, and legacy
 `agent.core.*` action names remain wire-compatible names while implementations
 migrate in-process; neither implies a second service.
 
-`deployments.server` now reads the canonical in-process
-`core_workloads/core_workload_operations/core_workload_events` tables directly,
-not an external Core reconciliation projection. Public event sequence is
-allocated by a locked per-workload PostgreSQL counter.
-
-Task, confirmation, schedule, remote HTTPS MCP, AWS CloudFormation and typed
-AWS SSM/ECS workload implementations now run in-process and are checked for
-readiness both at discovery and invocation time. `skill` and
-`workload.core_runner` remain unavailable and are never advertised.
+The V1 workload/deployment paragraphs from this entry are superseded by the
+2026-07-31 reset above. Task, schedule, model, remote HTTPS MCP, and reusable
+AWS credential control remain in-process; project execution is rebuilt only
+on the V2 plan/run/stage contract.
 
 Remote MCP discovery is bounded to the fixed Official Registry, Smithery,
 Glama and GitHub catalogs. Existing `agent.core.mcp.*` DTOs keep their
@@ -80,29 +91,11 @@ capabilities without disabling ordinary Matrix/ProductCore routes. The same
 image exposes one-shot `agent-secretctl init|upgrade|verify|rotate`; legacy
 model rows are not upgraded automatically at startup.
 
-## 2026-07-28 Agent Core deployment ledger and dashboard
+## 2026-07-28 Agent Core deployment ledger and dashboard (removed)
 
-Added owner-only read actions `agent.core.dashboard.get`,
-`agent.core.deployments.list`, `.get`, and `.events`. The server maintains an
-owner-fenced PostgreSQL deployment projection and ordered operation events for
-the canonical `agent.core.workloads.*` apply/destroy mutations. Deployment
-objects expose sanitized target identity and nullable cost fields; credentials,
-secret grants, raw templates, and provider payloads are never persisted.
-`deployments.server` is advertised when durable deployment storage is
-configured. It is returned in
-`agent.backends.get.embedded.capabilities` because the deployment ledger is
-Message Server-owned; clients do not require Core readiness for ledger reads.
-
-Dashboard aggregation is additive and honest: the response includes required
-`partial` and `warnings` fields. Warning values are stable non-sensitive codes
-(`tasks_unavailable`, `schedules_unavailable`, or
-`confirmations_unavailable`) when an auxiliary aggregate cannot be read;
-deployment projection data remains available.
-Deployment event readbacks expose a deterministic `event_id`, owner-workload
-monotonic `sequence`, `type`, `status`, empty redacted `message`,
-`occurred_at`, and optional sanitized `actual`. Core operation sequence cursors
-remain internal so an apply/destroy sequence restart cannot move the public
-workload cursor backwards.
+This unreleased V1 contract and its tables/actions were deleted by the
+2026-07-31 V2 reset. It is retained here only as historical context and is not
+an advertised or callable interface.
 
 ## 2026-07-28 Native Agent model input modalities and managed knowledge
 
@@ -1176,5 +1169,44 @@ Owner access tokens are used only at the Product API boundary. The Unix updater 
 Hardening follow-up: client reports now carry the authenticated portal device/session from HTTP authorization or WS ticket creation and reject stale sessions with `client_session_stale`. Persistence uses a narrow device-CAS update, while same-device full portal saves preserve client build fields and device switches clear them atomically. Status always overwrites updater `current_version`/`client_version` echoes with local facts. If account deletion fails after setting `deprovisioned`, the backend best-effort restores `running`; a failed restoration returns `account_delete_watchdog_restore_failed` without upstream details.
 
 Same-device password-rotation follow-up: `portal.password` serializes its access-token/session-generation mutation and portal persistence with `client.version.report` validation/CAS. The lock is released before Matrix-session refresh, preventing both stale-report persistence and recursive mutex acquisition without changing the public action envelope.
+
+## 2026-07-31 — execution.v2 owner action envelope
+
+The ProductCore registry now defines the owner-only HTTP+WS action names
+`projects.analyze`, `analyses.*`, `targets.*`, `plans.*`, `deployments.*`,
+`runs.*`, `confirmations.*`, `artifacts.get`, and `service_bindings.*`.
+Mutation requests require UUID `idempotency_key`; revisioned changes require
+`expected_revision`. Unknown fields and client-supplied digests are rejected.
+The dedicated execution port is readiness-gated and returns stable
+`execution_v2_not_ready` until a typed store/coordinator/provider dependency is
+explicitly enabled. No SSH or generic HTTP provider capability is advertised.
+
+The bootstrap path is also server-authoritative. A successful
+`projects.analyze` creates the stable project row in the same idempotent
+transaction as its first immutable analysis, so no separate client-created
+project prerequisite exists. `targets.import` accepts only an exact verified
+AWS credential revision, EC2 instance ID, and idempotency key; account, region,
+profile, capabilities, target/observation identities, revisions, and digests
+are derived by the server. The action succeeds only after STS account binding,
+running Linux EC2 identity, and SSM Online state are verified and the initial
+observation is durably recorded.
+
+`targets.reserve` is an additive owner-only reservation action for the V2
+two-plan EC2 bootstrap. Its request contains only an exact verified AWS
+credential revision, an instance-type selection, volume size, and UUID
+idempotency key. The server owns account, region, infrastructure profile, AMI
+parameter, architecture, SSM management mode, network policy, cost quote,
+target identity, revision, and digests. It creates only revision 1 with
+`kind=aws_compute_reservation`; it does not call AWS. The corresponding
+`aws-ec2-provision` Recipe and typed CloudFormation intent/readback contract
+are production-wired. `execution.v2.provision` is advertised only while the
+durable SQL intent store, live AWS reservation catalog, typed CloudFormation
+provider, worker lifecycle, and provider reconciliation loop are all ready.
+
+Imported EC2 targets now receive the `observed_https_egress` network envelope
+only after `DescribeSecurityGroups` proves public TCP/443 egress for the exact
+attached security-group set. The target and observation bind that proof by
+digest, and SSM pre-dispatch inspection must prove it again; running EC2 and
+SSM Online status alone never authorizes registry HTTPS access.
 
 Watchdog follow-up: `release.v1.status` now includes an additive `watchdog` object with `status`, derived `degraded`, optional RFC3339 `cooldown_until` / `last_observed_at`, and stable `error_code`. The backend allowlists these fields from the Unix updater response, normalizes timestamps, derives `degraded` from the allowlisted status, and never forwards repair attempt history, service/image input, control data, or updater-only fields. Older or unavailable updater responses map to `watchdog.status="unknown"` with no repair operation inferred by the client.

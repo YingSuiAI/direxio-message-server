@@ -13,8 +13,8 @@ import (
 
 func ptrTime(value time.Time) *time.Time { return &value }
 
-// ensureScheduleRunLink repairs the nullable v102 links left by older rows,
-// while rejecting a row that belongs to a different deterministic identity.
+// ensureScheduleRunLink fills optional links on an existing run while
+// rejecting a row that belongs to a different deterministic identity.
 func ensureScheduleRunLink(ctx context.Context, tx *sql.Tx, owner, scheduleID string, scheduledFor time.Time, status string, startedAt *time.Time, runID, occurrenceID, taskID string) error {
 	var existingRun string
 	var existingOccurrence, existingTask sql.NullString
@@ -60,8 +60,8 @@ func ensureScheduleOccurrenceLink(ctx context.Context, tx *sql.Tx, owner, schedu
 	return nil
 }
 
-// MaterializeScheduleTask atomically links one legacy schedule run to one
-// generic task. The deterministic IDs make retries and multiple workers safe.
+// MaterializeScheduleTask atomically links one schedule run to one generic
+// task. The deterministic IDs make retries and multiple workers safe.
 func (s *DatabaseStore) MaterializeScheduleTask(ctx context.Context, owner, scheduleID string, at time.Time) (string, string, error) {
 	if s == nil || s.db == nil || owner == "" || scheduleID == "" || at.IsZero() {
 		return "", "", task.ErrInvalid

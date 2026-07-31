@@ -91,7 +91,8 @@ The external `POST /mcp` transport must call the same `internal/dirextalkmcp` se
 - `P2P_NATIVE_AGENT_DATA_DIR` configures the Agent data directory.
 - Default data dir is `/var/dirextalk-message-server/agent`.
 - Docker compose mounts the durable Agent data directory for the secret keyring;
-  PostgreSQL owns task, confirmation, extension and workload metadata.
+  PostgreSQL owns task, confirmation, extension, Execution V2 plan/run,
+  receipt and service-binding metadata.
 - Homeserver/sync DB access is read-only. Native Agent must not write Matrix tables directly.
 
 ## Acceptance

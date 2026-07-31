@@ -89,7 +89,7 @@ func (o AgentSecretRotationOptions) normalized() (AgentSecretRotationOptions, er
 }
 
 // VerifyAgentSecretDatabase validates all generic and model-profile envelopes.
-// Model rows must satisfy the durable v107 empty-or-keyring invariant; unknown
+// Model rows must satisfy the final-schema empty-or-keyring invariant; unknown
 // keys, malformed bindings and authentication failures fail verification.
 func VerifyAgentSecretDatabase(ctx context.Context, db *sql.DB, options AgentSecretRotationOptions) error {
 	if db == nil {

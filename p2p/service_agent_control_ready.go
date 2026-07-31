@@ -10,26 +10,24 @@ type nativeAgentControlRequirement struct {
 func nativeAgentControlRequirements(action string) (nativeAgentControlRequirement, bool) {
 	switch strings.TrimSpace(action) {
 	case "agent.core.aws.credentials.list",
-		"agent.core.aws.credentials.test",
-		"agent.core.aws.ec2_provisions.plan",
-		"agent.core.aws.ec2_provisions.get",
-		"agent.core.aws.ec2_provisions.list",
-		"agent.core.aws.ec2_provisions.events",
-		"agent.core.aws.ec2_provisions.create.request",
-		"agent.core.aws.ec2_provisions.destroy.request":
+		"agent.core.aws.credentials.test":
 		return nativeAgentControlRequirement{all: []string{"aws.control"}}, true
-	case "agent.core.aws.ec2_provisions.geolibre_install.plan",
-		"agent.core.aws.ec2_provisions.geolibre_install.request":
-		return nativeAgentControlRequirement{all: []string{"aws.control", "workload.aws_ssm"}}, true
-	case "agent.core.workloads.operations.get",
-		"agent.core.workloads.operations.events",
-		"agent.core.workloads.operations.reconcile",
-		"agent.core.workloads.actual.get":
-		return nativeAgentControlRequirement{any: []string{"workload.aws_ssm", "workload.aws_ecs"}}, true
-	case "agent.core.deployments.list",
-		"agent.core.deployments.get",
-		"agent.core.deployments.events":
-		return nativeAgentControlRequirement{all: []string{"deployments.server"}}, true
+	case "agent.execution.v2.projects.analyze",
+		"agent.execution.v2.plans.create",
+		"agent.execution.v2.plans.get":
+		return nativeAgentControlRequirement{all: []string{"execution.v2.plan"}}, true
+	case "agent.execution.v2.targets.list",
+		"agent.execution.v2.targets.get":
+		return nativeAgentControlRequirement{all: []string{"execution.v2"}}, true
+	case "agent.execution.v2.runs.create",
+		"agent.execution.v2.runs.get",
+		"agent.execution.v2.runs.events":
+		return nativeAgentControlRequirement{all: []string{"execution.v2.run"}}, true
+	case "agent.execution.v2.service_bindings.list",
+		"agent.execution.v2.service_bindings.get":
+		return nativeAgentControlRequirement{all: []string{"execution.v2.bindings"}}, true
+	case "agent.execution.v2.service_bindings.invoke":
+		return nativeAgentControlRequirement{all: []string{"execution.v2.bindings", "execution.v2.transport.http_api"}}, true
 	default:
 		return nativeAgentControlRequirement{}, false
 	}

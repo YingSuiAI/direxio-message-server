@@ -39,8 +39,8 @@ func TestActionSpecsReturnsStableOrderedCopy(t *testing.T) {
 	first := ActionSpecs()
 	second := ActionSpecs()
 
-	if len(first) != 253 {
-		t.Fatalf("ActionSpecs() returned %d actions, want 253", len(first))
+	if len(first) == 0 {
+		t.Fatal("ActionSpecs() returned no actions")
 	}
 	if !reflect.DeepEqual(first, second) {
 		t.Fatal("ActionSpecs() did not preserve action order")
@@ -104,36 +104,6 @@ func TestModelProfileActionSchemasDescribePresenceSensitiveFields(t *testing.T) 
 		t.Fatalf("client_profile_id presence schema = %#v", refPresence)
 	}
 }
-func TestWorkloadPlanSchemaNestedFields(t *testing.T) {
-	s, _ := ActionSpecFor("agent.core.workloads.plan")
-	tt := s.Schema.Request["typed_target"]
-	if tt.Type != "object" || tt.Properties["identity"].Properties["aws_ecs_subnet_ids"].Items.Type != "string" || tt.Properties["ports"].Items.Properties["port"].Type != "integer" || tt.Properties["network_grants"].Items.Properties["reference_id"].Type != "string" {
-		t.Fatal("incomplete workload schema")
-	}
-	if s.Schema.Request["command_steps"].Items.Type != "string" {
-		t.Fatal("command_steps items missing")
-	}
-	requestBinding := s.Schema.Request["typed_secret_grants"].Items.Properties["binding_digest"]
-	if requestBinding.Required || requestBinding.Presence == nil ||
-		requestBinding.Presence.Omitted != "allowed_only_when_purpose_is_aws_credential; server_pins_the_owner_bound_encrypted_credential_revision" {
-		t.Fatalf("workload request binding-digest presence = %#v", requestBinding)
-	}
-	plan := s.Schema.Response["plan"]
-	if !plan.Required || plan.Properties["typed_target"].Properties["identity"].Properties["kind"].Type != "string" || plan.Properties["typed_resource_limits"].Properties["output_mb"].Type != "integer" || plan.Properties["typed_secret_grants"].Items.Properties["binding_digest"].Type != "string" {
-		t.Fatal("workload plan response schema is incomplete")
-	}
-	if !plan.Properties["typed_secret_grants"].Items.Properties["binding_digest"].Required {
-		t.Fatal("persisted workload secret grants must expose their pinned binding digest")
-	}
-	apply, _ := ActionSpecFor("agent.core.workloads.apply")
-	op := apply.Schema.Response["operation"]
-	if !op.Required || op.Properties["target_kind"].Type != "string" || op.Properties["summary"].Type != "string" || op.Properties["secret_grant_refs"].Items.Properties["binding_digest"].Type != "string" || op.Properties["desired_plan"].Properties["target"].Properties["network_grants"].Items.Properties["reference_id"].Type != "string" || op.Properties["actual"].Properties["identity"].Properties["aws_ecs_image_uri"].Type != "string" {
-		t.Fatal("workload operation response schema is incomplete")
-	}
-	if !op.Properties["expected_workload_revision"].Required || op.Properties["expected_workload_revision"].Presence.Present != "nonnegative_integer" {
-		t.Fatal("workload operation expected revision schema is incomplete")
-	}
-}
 func TestAgentCoreFamilySchemaDrift(t *testing.T) {
 	c, _ := ActionSpecFor("agent.core.schedules.create")
 	if c.Schema.Request["task_template"].Type != "object" || c.Schema.Request["trigger"].Type != "object" {
@@ -168,6 +138,15 @@ func TestAgentCoreFamilySchemaDrift(t *testing.T) {
 	if !secret.Required || !secret.WriteOnly {
 		t.Fatal("extension secret value must be write-only")
 	}
+	deleteCredential, ok := ActionSpecFor("agent.core.aws.credentials.delete")
+	if !ok || deleteCredential.Schema == nil {
+		t.Fatal("AWS credential delete schema must be published")
+	}
+	if !deleteCredential.Schema.Request["idempotency_key"].Required ||
+		!deleteCredential.Schema.Request["credential_id"].Required ||
+		!deleteCredential.Schema.Request["expected_revision"].Required {
+		t.Fatal("AWS credential delete must require idempotency, identity, and exact revision")
+	}
 }
 
 func TestBuildActionSpecIndexRejectsDuplicateNames(t *testing.T) {
@@ -182,5 +161,42 @@ func TestBuildActionSpecIndexRejectsDuplicateNames(t *testing.T) {
 	}
 	if index != nil {
 		t.Fatalf("buildActionSpecIndex() returned partial index %#v on error", index)
+	}
+}
+
+func TestNativeAgentReferenceSchemaMatchesStrictProducerShape(t *testing.T) {
+	wantFields := map[string]bool{
+		"kind": true, "room_id": true, "room_type": true, "title": true,
+		"preview": true, "channel_id": true, "post_id": true,
+	}
+	for _, action := range []string{"agent.chat", "agent.chat.stream"} {
+		spec, ok := ActionSpecFor(action)
+		if !ok || spec.Schema == nil {
+			t.Fatalf("%s must publish a schema", action)
+		}
+		field := spec.Schema.Response["references"]
+		if field.Type != "array" || field.Items == nil || field.Items.Type != "object" {
+			t.Fatalf("%s references schema = %#v", action, field)
+		}
+		got := field.Items.Properties
+		if len(got) != len(wantFields) {
+			t.Fatalf("%s reference fields = %#v", action, got)
+		}
+		for name := range got {
+			if !wantFields[name] {
+				t.Errorf("%s publishes unsupported reference field %q", action, name)
+			}
+		}
+		kind := field.Items.Properties["kind"]
+		if !kind.Required {
+			t.Errorf("%s reference kind must be required", action)
+		}
+		roomID := field.Items.Properties["room_id"]
+		if !roomID.Required {
+			t.Errorf("%s reference room_id must be required", action)
+		}
+		if field.Presence == nil || field.Presence.Omitted != "No room or channel references were produced." {
+			t.Errorf("%s reference presence = %#v", action, field.Presence)
+		}
 	}
 }

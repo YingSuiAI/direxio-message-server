@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -10,7 +11,6 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
-	workload "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcontrol/aws/workload"
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcontrol/confirmation"
 )
 
@@ -43,27 +43,145 @@ func testConfirmationBinding(t *testing.T) confirmation.Binding {
 	return binding
 }
 
-func testWorkloadBinding(t *testing.T, kind workload.OperationKind, targetKind workload.TargetKind) confirmation.Binding {
+func testExecutionV2ConfirmationBinding(t *testing.T) confirmation.Binding {
 	t.Helper()
-	p := workload.Plan{
-		ID:         "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-		Revision:   3,
-		Digest:     strings.Repeat("b", 64),
-		TargetKind: targetKind,
-		Target: workload.TargetSettings{Identity: workload.TargetIdentity{
-			Kind:       targetKind,
-			AccountID:  "123456789012",
-			Region:     "ap-east-1",
-			InstanceID: "i-0123456789abcdef0",
-		}},
-	}
-	binding := workload.BindingForOperation(p, testConfirmationTarget, kind)
-	binding.OwnerID = testConfirmationOwner
-	normalized, err := binding.Normalize()
+	digest := confirmation.Digest(strings.Repeat("a", 64))
+	binding, err := (confirmation.Binding{
+		OwnerID: testConfirmationOwner, OperationDomain: "execution:v2:remote_execution", TargetID: testConfirmationTarget, TargetRevision: 3, TargetKind: "aws_ec2_instance",
+		ContentDigest: digest, ExecutionDigest: digest, ParameterDigest: digest, NetworkDigest: digest, SecretGrantDigest: digest,
+		PlanID: "44444444-4444-4444-8444-444444444444", PlanRevision: 2, PlanDigest: digest,
+		DeploymentID: "55555555-5555-4555-8555-555555555555", RunID: "66666666-6666-4666-8666-666666666666", RunRevision: 3,
+		StageID: "77777777-7777-4777-8777-777777777777", StageRevision: 1, StageDigest: digest, TargetDigest: digest,
+		ArtifactSetDigest: digest, PolicyDigest: digest, CostQuoteDigest: digest, RollbackDigest: digest, PreviewDigest: digest,
+		RiskLevel: "R2", GateType: "remote_execution", StageIdempotencyKey: "88888888-8888-4888-8888-888888888888",
+		BindingExpiresAt: time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC),
+	}).Normalize()
 	if err != nil {
 		t.Fatal(err)
 	}
-	return normalized
+	return binding
+}
+
+func TestDatabaseExpireAtExecutionV2FailsBeforeTerminalMutation(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	b := testExecutionV2ConfirmationBinding(t)
+	at := time.Date(2031, 1, 1, 0, 0, 0, 0, time.UTC)
+	mock.ExpectBegin()
+	expectConfirmationIdentity(mock, testConfirmationOwner)
+	expectConfirmationTaskLock(mock, "waiting_user", 0, 0, 1, nil)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT confirmation_id::text,owner_id,operation_domain,target_id,target_revision,binding_digest,binding_json,task_id::text,state,revision,created_at,updated_at,expires_at,terminal_reason FROM agent_confirmations")).WithArgs(testConfirmationOwner, testConfirmationID).WillReturnRows(testConfirmationRows(t, b, confirmation.StatePending, 1, at.Add(-time.Hour), at.Add(-time.Hour), at.Add(-time.Minute), ""))
+	mock.ExpectRollback()
+	if err := NewDatabaseConfirmationStore(db).ExpireAt(context.Background(), testConfirmationOwner, testConfirmationID, at); !errors.Is(err, confirmation.ErrConflict) {
+		t.Fatalf("ExpireAt() = %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDatabaseExpireOverdueExecutionV2FailsBeforeTerminalMutation(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	b := testExecutionV2ConfirmationBinding(t)
+	at := time.Date(2031, 1, 1, 0, 0, 0, 0, time.UTC)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT confirmation_id::text\nFROM agent_confirmations")).WithArgs(testConfirmationOwner, "", "", at, maxOverdueSweepCandidates).WillReturnRows(sqlmock.NewRows([]string{"confirmation_id"}).AddRow(testConfirmationID))
+	mock.ExpectBegin()
+	expectConfirmationIdentity(mock, testConfirmationOwner)
+	expectConfirmationTaskLock(mock, "waiting_user", 0, 0, 1, nil)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT confirmation_id::text,owner_id,operation_domain,target_id,target_revision,binding_digest,binding_json,task_id::text,state,revision,created_at,updated_at,expires_at,terminal_reason FROM agent_confirmations")).WithArgs(testConfirmationOwner, testConfirmationID).WillReturnRows(testConfirmationRows(t, b, confirmation.StatePending, 1, at.Add(-time.Hour), at.Add(-time.Hour), at.Add(-time.Minute), ""))
+	mock.ExpectRollback()
+	if err := NewDatabaseConfirmationStore(db).ExpireOverdue(context.Background(), testConfirmationOwner, at); !errors.Is(err, confirmation.ErrConflict) {
+		t.Fatalf("ExpireOverdue() = %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDatabaseConfirmationGenericV2ConfirmAndConsumeFailClosed(t *testing.T) {
+	t.Run("confirm", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		binding := testExecutionV2ConfirmationBinding(t)
+		at := time.Date(2029, 1, 1, 0, 0, 0, 0, time.UTC)
+		command := confirmation.ConfirmCommand{OwnerID: testConfirmationOwner, ConfirmationID: testConfirmationID, IdempotencyKey: "99999999-9999-4999-8999-999999999999", ExpectedRevision: 1, Binding: binding, At: at}
+		mock.ExpectBegin()
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT confirmation_id::text,owner_id,operation_domain,target_id,target_revision,binding_digest,binding_json,task_id::text,state,revision,created_at,updated_at,expires_at,terminal_reason FROM agent_confirmations")).WithArgs(testConfirmationOwner, testConfirmationID).WillReturnRows(testConfirmationRows(t, binding, confirmation.StatePending, 1, at.Add(-time.Minute), at.Add(-time.Minute), binding.BindingExpiresAt, ""))
+		mock.ExpectRollback()
+		if _, err = NewDatabaseConfirmationStore(db).Confirm(t.Context(), command); !errors.Is(err, confirmation.ErrConflict) {
+			t.Fatalf("Confirm() error = %v, want ErrConflict", err)
+		}
+		if err = mock.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("consume", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		binding := testExecutionV2ConfirmationBinding(t)
+		at := time.Date(2029, 1, 1, 0, 0, 0, 0, time.UTC)
+		command := confirmation.ConsumeCommand{OwnerID: testConfirmationOwner, ConfirmationID: testConfirmationID, IdempotencyKey: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", TaskID: testConfirmationTaskID, Attempt: 2, LeaseEpoch: 7, ExpectedRevision: 3, ExpectedTaskRevision: 9, Binding: binding, At: at}
+		mock.ExpectBegin()
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT confirmation_id::text,owner_id,operation_domain,target_id,target_revision,binding_digest,binding_json,task_id::text,state,revision,created_at,updated_at,expires_at,terminal_reason FROM agent_confirmations")).WithArgs(testConfirmationOwner, testConfirmationID).WillReturnRows(testConfirmationRows(t, binding, confirmation.StateConfirmed, 3, at.Add(-time.Minute), at.Add(-time.Minute), binding.BindingExpiresAt, ""))
+		mock.ExpectRollback()
+		if _, err = NewDatabaseConfirmationStore(db).Consume(t.Context(), command); !errors.Is(err, confirmation.ErrConflict) {
+			t.Fatalf("Consume() error = %v, want ErrConflict", err)
+		}
+		if err = mock.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("confirm replay hit", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		binding := testExecutionV2ConfirmationBinding(t)
+		at := time.Date(2029, 1, 1, 0, 0, 0, 0, time.UTC)
+		command := confirmation.ConfirmCommand{OwnerID: testConfirmationOwner, ConfirmationID: testConfirmationID, IdempotencyKey: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", ExpectedRevision: 1, Binding: binding, At: at}
+		mock.ExpectBegin()
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT confirmation_id::text,owner_id,operation_domain,target_id,target_revision,binding_digest,binding_json,task_id::text,state,revision,created_at,updated_at,expires_at,terminal_reason FROM agent_confirmations")).WithArgs(testConfirmationOwner, testConfirmationID).WillReturnRows(testConfirmationRows(t, binding, confirmation.StatePending, 1, at.Add(-time.Minute), at.Add(-time.Minute), binding.BindingExpiresAt, ""))
+		mock.ExpectRollback()
+		if _, err = NewDatabaseConfirmationStore(db).Confirm(t.Context(), command); !errors.Is(err, confirmation.ErrConflict) {
+			t.Fatalf("Confirm replay error = %v, want ErrConflict", err)
+		}
+		if err = mock.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("consume replay hit", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		binding := testExecutionV2ConfirmationBinding(t)
+		at := time.Date(2029, 1, 1, 0, 0, 0, 0, time.UTC)
+		command := confirmation.ConsumeCommand{OwnerID: testConfirmationOwner, ConfirmationID: testConfirmationID, IdempotencyKey: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", TaskID: testConfirmationTaskID, Attempt: 2, LeaseEpoch: 7, ExpectedRevision: 3, ExpectedTaskRevision: 9, Binding: binding, At: at}
+		mock.ExpectBegin()
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT confirmation_id::text,owner_id,operation_domain,target_id,target_revision,binding_digest,binding_json,task_id::text,state,revision,created_at,updated_at,expires_at,terminal_reason FROM agent_confirmations")).WithArgs(testConfirmationOwner, testConfirmationID).WillReturnRows(testConfirmationRows(t, binding, confirmation.StateConfirmed, 3, at.Add(-time.Minute), at.Add(-time.Minute), binding.BindingExpiresAt, ""))
+		mock.ExpectRollback()
+		if _, err = NewDatabaseConfirmationStore(db).Consume(t.Context(), command); !errors.Is(err, confirmation.ErrConflict) {
+			t.Fatalf("Consume replay error = %v, want ErrConflict", err)
+		}
+		if err = mock.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
+		}
+	})
 }
 
 func testConfirmationRows(t *testing.T, binding confirmation.Binding, state confirmation.State, revision int64, createdAt, updatedAt, expiresAt time.Time, reason string) *sqlmock.Rows {
@@ -104,10 +222,13 @@ func expectConfirmationReplayMiss(mock sqlmock.Sqlmock, owner, operation, key st
 		WillReturnError(sql.ErrNoRows)
 }
 
+func expectConfirmationPreflight(t *testing.T, mock sqlmock.Sqlmock, binding confirmation.Binding, state confirmation.State, revision int64, createdAt, updatedAt, expiresAt time.Time, reason string) {
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT confirmation_id::text,owner_id,operation_domain,target_id,target_revision,binding_digest,binding_json,task_id::text,state,revision,created_at,updated_at,expires_at,terminal_reason FROM agent_confirmations")).
+		WithArgs(testConfirmationOwner, testConfirmationID).
+		WillReturnRows(testConfirmationRows(t, binding, state, revision, createdAt, updatedAt, expiresAt, reason))
+}
+
 func expectConfirmationIdentity(mock sqlmock.Sqlmock, owner string) {
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT owner_id,COALESCE(provision_id::text,'') FROM core_aws_changes")).
-		WithArgs(owner, testConfirmationID).
-		WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT owner_id,task_id::text FROM agent_confirmations")).
 		WithArgs(testConfirmationID, owner).
 		WillReturnRows(sqlmock.NewRows([]string{"owner_id", "task_id"}).AddRow(testConfirmationOwner, testConfirmationTaskID))
@@ -143,6 +264,7 @@ func TestDatabaseConfirmationConfirmPersistsAndReplaysResponse(t *testing.T) {
 	digest := confirmation.RequestDigestForConfirm(command)
 
 	mock.ExpectBegin()
+	expectConfirmationPreflight(t, mock, binding, confirmation.StatePending, 1, at.Add(-time.Minute), at.Add(-time.Minute), expiresAt, "")
 	expectConfirmationReplayMiss(mock, testConfirmationOwner, "confirm", key)
 	expectConfirmationIdentity(mock, testConfirmationOwner)
 	expectConfirmationTaskLock(mock, "waiting_user", 0, 0, 7, nil)
@@ -179,12 +301,16 @@ func TestDatabaseConfirmationConfirmPersistsAndReplaysResponse(t *testing.T) {
 	}
 
 	mock.ExpectBegin()
+	expectConfirmationPreflight(t, mock, binding, confirmation.StateConfirmed, 2, at.Add(-time.Minute), at, expiresAt, "")
 	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")).
 		WithArgs(canonicalAdvisoryLockIdentity("agent-confirmation", testConfirmationOwner, "confirm", key)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT request_digest,response_json FROM agent_confirmation_replays")).
 		WithArgs(testConfirmationOwner, "confirm", key).
 		WillReturnRows(sqlmock.NewRows([]string{"request_digest", "response_json"}).AddRow(string(digest), replayJSON))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT confirmation_id::text,owner_id,operation_domain,target_id,target_revision,binding_digest,binding_json,task_id::text,state,revision,created_at,updated_at,expires_at,terminal_reason FROM agent_confirmations")).
+		WithArgs(testConfirmationOwner, testConfirmationID).
+		WillReturnRows(testConfirmationRows(t, binding, confirmation.StateConfirmed, 2, at.Add(-time.Minute), at, expiresAt, ""))
 	mock.ExpectRollback()
 
 	second, err := store.Confirm(t.Context(), command)
@@ -212,6 +338,7 @@ func TestDatabaseConfirmationConfirmLateExpiryTerminalizesBeforeReturning(t *tes
 	command := confirmation.ConfirmCommand{OwnerID: testConfirmationOwner, ConfirmationID: testConfirmationID, IdempotencyKey: key, ExpectedRevision: 1, Binding: binding, At: at}
 
 	mock.ExpectBegin()
+	expectConfirmationPreflight(t, mock, binding, confirmation.StatePending, 1, at.Add(-time.Hour), at.Add(-time.Minute), at, "")
 	expectConfirmationReplayMiss(mock, testConfirmationOwner, "confirm", key)
 	expectConfirmationIdentity(mock, testConfirmationOwner)
 	expectConfirmationTaskLock(mock, "waiting_user", 1, 1, 7, nil)
@@ -229,6 +356,7 @@ func TestDatabaseConfirmationConfirmLateExpiryTerminalizesBeforeReturning(t *tes
 		t.Fatalf("expected expired confirmation, got %v", err)
 	}
 	mock.ExpectBegin()
+	expectConfirmationPreflight(t, mock, binding, confirmation.StateExpired, 2, at.Add(-time.Hour), at, at, confirmation.ReasonExpired)
 	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")).WithArgs(canonicalAdvisoryLockIdentity("agent-confirmation", testConfirmationOwner, "confirm", key)).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT request_digest,response_json FROM agent_confirmation_replays")).WithArgs(testConfirmationOwner, "confirm", key).WillReturnRows(sqlmock.NewRows([]string{"request_digest", "response_json"}).AddRow(string(confirmation.RequestDigestForConfirm(command)), terminalConfirmationReplayJSON(t, expired)))
 	mock.ExpectRollback()
@@ -239,6 +367,7 @@ func TestDatabaseConfirmationConfirmLateExpiryTerminalizesBeforeReturning(t *tes
 	conflictCommand := command
 	conflictCommand.ExpectedRevision = 2
 	mock.ExpectBegin()
+	expectConfirmationPreflight(t, mock, binding, confirmation.StateExpired, 2, at.Add(-time.Hour), at, at, confirmation.ReasonExpired)
 	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")).WithArgs(canonicalAdvisoryLockIdentity("agent-confirmation", testConfirmationOwner, "confirm", key)).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT request_digest,response_json FROM agent_confirmation_replays")).WithArgs(testConfirmationOwner, "confirm", key).WillReturnRows(sqlmock.NewRows([]string{"request_digest", "response_json"}).AddRow(string(confirmation.RequestDigestForConfirm(command)), terminalConfirmationReplayJSON(t, expired)))
 	mock.ExpectRollback()
@@ -274,6 +403,7 @@ func TestDatabaseConfirmationRejectAtomicallyCancelsTaskAndPersistsReplay(t *tes
 	digest := confirmation.RequestDigestForReject(command)
 
 	mock.ExpectBegin()
+	expectConfirmationPreflight(t, mock, binding, confirmation.StatePending, 1, at.Add(-time.Minute), at.Add(-time.Minute), expiresAt, "")
 	expectConfirmationReplayMiss(mock, testConfirmationOwner, "reject", key)
 	expectConfirmationIdentity(mock, testConfirmationOwner)
 	expectConfirmationTaskLock(mock, "waiting_user", 0, 0, 7, nil)
@@ -325,6 +455,7 @@ func TestDatabaseConfirmationRejectLateExpiryTerminalizesBeforeReturning(t *test
 	command := confirmation.RejectCommand{OwnerID: testConfirmationOwner, ConfirmationID: testConfirmationID, IdempotencyKey: key, ExpectedRevision: 1, Reason: "too late", At: at}
 
 	mock.ExpectBegin()
+	expectConfirmationPreflight(t, mock, binding, confirmation.StatePending, 1, at.Add(-time.Hour), at.Add(-time.Minute), at, "")
 	expectConfirmationReplayMiss(mock, testConfirmationOwner, "reject", key)
 	expectConfirmationIdentity(mock, testConfirmationOwner)
 	expectConfirmationTaskLock(mock, "waiting_user", 1, 1, 7, nil)
@@ -342,6 +473,7 @@ func TestDatabaseConfirmationRejectLateExpiryTerminalizesBeforeReturning(t *test
 		t.Fatalf("expected expired confirmation, got %v", err)
 	}
 	mock.ExpectBegin()
+	expectConfirmationPreflight(t, mock, binding, confirmation.StateExpired, 2, at.Add(-time.Hour), at, at, confirmation.ReasonExpired)
 	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")).WithArgs(canonicalAdvisoryLockIdentity("agent-confirmation", testConfirmationOwner, "reject", key)).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT request_digest,response_json FROM agent_confirmation_replays")).WithArgs(testConfirmationOwner, "reject", key).WillReturnRows(sqlmock.NewRows([]string{"request_digest", "response_json"}).AddRow(string(confirmation.RequestDigestForReject(command)), terminalConfirmationReplayJSON(t, expired)))
 	mock.ExpectRollback()
@@ -352,66 +484,12 @@ func TestDatabaseConfirmationRejectLateExpiryTerminalizesBeforeReturning(t *test
 	conflictCommand := command
 	conflictCommand.Reason = "different"
 	mock.ExpectBegin()
+	expectConfirmationPreflight(t, mock, binding, confirmation.StateExpired, 2, at.Add(-time.Hour), at, at, confirmation.ReasonExpired)
 	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")).WithArgs(canonicalAdvisoryLockIdentity("agent-confirmation", testConfirmationOwner, "reject", key)).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT request_digest,response_json FROM agent_confirmation_replays")).WithArgs(testConfirmationOwner, "reject", key).WillReturnRows(sqlmock.NewRows([]string{"request_digest", "response_json"}).AddRow(string(confirmation.RequestDigestForReject(command)), terminalConfirmationReplayJSON(t, expired)))
 	mock.ExpectRollback()
 	if _, err = store.Reject(t.Context(), conflictCommand); !errors.Is(err, confirmation.ErrIdempotencyConflict) {
 		t.Fatalf("different digest error = %v", err)
-	}
-	if err = mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestDatabaseConfirmationRejectTerminalizesLinkedWorkloadOperation(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	store := NewDatabaseConfirmationStore(db)
-	binding := testWorkloadBinding(t, workload.OperationApply, workload.TargetAWSEC2SSM)
-	at := time.Date(2026, 7, 29, 8, 45, 0, 0, time.UTC)
-	expiresAt := at.Add(time.Hour)
-	key := "46464646-4646-4646-8464-464646464646"
-	operationID := "77777777-7777-4777-8777-777777777777"
-	workloadID := testConfirmationTarget
-	command := confirmation.RejectCommand{
-		OwnerID:          testConfirmationOwner,
-		ConfirmationID:   testConfirmationID,
-		IdempotencyKey:   key,
-		ExpectedRevision: 1,
-		Reason:           "not approved",
-		At:               at,
-	}
-	digest := confirmation.RequestDigestForReject(command)
-
-	mock.ExpectBegin()
-	expectConfirmationReplayMiss(mock, testConfirmationOwner, "reject", key)
-	expectConfirmationIdentity(mock, testConfirmationOwner)
-	expectConfirmationTaskLock(mock, "waiting_user", 1, 1, 7, nil)
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT confirmation_id::text,owner_id,operation_domain,target_id,target_revision,binding_digest,binding_json,task_id::text,state,revision,created_at,updated_at,expires_at,terminal_reason FROM agent_confirmations")).WithArgs(testConfirmationOwner, testConfirmationID).WillReturnRows(testConfirmationRows(t, binding, confirmation.StatePending, 1, at.Add(-time.Minute), at.Add(-time.Minute), expiresAt, ""))
-	mock.ExpectExec(regexp.QuoteMeta("UPDATE agent_confirmations SET state='rejected'")).WithArgs(command.Reason, at, testConfirmationID, testConfirmationOwner, int64(1)).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec(regexp.QuoteMeta("UPDATE agent_tasks SET status='canceled'")).WithArgs(command.Reason, at, testConfirmationTaskID, testConfirmationOwner).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec(regexp.QuoteMeta("UPDATE agent_confirmations SET state=CASE WHEN state IN ('pending','confirmed') THEN 'expired' ELSE state END")).WithArgs(testConfirmationTaskID, confirmation.ReasonUserRejected, at).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT operation_id::text,workload_id::text,confirmation_id::text,plan_revision,operation,status,dispatch_state,revision,expected_workload_revision")).WithArgs(testConfirmationOwner, testConfirmationTaskID).WillReturnRows(sqlmock.NewRows([]string{"operation_id", "workload_id", "confirmation_id", "plan_revision", "operation", "status", "dispatch_state", "revision", "expected_workload_revision"}).AddRow(operationID, workloadID, testConfirmationID, 3, "apply", "waiting_user", "prepared", 1, 1))
-	mock.ExpectExec(regexp.QuoteMeta("UPDATE core_workload_operations SET status=$1,dispatch_state='terminal'")).WithArgs("rejected", "user_rejected", command.Reason, at, testConfirmationOwner, operationID, testConfirmationTaskID, int64(1)).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec(regexp.QuoteMeta("UPDATE core_workloads SET state='failed',revision=revision+1,updated_at=$1")).WithArgs(at, testConfirmationOwner, workloadID, int64(1)).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery(regexp.QuoteMeta("INSERT INTO core_workload_event_counters(owner_id,operation_id,next_sequence)")).WithArgs(testConfirmationOwner, operationID).WillReturnRows(sqlmock.NewRows([]string{"sequence"}).AddRow(int64(2)))
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT workload_id::text FROM core_workload_operations")).WithArgs(testConfirmationOwner, operationID).WillReturnRows(sqlmock.NewRows([]string{"workload_id"}).AddRow(workloadID))
-	mock.ExpectQuery(regexp.QuoteMeta("INSERT INTO p2p_agent_deployment_event_cursors(owner_id,workload_id,last_sequence,updated_at)")).WithArgs(testConfirmationOwner, workloadID, at).WillReturnRows(sqlmock.NewRows([]string{"last_sequence"}).AddRow(int64(4)))
-	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO core_workload_events(owner_id,workload_id,operation_id,sequence,public_sequence,kind,status,message,readback_json,at)")).WithArgs(testConfirmationOwner, workloadID, operationID, uint64(2), int64(4), "terminal", "rejected", command.Reason, sqlmock.AnyArg(), at).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO agent_task_events")).WithArgs(testConfirmationTaskID, command.Reason, at, testConfirmationOwner).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT confirmation_id::text,owner_id,operation_domain,target_id,target_revision,binding_digest,binding_json,task_id::text,state,revision,created_at,updated_at,expires_at,terminal_reason FROM agent_confirmations")).WithArgs(testConfirmationOwner, testConfirmationID).WillReturnRows(testConfirmationRows(t, binding, confirmation.StateRejected, 2, at.Add(-time.Minute), at, expiresAt, command.Reason))
-	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO agent_confirmation_replays")).WithArgs(testConfirmationOwner, "reject", key, string(digest), sqlmock.AnyArg(), at).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectCommit()
-
-	out, err := store.Reject(t.Context(), command)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out.State != confirmation.StateRejected || out.Revision != 2 {
-		t.Fatalf("unexpected rejected value: %+v", out)
 	}
 	if err = mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
@@ -442,6 +520,7 @@ func TestDatabaseConfirmationConsumeRejectsExpiredApprovalBeforeReservation(t *t
 	}
 
 	mock.ExpectBegin()
+	expectConfirmationPreflight(t, mock, binding, confirmation.StateConfirmed, 3, at.Add(-time.Hour), at.Add(-time.Minute), at, "")
 	expectConfirmationReplayMiss(mock, testConfirmationOwner, "consume", key)
 	expectConfirmationTaskLock(mock, "running", 2, 7, 9, at.Add(time.Hour))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT confirmation_id::text,owner_id,operation_domain,target_id,target_revision,binding_digest,binding_json,task_id::text,state,revision,created_at,updated_at,expires_at,terminal_reason FROM agent_confirmations")).
@@ -461,6 +540,7 @@ func TestDatabaseConfirmationConsumeRejectsExpiredApprovalBeforeReservation(t *t
 		t.Fatalf("expected expired rejection, got %v", err)
 	}
 	mock.ExpectBegin()
+	expectConfirmationPreflight(t, mock, binding, confirmation.StateExpired, 4, at.Add(-time.Hour), at, at, confirmation.ReasonExpired)
 	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")).WithArgs(canonicalAdvisoryLockIdentity("agent-confirmation", testConfirmationOwner, "consume", key)).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT request_digest,response_json FROM agent_confirmation_replays")).WithArgs(testConfirmationOwner, "consume", key).WillReturnRows(sqlmock.NewRows([]string{"request_digest", "response_json"}).AddRow(string(confirmation.RequestDigestForConsume(command)), terminalConfirmationReplayJSON(t, expired)))
 	mock.ExpectRollback()
@@ -471,6 +551,7 @@ func TestDatabaseConfirmationConsumeRejectsExpiredApprovalBeforeReservation(t *t
 	conflictCommand := command
 	conflictCommand.ExpectedTaskRevision = 10
 	mock.ExpectBegin()
+	expectConfirmationPreflight(t, mock, binding, confirmation.StateExpired, 4, at.Add(-time.Hour), at, at, confirmation.ReasonExpired)
 	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")).WithArgs(canonicalAdvisoryLockIdentity("agent-confirmation", testConfirmationOwner, "consume", key)).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT request_digest,response_json FROM agent_confirmation_replays")).WithArgs(testConfirmationOwner, "consume", key).WillReturnRows(sqlmock.NewRows([]string{"request_digest", "response_json"}).AddRow(string(confirmation.RequestDigestForConsume(command)), terminalConfirmationReplayJSON(t, expired)))
 	mock.ExpectRollback()
@@ -508,6 +589,7 @@ func TestDatabaseConfirmationConsumePersistsReplayWithReservation(t *testing.T) 
 	digest := confirmation.RequestDigestForConsume(command)
 
 	mock.ExpectBegin()
+	expectConfirmationPreflight(t, mock, binding, confirmation.StateConfirmed, 3, at.Add(-time.Hour), at.Add(-time.Minute), at.Add(time.Hour), "")
 	expectConfirmationReplayMiss(mock, testConfirmationOwner, "consume", key)
 	expectConfirmationTaskLock(mock, "running", 2, 7, 9, at.Add(time.Hour))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT confirmation_id::text,owner_id,operation_domain,target_id,target_revision,binding_digest,binding_json,task_id::text,state,revision,created_at,updated_at,expires_at,terminal_reason FROM agent_confirmations")).
@@ -533,12 +615,16 @@ func TestDatabaseConfirmationConsumePersistsReplayWithReservation(t *testing.T) 
 		t.Fatal(err)
 	}
 	mock.ExpectBegin()
+	expectConfirmationPreflight(t, mock, binding, confirmation.StateConsumed, 4, at.Add(-time.Hour), at, at.Add(time.Hour), "")
 	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")).
 		WithArgs(canonicalAdvisoryLockIdentity("agent-confirmation", testConfirmationOwner, "consume", key)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT request_digest,response_json FROM agent_confirmation_replays")).
 		WithArgs(testConfirmationOwner, "consume", key).
 		WillReturnRows(sqlmock.NewRows([]string{"request_digest", "response_json"}).AddRow(string(digest), replayJSON))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT confirmation_id::text,owner_id,operation_domain,target_id,target_revision,binding_digest,binding_json,task_id::text,state,revision,created_at,updated_at,expires_at,terminal_reason FROM agent_confirmations")).
+		WithArgs(testConfirmationOwner, testConfirmationID).
+		WillReturnRows(testConfirmationRows(t, binding, confirmation.StateConsumed, 4, at.Add(-time.Hour), at, at.Add(time.Hour), ""))
 	mock.ExpectRollback()
 	second, err := store.Consume(t.Context(), command)
 	if err != nil {
@@ -574,6 +660,7 @@ func TestDatabaseConfirmationExpireAtomicallyFailsTaskAndClearsReservations(t *t
 
 	mock.ExpectBegin()
 	expectConfirmationIdentity(mock, "")
+	expectConfirmationPreflight(t, mock, binding, confirmation.StatePending, 1, at.Add(-time.Hour), at.Add(-time.Minute), at.Add(-time.Second), "")
 	expectConfirmationReplayMiss(mock, testConfirmationOwner, "expire", key)
 	expectConfirmationTaskLock(mock, "running", 2, 7, 9, at.Add(time.Hour))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT confirmation_id::text,owner_id,operation_domain,target_id,target_revision,binding_digest,binding_json,task_id::text,state,revision,created_at,updated_at,expires_at,terminal_reason FROM agent_confirmations")).
@@ -652,151 +739,6 @@ func TestDatabaseConfirmationExpireAtUsesSameAtomicTaskTransition(t *testing.T) 
 	}
 }
 
-func TestDatabaseConfirmationExpireAtTerminalizesLinkedWorkloadOperation(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	store := NewDatabaseConfirmationStore(db)
-	binding := testWorkloadBinding(t, workload.OperationDestroy, workload.TargetAWSECS)
-	at := time.Date(2026, 7, 29, 11, 30, 0, 0, time.UTC)
-	operationID := "99999999-9999-4999-8999-999999999999"
-	workloadID := testConfirmationTarget
-
-	mock.ExpectBegin()
-	expectConfirmationIdentity(mock, testConfirmationOwner)
-	expectConfirmationTaskLock(mock, "waiting_user", 1, 1, 4, nil)
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT confirmation_id::text,owner_id,operation_domain,target_id,target_revision,binding_digest,binding_json,task_id::text,state,revision,created_at,updated_at,expires_at,terminal_reason FROM agent_confirmations")).WithArgs(testConfirmationOwner, testConfirmationID).WillReturnRows(testConfirmationRows(t, binding, confirmation.StatePending, 1, at.Add(-time.Hour), at.Add(-time.Minute), at, ""))
-	mock.ExpectExec(regexp.QuoteMeta("UPDATE agent_confirmations SET state='expired'")).WithArgs(confirmation.ReasonExpired, at, testConfirmationID, testConfirmationOwner, int64(1)).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec(regexp.QuoteMeta("UPDATE agent_tasks SET status='failed'")).WithArgs(confirmation.ReasonExpired, at, testConfirmationTaskID, testConfirmationOwner, "waiting_user").WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec(regexp.QuoteMeta("UPDATE agent_confirmations SET state=CASE WHEN state IN ('pending','confirmed') THEN 'expired' ELSE state END")).WithArgs(testConfirmationTaskID, confirmation.ReasonExpired, at).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT operation_id::text,workload_id::text,confirmation_id::text,plan_revision,operation,status,dispatch_state,revision,expected_workload_revision")).WithArgs(testConfirmationOwner, testConfirmationTaskID).WillReturnRows(sqlmock.NewRows([]string{"operation_id", "workload_id", "confirmation_id", "plan_revision", "operation", "status", "dispatch_state", "revision", "expected_workload_revision"}).AddRow(operationID, workloadID, testConfirmationID, 3, "destroy", "waiting_user", "prepared", 1, 1))
-	mock.ExpectExec(regexp.QuoteMeta("UPDATE core_workload_operations SET status=$1,dispatch_state='terminal'")).WithArgs("expired", confirmation.ReasonExpired, confirmation.ReasonExpired, at, testConfirmationOwner, operationID, testConfirmationTaskID, int64(1)).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery(regexp.QuoteMeta("INSERT INTO core_workload_event_counters(owner_id,operation_id,next_sequence)")).WithArgs(testConfirmationOwner, operationID).WillReturnRows(sqlmock.NewRows([]string{"sequence"}).AddRow(int64(2)))
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT workload_id::text FROM core_workload_operations")).WithArgs(testConfirmationOwner, operationID).WillReturnRows(sqlmock.NewRows([]string{"workload_id"}).AddRow(workloadID))
-	mock.ExpectQuery(regexp.QuoteMeta("INSERT INTO p2p_agent_deployment_event_cursors(owner_id,workload_id,last_sequence,updated_at)")).WithArgs(testConfirmationOwner, workloadID, at).WillReturnRows(sqlmock.NewRows([]string{"last_sequence"}).AddRow(int64(5)))
-	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO core_workload_events(owner_id,workload_id,operation_id,sequence,public_sequence,kind,status,message,readback_json,at)")).WithArgs(testConfirmationOwner, workloadID, operationID, uint64(2), int64(5), "terminal", "expired", confirmation.ReasonExpired, sqlmock.AnyArg(), at).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO agent_task_events")).WithArgs(confirmation.ReasonExpired, at, testConfirmationTaskID, testConfirmationOwner).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectCommit()
-
-	if err = store.ExpireAt(t.Context(), testConfirmationOwner, testConfirmationID, at); err != nil {
-		t.Fatal(err)
-	}
-	if err = mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestTerminalizeWorkloadOperationFailsClosedOnIdentityAndCardinality(t *testing.T) {
-	binding := testWorkloadBinding(t, workload.OperationApply, workload.TargetAWSEC2SSM)
-	stored := confirmation.Confirmation{ID: testConfirmationID, ConfirmationID: testConfirmationID, OwnerID: testConfirmationOwner, TaskID: testConfirmationTaskID, Binding: binding}
-	operationID := "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
-	workloadID := binding.TargetID
-	columns := []string{"operation_id", "workload_id", "confirmation_id", "plan_revision", "operation", "status", "dispatch_state", "revision", "expected_workload_revision"}
-	cases := []struct {
-		name string
-		rows *sqlmock.Rows
-		want error
-	}{
-		{name: "missing", rows: sqlmock.NewRows(columns), want: confirmation.ErrNotFound},
-		{name: "wrong confirmation", rows: sqlmock.NewRows(columns).AddRow(operationID, workloadID, testConfirmationTarget, 3, "apply", "waiting_user", "prepared", 1, 1), want: confirmation.ErrConflict},
-		{name: "wrong target", rows: sqlmock.NewRows(columns).AddRow(operationID, "99999999-9999-4999-8999-999999999999", testConfirmationID, 3, "apply", "waiting_user", "prepared", 1, 1), want: confirmation.ErrConflict},
-		{name: "wrong revision", rows: sqlmock.NewRows(columns).AddRow(operationID, workloadID, testConfirmationID, 4, "apply", "waiting_user", "prepared", 1, 1), want: confirmation.ErrConflict},
-		{name: "wrong kind", rows: sqlmock.NewRows(columns).AddRow(operationID, workloadID, testConfirmationID, 3, "destroy", "waiting_user", "prepared", 1, 1), want: confirmation.ErrConflict},
-		{name: "ambiguous", rows: sqlmock.NewRows(columns).AddRow(operationID, workloadID, testConfirmationID, 3, "apply", "waiting_user", "prepared", 1, 1).AddRow("cccccccc-cccc-4ccc-8ccc-cccccccccccc", workloadID, testConfirmationID, 3, "apply", "waiting_user", "prepared", 1, 1), want: confirmation.ErrConflict},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			db, mock, err := sqlmock.New()
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer db.Close()
-			mock.ExpectBegin()
-			tx, err := db.BeginTx(t.Context(), nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			mock.ExpectQuery(regexp.QuoteMeta("SELECT operation_id::text,workload_id::text,confirmation_id::text,plan_revision,operation,status,dispatch_state,revision")).WithArgs(testConfirmationOwner, testConfirmationTaskID).WillReturnRows(tc.rows)
-			mock.ExpectRollback()
-			got := terminalizeWorkloadOperationTx(t.Context(), tx, stored, "expired", confirmation.ReasonExpired, confirmation.ReasonExpired, time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC))
-			if !errors.Is(got, tc.want) {
-				t.Fatalf("error = %v, want %v", got, tc.want)
-			}
-			if err = tx.Rollback(); err != nil {
-				t.Fatal(err)
-			}
-			if err = mock.ExpectationsWereMet(); err != nil {
-				t.Fatal(err)
-			}
-		})
-	}
-}
-
-func TestTerminalizeWorkloadOperationPreservesExistingReadyWorkload(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	binding := testWorkloadBinding(t, workload.OperationApply, workload.TargetAWSEC2SSM)
-	stored := confirmation.Confirmation{
-		ID:             testConfirmationID,
-		ConfirmationID: testConfirmationID,
-		OwnerID:        testConfirmationOwner,
-		TaskID:         testConfirmationTaskID,
-		Binding:        binding,
-	}
-	const operationID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
-	const expectedWorkloadRevision = int64(5)
-	at := time.Date(2026, 7, 29, 12, 5, 0, 0, time.UTC)
-
-	mock.ExpectBegin()
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT operation_id::text,workload_id::text,confirmation_id::text,plan_revision,operation,status,dispatch_state,revision,expected_workload_revision")).
-		WithArgs(testConfirmationOwner, testConfirmationTaskID).
-		WillReturnRows(sqlmock.NewRows([]string{
-			"operation_id", "workload_id", "confirmation_id", "plan_revision",
-			"operation", "status", "dispatch_state", "revision", "expected_workload_revision",
-		}).AddRow(operationID, binding.TargetID, testConfirmationID, 3, "apply", "waiting_user", "prepared", 1, expectedWorkloadRevision))
-	mock.ExpectExec(regexp.QuoteMeta("UPDATE core_workload_operations SET status=$1,dispatch_state='terminal'")).
-		WithArgs("rejected", "user_rejected", "not approved", at, testConfirmationOwner, operationID, testConfirmationTaskID, int64(1)).
-		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec(regexp.QuoteMeta("UPDATE core_workloads SET state='failed',revision=revision+1,updated_at=$1")).
-		WithArgs(at, testConfirmationOwner, binding.TargetID, expectedWorkloadRevision).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT state,revision FROM core_workloads")).
-		WithArgs(testConfirmationOwner, binding.TargetID).
-		WillReturnRows(sqlmock.NewRows([]string{"state", "revision"}).AddRow("ready", expectedWorkloadRevision))
-	mock.ExpectQuery(regexp.QuoteMeta("INSERT INTO core_workload_event_counters(owner_id,operation_id,next_sequence)")).
-		WithArgs(testConfirmationOwner, operationID).
-		WillReturnRows(sqlmock.NewRows([]string{"sequence"}).AddRow(int64(2)))
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT workload_id::text FROM core_workload_operations")).
-		WithArgs(testConfirmationOwner, operationID).
-		WillReturnRows(sqlmock.NewRows([]string{"workload_id"}).AddRow(binding.TargetID))
-	mock.ExpectQuery(regexp.QuoteMeta("INSERT INTO p2p_agent_deployment_event_cursors(owner_id,workload_id,last_sequence,updated_at)")).
-		WithArgs(testConfirmationOwner, binding.TargetID, at).
-		WillReturnRows(sqlmock.NewRows([]string{"last_sequence"}).AddRow(int64(4)))
-	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO core_workload_events(owner_id,workload_id,operation_id,sequence,public_sequence,kind,status,message,readback_json,at)")).
-		WithArgs(testConfirmationOwner, binding.TargetID, operationID, uint64(2), int64(4), "terminal", "rejected", "not approved", sqlmock.AnyArg(), at).
-		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectRollback()
-
-	tx, err := db.BeginTx(t.Context(), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = terminalizeWorkloadOperationTx(t.Context(), tx, stored, "rejected", "user_rejected", "not approved", at); err != nil {
-		t.Fatal(err)
-	}
-	if err = tx.Rollback(); err != nil {
-		t.Fatal(err)
-	}
-	if err = mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestDatabaseConfirmationReleaseReservationPersistsReplayAfterTerminalFence(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -831,6 +773,7 @@ func TestDatabaseConfirmationReleaseReservationPersistsReplayAfterTerminalFence(
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT owner_id,task_id::text FROM agent_confirmations")).WithArgs(testConfirmationID, "").WillReturnRows(sqlmock.NewRows([]string{"owner_id", "task_id"}).AddRow(testConfirmationOwner, testConfirmationTaskID))
+	expectConfirmationPreflight(t, mock, binding, confirmation.StateConsumed, 4, at.Add(-time.Hour), at.Add(-time.Minute), at.Add(time.Hour), "")
 	expectConfirmationReplayMiss(mock, testConfirmationOwner, "release", key)
 	expectConfirmationTaskLock(mock, "succeeded", 2, 7, 10, nil)
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT confirmation_id::text,owner_id,operation_domain,target_id,target_revision,binding_digest,binding_json,task_id::text,state,revision,created_at,updated_at,expires_at,terminal_reason FROM agent_confirmations")).

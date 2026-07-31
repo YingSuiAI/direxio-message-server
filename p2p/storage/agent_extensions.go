@@ -9,9 +9,8 @@ import (
 	"time"
 )
 
-// AgentExtensionDDL is kept separate from the legacy migration file so an
-// embedding application can opt into the extension lifecycle atomically.
-// Every immutable digest is a column; secret material is intentionally absent.
+// AgentExtensionDDL is consumed by the direct-final v78 migration. Every
+// immutable digest is a column; secret material is intentionally absent.
 const AgentExtensionDDL = `
 CREATE TABLE IF NOT EXISTS p2p_agent_extensions (
  owner_id TEXT NOT NULL, installation_id TEXT NOT NULL, candidate_json JSONB NOT NULL,
@@ -55,20 +54,6 @@ type AgentExtensionRecord struct {
 
 var ErrAgentExtensionNotFound = errors.New("agent extension not found")
 
-func (s *DatabaseStore) MigrateAgentExtensions(ctx context.Context) error {
-	if s == nil || s.db == nil {
-		return errors.New("nil database store")
-	}
-	for _, stmt := range strings.Split(AgentExtensionDDL, ";") {
-		if strings.TrimSpace(stmt) == "" {
-			continue
-		}
-		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
-			return err
-		}
-	}
-	return nil
-}
 func (s *DatabaseStore) PutAgentExtension(ctx context.Context, r AgentExtensionRecord) error {
 	if s == nil || s.db == nil || strings.TrimSpace(r.OwnerID) == "" || strings.TrimSpace(r.InstallationID) == "" || len(r.CandidateJSON) == 0 {
 		return errors.New("invalid agent extension")

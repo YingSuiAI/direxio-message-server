@@ -148,36 +148,47 @@ func (r *MemoryRepository) SetTaskFence(fence TaskFence) error {
 }
 
 func (r *MemoryRepository) Request(_ context.Context, command RequestCommand) (Confirmation, error) {
-	if !validateUUID(command.IdempotencyKey) {
+	command.OwnerID = strings.TrimSpace(command.OwnerID)
+	if command.OwnerID == "" || !validateUUID(command.IdempotencyKey) {
 		return Confirmation{}, ErrInvalid
 	}
 	binding, err := command.Binding.normalized()
 	if err != nil || !validateUUID(command.TaskID) {
 		return Confirmation{}, ErrInvalid
 	}
+	if !binding.MatchesOwner(command.OwnerID) {
+		return Confirmation{}, ErrInvalid
+	}
 	command.Binding = binding
+	if isExecutionV2Domain(binding.OperationDomain) {
+		return Confirmation{}, ErrConflict
+	}
 	command.RequestDigest = requestDigest(command)
 	now := r.at(command.At)
 	if command.ExpiresAt.IsZero() || command.ExpiresAt.Location() != time.UTC || !command.ExpiresAt.After(now) {
 		return Confirmation{}, ErrInvalid
 	}
+	if !binding.MatchesConfirmationExpiry(command.ExpiresAt) {
+		return Confirmation{}, ErrInvalid
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if value, ok, conflict := r.replayLocked("request:"+command.IdempotencyKey, command.RequestDigest); ok || conflict != nil {
+	replayKey := "request:" + command.OwnerID + ":" + command.IdempotencyKey
+	if value, ok, conflict := r.replayLocked(replayKey, command.RequestDigest); ok || conflict != nil {
 		return value, conflict
 	}
 	for id, existing := range r.items {
 		reservation := r.reservations[id]
-		if existing.Binding.OperationDomain == binding.OperationDomain && existing.Binding.TargetID == binding.TargetID && isLiveConfirmation(existing) && (existing.State != StateConsumed || reservation.Active) {
+		if existing.OwnerID == command.OwnerID && existing.Binding.OperationDomain == binding.OperationDomain && existing.Binding.TargetID == binding.TargetID && isLiveConfirmation(existing) && (existing.State != StateConsumed || reservation.Active) {
 			return Confirmation{}, ErrConflict
 		}
 	}
 	id := uuid.New().String()
-	value := Confirmation{ConfirmationID: id, Binding: binding, TaskID: strings.TrimSpace(command.TaskID), State: StatePending, Revision: 1, CreatedAt: now, UpdatedAt: now, ExpiresAt: command.ExpiresAt}
+	value := Confirmation{ConfirmationID: id, OwnerID: command.OwnerID, Binding: binding, TaskID: strings.TrimSpace(command.TaskID), State: StatePending, Revision: 1, CreatedAt: now, UpdatedAt: now, ExpiresAt: command.ExpiresAt}
 	r.items[id] = cloneConfirmation(value)
 	r.targetBindings[id] = binding
 	r.order = append(r.order, id)
-	r.replays["request:"+command.IdempotencyKey] = replay{digest: command.RequestDigest, value: cloneConfirmation(value)}
+	r.replays[replayKey] = replay{digest: command.RequestDigest, value: cloneConfirmation(value)}
 	return cloneConfirmation(value), nil
 }
 
@@ -264,20 +275,27 @@ type listCursor struct {
 }
 
 func (r *MemoryRepository) Confirm(ctx context.Context, command ConfirmCommand) (Confirmation, error) {
-	if !validateUUID(command.IdempotencyKey) || !validateUUID(command.ConfirmationID) || command.ExpectedRevision < 1 {
+	command.OwnerID = strings.TrimSpace(command.OwnerID)
+	if command.OwnerID == "" || !validateUUID(command.IdempotencyKey) || !validateUUID(command.ConfirmationID) || command.ExpectedRevision < 1 {
 		return Confirmation{}, ErrInvalid
 	}
 	command.RequestDigest = confirmDigest(command)
 	now := r.at(command.At)
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	key := "confirm:" + command.IdempotencyKey
-	if value, ok, conflict := r.replayLocked(key, command.RequestDigest); ok || conflict != nil {
-		return value, conflict
-	}
 	value, ok := r.items[command.ConfirmationID]
 	if !ok {
 		return Confirmation{}, ErrNotFound
+	}
+	if value.OwnerID != command.OwnerID {
+		return Confirmation{}, ErrConflict
+	}
+	if isExecutionV2Domain(value.Binding.OperationDomain) {
+		return Confirmation{}, ErrConflict
+	}
+	key := "confirm:" + command.OwnerID + ":" + command.IdempotencyKey
+	if replay, ok, conflict := r.replayLocked(key, command.RequestDigest); ok || conflict != nil {
+		return replay, conflict
 	}
 	if value.Revision != command.ExpectedRevision {
 		return Confirmation{}, ErrRevisionConflict
@@ -331,20 +349,27 @@ func (r *MemoryRepository) Confirm(ctx context.Context, command ConfirmCommand) 
 }
 
 func (r *MemoryRepository) Reject(_ context.Context, command RejectCommand) (Confirmation, error) {
-	if !validateUUID(command.IdempotencyKey) || !validateUUID(command.ConfirmationID) || command.ExpectedRevision < 1 {
+	command.OwnerID = strings.TrimSpace(command.OwnerID)
+	if command.OwnerID == "" || !validateUUID(command.IdempotencyKey) || !validateUUID(command.ConfirmationID) || command.ExpectedRevision < 1 {
 		return Confirmation{}, ErrInvalid
 	}
 	now := r.at(command.At)
 	command.RequestDigest = rejectDigest(command)
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	key := "reject:" + command.IdempotencyKey
-	if value, ok, conflict := r.replayLocked(key, command.RequestDigest); ok || conflict != nil {
-		return value, conflict
-	}
 	value, ok := r.items[command.ConfirmationID]
 	if !ok {
 		return Confirmation{}, ErrNotFound
+	}
+	if value.OwnerID != command.OwnerID {
+		return Confirmation{}, ErrConflict
+	}
+	if isExecutionV2Domain(value.Binding.OperationDomain) {
+		return Confirmation{}, ErrConflict
+	}
+	key := "reject:" + command.OwnerID + ":" + command.IdempotencyKey
+	if replay, ok, conflict := r.replayLocked(key, command.RequestDigest); ok || conflict != nil {
+		return replay, conflict
 	}
 	if value.Revision != command.ExpectedRevision {
 		return Confirmation{}, ErrRevisionConflict
@@ -376,20 +401,27 @@ func (r *MemoryRepository) Reject(_ context.Context, command RejectCommand) (Con
 }
 
 func (r *MemoryRepository) Consume(ctx context.Context, command ConsumeCommand) (Confirmation, error) {
-	if !validateUUID(command.IdempotencyKey) || !validateUUID(command.ConfirmationID) || !validateUUID(command.TaskID) || command.Attempt == 0 || command.LeaseEpoch == 0 || command.ExpectedRevision < 1 || command.ExpectedTaskRevision < 1 {
+	command.OwnerID = strings.TrimSpace(command.OwnerID)
+	if command.OwnerID == "" || !validateUUID(command.IdempotencyKey) || !validateUUID(command.ConfirmationID) || !validateUUID(command.TaskID) || command.Attempt == 0 || command.LeaseEpoch == 0 || command.ExpectedRevision < 1 || command.ExpectedTaskRevision < 1 {
 		return Confirmation{}, ErrInvalid
 	}
 	command.RequestDigest = consumeDigest(command)
 	now := r.at(command.At)
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	key := "consume:" + command.IdempotencyKey
-	if value, ok, conflict := r.replayLocked(key, command.RequestDigest); ok || conflict != nil {
-		return value, conflict
-	}
 	value, ok := r.items[command.ConfirmationID]
 	if !ok {
 		return Confirmation{}, ErrNotFound
+	}
+	if value.OwnerID != command.OwnerID {
+		return Confirmation{}, ErrConflict
+	}
+	if isExecutionV2Domain(value.Binding.OperationDomain) {
+		return Confirmation{}, ErrConflict
+	}
+	key := "consume:" + command.OwnerID + ":" + command.IdempotencyKey
+	if replay, ok, conflict := r.replayLocked(key, command.RequestDigest); ok || conflict != nil {
+		return replay, conflict
 	}
 	if value.Revision != command.ExpectedRevision || value.TaskID != command.TaskID || value.State != StateConfirmed {
 		return Confirmation{}, ErrTaskFenceConflict
@@ -455,13 +487,16 @@ func (r *MemoryRepository) ReleaseReservation(ctx context.Context, command Relea
 	command.RequestDigest = releaseDigest(command)
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	key := "release:" + command.IdempotencyKey
-	if value, ok, conflict := r.replayLocked(key, command.RequestDigest); ok || conflict != nil {
-		return value, conflict
-	}
 	value, ok := r.items[command.ConfirmationID]
 	if !ok {
 		return Confirmation{}, ErrNotFound
+	}
+	if isExecutionV2Domain(value.Binding.OperationDomain) {
+		return Confirmation{}, ErrConflict
+	}
+	key := "release:" + command.IdempotencyKey
+	if replay, ok, conflict := r.replayLocked(key, command.RequestDigest); ok || conflict != nil {
+		return replay, conflict
 	}
 	reservation, reserved := r.reservations[command.ConfirmationID]
 	if value.State != StateConsumed || !reserved || !reservation.Active || value.TaskID != command.TaskID || reservation.AcquiredAttempt != command.AcquiredAttempt || reservation.AcquiredLeaseEpoch != command.AcquiredLeaseEpoch {
@@ -491,13 +526,16 @@ func (r *MemoryRepository) Expire(_ context.Context, command ExpireCommand) (Con
 	command.RequestDigest = expireDigest(command)
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	key := "expire:" + command.IdempotencyKey
-	if value, ok, conflict := r.replayLocked(key, command.RequestDigest); ok || conflict != nil {
-		return value, conflict
-	}
 	value, ok := r.items[command.ConfirmationID]
 	if !ok {
 		return Confirmation{}, ErrNotFound
+	}
+	if isExecutionV2Domain(value.Binding.OperationDomain) {
+		return Confirmation{}, ErrConflict
+	}
+	key := "expire:" + command.IdempotencyKey
+	if replay, ok, conflict := r.replayLocked(key, command.RequestDigest); ok || conflict != nil {
+		return replay, conflict
 	}
 	if value.Revision != command.ExpectedRevision {
 		return Confirmation{}, ErrRevisionConflict

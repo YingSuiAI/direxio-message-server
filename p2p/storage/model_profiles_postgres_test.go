@@ -186,7 +186,9 @@ func TestPostgresModelProfileVerifyRejectsCorruptEmptyCurrentEnvelope(t *testing
 	}
 }
 
-func TestPostgresModelCredentialEnvelopeMigrationBackfillsOnlyExactLegacyVersions(t *testing.T) {
+// TestPostgresModelCredentialFinalSchemaRejectsInvalidEnvelopeVersions asserts
+// that a fresh v78 database enforces the final envelope constraints directly.
+func TestPostgresModelCredentialFinalSchemaRejectsInvalidEnvelopeVersions(t *testing.T) {
 	ctx := context.Background()
 	connStr, closeDB := test.PrepareDBConnectionString(t, test.DBTypePostgres)
 	defer closeDB()
@@ -204,35 +206,25 @@ func TestPostgresModelCredentialEnvelopeMigrationBackfillsOnlyExactLegacyVersion
 	if err != nil || len(result.Profiles) != 1 {
 		t.Fatalf("model profile sync = %#v err=%v", result, err)
 	}
-	for _, table := range []string{"p2p_agent_model_profiles", "p2p_agent_model_profile_credentials"} {
-		if _, err := store.DB().ExecContext(ctx, `ALTER TABLE `+table+` DROP CONSTRAINT `+table+`_api_key_envelope_check`); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := store.DB().ExecContext(ctx, `UPDATE `+table+` SET api_key_envelope_version=0,api_key_aad_version=0`); err != nil {
-			t.Fatal(err)
-		}
+	profileID := result.Profiles[0].ProfileID
+	if _, err := store.DB().ExecContext(ctx, `UPDATE p2p_agent_model_profiles SET api_key_envelope_version=0,api_key_aad_version=0 WHERE owner_id='owner' AND profile_id=$1`, profileID); err == nil {
+		t.Fatal("fresh profile schema accepted legacy envelope versions")
 	}
-	if _, err := store.DB().ExecContext(ctx, `DELETE FROM db_migrations WHERE version=$1`, "p2p: model credential envelope versions v107"); err != nil {
-		t.Fatal(err)
+	if _, err := store.DB().ExecContext(ctx, `UPDATE p2p_agent_model_profile_credentials SET api_key_envelope_version=0,api_key_aad_version=0 WHERE owner_id='owner' AND profile_id=$1 AND credential_version=1`, profileID); err == nil {
+		t.Fatal("fresh credential schema accepted legacy envelope versions")
 	}
-	if err := store.Migrate(ctx); err != nil {
-		t.Fatalf("exact legacy envelope migration: %v", err)
+	if _, err := store.DB().ExecContext(ctx, `UPDATE p2p_agent_model_profiles SET api_key_envelope_version=1,api_key_aad_version=0 WHERE owner_id='owner' AND profile_id=$1`, profileID); err == nil {
+		t.Fatal("fresh profile schema accepted mixed envelope/AAD versions")
+	}
+	if _, err := store.DB().ExecContext(ctx, `UPDATE p2p_agent_model_profile_credentials SET api_key_envelope_version=1,api_key_aad_version=0 WHERE owner_id='owner' AND profile_id=$1 AND credential_version=1`, profileID); err == nil {
+		t.Fatal("fresh credential schema accepted mixed envelope/AAD versions")
 	}
 	var envelopeVersion, aadVersion int64
-	if err := store.DB().QueryRowContext(ctx, `SELECT api_key_envelope_version,api_key_aad_version FROM p2p_agent_model_profiles WHERE owner_id='owner' AND profile_id=$1`, result.Profiles[0].ProfileID).Scan(&envelopeVersion, &aadVersion); err != nil || envelopeVersion != 1 || aadVersion != 1 {
-		t.Fatalf("backfilled current envelope = %d/%d err=%v", envelopeVersion, aadVersion, err)
+	if err := store.DB().QueryRowContext(ctx, `SELECT api_key_envelope_version,api_key_aad_version FROM p2p_agent_model_profiles WHERE owner_id='owner' AND profile_id=$1`, profileID).Scan(&envelopeVersion, &aadVersion); err != nil || envelopeVersion != 1 || aadVersion != 1 {
+		t.Fatalf("current envelope after rejected legacy writes = %d/%d err=%v", envelopeVersion, aadVersion, err)
 	}
-	if _, err := store.DB().ExecContext(ctx, `ALTER TABLE p2p_agent_model_profiles DROP CONSTRAINT p2p_agent_model_profiles_api_key_envelope_check`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.DB().ExecContext(ctx, `UPDATE p2p_agent_model_profiles SET api_key_envelope_version=0,api_key_aad_version=1 WHERE owner_id='owner' AND profile_id=$1`, result.Profiles[0].ProfileID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.DB().ExecContext(ctx, `DELETE FROM db_migrations WHERE version=$1`, "p2p: model credential envelope versions v107"); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Migrate(ctx); err == nil {
-		t.Fatal("migration accepted mixed model envelope versions")
+	if err := store.DB().QueryRowContext(ctx, `SELECT api_key_envelope_version,api_key_aad_version FROM p2p_agent_model_profile_credentials WHERE owner_id='owner' AND profile_id=$1 AND credential_version=1`, profileID).Scan(&envelopeVersion, &aadVersion); err != nil || envelopeVersion != 1 || aadVersion != 1 {
+		t.Fatalf("historical envelope after rejected legacy writes = %d/%d err=%v", envelopeVersion, aadVersion, err)
 	}
 }
 

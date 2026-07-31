@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	coreconfirmation "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcontrol/confirmation"
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcontrol/task"
 	"github.com/google/uuid"
 )
@@ -130,6 +129,23 @@ func getDatabaseTaskTx(ctx context.Context, tx *sql.Tx, owner, id string, lock b
 	return scanDatabaseTask(tx.QueryRowContext(ctx, query, id, owner), id)
 }
 
+// databaseTaskIsExecutionStageTx prevents the generic task terminalizers from
+// splitting execution.v2's stage/run/receipt transaction. The coordinator
+// owns that terminal transition once it exists.
+func databaseTaskIsExecutionStageTx(ctx context.Context, tx *sql.Tx, id string) (bool, error) {
+	var kind string
+	err := tx.QueryRowContext(ctx, `SELECT COALESCE(spec_json->>'kind','') FROM agent_tasks WHERE task_id=$1 FOR UPDATE`, id).Scan(&kind)
+	if errors.Is(err, sql.ErrNoRows) {
+		// Preserve the legacy terminalizer result (its guarded UPDATE reports
+		// the normal lease conflict for an absent/stale task).
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return task.TaskKind(strings.TrimSpace(kind)) == task.TaskKindExecutionStage, nil
+}
+
 func taskOwnerTx(ctx context.Context, tx *sql.Tx, id string) (string, error) {
 	var owner string
 	err := tx.QueryRowContext(ctx, `SELECT owner_id FROM agent_tasks WHERE task_id=$1`, id).Scan(&owner)
@@ -222,6 +238,9 @@ func (s *DatabaseTaskStore) Create(ctx context.Context, c task.CreateCommand) (t
 	if c.Spec.Validate() != nil {
 		return task.Task{}, task.ErrInvalid
 	}
+	if c.Spec.Kind == task.TaskKindExecutionStage {
+		return task.Task{}, task.ErrConflict
+	}
 	now := c.At.UTC()
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -268,7 +287,7 @@ func (s *DatabaseTaskStore) Claim(ctx context.Context, c task.ClaimCommand) (tas
 	if running >= max {
 		return task.Task{}, task.Lease{}, task.ErrConflict
 	}
-	err = tx.QueryRowContext(ctx, `SELECT task_id::text,revision,lease_epoch FROM agent_tasks WHERE task_id=$1 AND owner_id=$2 AND status='queued' AND available_at<= $3 AND deleted_at IS NULL FOR UPDATE SKIP LOCKED`, c.TaskID, c.OwnerID, c.At.UTC()).Scan(&id, &rev, &epoch)
+	err = tx.QueryRowContext(ctx, `SELECT task_id::text,revision,lease_epoch FROM agent_tasks WHERE task_id=$1 AND owner_id=$2 AND status='queued' AND available_at<= $3 AND deleted_at IS NULL AND COALESCE(spec_json->>'kind','') <> 'execution_stage' FOR UPDATE SKIP LOCKED`, c.TaskID, c.OwnerID, c.At.UTC()).Scan(&id, &rev, &epoch)
 	if errors.Is(err, sql.ErrNoRows) {
 		return task.Task{}, task.Lease{}, task.ErrConflict
 	}
@@ -339,7 +358,7 @@ func (s *DatabaseTaskStore) Reclaim(ctx context.Context, c task.ReclaimCommand) 
 	defer tx.Rollback()
 	var id string
 	var rev, epoch int64
-	err := tx.QueryRowContext(ctx, `SELECT task_id::text,revision,lease_epoch FROM agent_tasks WHERE task_id=$1 AND owner_id=$2 AND status='running' AND lease_expires_at<=$3 FOR UPDATE SKIP LOCKED`, c.TaskID, c.OwnerID, c.At.UTC()).Scan(&id, &rev, &epoch)
+	err := tx.QueryRowContext(ctx, `SELECT task_id::text,revision,lease_epoch FROM agent_tasks WHERE task_id=$1 AND owner_id=$2 AND status='running' AND lease_expires_at<=$3 AND COALESCE(spec_json->>'kind','') <> 'execution_stage' FOR UPDATE SKIP LOCKED`, c.TaskID, c.OwnerID, c.At.UTC()).Scan(&id, &rev, &epoch)
 	if errors.Is(err, sql.ErrNoRows) {
 		return task.Task{}, task.Lease{}, task.ErrConflict
 	}
@@ -370,7 +389,7 @@ func (s *DatabaseTaskStore) Reclaim(ctx context.Context, c task.ReclaimCommand) 
 }
 func (s *DatabaseTaskStore) Renew(ctx context.Context, c task.RenewLeaseCommand) (task.Lease, error) {
 	until := c.At.UTC().Add(c.LeaseTTL)
-	r, e := s.db.ExecContext(ctx, `UPDATE agent_tasks SET lease_expires_at=$1,revision=revision+1,updated_at=$1 WHERE task_id=$2 AND status='running' AND lease_holder=$3 AND lease_epoch=$4 AND revision=$5 AND lease_expires_at>$6`, until, c.TaskID, c.Holder, c.LeaseEpoch, c.ExpectedRevision, c.At.UTC())
+	r, e := s.db.ExecContext(ctx, `UPDATE agent_tasks SET lease_expires_at=$1,revision=revision+1,updated_at=$1 WHERE task_id=$2 AND status='running' AND lease_holder=$3 AND lease_epoch=$4 AND revision=$5 AND lease_expires_at>$6 AND COALESCE(spec_json->>'kind','') <> 'execution_stage'`, until, c.TaskID, c.Holder, c.LeaseEpoch, c.ExpectedRevision, c.At.UTC())
 	if e != nil {
 		return task.Lease{}, e
 	}
@@ -391,7 +410,7 @@ func (s *DatabaseTaskStore) AppendProgress(ctx context.Context, c task.ProgressC
 	var attempt int
 	var epoch int64
 	var exp time.Time
-	e = tx.QueryRowContext(ctx, `SELECT owner_id,progress_sequence,revision,attempt,lease_epoch,lease_expires_at FROM agent_tasks WHERE task_id=$1 FOR UPDATE`, c.TaskID).Scan(&owner, &seq, &rev, &attempt, &epoch, &exp)
+	e = tx.QueryRowContext(ctx, `SELECT owner_id,progress_sequence,revision,attempt,lease_epoch,lease_expires_at FROM agent_tasks WHERE task_id=$1 AND COALESCE(spec_json->>'kind','') <> 'execution_stage' FOR UPDATE`, c.TaskID).Scan(&owner, &seq, &rev, &attempt, &epoch, &exp)
 	if e != nil {
 		return task.Task{}, task.Progress{}, e
 	}
@@ -440,7 +459,7 @@ func (s *DatabaseTaskStore) transition(ctx context.Context, c task.Fence, status
 		return task.Task{}, e
 	}
 	defer tx.Rollback()
-	r, e := tx.ExecContext(ctx, `UPDATE agent_tasks SET status=$1,failure_code=$2,lease_holder='',lease_expires_at=NULL,revision=revision+1,progress_sequence=progress_sequence+1,updated_at=$3 WHERE task_id=$4 AND status='running' AND attempt=$5 AND lease_epoch=$6 AND revision=$7 AND lease_expires_at>$3`, status, code, at, c.TaskID, c.Attempt, c.LeaseEpoch, c.ExpectedRevision)
+	r, e := tx.ExecContext(ctx, `UPDATE agent_tasks SET status=$1,failure_code=$2,lease_holder='',lease_expires_at=NULL,revision=revision+1,progress_sequence=progress_sequence+1,updated_at=$3 WHERE task_id=$4 AND status='running' AND attempt=$5 AND lease_epoch=$6 AND revision=$7 AND lease_expires_at>$3 AND COALESCE(spec_json->>'kind','') <> 'execution_stage'`, status, code, at, c.TaskID, c.Attempt, c.LeaseEpoch, c.ExpectedRevision)
 	if e != nil {
 		return task.Task{}, e
 	}
@@ -483,7 +502,7 @@ func (s *DatabaseTaskStore) WaitUser(ctx context.Context, c task.WaitUserCommand
 		return e
 	}
 	defer tx.Rollback()
-	r, e := tx.ExecContext(ctx, `UPDATE agent_tasks SET status='waiting_user',lease_holder='',lease_expires_at=NULL,revision=revision+1,progress_sequence=progress_sequence+1,updated_at=$1 WHERE task_id=$2 AND status='running' AND attempt=$3 AND lease_epoch=$4 AND revision=$5 AND lease_expires_at>$1`, c.At.UTC(), c.TaskID, c.Attempt, c.LeaseEpoch, c.ExpectedRevision)
+	r, e := tx.ExecContext(ctx, `UPDATE agent_tasks SET status='waiting_user',lease_holder='',lease_expires_at=NULL,revision=revision+1,progress_sequence=progress_sequence+1,updated_at=$1 WHERE task_id=$2 AND status='running' AND attempt=$3 AND lease_epoch=$4 AND revision=$5 AND lease_expires_at>$1 AND COALESCE(spec_json->>'kind','') <> 'execution_stage'`, c.At.UTC(), c.TaskID, c.Attempt, c.LeaseEpoch, c.ExpectedRevision)
 	if e != nil {
 		return e
 	}
@@ -506,7 +525,7 @@ func (s *DatabaseTaskStore) Resume(ctx context.Context, c task.ResumeCommand) er
 		return e
 	}
 	defer tx.Rollback()
-	r, e := tx.ExecContext(ctx, `UPDATE agent_tasks SET status='queued',available_at=$1,revision=revision+1,progress_sequence=progress_sequence+1,updated_at=$1 WHERE task_id=$2 AND owner_id=$3 AND status='waiting_user' AND revision=$4`, at, c.TaskID, c.OwnerID, c.ExpectedRevision)
+	r, e := tx.ExecContext(ctx, `UPDATE agent_tasks SET status='queued',available_at=$1,revision=revision+1,progress_sequence=progress_sequence+1,updated_at=$1 WHERE task_id=$2 AND owner_id=$3 AND status='waiting_user' AND revision=$4 AND COALESCE(spec_json->>'kind','') <> 'execution_stage'`, at, c.TaskID, c.OwnerID, c.ExpectedRevision)
 	if e != nil {
 		return e
 	}
@@ -529,6 +548,11 @@ func (s *DatabaseTaskStore) Complete(ctx context.Context, c task.CompleteCommand
 		return task.Task{}, e
 	}
 	defer tx.Rollback()
+	if executionStage, e := databaseTaskIsExecutionStageTx(ctx, tx, c.TaskID); e != nil {
+		return task.Task{}, e
+	} else if executionStage {
+		return task.Task{}, task.ErrConflict
+	}
 	r, e := tx.ExecContext(ctx, `UPDATE agent_tasks SET status='succeeded',result_json=$1,lease_holder='',lease_expires_at=NULL,revision=revision+1,progress_sequence=progress_sequence+1,updated_at=$2 WHERE task_id=$3 AND status='running' AND attempt=$4 AND lease_epoch=$5 AND revision=$6 AND lease_expires_at>$2`, raw, c.At.UTC(), c.TaskID, c.Attempt, c.LeaseEpoch, c.ExpectedRevision)
 	if e != nil {
 		return task.Task{}, e
@@ -558,6 +582,11 @@ func (s *DatabaseTaskStore) Fail(ctx context.Context, c task.FailCommand) (task.
 		return task.Task{}, e
 	}
 	defer tx.Rollback()
+	if executionStage, e := databaseTaskIsExecutionStageTx(ctx, tx, c.TaskID); e != nil {
+		return task.Task{}, e
+	} else if executionStage {
+		return task.Task{}, task.ErrConflict
+	}
 	r, e := tx.ExecContext(ctx, `UPDATE agent_tasks SET status='failed',failure_code=$1,failure_summary=$2,lease_holder='',lease_expires_at=NULL,revision=revision+1,progress_sequence=progress_sequence+1,updated_at=$3 WHERE task_id=$4 AND status='running' AND attempt=$5 AND lease_epoch=$6 AND revision=$7 AND lease_expires_at>$3`, c.ErrorCode, c.ErrorSummary, c.At.UTC(), c.TaskID, c.Attempt, c.LeaseEpoch, c.ExpectedRevision)
 	if e != nil {
 		return task.Task{}, e
@@ -609,20 +638,16 @@ func (s *DatabaseTaskStore) Cancel(ctx context.Context, c task.CancelCommand) (t
 		return task.Task{}, e
 	}
 	defer tx.Rollback()
+	if executionStage, checkErr := databaseTaskIsExecutionStageTx(ctx, tx, c.TaskID); checkErr != nil {
+		return task.Task{}, checkErr
+	} else if executionStage {
+		return task.Task{}, task.ErrConflict
+	}
 	if e = lockTaskReplayTx(ctx, tx, c.OwnerID, "cancel", c.Mutation.IdempotencyKey); e != nil {
 		return task.Task{}, e
 	}
 	if replay, found, replayErr := readTaskReplayTx(ctx, tx, c.OwnerID, "cancel", c.Mutation.IdempotencyKey, c.Mutation.RequestDigest); found || replayErr != nil {
 		return replay, replayErr
-	}
-	// The AWS provider path takes this fence before it locks task/change rows.
-	// Resolve it by task here so a cancel cannot invert that durable lock order.
-	hasAWSChange, e := lockAWSPreProviderByTaskTx(ctx, tx, c.OwnerID, c.TaskID)
-	if e != nil {
-		if errors.Is(e, coreconfirmation.ErrConflict) {
-			return task.Task{}, task.ErrConflict
-		}
-		return task.Task{}, e
 	}
 	current, e := getDatabaseTaskTx(ctx, tx, c.OwnerID, c.TaskID, true)
 	if e != nil {
@@ -633,41 +658,6 @@ func (s *DatabaseTaskStore) Cancel(ctx context.Context, c task.CancelCommand) (t
 	}
 	if current.Status == task.StatusSucceeded || current.Status == task.StatusFailed || current.Status == task.StatusCanceled {
 		return task.Task{}, task.ErrTerminal
-	}
-	if hasAWSChange && current.Spec.Kind != task.TaskKindAWSChange {
-		return task.Task{}, task.ErrConflict
-	}
-	if current.Spec.Kind == task.TaskKindAWSChange || current.Spec.Kind == task.TaskKindWorkload {
-		// An external dispatch may have irreversible provider work in flight.
-		// Only its pre-provider waiting/queued states can be canceled here.
-		if current.Status != task.StatusWaitingUser && current.Status != task.StatusQueued {
-			return task.Task{}, task.ErrConflict
-		}
-		stored, terminalizeErr := getExternalTaskConfirmationForUpdateTx(ctx, tx, c.OwnerID, c.TaskID, current.Spec.Kind)
-		if terminalizeErr == nil {
-			if (current.Status == task.StatusWaitingUser && stored.State != coreconfirmation.StatePending) ||
-				(current.Status == task.StatusQueued && stored.State != coreconfirmation.StateConfirmed) {
-				terminalizeErr = coreconfirmation.ErrConflict
-			}
-		}
-		if terminalizeErr == nil {
-			if current.Spec.Kind == task.TaskKindWorkload {
-				terminalizeErr = validateWorkloadTaskFenceTx(ctx, tx, current, stored)
-			}
-		}
-		if terminalizeErr == nil {
-			if current.Spec.Kind == task.TaskKindAWSChange {
-				terminalizeErr = terminalizeAWSPreProviderChangeTx(ctx, tx, stored, confirmationTaskRow{OwnerID: current.OwnerID, Status: string(current.Status), Attempt: int(current.Attempt), LeaseEpoch: int64(current.LeaseEpoch), Revision: int64(current.Revision)}, c.Reason, c.At.UTC())
-			} else {
-				terminalizeErr = terminalizeWorkloadOperationTx(ctx, tx, stored, "canceled", "canceled", c.Reason, c.At.UTC())
-			}
-		}
-		if terminalizeErr != nil {
-			if errors.Is(terminalizeErr, coreconfirmation.ErrConflict) || errors.Is(terminalizeErr, coreconfirmation.ErrNotFound) || errors.Is(terminalizeErr, coreconfirmation.ErrRevisionConflict) {
-				return task.Task{}, task.ErrConflict
-			}
-			return task.Task{}, terminalizeErr
-		}
 	}
 	running := current.Status == task.StatusRunning
 	if running && (current.Lease == nil || current.Lease.Epoch != current.LeaseEpoch) {
@@ -726,6 +716,13 @@ func (s *DatabaseTaskStore) Timeout(ctx context.Context, c task.TimeoutCommand) 
 	return e
 }
 func (s *DatabaseTaskStore) Delete(ctx context.Context, c task.DeleteCommand) error {
+	current, e := s.Get(ctx, c.OwnerID, c.TaskID)
+	if e != nil {
+		return e
+	}
+	if current.Spec.Kind == task.TaskKindExecutionStage {
+		return task.ErrConflict
+	}
 	r, e := s.db.ExecContext(ctx, `UPDATE agent_tasks SET deleted_at=$1,revision=revision+1,updated_at=$1 WHERE task_id=$2 AND owner_id=$3 AND revision=$4 AND status IN ('succeeded','failed','canceled')`, c.At.UTC(), c.TaskID, c.OwnerID, c.ExpectedRevision)
 	if e != nil {
 		return e
@@ -745,6 +742,9 @@ func (s *DatabaseTaskStore) CreateTask(ctx context.Context, c task.CreateTaskCom
 	}
 	if !task.ValidUUID(c.Mutation.IdempotencyKey) {
 		return task.Task{}, task.ErrInvalid
+	}
+	if c.Spec.Kind == task.TaskKindExecutionStage {
+		return task.Task{}, task.ErrConflict
 	}
 	at := time.Now().UTC()
 	raw, _ := json.Marshal(c.Spec)
@@ -813,9 +813,12 @@ func (s *DatabaseTaskStore) CommitMutation(ctx context.Context, r task.MutationR
 	if err != nil {
 		return task.MutationRecord{}, task.ErrInvalid
 	}
-	owner := ""
-	if err = s.db.QueryRowContext(ctx, `SELECT owner_id FROM agent_tasks WHERE task_id=$1`, oldTaskID(r.Response)).Scan(&owner); err != nil && !errors.Is(err, sql.ErrNoRows) {
+	owner, kind := "", ""
+	if err = s.db.QueryRowContext(ctx, `SELECT owner_id,COALESCE(spec_json->>'kind','') FROM agent_tasks WHERE task_id=$1`, oldTaskID(r.Response)).Scan(&owner, &kind); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return task.MutationRecord{}, err
+	}
+	if strings.TrimSpace(kind) == string(task.TaskKindExecutionStage) {
+		return task.MutationRecord{}, task.ErrConflict
 	}
 	if owner == "" {
 		return r, nil
@@ -923,6 +926,11 @@ func (s *DatabaseTaskStore) RetryTask(ctx context.Context, c task.RetryCommand) 
 	if owner == "" {
 		return task.Task{}, task.ErrInvalid
 	}
+	if executionStage, checkErr := databaseTaskIsExecutionStageTx(ctx, tx, c.TaskID); checkErr != nil {
+		return task.Task{}, checkErr
+	} else if executionStage {
+		return task.Task{}, task.ErrConflict
+	}
 	if e = lockTaskReplayTx(ctx, tx, owner, "retry", c.Mutation.IdempotencyKey); e != nil {
 		return task.Task{}, e
 	}
@@ -1026,7 +1034,7 @@ func (s *DatabaseTaskStore) ClaimNextDue(ctx context.Context, holder string, at 
 	}
 	var id string
 	var rev, epoch int64
-	e = tx.QueryRowContext(ctx, `SELECT task_id::text,revision,lease_epoch FROM agent_tasks WHERE status='queued' AND available_at<=$1 AND deleted_at IS NULL ORDER BY available_at,created_at,task_id FOR UPDATE SKIP LOCKED LIMIT 1`, at.UTC()).Scan(&id, &rev, &epoch)
+	e = tx.QueryRowContext(ctx, `SELECT task_id::text,revision,lease_epoch FROM agent_tasks WHERE status='queued' AND available_at<=$1 AND deleted_at IS NULL AND COALESCE(spec_json->>'kind','') <> 'execution_stage' ORDER BY available_at,created_at,task_id FOR UPDATE SKIP LOCKED LIMIT 1`, at.UTC()).Scan(&id, &rev, &epoch)
 	if errors.Is(e, sql.ErrNoRows) {
 		return task.Task{}, task.Lease{}, task.ErrNotFound
 	}
@@ -1069,7 +1077,7 @@ func (s *DatabaseTaskStore) ReclaimExpired(ctx context.Context, holder string, a
 	var id string
 	var epoch int64
 	var previousHolder string
-	e = tx.QueryRowContext(ctx, `SELECT task_id::text,lease_epoch,lease_holder FROM agent_tasks WHERE status='running' AND lease_expires_at<=$1 AND deleted_at IS NULL ORDER BY lease_expires_at,task_id FOR UPDATE SKIP LOCKED LIMIT 1`, at.UTC()).Scan(&id, &epoch, &previousHolder)
+	e = tx.QueryRowContext(ctx, `SELECT task_id::text,lease_epoch,lease_holder FROM agent_tasks WHERE status='running' AND lease_expires_at<=$1 AND deleted_at IS NULL AND COALESCE(spec_json->>'kind','') <> 'execution_stage' ORDER BY lease_expires_at,task_id FOR UPDATE SKIP LOCKED LIMIT 1`, at.UTC()).Scan(&id, &epoch, &previousHolder)
 	if errors.Is(e, sql.ErrNoRows) {
 		return task.ErrNotFound
 	}

@@ -3,14 +3,156 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/YingSuiAI/dirextalk-message-server/internal/sqlutil"
 	channelsmodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/channels"
 	"github.com/YingSuiAI/dirextalk-message-server/setup/config"
 	"github.com/YingSuiAI/dirextalk-message-server/test"
 )
+
+type executionV2GraphFixture struct {
+	Owner          string
+	ProjectID      string
+	AnalysisID     string
+	TargetID       string
+	PlanID         string
+	PlanRevision   int64
+	PlanDigest     string
+	RunRevision    int64
+	StageID        string
+	StageRevision  int64
+	StageDigest    string
+	TargetRevision int64
+	TargetDigest   string
+	RunID          string
+	TaskID         string
+	ConfirmationID string
+}
+
+// frozenUpstreamMigrationVersions is intentionally a literal copy of the
+// registrations in origin/main through v77.  V78 is the sole branch-local
+// registration: a clean install must not silently grow an upgrade chain.
+var frozenUpstreamMigrationVersions = []string{
+	"p2p: integrated appservice tables v1",
+	"p2p: integrated appservice tables v2",
+	"p2p: integrated appservice tables v3",
+	"p2p: integrated appservice tables v4 member avatars",
+	"p2p: integrated appservice tables v5 product mute state",
+	"p2p: integrated appservice tables v6 member join order",
+	"p2p: integrated appservice tables v7 portal matrix device",
+	"p2p: integrated appservice tables v11 channel comment replies",
+	"p2p: integrated appservice tables v12 channel comment media",
+	"p2p: integrated appservice tables v13 event outbox",
+	"p2p: integrated appservice tables v14 channel invite grants",
+	"p2p: drop legacy message mirror table v15",
+	"p2p: unique contact peer v16",
+	"p2p: product conversations v17",
+	"p2p: conversation peer mxid v18",
+	"p2p: backfill product conversations v19",
+	"p2p: conversation last message v20",
+	"p2p: member requester node v21",
+	"p2p: contact avatars v22",
+	"p2p: call lifecycle fields v23",
+	"p2p: contact request remark v24",
+	"p2p: owner scoped member indexes v25",
+	"p2p: public channel visibility index v26",
+	"p2p: event dedupe key v27",
+	"p2p: contact display name override v28",
+	"p2p: portal agent config json v29",
+	"p2p: owner blocks v30",
+	"p2p: official plugins v31",
+	"p2p: plugin secrets v32",
+	"p2p: system reports v33",
+	"p2p: portal client build v34",
+	"p2p: recoverable operations v35",
+	"p2p: recoverable operation claims v36",
+	"p2p: operation base generations v37",
+	"p2p: legacy agent invocation reservations v38",
+	"p2p: authoritative read marker order v73",
+	"p2p: channel favorite reaction backfill v74",
+	"p2p: projected reaction event identity v75",
+	"p2p: durable native agent turns v77",
+	"p2p: canonical Matrix member membership v76",
+}
+
+func newExecutionV2GraphFixture(t *testing.T, db *sql.DB) executionV2GraphFixture {
+	t.Helper()
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	f := executionV2GraphFixture{
+		Owner:          "@execution-v2-fixture:example.test",
+		ProjectID:      "00000000-0000-4000-8000-000000000301",
+		AnalysisID:     "00000000-0000-4000-8000-000000000302",
+		TargetID:       "00000000-0000-4000-8000-000000000303",
+		PlanID:         "00000000-0000-4000-8000-000000000304",
+		PlanRevision:   1,
+		PlanDigest:     strings.Repeat("c", 64),
+		RunRevision:    1,
+		StageID:        "00000000-0000-4000-8000-000000000305",
+		StageRevision:  1,
+		StageDigest:    strings.Repeat("a", 64),
+		TargetRevision: 1,
+		TargetDigest:   strings.Repeat("b", 64),
+		RunID:          "00000000-0000-4000-8000-000000000306",
+		TaskID:         "00000000-0000-4000-8000-000000000307",
+		ConfirmationID: "00000000-0000-4000-8000-000000000308",
+	}
+	planDigest := f.PlanDigest
+	stepDigest := strings.Repeat("d", 64)
+	previewDigest := strings.Repeat("e", 64)
+	graph := []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO core_execution_projects(owner_id,project_id,project_digest,snapshot_json,created_at,updated_at) VALUES($1,$2,$3,'{"project":"fixture"}'::jsonb,$4,$4)`, []any{f.Owner, f.ProjectID, planDigest, now}},
+		{`INSERT INTO core_execution_analyses(owner_id,analysis_id,project_id,analysis_digest,snapshot_json,created_at) VALUES($1,$2,$3,$4,'{"analysis":"fixture"}'::jsonb,$5)`, []any{f.Owner, f.AnalysisID, f.ProjectID, planDigest, now}},
+		{`INSERT INTO core_execution_targets(owner_id,target_id,target_revision,target_digest,provider,snapshot_json,created_at,updated_at) VALUES($1,$2,$3,$4,'fixture','{"target":"fixture"}'::jsonb,$5,$5)`, []any{f.Owner, f.TargetID, f.TargetRevision, f.TargetDigest, now}},
+		{`INSERT INTO core_execution_plans(owner_id,plan_id,project_id,snapshot_json,created_at,updated_at) VALUES($1,$2,$3,'{"plan":"fixture"}'::jsonb,$4,$4)`, []any{f.Owner, f.PlanID, f.ProjectID, now}},
+		{`INSERT INTO core_execution_plan_revisions(owner_id,plan_id,plan_revision_id,revision,project_id,analysis_id,status,plan_digest,snapshot_json,expires_at,created_at) VALUES($1,$2,$3,$4,$5,$6,'ready',$7,'{"revision":"fixture"}'::jsonb,$8,$9)`, []any{f.Owner, f.PlanID, "00000000-0000-4000-8000-000000000309", f.PlanRevision, f.ProjectID, f.AnalysisID, planDigest, now.Add(time.Hour), now}},
+		{`INSERT INTO core_execution_plan_stages(owner_id,plan_id,plan_revision,stage_key,stage_revision,stage_digest,ordinal,status,snapshot_json) VALUES($1,$2,$3,'deploy',1,$4,1,'ready','{"stage":"fixture"}'::jsonb)`, []any{f.Owner, f.PlanID, f.PlanRevision, f.StageDigest}},
+		{`INSERT INTO core_execution_plan_steps(owner_id,plan_id,plan_revision,stage_key,step_key,step_set,step_revision,step_digest,ordinal,status,snapshot_json) VALUES($1,$2,$3,'deploy','apply','forward',1,$4,1,'ready','{"step":"forward"}'::jsonb)`, []any{f.Owner, f.PlanID, f.PlanRevision, stepDigest}},
+		{`INSERT INTO core_execution_plan_steps(owner_id,plan_id,plan_revision,stage_key,step_key,step_set,step_revision,step_digest,ordinal,status,snapshot_json) VALUES($1,$2,$3,'deploy','undo','rollback',1,$4,1,'ready','{"step":"rollback"}'::jsonb)`, []any{f.Owner, f.PlanID, f.PlanRevision, stepDigest}},
+		{`INSERT INTO agent_tasks(task_id,owner_id,spec_json,status,available_at,created_at,updated_at) VALUES($1,$2,$3::jsonb,'queued',$4,$4,$4)`, []any{f.TaskID, f.Owner, fmt.Sprintf(`{"kind":"execution_stage","idempotency_key":"fixture-stage","payload":{"execution_stage":{"plan_id":%q,"plan_revision":1,"plan_digest":%q,"run_id":%q,"run_revision":1,"stage_id":%q,"stage_revision":1,"stage_digest":%q,"target_id":%q,"target_revision":1,"target_digest":%q}}}`, f.PlanID, f.PlanDigest, f.RunID, f.StageID, f.StageDigest, f.TargetID, f.TargetDigest), now}},
+		{`INSERT INTO agent_confirmations(confirmation_id,owner_id,operation_domain,target_id,target_revision,binding_digest,binding_json,preview_json,preview_digest,task_id,state,expires_at,created_at,updated_at) VALUES($1,$2,'execution:v2:remote_execution',$3,$4,$5,$6::jsonb,'{"preview":"fixture"}'::jsonb,$7,$8,'pending',$9,$10,$10)`, []any{f.ConfirmationID, f.Owner, f.TargetID, f.TargetRevision, planDigest, fmt.Sprintf(`{"plan_id":%q,"plan_revision":1,"plan_digest":%q,"run_id":%q,"run_revision":1,"stage_id":%q,"stage_revision":1,"stage_digest":%q,"target_id":%q,"target_revision":1,"target_digest":%q,"preview_digest":%q}`, f.PlanID, f.PlanDigest, f.RunID, f.StageID, f.StageDigest, f.TargetID, f.TargetDigest, previewDigest), previewDigest, f.TaskID, now.Add(time.Hour), now}},
+		{`INSERT INTO core_execution_runs(owner_id,run_id,project_id,plan_id,plan_revision,deployment_id,purpose,plan_digest,run_digest,snapshot_json,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,'service',$7,$7,'{"run":"fixture"}'::jsonb,$8,$8)`, []any{f.Owner, f.RunID, f.ProjectID, f.PlanID, f.PlanRevision, "00000000-0000-4000-8000-000000000310", planDigest, now}},
+		{`INSERT INTO core_execution_run_revisions(owner_id,run_id,revision,project_id,plan_id,plan_revision,deployment_id,operation,purpose,trigger_kind,plan_digest,status,schema_version,run_digest,snapshot_json,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,'execute','service','manual',$8,'pending','execution-run/v2',$8,'{"run":"fixture"}'::jsonb,$9,$9)`, []any{f.Owner, f.RunID, f.RunRevision, f.ProjectID, f.PlanID, f.PlanRevision, "00000000-0000-4000-8000-000000000310", planDigest, now}},
+		{`INSERT INTO core_execution_deployments(owner_id,deployment_id,project_id,current_run_id,state,object_json,actual_json,created_at,updated_at) VALUES($1,$2,$3,$4,'pending','{"deployment":"fixture"}'::jsonb,'{}'::jsonb,$5,$5)`, []any{f.Owner, "00000000-0000-4000-8000-000000000310", f.ProjectID, f.RunID, now}},
+		{`INSERT INTO core_execution_run_stages(owner_id,run_id,stage_id,project_id,plan_id,plan_revision,plan_digest,run_revision,plan_stage_key,stage_revision,plan_stage_digest,target_id,target_revision,target_digest,task_id,confirmation_id,ordinal,snapshot_json) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'deploy',$9,$10,$11,$12,$13,$14,$15,1,'{"run_stage":"fixture"}'::jsonb)`, []any{f.Owner, f.RunID, f.StageID, f.ProjectID, f.PlanID, f.PlanRevision, f.PlanDigest, f.RunRevision, f.StageRevision, f.StageDigest, f.TargetID, f.TargetRevision, f.TargetDigest, f.TaskID, f.ConfirmationID}},
+		{`UPDATE core_execution_deployments SET current_stage_id=$3,revision=revision+1,updated_at=clock_timestamp() WHERE owner_id=$1 AND deployment_id=$2`, []any{f.Owner, "00000000-0000-4000-8000-000000000310", f.StageID}},
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range graph {
+		if _, err := tx.ExecContext(ctx, statement.query, statement.args...); err != nil {
+			_ = tx.Rollback()
+			t.Fatalf("insert execution v2 fixture graph: %v", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit execution v2 fixture graph: %v", err)
+	}
+	return f
+}
+
+func openExecutionV2Schema(t *testing.T) *DatabaseStore {
+	t.Helper()
+	ctx := context.Background()
+	connStr, closeDB := test.PrepareDBConnectionString(t, test.DBTypePostgres)
+	t.Cleanup(closeDB)
+	dbOpts := config.DatabaseOptions{ConnectionString: config.DataSource(connStr)}
+	store, err := NewDatabaseStore(ctx, sqlutil.NewConnectionManager(nil, dbOpts), &dbOpts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	return store
+}
 
 func TestDatabaseStoreRejectsSQLiteConnectionString(t *testing.T) {
 	ctx := context.Background()
@@ -23,111 +165,342 @@ func TestDatabaseStoreRejectsSQLiteConnectionString(t *testing.T) {
 	}
 }
 
-func TestDatabaseStoreCreatesBusinessIndexes(t *testing.T) {
+func TestExecutionV2RunStageTaskBindingExactScope(t *testing.T) {
 	ctx := context.Background()
-	connStr, closeDB := test.PrepareDBConnectionString(t, test.DBTypePostgres)
-	defer closeDB()
-
-	dbOpts := config.DatabaseOptions{ConnectionString: config.DataSource(connStr)}
-	store, err := NewDatabaseStore(ctx, sqlutil.NewConnectionManager(nil, dbOpts), &dbOpts)
-	if err != nil {
-		t.Fatal(err)
+	store := openExecutionV2Schema(t)
+	f := newExecutionV2GraphFixture(t, store.DB())
+	fields := []struct {
+		name string
+		bad  string
+		good string
+	}{
+		{"plan_id", "00000000-0000-4000-8000-000000000401", f.PlanID},
+		{"plan_revision", "2", "1"},
+		{"plan_digest", strings.Repeat("f", 64), f.PlanDigest},
+		{"run_id", "00000000-0000-4000-8000-000000000402", f.RunID},
+		{"run_revision", "2", "1"},
+		{"stage_id", "00000000-0000-4000-8000-000000000403", f.StageID},
+		{"stage_revision", "2", "1"},
+		{"stage_digest", strings.Repeat("f", 64), f.StageDigest},
+		{"target_id", "00000000-0000-4000-8000-000000000404", f.TargetID},
+		{"target_revision", "2", "1"},
+		{"target_digest", strings.Repeat("f", 64), f.TargetDigest},
 	}
-	defer store.Close()
-
-	expected := []string{
-		"p2p_channels_room_idx",
-		"p2p_channels_type_visibility_idx",
-		"p2p_channels_visibility_idx",
-		"p2p_channel_posts_channel_idx",
-		"p2p_channel_posts_event_idx",
-		"p2p_channel_posts_author_idx",
-		"p2p_channel_comments_post_idx",
-		"p2p_channel_comments_channel_idx",
-		"p2p_channel_comments_event_idx",
-		"p2p_contacts_peer_idx",
-		"p2p_contacts_status_idx",
-		"p2p_blocks_type_idx",
-		"p2p_blocks_room_idx",
-		"p2p_blocks_peer_idx",
-		"p2p_reports_target_idx",
-		"p2p_reports_reporter_idx",
-		"p2p_calls_room_idx",
-		"p2p_calls_state_idx",
-		"p2p_favorites_type_idx",
-		"p2p_favorites_event_idx",
-		"p2p_reactions_user_idx",
-		"p2p_reactions_target_idx",
-		"p2p_reactions_event_idx",
-		"p2p_members_channel_idx",
-		"p2p_members_room_idx",
-		"p2p_members_user_idx",
-		"p2p_members_room_joined_idx",
-		"p2p_members_channel_joined_idx",
-		"p2p_members_user_room_idx",
-		"p2p_members_user_channel_idx",
-		"p2p_events_room_idx",
-		"p2p_events_type_idx",
-		"p2p_legacy_agent_invocations_state_updated_idx",
-		"p2p_native_agent_turns_owner_conversation_idx",
-		"p2p_native_agent_turns_active_idx",
-		"core_deployments_owner_public_deployment_uidx",
-		"core_deployment_events_owner_public_event_uidx",
-	}
-	for _, indexName := range expected {
-		t.Run(indexName, func(t *testing.T) {
-			var name string
-			if err := store.DB().QueryRowContext(ctx, `SELECT indexname FROM pg_indexes WHERE schemaname = 'public' AND indexname = $1`, indexName).Scan(&name); err != nil {
-				t.Fatalf("expected index %s to exist: %v", indexName, err)
+	for _, field := range fields {
+		t.Run(field.name, func(t *testing.T) {
+			setTaskPayloadField := func(value string) {
+				query := fmt.Sprintf(`UPDATE agent_tasks SET spec_json=jsonb_set(spec_json,'{payload,execution_stage,%s}',to_jsonb($1::text),false) WHERE owner_id=$2 AND task_id=$3`, field.name)
+				if _, err := store.DB().ExecContext(ctx, query, value, f.Owner, f.TaskID); err != nil {
+					t.Fatalf("set task %s=%q: %v", field.name, value, err)
+				}
 			}
-		})
-	}
-	var contactPeerIndex string
-	if err := store.DB().QueryRowContext(ctx, `SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'p2p_contacts_peer_idx'`).Scan(&contactPeerIndex); err != nil {
-		t.Fatalf("expected contact peer index definition: %v", err)
-	}
-	if !strings.Contains(strings.ToUpper(contactPeerIndex), "UNIQUE") {
-		t.Fatalf("expected p2p_contacts_peer_idx to be unique, got %s", contactPeerIndex)
-	}
-	var messageTableCount int
-	if err := store.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'p2p_messages'`).Scan(&messageTableCount); err != nil {
-		t.Fatal(err)
-	}
-	if messageTableCount != 0 {
-		t.Fatalf("p2p_messages table must not be created after Matrix-source migration")
-	}
-	for _, migration := range []string{
-		"p2p: agent secret envelopes v97",
-		"p2p: agent tasks and confirmations v98",
-		"p2p: agent extension lifecycle v99",
-		"p2p: AWS control plane v100",
-		"p2p: workload control plane v101",
-		"p2p: generic schedules and deployment cursors v102",
-	} {
-		t.Run(migration, func(t *testing.T) {
-			var registrations int
-			if err := store.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM db_migrations WHERE version=$1`, migration).Scan(&registrations); err != nil {
-				t.Fatal(err)
+			setTaskPayloadField(field.bad)
+			_, err := store.DB().ExecContext(ctx, `UPDATE core_execution_run_stages SET status='queued' WHERE owner_id=$1 AND run_id=$2 AND stage_id=$3`, f.Owner, f.RunID, f.StageID)
+			if err == nil || !strings.Contains(err.Error(), "execution stage task immutable scope mismatch") {
+				t.Fatalf("mismatched task %s accepted or wrong guard: %v", field.name, err)
 			}
-			if registrations != 1 {
-				t.Fatalf("migration registrations = %d, want 1", registrations)
-			}
-		})
-	}
-	for _, table := range []string{"p2p_agent_secrets", "agent_tasks", "p2p_agent_secret_rotations", "core_aws_credentials", "core_workload_operations", "p2p_agent_deployment_event_cursors"} {
-		t.Run(table, func(t *testing.T) {
-			var present bool
-			if err := store.DB().QueryRowContext(ctx, `SELECT to_regclass($1) IS NOT NULL`, table).Scan(&present); err != nil {
-				t.Fatal(err)
-			}
-			if !present {
-				t.Fatalf("migration table %s is missing", table)
+			setTaskPayloadField(field.good)
+			if _, err := store.DB().ExecContext(ctx, `UPDATE core_execution_run_stages SET status='queued' WHERE owner_id=$1 AND run_id=$2 AND stage_id=$3`, f.Owner, f.RunID, f.StageID); err != nil {
+				t.Fatalf("exact task %s binding rejected: %v", field.name, err)
 			}
 		})
 	}
 }
 
-func TestDatabasePublicDeploymentUUIDMigrationIsCanonicalAndRegisteredOnce(t *testing.T) {
+func TestExecutionV2RunStageConfirmationBindingExactScope(t *testing.T) {
+	ctx := context.Background()
+	store := openExecutionV2Schema(t)
+	f := newExecutionV2GraphFixture(t, store.DB())
+	fields := []struct {
+		name string
+		bad  string
+		good string
+	}{
+		{"plan_id", "00000000-0000-4000-8000-000000000411", f.PlanID},
+		{"plan_revision", "2", "1"},
+		{"plan_digest", strings.Repeat("f", 64), f.PlanDigest},
+		{"run_id", "00000000-0000-4000-8000-000000000412", f.RunID},
+		{"run_revision", "2", "1"},
+		{"stage_id", "00000000-0000-4000-8000-000000000413", f.StageID},
+		{"stage_revision", "2", "1"},
+		{"stage_digest", strings.Repeat("f", 64), f.StageDigest},
+		{"target_id", "00000000-0000-4000-8000-000000000414", f.TargetID},
+		{"target_revision", "2", "1"},
+		{"target_digest", strings.Repeat("f", 64), f.TargetDigest},
+	}
+	for _, field := range fields {
+		t.Run(field.name, func(t *testing.T) {
+			query := fmt.Sprintf(`UPDATE agent_confirmations SET binding_json=jsonb_set(binding_json,'{%s}',to_jsonb($1::text),false) WHERE owner_id=$2 AND confirmation_id=$3`, field.name)
+			if _, err := store.DB().ExecContext(ctx, query, field.bad, f.Owner, f.ConfirmationID); err != nil {
+				t.Fatalf("set confirmation %s=%q: %v", field.name, field.bad, err)
+			}
+			_, err := store.DB().ExecContext(ctx, `UPDATE core_execution_run_stages SET status='running' WHERE owner_id=$1 AND run_id=$2 AND stage_id=$3`, f.Owner, f.RunID, f.StageID)
+			if err == nil || !strings.Contains(err.Error(), "execution confirmation binding scope mismatch") {
+				t.Fatalf("mismatched confirmation %s accepted or wrong guard: %v", field.name, err)
+			}
+			if _, err := store.DB().ExecContext(ctx, query, field.good, f.Owner, f.ConfirmationID); err != nil {
+				t.Fatalf("restore confirmation %s=%q: %v", field.name, field.good, err)
+			}
+			if _, err := store.DB().ExecContext(ctx, `UPDATE core_execution_run_stages SET status='running' WHERE owner_id=$1 AND run_id=$2 AND stage_id=$3`, f.Owner, f.RunID, f.StageID); err != nil {
+				t.Fatalf("exact confirmation %s binding rejected: %v", field.name, err)
+			}
+		})
+	}
+}
+
+func TestExecutionV2ConfirmationPreviewDigestBindingGuard(t *testing.T) {
+	ctx := context.Background()
+	store := openExecutionV2Schema(t)
+	f := newExecutionV2GraphFixture(t, store.DB())
+	for _, tc := range []struct {
+		name  string
+		query string
+	}{
+		{"binding_preview_digest", `UPDATE agent_confirmations SET binding_json=jsonb_set(binding_json,'{preview_digest}',to_jsonb($1::text),false) WHERE owner_id=$2 AND confirmation_id=$3`},
+		{"column_preview_digest", `UPDATE agent_confirmations SET preview_digest=$1 WHERE owner_id=$2 AND confirmation_id=$3`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bad := strings.Repeat("f", 64)
+			if _, err := store.DB().ExecContext(ctx, tc.query, bad, f.Owner, f.ConfirmationID); err == nil || !strings.Contains(err.Error(), "execution confirmation preview/binding mismatch") {
+				t.Fatalf("preview mismatch accepted or wrong guard: %v", err)
+			}
+			if _, err := store.DB().ExecContext(ctx, `UPDATE agent_confirmations SET updated_at=clock_timestamp() WHERE owner_id=$1 AND confirmation_id=$2`, f.Owner, f.ConfirmationID); err != nil {
+				t.Fatalf("exact preview digest binding rejected: %v", err)
+			}
+		})
+	}
+}
+
+func TestExecutionV2RunRevisionHistoryAndLifecycleSchema(t *testing.T) {
+	ctx := context.Background()
+	store := openExecutionV2Schema(t)
+	f := newExecutionV2GraphFixture(t, store.DB())
+
+	var historyCount int
+	if err := store.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM core_execution_run_revisions WHERE owner_id=$1 AND run_id=$2 AND revision=$3`, f.Owner, f.RunID, f.RunRevision).Scan(&historyCount); err != nil {
+		t.Fatal(err)
+	}
+	if historyCount != 1 {
+		t.Fatalf("run revision history rows = %d, want 1", historyCount)
+	}
+
+	started := time.Now().UTC().Add(-time.Minute).Truncate(time.Microsecond)
+	completed := started.Add(30 * time.Second)
+	tx, err := store.DB().BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE core_execution_runs SET revision=2,started_at=$1,completed_at=$2,terminal_reason='completed',current_stage='deploy' WHERE owner_id=$3 AND run_id=$4`, started, completed, f.Owner, f.RunID); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("advance current run projection revision: %v", err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO core_execution_run_revisions(owner_id,run_id,revision,project_id,plan_id,plan_revision,operation,purpose,trigger_kind,deployment_id,plan_digest,current_stage,status,terminal_reason,started_at,completed_at,schema_version,run_digest,snapshot_json,created_at,updated_at) SELECT owner_id,run_id,revision,project_id,plan_id,plan_revision,operation,purpose,trigger_kind,deployment_id,plan_digest,current_stage,status,terminal_reason,started_at,completed_at,schema_version,run_digest,snapshot_json,created_at,updated_at FROM core_execution_runs WHERE owner_id=$1 AND run_id=$2`, f.Owner, f.RunID); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("append current run revision: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit current run revision: %v", err)
+	}
+	var gotStarted, gotCompleted time.Time
+	var terminalReason, currentStage string
+	if err := store.DB().QueryRowContext(ctx, `SELECT started_at,completed_at,terminal_reason,current_stage FROM core_execution_runs WHERE owner_id=$1 AND run_id=$2`, f.Owner, f.RunID).Scan(&gotStarted, &gotCompleted, &terminalReason, &currentStage); err != nil {
+		t.Fatal(err)
+	}
+	if !gotStarted.Equal(started) || !gotCompleted.Equal(completed) || terminalReason != "completed" || currentStage != "deploy" {
+		t.Fatalf("run lifecycle roundtrip = %v, %v, %q, %q", gotStarted, gotCompleted, terminalReason, currentStage)
+	}
+	var pinnedRevision int64
+	if err := store.DB().QueryRowContext(ctx, `SELECT run_revision FROM core_execution_run_stages WHERE owner_id=$1 AND run_id=$2 AND stage_id=$3`, f.Owner, f.RunID, f.StageID).Scan(&pinnedRevision); err != nil {
+		t.Fatal(err)
+	}
+	if pinnedRevision != f.RunRevision {
+		t.Fatalf("stage run revision = %d, want %d", pinnedRevision, f.RunRevision)
+	}
+
+	stageInsert := `INSERT INTO core_execution_run_stages(owner_id,run_id,stage_id,project_id,plan_id,plan_revision,plan_digest,run_revision,plan_stage_key,stage_revision,plan_stage_digest,ordinal,snapshot_json) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'deploy',1,$9,$10,'{}'::jsonb)`
+	if _, err := store.DB().ExecContext(ctx, stageInsert, f.Owner, f.RunID, "00000000-0000-4000-8000-000000000399", f.ProjectID, f.PlanID, f.PlanRevision, f.PlanDigest, int64(3), f.StageDigest, int64(2)); err == nil {
+		t.Fatal("stage referencing missing run revision was accepted")
+	}
+	if _, err := store.DB().ExecContext(ctx, stageInsert, f.Owner, f.RunID, "00000000-0000-4000-8000-000000000398", f.ProjectID, f.PlanID, f.PlanRevision, f.PlanDigest, int64(0), f.StageDigest, int64(3)); err == nil {
+		t.Fatal("stage referencing invalid run revision was accepted")
+	}
+
+	if _, err := store.DB().ExecContext(ctx, `UPDATE core_execution_run_revisions SET status='running' WHERE owner_id=$1 AND run_id=$2 AND revision=$3`, f.Owner, f.RunID, f.RunRevision); err == nil || !strings.Contains(err.Error(), "append-only") {
+		t.Fatalf("run revision history mutation = %v", err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `DELETE FROM core_execution_run_revisions WHERE owner_id=$1 AND run_id=$2 AND revision=$3`, f.Owner, f.RunID, f.RunRevision); err == nil || !strings.Contains(err.Error(), "append-only") {
+		t.Fatalf("run revision history delete = %v", err)
+	}
+
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO core_execution_run_revisions(owner_id,run_id,revision,project_id,plan_id,plan_revision,operation,purpose,trigger_kind,deployment_id,plan_digest,current_stage,status,terminal_reason,started_at,completed_at,schema_version,run_digest,snapshot_json,created_at,updated_at) SELECT owner_id,run_id,revision,project_id,plan_id,plan_revision,'destroy',purpose,trigger_kind,deployment_id,plan_digest,current_stage,status,terminal_reason,started_at,completed_at,schema_version,run_digest,snapshot_json,created_at,updated_at FROM core_execution_runs WHERE owner_id=$1 AND run_id=$2`, f.Owner, f.RunID); err == nil || !strings.Contains(err.Error(), "revision identity mismatch") {
+		t.Fatalf("forged run revision identity = %v", err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO core_execution_run_revisions(owner_id,run_id,revision,project_id,plan_id,plan_revision,operation,purpose,trigger_kind,deployment_id,plan_digest,current_stage,status,terminal_reason,started_at,completed_at,schema_version,run_digest,snapshot_json,created_at,updated_at) SELECT owner_id,run_id,revision+1,project_id,plan_id,plan_revision,operation,purpose,trigger_kind,deployment_id,plan_digest,current_stage,status,terminal_reason,started_at,completed_at,schema_version,run_digest,snapshot_json,created_at,updated_at FROM core_execution_runs WHERE owner_id=$1 AND run_id=$2`, f.Owner, f.RunID); err == nil || !strings.Contains(err.Error(), "future or non-current") {
+		t.Fatalf("future run revision = %v", err)
+	}
+	lifecycleTx, err := store.DB().BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lifecycleTx.ExecContext(ctx, `UPDATE core_execution_runs SET revision=revision+1,current_stage='verify',updated_at=clock_timestamp() WHERE owner_id=$1 AND run_id=$2`, f.Owner, f.RunID); err != nil {
+		_ = lifecycleTx.Rollback()
+		t.Fatalf("advance run for lifecycle history mismatch: %v", err)
+	}
+	if _, err := lifecycleTx.ExecContext(ctx, `INSERT INTO core_execution_run_revisions(owner_id,run_id,revision,project_id,plan_id,plan_revision,rollback_of_run_id,deployment_id,operation,purpose,trigger_kind,plan_digest,current_stage,current_stage_id,status,terminal_reason,started_at,completed_at,schema_version,run_digest,snapshot_json,created_at,updated_at) SELECT owner_id,run_id,revision,project_id,plan_id,plan_revision,rollback_of_run_id,deployment_id,operation,purpose,trigger_kind,plan_digest,current_stage||'-forged',current_stage_id,status,terminal_reason,started_at,completed_at,schema_version,run_digest,snapshot_json,created_at,updated_at FROM core_execution_runs WHERE owner_id=$1 AND run_id=$2`, f.Owner, f.RunID); err == nil || !strings.Contains(err.Error(), "revision identity mismatch") {
+		_ = lifecycleTx.Rollback()
+		t.Fatalf("forged run lifecycle history = %v", err)
+	}
+	_ = lifecycleTx.Rollback()
+	gapTx, err := store.DB().BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gapTx.ExecContext(ctx, `UPDATE core_execution_runs SET revision=revision+1 WHERE owner_id=$1 AND run_id=$2`, f.Owner, f.RunID); err != nil {
+		_ = gapTx.Rollback()
+		t.Fatalf("advance run without history: %v", err)
+	}
+	if err := gapTx.Commit(); err == nil || !strings.Contains(err.Error(), "requires matching history") {
+		t.Fatalf("gapped run revision = %v", err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `UPDATE core_execution_runs SET revision=1 WHERE owner_id=$1 AND run_id=$2`, f.Owner, f.RunID); err == nil || !strings.Contains(err.Error(), "revision is not consecutive") {
+		t.Fatalf("run revision rollback = %v", err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `UPDATE core_execution_runs SET revision=revision+1,operation='destroy' WHERE owner_id=$1 AND run_id=$2`, f.Owner, f.RunID); err == nil || !strings.Contains(err.Error(), "identity/lifecycle") {
+		t.Fatalf("run identity mutation = %v", err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `UPDATE core_execution_runs SET revision=revision+1,completed_at=completed_at+interval '1 second' WHERE owner_id=$1 AND run_id=$2`, f.Owner, f.RunID); err == nil || !strings.Contains(err.Error(), "identity/lifecycle") {
+		t.Fatalf("run terminal lifecycle mutation = %v", err)
+	}
+
+	rollbackID := "00000000-0000-4000-8000-000000000397"
+	rollbackTx, err := store.DB().BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rollbackTx.ExecContext(ctx, `INSERT INTO core_execution_runs(owner_id,run_id,project_id,plan_id,plan_revision,rollback_of_run_id,operation,purpose,trigger_kind,plan_digest,run_digest) VALUES($1,$2,$3,$4,$5,$6,'rollback','job','rollback',$7,$7)`, f.Owner, rollbackID, f.ProjectID, f.PlanID, f.PlanRevision, f.RunID, f.PlanDigest); err != nil {
+		_ = rollbackTx.Rollback()
+		t.Fatalf("rollback trigger kind rejected: %v", err)
+	}
+	if _, err := rollbackTx.ExecContext(ctx, `INSERT INTO core_execution_run_revisions(owner_id,run_id,revision,project_id,plan_id,plan_revision,rollback_of_run_id,operation,purpose,trigger_kind,plan_digest,current_stage,status,terminal_reason,schema_version,run_digest,snapshot_json,created_at,updated_at) SELECT owner_id,run_id,revision,project_id,plan_id,plan_revision,rollback_of_run_id,operation,purpose,trigger_kind,plan_digest,current_stage,status,terminal_reason,schema_version,run_digest,snapshot_json,created_at,updated_at FROM core_execution_runs WHERE owner_id=$1 AND run_id=$2`, f.Owner, rollbackID); err != nil {
+		_ = rollbackTx.Rollback()
+		t.Fatalf("append rollback run revision: %v", err)
+	}
+	if err := rollbackTx.Commit(); err != nil {
+		t.Fatalf("commit rollback run: %v", err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO core_execution_runs(owner_id,run_id,project_id,plan_id,plan_revision,operation,purpose,trigger_kind,plan_digest,run_digest) VALUES($1,$2,$3,$4,$5,'execute','job','invalid',$6,$6)`, f.Owner, "00000000-0000-4000-8000-000000000396", f.ProjectID, f.PlanID, f.PlanRevision, f.PlanDigest); err == nil {
+		t.Fatal("invalid trigger kind was accepted")
+	}
+}
+
+func TestExecutionV2DispatchReconciliationAndDeploymentTamperFences(t *testing.T) {
+	ctx := context.Background()
+	store := openExecutionV2Schema(t)
+	f := newExecutionV2GraphFixture(t, store.DB())
+	const deploymentID = "00000000-0000-4000-8000-000000000310"
+	const attemptID = "00000000-0000-4000-8000-000000000381"
+	const receiptID = "00000000-0000-4000-8000-000000000382"
+	const leaseID = "00000000-0000-4000-8000-000000000383"
+	const token = "00000000-0000-4000-8000-000000000384"
+	const intentID = "00000000-0000-4000-8000-000000000385"
+	requestDigest, fenceDigest, providerOperationID := strings.Repeat("1", 64), strings.Repeat("2", 64), "provider-operation-fixture"
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO core_execution_step_attempts(owner_id,attempt_id,run_id,stage_id,project_id,plan_id,plan_revision,plan_stage_key,step_key,step_set,step_revision,step_digest,attempt_no,status,input_digest,output_digest,snapshot_json) VALUES($1,$2,$3,$4,$5,$6,$7,'deploy','apply','forward',1,$8,1,'uncertain',$9,$9,'{}'::jsonb)`, f.Owner, attemptID, f.RunID, f.StageID, f.ProjectID, f.PlanID, f.PlanRevision, strings.Repeat("d", 64), requestDigest); err != nil {
+		t.Fatalf("seed uncertain step attempt: %v", err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO core_execution_receipts(owner_id,receipt_id,run_id,attempt_id,provider_operation_id,idempotency_digest,request_digest,fence_digest,response_digest,status,snapshot_json) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'uncertain','{}'::jsonb)`, f.Owner, receiptID, f.RunID, attemptID, providerOperationID, strings.Repeat("3", 64), requestDigest, fenceDigest, strings.Repeat("4", 64)); err != nil {
+		t.Fatalf("seed uncertain receipt: %v", err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO core_execution_target_mutation_leases(owner_id,target_id,target_revision,lease_id,run_id,stage_id,provider_operation_id,receipt_id,token,epoch,revision,status,schema_version,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,1,1,'uncertain','execution-target-lease/v2',clock_timestamp())`, f.Owner, f.TargetID, f.TargetRevision, leaseID, f.RunID, f.StageID, providerOperationID, receiptID, token); err != nil {
+		t.Fatalf("seed uncertain target lease: %v", err)
+	}
+	const lateCommandReceiptID = "00000000-0000-4000-8000-000000000387"
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO core_execution_receipts(owner_id,receipt_id,run_id,attempt_id,idempotency_digest,request_digest,fence_digest,status,snapshot_json) VALUES($1,$2,$3,$4,$5,$6,$7,'accepted','{}'::jsonb)`, f.Owner, lateCommandReceiptID, f.RunID, attemptID, strings.Repeat("8", 64), strings.Repeat("9", 64), strings.Repeat("a", 64)); err != nil {
+		t.Fatalf("seed receipt for atomic uncertain command evidence: %v", err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `UPDATE core_execution_receipts SET provider_operation_id='provider-operation-late',command_id='command-late',response_digest=$1,status='uncertain',revision=revision+1 WHERE owner_id=$2 AND receipt_id=$3 AND status='accepted'`, strings.Repeat("b", 64), f.Owner, lateCommandReceiptID); err != nil {
+		t.Fatalf("atomically terminalize uncertain receipt with command id: %v", err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `UPDATE core_execution_receipts SET command_id='forged-command',revision=revision+1 WHERE owner_id=$1 AND receipt_id=$2`, f.Owner, lateCommandReceiptID); err == nil || !strings.Contains(err.Error(), "terminal evidence") {
+		t.Fatalf("uncertain receipt command rewrite = %v", err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO core_execution_dispatch_intents(owner_id,intent_id,run_id,stage_id,attempt_id,receipt_id,task_id,task_lease_epoch,target_id,target_revision,target_digest,plan_id,plan_revision,plan_digest,stage_revision,stage_digest,step_key,step_set,step_revision,step_digest,attempt_no,lease_id,lease_token,lease_epoch,request_digest,fence_digest,status,snapshot_json) VALUES($1,$2,$3,$4,$5,$6,$7,1,$8,$9,$10,$11,$12,$13,$14,$15,'apply','forward',1,$16,1,$17,$18,1,$19,$20,'uncertain','{"frozen":true}'::jsonb)`, f.Owner, intentID, f.RunID, f.StageID, attemptID, receiptID, f.TaskID, f.TargetID, f.TargetRevision, f.TargetDigest, f.PlanID, f.PlanRevision, f.PlanDigest, f.StageRevision, f.StageDigest, strings.Repeat("d", 64), leaseID, token, requestDigest, fenceDigest); err != nil {
+		t.Fatalf("seed frozen dispatch intent: %v", err)
+	}
+	for _, query := range []string{
+		`UPDATE core_execution_dispatch_intents SET snapshot_json='{"frozen":false}'::jsonb,revision=revision+1 WHERE owner_id='@execution-v2-fixture:example.test' AND intent_id='00000000-0000-4000-8000-000000000385'`,
+		`UPDATE core_execution_dispatch_intents SET status='accepted',revision=revision+1 WHERE owner_id='@execution-v2-fixture:example.test' AND intent_id='00000000-0000-4000-8000-000000000385'`,
+	} {
+		if _, err := store.DB().ExecContext(ctx, query); err == nil || !strings.Contains(err.Error(), "execution dispatch intent") {
+			t.Fatalf("forged dispatch mutation = %v", err)
+		}
+	}
+	uncertainTx, err := store.DB().BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = uncertainTx.ExecContext(ctx, `UPDATE core_execution_run_stages SET status='uncertain',revision=revision+1,started_at=clock_timestamp(),completed_at=clock_timestamp(),updated_at=clock_timestamp() WHERE owner_id=$1 AND run_id=$2 AND stage_id=$3 AND status='blocked'`, f.Owner, f.RunID, f.StageID); err != nil {
+		_ = uncertainTx.Rollback()
+		t.Fatalf("seed uncertain stage: %v", err)
+	}
+	if _, err = uncertainTx.ExecContext(ctx, `UPDATE core_execution_runs SET status='uncertain',current_stage='deploy',current_stage_id=$3,terminal_reason='fixture_uncertain',started_at=clock_timestamp(),completed_at=clock_timestamp(),revision=revision+1,updated_at=clock_timestamp() WHERE owner_id=$1 AND run_id=$2 AND status='pending'`, f.Owner, f.RunID, f.StageID); err != nil {
+		_ = uncertainTx.Rollback()
+		t.Fatalf("seed uncertain run: %v", err)
+	}
+	if _, err = uncertainTx.ExecContext(ctx, `INSERT INTO core_execution_run_revisions(owner_id,run_id,revision,project_id,plan_id,plan_revision,rollback_of_run_id,deployment_id,operation,purpose,trigger_kind,plan_digest,current_stage,current_stage_id,status,terminal_reason,started_at,completed_at,schema_version,run_digest,snapshot_json,created_at,updated_at) SELECT owner_id,run_id,revision,project_id,plan_id,plan_revision,rollback_of_run_id,deployment_id,operation,purpose,trigger_kind,plan_digest,current_stage,current_stage_id,status,terminal_reason,started_at,completed_at,schema_version,run_digest,snapshot_json,created_at,updated_at FROM core_execution_runs WHERE owner_id=$1 AND run_id=$2`, f.Owner, f.RunID); err != nil {
+		_ = uncertainTx.Rollback()
+		t.Fatalf("append uncertain run revision: %v", err)
+	}
+	if err = uncertainTx.Commit(); err != nil {
+		t.Fatalf("commit uncertain run: %v", err)
+	}
+	if _, err = store.DB().ExecContext(ctx, `UPDATE core_execution_runs SET status='running',terminal_reason='',completed_at=NULL,revision=revision+1,updated_at=clock_timestamp() WHERE owner_id=$1 AND run_id=$2 AND status='uncertain'`, f.Owner, f.RunID); err == nil || !strings.Contains(err.Error(), "identity/lifecycle") {
+		t.Fatalf("ordinary uncertain run reopen = %v", err)
+	}
+	resolution := `INSERT INTO core_execution_reconciliation_resolutions(owner_id,run_id,stage_id,lease_id,token,epoch,receipt_id,provider_operation_id,request_digest,outcome,outcome_digest) VALUES($1,$2,$3,$4,$5,1,$6,$7,$8,'succeeded',$9)`
+	if _, err := store.DB().ExecContext(ctx, resolution, f.Owner, f.RunID, f.StageID, leaseID, token, receiptID, providerOperationID, requestDigest, strings.Repeat("5", 64)); err != nil {
+		t.Fatalf("append exact reconciliation resolution: %v", err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `UPDATE core_execution_reconciliation_resolutions SET outcome='failed' WHERE owner_id=$1 AND run_id=$2 AND stage_id=$3 AND lease_id=$4 AND epoch=1`, f.Owner, f.RunID, f.StageID, leaseID); err == nil || !strings.Contains(err.Error(), "append-only") {
+		t.Fatalf("reconciliation update = %v", err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `DELETE FROM core_execution_reconciliation_resolutions WHERE owner_id=$1 AND run_id=$2 AND stage_id=$3 AND lease_id=$4 AND epoch=1`, f.Owner, f.RunID, f.StageID, leaseID); err == nil || !strings.Contains(err.Error(), "append-only") {
+		t.Fatalf("reconciliation delete = %v", err)
+	}
+	if _, err := store.DB().ExecContext(ctx, resolution, f.Owner, f.RunID, f.StageID, leaseID, token, receiptID, providerOperationID, strings.Repeat("6", 64), strings.Repeat("5", 64)); err == nil || !strings.Contains(err.Error(), "reconciliation resolution") {
+		t.Fatalf("mismatched reconciliation request digest = %v", err)
+	}
+
+	if _, err := store.DB().ExecContext(ctx, `UPDATE core_execution_deployments SET project_id=$3,revision=revision+1 WHERE owner_id=$1 AND deployment_id=$2`, f.Owner, deploymentID, "00000000-0000-4000-8000-000000000399"); err == nil || !strings.Contains(err.Error(), "execution deployment") {
+		t.Fatalf("deployment identity rewrite = %v", err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `UPDATE core_execution_deployments SET state='queued',revision=revision+2 WHERE owner_id=$1 AND deployment_id=$2`, f.Owner, deploymentID); err == nil || !strings.Contains(err.Error(), "revision is not consecutive") {
+		t.Fatalf("deployment revision skip = %v", err)
+	}
+	for _, state := range []string{"queued", "running", "succeeded"} {
+		if _, err := store.DB().ExecContext(ctx, `UPDATE core_execution_deployments SET state=$1,revision=revision+1,updated_at=clock_timestamp() WHERE owner_id=$2 AND deployment_id=$3`, state, f.Owner, deploymentID); err != nil {
+			t.Fatalf("advance deployment to %s: %v", state, err)
+		}
+	}
+	if _, err := store.DB().ExecContext(ctx, `UPDATE core_execution_deployments SET state='running',revision=revision+1,updated_at=clock_timestamp() WHERE owner_id=$1 AND deployment_id=$2`, f.Owner, deploymentID); err == nil || !strings.Contains(err.Error(), "execution deployment") {
+		t.Fatalf("terminal deployment regression = %v", err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `DELETE FROM core_execution_deployments WHERE owner_id=$1 AND deployment_id=$2`, f.Owner, deploymentID); err == nil || !strings.Contains(err.Error(), "cannot be deleted") {
+		t.Fatalf("deployment delete = %v", err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO core_execution_deployment_events(owner_id,deployment_id,event_id,sequence,event_digest,event_json) VALUES($1,$2,'00000000-0000-4000-8000-000000000386',1,$3,'{}'::jsonb)`, f.Owner, deploymentID, strings.Repeat("7", 64)); err != nil {
+		t.Fatalf("append deployment event: %v", err)
+	}
+	for _, query := range []string{
+		`UPDATE core_execution_deployment_events SET event_json='{"changed":true}'::jsonb WHERE owner_id='@execution-v2-fixture:example.test' AND deployment_id='00000000-0000-4000-8000-000000000310' AND sequence=1`,
+		`DELETE FROM core_execution_deployment_events WHERE owner_id='@execution-v2-fixture:example.test' AND deployment_id='00000000-0000-4000-8000-000000000310' AND sequence=1`,
+	} {
+		if _, err := store.DB().ExecContext(ctx, query); err == nil || !strings.Contains(err.Error(), "append-only") {
+			t.Fatalf("forged deployment event mutation = %v", err)
+		}
+	}
+}
+
+func TestFreshAgentExecutionV2SchemaRegistersOnceWithoutV1Ledgers(t *testing.T) {
 	ctx := context.Background()
 	connStr, closeDB := test.PrepareDBConnectionString(t, test.DBTypePostgres)
 	defer closeDB()
@@ -137,42 +510,205 @@ func TestDatabasePublicDeploymentUUIDMigrationIsCanonicalAndRegisteredOnce(t *te
 		t.Fatal(err)
 	}
 	defer store.Close()
-	var canonical string
-	if err := store.DB().QueryRowContext(ctx, `SELECT core_canonical_public_uuid('00010203-0405-ff07-ff09-0a0b0c0d0e0f'::uuid)::text`).Scan(&canonical); err != nil {
+
+	const version = "p2p: agent and execution v2 fresh schema v78"
+	for _, run := range []int{1, 2} {
+		if run == 2 {
+			if err := store.Migrate(ctx); err != nil {
+				t.Fatalf("reopen migration: %v", err)
+			}
+		}
+		var count int
+		if err := store.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM db_migrations WHERE version=$1`, version).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 {
+			t.Fatalf("fresh schema registration count = %d, want 1", count)
+		}
+	}
+	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if canonical != "00010203-0405-3f07-bf09-0a0b0c0d0e0f" {
-		t.Fatalf("canonical public UUID = %q", canonical)
+	store, err = NewDatabaseStore(ctx, sqlutil.NewConnectionManager(nil, dbOpts), &dbOpts)
+	if err != nil {
+		t.Fatalf("close/reopen fresh schema: %v", err)
 	}
-	var registrations int
-	if err := store.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM db_migrations WHERE version='p2p: public deployment UUIDs v108'`).Scan(&registrations); err != nil {
+	defer store.Close()
+	expectedMigrations := make(map[string]struct{}, len(frozenUpstreamMigrationVersions)+1)
+	for _, frozen := range frozenUpstreamMigrationVersions {
+		expectedMigrations[frozen] = struct{}{}
+	}
+	expectedMigrations[version] = struct{}{}
+	rows, err := store.DB().QueryContext(ctx, `SELECT version FROM db_migrations`)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if registrations != 1 {
-		t.Fatalf("v108 migration registrations = %d, want 1", registrations)
+	defer rows.Close()
+	actualMigrations := make(map[string]struct{}, len(expectedMigrations))
+	for rows.Next() {
+		var actual string
+		if err := rows.Scan(&actual); err != nil {
+			t.Fatal(err)
+		}
+		actualMigrations[actual] = struct{}{}
 	}
-	if err := store.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM db_migrations WHERE version='p2p: release terminal confirmation reservations v109'`).Scan(&registrations); err != nil {
+	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if registrations != 1 {
-		t.Fatalf("v109 migration registrations = %d, want 1", registrations)
+	if len(actualMigrations) != len(expectedMigrations) {
+		t.Fatalf("migration registrations = %d, want exactly frozen upstream + v78 = %d: %#v", len(actualMigrations), len(expectedMigrations), actualMigrations)
 	}
-	const owner = "@migration-owner:example.test"
-	const legacyDeployment = "00000000-0000-f000-f000-000000000001"
-	const publicDeployment = "00000000-0000-3000-b000-000000000001"
-	const legacyEvent = "00000000-0000-e000-f000-000000000002"
-	const publicEvent = "00000000-0000-3000-b000-000000000002"
-	// This is the exact v107-era column shape: v108 must derive the public
-	// identity before NOT NULL is checked during a rolling deployment.
-	if _, err := store.DB().ExecContext(ctx, `INSERT INTO core_deployments(owner_id,deployment_id,state,target_kind,revision,object_json) VALUES($1,$2,'pending','AWS_EC2',1,$3::jsonb)`, owner, legacyDeployment, `{"deployment_id":"00000000-0000-f000-f000-000000000001"}`); err != nil {
+	for expected := range expectedMigrations {
+		if _, ok := actualMigrations[expected]; !ok {
+			t.Fatalf("required migration %q is not registered", expected)
+		}
+	}
+	for actual := range actualMigrations {
+		if _, ok := expectedMigrations[actual]; !ok {
+			t.Fatalf("unexpected migration registration %q", actual)
+		}
+	}
+	for _, table := range []string{
+		"p2p_agent_model_profiles", "p2p_agent_secrets", "core_execution_secrets", "core_execution_secret_parameter_intents", "agent_tasks",
+		"core_aws_credentials", "core_aws_credential_current", "core_aws_replays", "core_execution_projects", "core_execution_source_artifacts", "core_execution_runs", "core_execution_run_revisions",
+		"core_execution_deployments", "core_execution_deployment_events",
+		"core_execution_runtime_concurrency", "core_execution_reconciliation_resolutions",
+		"p2p_agent_model_profile_syncs", "p2p_agent_model_profile_deletes",
+		"p2p_agent_schedule_mutations", "p2p_agent_schedule_confirmations", "p2p_agent_schedule_runs",
+		"p2p_native_agent_conversation_mutations", "p2p_native_agent_memory_turns", "p2p_native_agent_memory_embeddings",
+		"p2p_native_agent_knowledge_sources", "p2p_native_agent_knowledge_uploads",
+	} {
+		var present bool
+		if err := store.DB().QueryRowContext(ctx, `SELECT to_regclass($1) IS NOT NULL`, table).Scan(&present); err != nil || !present {
+			t.Fatalf("fresh V2 table %s present=%v err=%v", table, present, err)
+		}
+	}
+	for _, forbidden := range []string{
+		"core_aws_changes", "core_aws_plans", "core_aws_ec2_provisions",
+		"core_aws_ec2_provision_events", "core_aws_ec2_provision_event_counters", "core_aws_ec2_provision_mutation_leases",
+		"core_workloads", "core_workload_plans", "core_workload_quotes", "core_workload_operations", "core_workload_events", "core_workload_event_counters", "core_workload_idempotency",
+		"core_deployments", "core_deployment_events", "core_deployment_event_counters",
+	} {
+		var present bool
+		if err := store.DB().QueryRowContext(ctx, `SELECT to_regclass($1) IS NOT NULL`, forbidden).Scan(&present); err != nil {
+			t.Fatal(err)
+		}
+		if present {
+			t.Fatalf("V1 table %s must not be in a fresh V2 schema", forbidden)
+		}
+	}
+	for _, column := range []string{"owner_id", "deployment_id", "project_id", "current_run_id", "current_stage_id", "release_id"} {
+		var present bool
+		if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='core_execution_deployments' AND column_name=$1)`, column).Scan(&present); err != nil || !present {
+			t.Fatalf("core_execution_deployments.%s present=%v err=%v", column, present, err)
+		}
+	}
+	for _, column := range []string{"plan_digest", "run_revision", "target_revision"} {
+		var present bool
+		if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='core_execution_run_stages' AND column_name=$1)`, column).Scan(&present); err != nil || !present {
+			t.Fatalf("core_execution_run_stages.%s present=%v err=%v", column, present, err)
+		}
+	}
+	for _, column := range []string{"started_at", "completed_at", "terminal_reason", "current_stage"} {
+		var present bool
+		if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='core_execution_runs' AND column_name=$1)`, column).Scan(&present); err != nil || !present {
+			t.Fatalf("core_execution_runs.%s present=%v err=%v", column, present, err)
+		}
+	}
+	for _, object := range []string{
+		"core_execution_deployments_reciprocal_guard",
+		"core_execution_runs_deployment_reciprocal_guard",
+		"core_execution_artifacts_scope_guard",
+		"core_execution_service_bindings_scope_guard",
+		"core_execution_events_append_only",
+		"core_execution_target_observations_immutable",
+		"core_execution_source_artifacts_immutable",
+		"core_execution_dispatch_intents_immutable",
+		"core_execution_receipt_terminal_evidence_guard",
+		"core_execution_reconciliation_scope_guard",
+		"core_execution_deployments_immutable",
+		"core_execution_deployment_events_append_only",
+	} {
+		var present bool
+		if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname=$1 AND NOT tgisinternal)`, object).Scan(&present); err != nil || !present {
+			t.Fatalf("fresh V2 trigger/index %s present=%v err=%v", object, present, err)
+		}
+	}
+	for _, forbiddenColumn := range []string{"plan_id", "plan_revision", "run_id", "attempt_id"} {
+		var present bool
+		if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='core_execution_source_artifacts' AND column_name=$1)`, forbiddenColumn).Scan(&present); err != nil {
+			t.Fatal(err)
+		}
+		if present {
+			t.Fatalf("pre-plan source artifact unexpectedly has %s", forbiddenColumn)
+		}
+	}
+	var fkTarget string
+	if err := store.DB().QueryRowContext(ctx, `SELECT c.confrelid::regclass::text FROM pg_constraint c JOIN pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=ANY(c.conkey) WHERE c.conrelid='core_execution_service_bindings'::regclass AND c.contype='f' AND a.attname='deployment_id'`).Scan(&fkTarget); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DB().ExecContext(ctx, `INSERT INTO core_deployment_events(owner_id,deployment_id,event_id,sequence,source_kind,source_id,source_sequence,event_json) VALUES($1,$2,$3,1,'provision','00000000-0000-4000-8000-000000000003',1,'{"kind":"queued","status":"pending"}')`, owner, legacyDeployment, legacyEvent); err != nil {
-		t.Fatalf("legacy deployment FK must remain usable: %v", err)
+	if fkTarget != "core_execution_deployments" {
+		t.Fatalf("service binding deployment FK target = %q", fkTarget)
 	}
-	events, _, err := NewWorkloadDeploymentSource(store).ListDeploymentEventsByID(ctx, owner, publicDeployment, 0, 10)
-	if err != nil || len(events) != 1 || events[0]["event_id"] != publicEvent || events[0]["deployment_id"] != publicDeployment {
-		t.Fatalf("public deployment event lookup = %#v, err=%v", events, err)
+	var eventDeleteRule string
+	if err := store.DB().QueryRowContext(ctx, `SELECT confdeltype::text FROM pg_constraint WHERE conrelid='core_execution_deployment_events'::regclass AND contype='f'`).Scan(&eventDeleteRule); err != nil {
+		t.Fatal(err)
+	}
+	if eventDeleteRule != "r" {
+		t.Fatalf("deployment event FK delete rule = %q, want RESTRICT", eventDeleteRule)
+	}
+	tx, err := store.DB().BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const owner = "@fresh-v2:example.test"
+	const projectID = "00000000-0000-4000-8000-000000000201"
+	const analysisID = "00000000-0000-4000-8000-000000000202"
+	const planID = "00000000-0000-4000-8000-000000000203"
+	const revisionID = "00000000-0000-4000-8000-000000000204"
+	const runID = "00000000-0000-4000-8000-000000000205"
+	const deploymentID = "00000000-0000-4000-8000-000000000206"
+	digest := strings.Repeat("a", 64)
+	for _, statement := range []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO core_execution_projects(owner_id,project_id,project_digest) VALUES($1,$2,$3)`, []any{owner, projectID, digest}},
+		{`INSERT INTO core_execution_analyses(owner_id,analysis_id,project_id,analysis_digest) VALUES($1,$2,$3,$4)`, []any{owner, analysisID, projectID, digest}},
+		{`INSERT INTO core_execution_plans(owner_id,plan_id,project_id) VALUES($1,$2,$3)`, []any{owner, planID, projectID}},
+		{`INSERT INTO core_execution_plan_revisions(owner_id,plan_id,plan_revision_id,revision,project_id,analysis_id,plan_digest,snapshot_json) VALUES($1,$2,$3,1,$4,$5,$6,'{"materialization":"fresh"}'::jsonb)`, []any{owner, planID, revisionID, projectID, analysisID, digest}},
+		{`INSERT INTO core_execution_runs(owner_id,run_id,project_id,plan_id,plan_revision,deployment_id,plan_digest,purpose,run_digest) VALUES($1,$2,$3,$4,1,$5,$6,'service',$7)`, []any{owner, runID, projectID, planID, deploymentID, digest, digest}},
+		{`INSERT INTO core_execution_run_revisions(owner_id,run_id,revision,project_id,plan_id,plan_revision,rollback_of_run_id,deployment_id,operation,purpose,trigger_kind,plan_digest,current_stage,current_stage_id,status,terminal_reason,started_at,completed_at,schema_version,run_digest,snapshot_json,created_at,updated_at) SELECT owner_id,run_id,revision,project_id,plan_id,plan_revision,rollback_of_run_id,deployment_id,operation,purpose,trigger_kind,plan_digest,current_stage,current_stage_id,status,terminal_reason,started_at,completed_at,schema_version,run_digest,snapshot_json,created_at,updated_at FROM core_execution_runs WHERE owner_id=$1 AND run_id=$2`, []any{owner, runID}},
+		{`INSERT INTO core_execution_deployments(owner_id,deployment_id,project_id,current_run_id) VALUES($1,$2,$3,$4)`, []any{owner, deploymentID, projectID, runID}},
+	} {
+		if _, err := tx.ExecContext(ctx, statement.query, statement.args...); err != nil {
+			_ = tx.Rollback()
+			t.Fatalf("insert reciprocal V2 service pair: %v", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("deferred reciprocal V2 service pair commit: %v", err)
+	}
+}
+
+func TestFreshV78ContainsNativeAgentTurnMetaColumns(t *testing.T) {
+	ctx := context.Background()
+	connStr, closeDB := test.PrepareDBConnectionString(t, test.DBTypePostgres)
+	defer closeDB()
+	dbOpts := config.DatabaseOptions{ConnectionString: config.DataSource(connStr)}
+	store, err := NewDatabaseStore(ctx, sqlutil.NewConnectionManager(nil, dbOpts), &dbOpts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	for _, column := range []string{"model_profile_id", "model_profile_revision", "credential_version"} {
+		var present bool
+		if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='p2p_native_agent_turns' AND column_name=$1)`, column).Scan(&present); err != nil {
+			t.Fatal(err)
+		}
+		if !present {
+			t.Fatalf("fresh v78 missing p2p_native_agent_turns.%s present=%v err=%v", column, present, err)
+		}
 	}
 }
 

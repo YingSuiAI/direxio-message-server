@@ -5,125 +5,223 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentturns"
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/nativeagent"
+	"github.com/google/uuid"
 )
+
+type controlCall struct {
+	action string
+	params map[string]any
+}
+
+type recordingControlInvoker struct {
+	ready map[string]bool
+	calls []controlCall
+}
+
+func (r *recordingControlInvoker) Available(action string) bool { return r.ready[action] }
+func (r *recordingControlInvoker) Invoke(_ context.Context, action string, params map[string]any) (any, error) {
+	r.calls = append(r.calls, controlCall{action: action, params: params})
+	return map[string]any{"ok": true}, nil
+}
+
+func controlToolByName(t *testing.T, tools []nativeagent.Tool, name string) nativeagent.Tool {
+	t.Helper()
+	for _, tool := range tools {
+		if tool.Name == name {
+			return tool
+		}
+	}
+	t.Fatalf("missing control tool %q", name)
+	return nativeagent.Tool{}
+}
 
 func TestControlToolsExposeOnlyBoundedFirstPartySurface(t *testing.T) {
 	tools := ControlTools(ControlInvokerFunc(func(context.Context, string, map[string]any) (any, error) {
 		return map[string]any{"ok": true}, nil
 	}))
 	want := map[string]bool{
-		"native_agent_aws_credentials_list":               true,
-		"native_agent_aws_credentials_test":               true,
-		"native_agent_workload_operations_get":            true,
-		"native_agent_workload_operations_events":         true,
-		"native_agent_workload_actual_get":                true,
-		"native_agent_deployments_list":                   true,
-		"native_agent_deployments_get":                    true,
-		"native_agent_deployments_events":                 true,
-		"native_agent_aws_ec2_provisions_plan":            true,
-		"native_agent_aws_ec2_provisions_get":             true,
-		"native_agent_aws_ec2_provisions_list":            true,
-		"native_agent_aws_ec2_provisions_events":          true,
-		"native_agent_aws_ec2_provisions_create_request":  true,
-		"native_agent_aws_ec2_provisions_destroy_request": true,
-		"native_agent_aws_ec2_geolibre_install_plan":      true,
-		"native_agent_aws_ec2_geolibre_install_request":   true,
+		"native_agent_aws_credentials_list":                 false,
+		"native_agent_aws_credentials_test":                 true,
+		"native_agent_execution_v2_projects_analyze":        true,
+		"native_agent_execution_v2_targets_list":            false,
+		"native_agent_execution_v2_targets_get":             false,
+		"native_agent_execution_v2_plans_create":            true,
+		"native_agent_execution_v2_plans_get":               false,
+		"native_agent_execution_v2_runs_create":             true,
+		"native_agent_execution_v2_runs_get":                false,
+		"native_agent_execution_v2_runs_status":             false,
+		"native_agent_execution_v2_runs_events":             false,
+		"native_agent_execution_v2_service_bindings_list":   false,
+		"native_agent_execution_v2_service_bindings_get":    false,
+		"native_agent_execution_v2_service_bindings_invoke": true,
 	}
 	if len(tools) != len(want) {
 		t.Fatalf("control tool count = %d, want %d", len(tools), len(want))
 	}
 	for _, tool := range tools {
-		if !want[tool.Name] {
+		write, ok := want[tool.Name]
+		if !ok {
 			t.Fatalf("unexpected control tool %q", tool.Name)
 		}
-		delete(want, tool.Name)
-	}
-	for _, tool := range tools {
-		if tool.Name == "native_agent_aws_ec2_provisions_create_request" || tool.Name == "native_agent_aws_ec2_provisions_destroy_request" || tool.Name == "native_agent_aws_ec2_geolibre_install_request" {
-			if !tool.Write {
-				t.Fatalf("dangerous tool %q is not marked write", tool.Name)
-			}
+		if tool.Write != write {
+			t.Fatalf("tool %q write = %v, want %v", tool.Name, tool.Write, write)
 		}
+		delete(want, tool.Name)
 	}
 	if len(want) != 0 {
 		t.Fatalf("missing control tools: %#v", want)
 	}
 }
 
-func TestControlToolsExcludeGenericWorkloadMutations(t *testing.T) {
+func TestControlToolsExcludeDangerousExecutionActions(t *testing.T) {
 	tools := ControlTools(ControlInvokerFunc(func(context.Context, string, map[string]any) (any, error) { return nil, nil }))
 	for _, tool := range tools {
-		switch tool.Name {
-		case "native_agent_workloads_plan", "native_agent_workloads_apply", "native_agent_workloads_destroy", "native_agent_aws_ec2_provisions_retry":
-			t.Fatalf("generic workload mutation leaked into Native Agent tools: %q", tool.Name)
+		name := strings.ToLower(tool.Name)
+		for _, forbidden := range []string{
+			"confirm", "reject", "reconcile", "retry", "cancel", "plans_revise",
+			"raw_ssm", "ssh_shell", "aws_sdk", "arbitrary_url", "geolibre", "workload", "provision",
+		} {
+			if strings.Contains(name, forbidden) {
+				t.Fatalf("dangerous or retired tool leaked into Native Agent tools: %q", tool.Name)
+			}
 		}
 	}
 }
 
-func TestControlToolsProjectOnlyTypedFieldsAndRequiresGeoPlanFence(t *testing.T) {
-	var gotAction string
-	var gotParams map[string]any
-	control := ControlInvokerFunc(func(_ context.Context, action string, params map[string]any) (any, error) {
-		gotAction, gotParams = action, params
-		return map[string]any{"ok": true}, nil
+func TestControlToolsUseExactPerActionDynamicReadiness(t *testing.T) {
+	invoker := &recordingControlInvoker{ready: map[string]bool{
+		"agent.execution.v2.plans.get": true,
+		"agent.execution.v2.runs.get":  true,
+	}}
+	tools := ControlTools(invoker)
+	if !controlToolByName(t, tools, "native_agent_execution_v2_plans_get").Available() {
+		t.Fatal("ready exact plan action was hidden")
+	}
+	if !controlToolByName(t, tools, "native_agent_execution_v2_runs_get").Available() ||
+		!controlToolByName(t, tools, "native_agent_execution_v2_runs_status").Available() {
+		t.Fatal("runs.get readiness did not enable get/status tools")
+	}
+	if controlToolByName(t, tools, "native_agent_execution_v2_plans_create").Available() {
+		t.Fatal("unready plan mutation was advertised")
+	}
+	if controlToolByName(t, tools, "native_agent_execution_v2_service_bindings_get").Available() {
+		t.Fatal("unready binding action was advertised")
+	}
+}
+
+func TestTargetReadToolsAreStrictReadOnlyControlCalls(t *testing.T) {
+	targetID := uuid.NewString()
+	invoker := &recordingControlInvoker{ready: map[string]bool{
+		"agent.execution.v2.targets.list": true,
+		"agent.execution.v2.targets.get":  true,
+	}}
+	tools := ControlTools(invoker)
+	list := controlToolByName(t, tools, "native_agent_execution_v2_targets_list")
+	get := controlToolByName(t, tools, "native_agent_execution_v2_targets_get")
+	if list.Write || get.Write {
+		t.Fatal("target discovery tools must be read-only")
+	}
+	if _, err := list.Handler(context.Background(), map[string]any{"page_size": 10, "page_token": "cursor"}); err != nil {
+		t.Fatalf("list targets: %v", err)
+	}
+	if _, err := get.Handler(context.Background(), map[string]any{"target_id": targetID, "revision": 2}); err != nil {
+		t.Fatalf("get target: %v", err)
+	}
+	if len(invoker.calls) != 2 || invoker.calls[0].action != "agent.execution.v2.targets.list" || invoker.calls[1].action != "agent.execution.v2.targets.get" {
+		t.Fatalf("calls = %#v", invoker.calls)
+	}
+	if _, ok := invoker.calls[0].params["idempotency_key"]; ok {
+		t.Fatal("read-only target list received an idempotency key")
+	}
+	if _, err := list.Handler(context.Background(), map[string]any{"unknown": true}); err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("unknown target list field accepted: %v", err)
+	}
+	if _, err := get.Handler(context.Background(), map[string]any{"target_id": targetID, "revision": 0}); err == nil || !strings.Contains(err.Error(), "positive revision") {
+		t.Fatalf("invalid target revision accepted: %v", err)
+	}
+	if len(invoker.calls) != 2 {
+		t.Fatalf("rejected target request reached invoker: %#v", invoker.calls)
+	}
+}
+
+func TestControlMutationInjectsTurnScopedUUIDAndRejectsModelIdempotency(t *testing.T) {
+	invoker := &recordingControlInvoker{ready: map[string]bool{"agent.execution.v2.runs.create": true}}
+	tool := controlToolByName(t, ControlTools(invoker), "native_agent_execution_v2_runs_create")
+	ctx := nativeagent.WithRequestContextIntent(context.Background(), "@owner:example", "conversation", "turn-1", "")
+	planID := uuid.NewString()
+	if _, err := tool.Handler(ctx, map[string]any{"plan_id": planID, "plan_revision": 7, "operation": "deploy"}); err != nil {
+		t.Fatalf("invoke run tool: %v", err)
+	}
+	if len(invoker.calls) != 1 || invoker.calls[0].action != "agent.execution.v2.runs.create" {
+		t.Fatalf("calls = %#v", invoker.calls)
+	}
+	request := invoker.calls[0].params
+	if request["plan_id"] != planID || request["plan_revision"] != 7 || request["operation"] != "deploy" {
+		t.Fatalf("projected request = %#v", request)
+	}
+	idempotency, ok := request["idempotency_key"].(string)
+	if !ok || uuid.Validate(idempotency) != nil {
+		t.Fatalf("server idempotency key = %#v", request["idempotency_key"])
+	}
+	if _, err := tool.Handler(ctx, map[string]any{"plan_id": planID, "plan_revision": 7, "idempotency_key": uuid.NewString()}); err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("model idempotency key was accepted: %v", err)
+	}
+	for _, operation := range []string{"upgrade", "repair", "destroy", "rollback"} {
+		if _, err := tool.Handler(ctx, map[string]any{"plan_id": planID, "plan_revision": 7, "operation": operation}); err == nil || !strings.Contains(err.Error(), "unsupported operation") {
+			t.Fatalf("unready %s operation was advertised/accepted: %v", operation, err)
+		}
+	}
+	if len(invoker.calls) != 1 {
+		t.Fatalf("rejected request reached invoker: %#v", invoker.calls)
+	}
+}
+
+func TestControlWritesRequireAuthenticatedTurnContext(t *testing.T) {
+	invoker := &recordingControlInvoker{ready: map[string]bool{"agent.execution.v2.plans.create": true}}
+	tool := controlToolByName(t, ControlTools(invoker), "native_agent_execution_v2_plans_create")
+	params := map[string]any{
+		"project_id": uuid.NewString(), "analysis_id": uuid.NewString(), "intent": "container.deploy",
+		"recipe_id": "container-service-deploy", "target_id": uuid.NewString(), "target_revision": 2, "purpose": "service",
+	}
+	if _, err := tool.Handler(context.Background(), params); err == nil || !strings.Contains(err.Error(), "owner, conversation, and turn") {
+		t.Fatalf("ownerless write error = %v", err)
+	}
+	if len(invoker.calls) != 0 {
+		t.Fatalf("ownerless write reached invoker: %#v", invoker.calls)
+	}
+}
+
+func TestServiceBindingInvokePreservesRevisionAndRejectsDirectSecrets(t *testing.T) {
+	invoker := &recordingControlInvoker{ready: map[string]bool{"agent.execution.v2.service_bindings.invoke": true}}
+	tool := controlToolByName(t, ControlTools(invoker), "native_agent_execution_v2_service_bindings_invoke")
+	ctx := nativeagent.WithRequestContextIntent(context.Background(), "@owner:example", "conversation", "turn-2", "")
+	bindingID := uuid.NewString()
+	if _, err := tool.Handler(ctx, map[string]any{"binding_id": bindingID, "operation": "search", "expected_revision": 3, "input": map[string]any{"query": "hello"}}); err != nil {
+		t.Fatalf("invoke binding tool: %v", err)
+	}
+	if got := invoker.calls[0].params["expected_revision"]; got != 3 {
+		t.Fatalf("expected_revision = %#v", got)
+	}
+	if _, err := tool.Handler(ctx, map[string]any{"binding_id": bindingID, "operation": "search", "expected_revision": 3, "input": map[string]any{"api_key": "plaintext"}}); err == nil || !strings.Contains(err.Error(), "forbidden secret field") {
+		t.Fatalf("direct secret error = %v", err)
+	}
+	if len(invoker.calls) != 1 {
+		t.Fatalf("secret-bearing request reached invoker: %#v", invoker.calls)
+	}
+}
+
+func TestNativeAgentServiceBindingInvokeRedactsUnexpectedAdapterMarkers(t *testing.T) {
+	tool := controlToolByName(t, ControlTools(ControlInvokerFunc(func(context.Context, string, map[string]any) (any, error) {
+		return map[string]any{"result": map[string]any{"detail": []any{"Bearer never-return", "Basic bmV2ZXI6cmV0dXJu"}}}, nil
+	})), "native_agent_execution_v2_service_bindings_invoke")
+	ctx := nativeagent.WithRequestContextIntent(context.Background(), "@owner:example", "conversation", "turn-redaction", "")
+	result, err := tool.Handler(ctx, map[string]any{
+		"binding_id": uuid.NewString(), "operation": "status", "expected_revision": 1, "input": map[string]any{},
 	})
-	ctx := nativeagent.WithRequestContextIntent(context.Background(), "owner", "conversation", "turn", "deploy GeoLibre")
-	var geoTool nativeagent.Tool
-	for _, candidate := range ControlTools(control) {
-		if candidate.Name == "native_agent_aws_ec2_geolibre_install_request" {
-			geoTool = candidate
-		}
-	}
-	if geoTool.Handler == nil {
-		t.Fatal("missing GeoLibre request handler")
-	}
-	if _, err := geoTool.Handler(ctx, map[string]any{"provision_id": "p", "expected_revision": int64(2), "plan_id": "plan", "plan_revision": int64(1), "plan_digest": "digest", "expires_at": "2030-01-01T00:00:00Z", "workload_id": "workload", "expected_workload_revision": int64(1), "owner_id": "must-not-pass", "command": "must-not-pass"}); err != nil {
-		t.Fatalf("handler error: %v", err)
-	}
-	if gotAction != "agent.core.aws.ec2_provisions.geolibre_install.request" {
-		t.Fatalf("action = %q", gotAction)
-	}
-	if _, ok := gotParams["owner_id"]; ok {
-		t.Fatal("model owner_id leaked into control request")
-	}
-	if _, ok := gotParams["command"]; ok {
-		t.Fatal("model command leaked into control request")
-	}
-	if gotParams["expires_at"] != "2030-01-01T00:00:00Z" || gotParams["idempotency_key"] == nil {
-		t.Fatalf("server fields missing: %#v", gotParams)
-	}
-	if _, err := geoTool.Handler(ctx, map[string]any{"provision_id": "p", "expected_revision": int64(2), "plan_id": "plan", "plan_revision": int64(1), "plan_digest": "digest", "expires_at": "2030-01-01T00:00:00Z", "workload_id": "workload"}); err == nil {
-		t.Fatal("workload_id without expected_workload_revision was accepted")
-	}
-}
-
-func TestControlToolsGeoPlanRequiresPersistedIssuedAt(t *testing.T) {
-	var got map[string]any
-	control := ControlInvokerFunc(func(_ context.Context, _ string, params map[string]any) (any, error) { got = params; return nil, nil })
-	var planTool nativeagent.Tool
-	for _, candidate := range ControlTools(control) {
-		if candidate.Name == "native_agent_aws_ec2_geolibre_install_plan" {
-			planTool = candidate
-		}
-	}
-	ctx := nativeagent.WithRequestContextIntent(context.Background(), "owner", "conversation", "turn", "plan")
-	if _, err := planTool.Handler(ctx, map[string]any{"provision_id": "p", "expected_revision": int64(1)}); err == nil {
-		t.Fatal("GeoLibre plan succeeded without durable issued_at")
-	}
-	ctx = agentturns.WithIssuedAt(ctx, time.Now().UTC())
-	if _, err := planTool.Handler(ctx, map[string]any{"provision_id": "p", "expected_revision": int64(1)}); err != nil {
-		t.Fatalf("GeoLibre plan with issued_at failed: %v", err)
-	}
-	if got["expires_at"] == nil {
-		t.Fatalf("server expiry missing: %#v", got)
-	}
-	expired := agentturns.WithIssuedAt(ctx, time.Now().UTC().Add(-geoLibrePlanTTL-time.Minute))
-	if _, err := planTool.Handler(expired, map[string]any{"provision_id": "p", "expected_revision": int64(1)}); err == nil {
-		t.Fatal("GeoLibre plan succeeded with expired durable issued_at")
+	if err != nil || strings.Contains(fmt.Sprint(result), "never-return") || strings.Contains(fmt.Sprint(result), "bmV2ZXI6cmV0dXJu") {
+		t.Fatalf("native invoke result=%#v err=%v", result, err)
 	}
 }
 
@@ -136,18 +234,45 @@ func TestControlIdempotencyOnlyUsesAuthenticatedTurnScope(t *testing.T) {
 	}
 }
 
-func TestRedactNativeControlResultRemovesExecutionAndOwnerMaterial(t *testing.T) {
+func TestRedactNativeControlResultRemovesExecutionOwnerAndSecretMaterial(t *testing.T) {
+	type typedPlanResult struct {
+		OwnerID string `json:"owner_id"`
+		URI     string `json:"uri"`
+		Digest  string `json:"digest"`
+	}
 	result := redactNativeControlResult(map[string]any{
-		"owner_id": "@owner:example", "operation": map[string]any{
+		"OwnerID": "@owner:example", "operation": map[string]any{
 			"desired_plan": map[string]any{"command_steps": []any{"rm -rf"}, "image_uri": "private"},
 			"confirmation": map[string]any{"binding": map[string]any{"selected_command": []any{"secret"}, "content_digest": "a"}},
 		},
-		"typed_target": map[string]any{"labels": map[string]string{"owner": "digest"}, "instance_id": "i-1"},
+		"typed_target":  map[string]any{"labels": map[string]string{"owner": "digest"}, "instance_id": "i-1"},
+		"result":        map[string]any{"access_token": "plaintext", "endpoint": "https://service.example"},
+		"typed_plan":    typedPlanResult{OwnerID: "@owner:example", URI: "file:///private", Digest: strings.Repeat("a", 64)},
+		"adapter_error": map[string]any{"detail": []any{"Bearer never-return", "Basic bmV2ZXI6cmV0dXJu"}},
 	})
 	serialized := fmt.Sprint(result)
-	for _, forbidden := range []string{"owner_id", "desired_plan", "command_steps", "image_uri", "selected_command", "labels", "rm -rf", "private", "secret"} {
+	for _, forbidden := range []string{"OwnerID", "owner_id", "desired_plan", "command_steps", "image_uri", "selected_command", "labels", "rm -rf", "private", "secret", "access_token", "plaintext", "file:///", "never-return", "bmV2ZXI6cmV0dXJu"} {
 		if strings.Contains(serialized, forbidden) {
 			t.Fatalf("redacted result retained %q: %s", forbidden, serialized)
+		}
+	}
+	if !strings.Contains(serialized, "https://service.example") {
+		t.Fatalf("redaction removed safe service endpoint: %s", serialized)
+	}
+}
+
+func TestControlToolSchemasDoNotExposeModelControlledIdempotency(t *testing.T) {
+	tools := ControlTools(ControlInvokerFunc(func(context.Context, string, map[string]any) (any, error) { return nil, nil }))
+	for _, tool := range tools {
+		if !tool.Write {
+			continue
+		}
+		properties, _ := tool.Parameters["properties"].(map[string]any)
+		if _, ok := properties["idempotency_key"]; ok {
+			t.Fatalf("write tool %q exposes model-controlled idempotency", tool.Name)
+		}
+		if additional, ok := tool.Parameters["additionalProperties"].(bool); !ok || additional {
+			t.Fatalf("write tool %q is not top-level strict: %#v", tool.Name, tool.Parameters)
 		}
 	}
 }

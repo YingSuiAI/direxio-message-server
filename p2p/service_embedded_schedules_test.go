@@ -184,8 +184,6 @@ func TestAgentSecretFailureSuppressesSecretDependentCapabilities(t *testing.T) {
 		"schedules.server",
 		"mcp",
 		"aws.control",
-		"workload.aws_ssm",
-		"workload.aws_ecs",
 	} {
 		if service.embeddedAgentCapabilityReady(capability) {
 			t.Fatalf("capability %q published while Agent secrets are unavailable", capability)
@@ -193,24 +191,20 @@ func TestAgentSecretFailureSuppressesSecretDependentCapabilities(t *testing.T) {
 	}
 }
 
-func TestDeploymentsCapabilityRejectsLegacyOrUnboundStores(t *testing.T) {
-	legacy := &Service{
-		store:                 p2pstorage.NewMemoryStore(),
-		deploymentSourceReady: true, // a stale/incorrect marker must not bypass the DB probe
+func TestExecutionV2BindingReadsAndHTTPInvokeUseIndependentReadiness(t *testing.T) {
+	service := &Service{
+		executionV2BindingsReady: func() bool { return true },
+		executionV2InvokeReady:   func() bool { return false },
 	}
-	if legacy.embeddedAgentCapabilityReady("deployments.server") {
-		t.Fatal("deployments.server published for the retained in-memory deployment ledger")
+	if !service.embeddedAgentCapabilityReady("execution.v2.bindings") {
+		t.Fatal("durable ServiceBinding reads were not advertised")
 	}
-	unbound := &Service{deploymentSourceReady: false}
-	if unbound.embeddedAgentCapabilityReady("deployments.server") {
-		t.Fatal("deployments.server published without a wired v106 source")
+	if service.embeddedAgentCapabilityReady("execution.v2.transport.http_api") {
+		t.Fatal("ServiceBinding reads advertised the deferred HTTP API transport")
 	}
-	withoutSchema := &Service{
-		store:                 p2pstorage.NewUnmigratedDatabaseStore(nil, nil),
-		deploymentSourceReady: true,
-	}
-	if withoutSchema.embeddedAgentCapabilityReady("deployments.server") {
-		t.Fatal("deployments.server published without a live v106 schema")
+	service.executionV2InvokeReady = func() bool { return true }
+	if !service.embeddedAgentCapabilityReady("execution.v2.transport.http_api") {
+		t.Fatal("ready HTTP API transport was not advertised")
 	}
 }
 
@@ -252,9 +246,6 @@ func TestDatabaseServiceMissingAgentKeyringInitializesAndIsIdempotent(t *testing
 	}
 	if !service.embeddedAgentCapabilityReady("model_profiles.server") {
 		t.Fatalf("model_profiles.server unavailable after automatic keyring initialization: ready=%v store=%v err=%v", service.agentSecretReady, service.modelProfiles != nil && service.modelProfiles.ModelProfileStoreReady(), service.modelProfileInitErr)
-	}
-	if !service.embeddedAgentCapabilityReady("deployments.server") {
-		t.Fatal("read-only deployments.server should remain available with a valid schema when Agent secrets are unavailable")
 	}
 	if !service.embeddedAgentCapabilityReady("memory.server") {
 		t.Fatal("in-process PostgreSQL knowledge and memory must remain ready without an Agent keyring")
@@ -413,84 +404,5 @@ func TestAgentSecretGuardReleasesAfterProcessComponentsDrain(t *testing.T) {
 	processCtx.WaitForComponentsToFinish()
 	if _, err := p2pstorage.InitializeAgentSecretKeyringForDatabase(ctx, store.DB(), keyring); err != nil {
 		t.Fatalf("maintenance after process drain: %v", err)
-	}
-}
-
-func TestDatabaseServiceEmbeddedAWSWorkloadReadiness(t *testing.T) {
-	ctx := context.Background()
-	connStr, closeDB := test.PrepareDBConnectionString(t, test.DBTypePostgres)
-	t.Cleanup(closeDB)
-	dbOpts := config.DatabaseOptions{ConnectionString: config.DataSource(connStr)}
-	store, err := NewDatabaseStore(ctx, sqlutil.NewConnectionManager(nil, dbOpts), &dbOpts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { store.Close() })
-
-	keyringFile := filepath.Join(t.TempDir(), "secret-keyring.json")
-	if _, err := p2pstorage.LoadOrCreateAgentSecretKeyring(keyringFile); err != nil {
-		t.Fatalf("initialize Agent secret keyring: %v", err)
-	}
-	service, err := NewServiceWithStore(ctx, Config{
-		ServerName:             "example.com",
-		AgentSecretKeyringFile: keyringFile,
-	}, store)
-	if err != nil {
-		t.Fatalf("NewServiceWithStore: %v", err)
-	}
-
-	processCtx := process.NewProcessContext()
-	if !service.StartEmbeddedScheduler(processCtx, "embedded-readiness-test") {
-		t.Fatal("StartEmbeddedScheduler returned false with PostgreSQL and an initialized Agent keyring")
-	}
-	t.Cleanup(func() {
-		processCtx.ShutdownDendrite()
-		processCtx.WaitForComponentsToFinish()
-	})
-
-	if !service.EmbeddedSchedulesReady() {
-		t.Fatal("embedded scheduler is not ready after startup")
-	}
-	if !service.embeddedAgentCapabilityReady("deployments.server") {
-		t.Fatal("deployments.server is not ready with the migrated v106 PostgreSQL source")
-	}
-	backends, apiErr := service.Handle(ctx, "agent.backends.get", nil)
-	if apiErr != nil {
-		t.Fatalf("agent.backends.get: %v", apiErr)
-	}
-	embedded, ok := backends.(map[string]any)["embedded"].(map[string]any)
-	if !ok {
-		t.Fatalf("embedded backend missing from response: %#v", backends)
-	}
-	capabilities, ok := embedded["capabilities"].([]string)
-	if !ok {
-		t.Fatalf("embedded capabilities have unexpected type: %#v", embedded["capabilities"])
-	}
-	for _, want := range []string{"aws.control", "workload.aws_ssm", "workload.aws_ecs"} {
-		found := false
-		for _, capability := range capabilities {
-			if capability == want {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Fatalf("capability %q missing from %#v", want, capabilities)
-		}
-	}
-
-	credentials, apiErr := service.Handle(ctx, "agent.core.aws.credentials.list", map[string]any{})
-	if apiErr != nil {
-		t.Fatalf("agent.core.aws.credentials.list: %v", apiErr)
-	}
-	if got, ok := credentials.(map[string]any)["credentials"].([]any); !ok || len(got) != 0 {
-		t.Fatalf("credentials.list = %#v, want an empty result", credentials)
-	}
-	workloads, apiErr := service.Handle(ctx, "agent.core.workloads.list", map[string]any{})
-	if apiErr != nil {
-		t.Fatalf("agent.core.workloads.list: %v", apiErr)
-	}
-	if got, ok := workloads.(map[string]any)["plans"].([]any); !ok || len(got) != 0 {
-		t.Fatalf("workloads.list = %#v, want an empty result", workloads)
 	}
 }

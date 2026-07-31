@@ -2,226 +2,236 @@ package aws
 
 import (
 	"context"
-	"fmt"
-	"strings"
 	"sync"
-	"time"
-	"unicode"
-	"unicode/utf8"
 
-	"github.com/aws/aws-sdk-go-v2/aws/arn"
+	"github.com/aws/aws-sdk-go-v2/service/cloudformation"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/service/pricing"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 )
 
-// AWSChangeTaskHandler is the narrow seam for a future durable Task executor.
-// The Core AWS RPC/domain layer only creates and reads change facts; provider
-// execution is intentionally supplied by a separate runtime handler.
-type AWSChangeTaskHandler interface {
-	HandleAWSChange(context.Context, string) error
-}
-
-// STSProvider is the sole credential-validation port.
 type STSProvider interface {
 	GetCallerIdentity(context.Context, CredentialHandle) (Identity, error)
 }
 
-type ChangeSetRequest struct {
-	Region, StackName, ChangeSetName, ClientToken string
-	Operation                                     Operation
-	Template                                      []byte
-	Parameters, Tags                              map[string]string
-	Capabilities                                  []string
+type STSClient interface {
+	GetCallerIdentity(context.Context, *sts.GetCallerIdentityInput, ...func(*sts.Options)) (*sts.GetCallerIdentityOutput, error)
+}
+type EC2Client interface {
+	DescribeInstances(context.Context, *ec2.DescribeInstancesInput, ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error)
+	DescribeInstanceTypes(context.Context, *ec2.DescribeInstanceTypesInput, ...func(*ec2.Options)) (*ec2.DescribeInstanceTypesOutput, error)
+	DescribeSecurityGroups(context.Context, *ec2.DescribeSecurityGroupsInput, ...func(*ec2.Options)) (*ec2.DescribeSecurityGroupsOutput, error)
+	DescribeVolumes(context.Context, *ec2.DescribeVolumesInput, ...func(*ec2.Options)) (*ec2.DescribeVolumesOutput, error)
+}
+type SSMClient interface {
+	DescribeInstanceInformation(context.Context, *ssm.DescribeInstanceInformationInput, ...func(*ssm.Options)) (*ssm.DescribeInstanceInformationOutput, error)
+	SendCommand(context.Context, *ssm.SendCommandInput, ...func(*ssm.Options)) (*ssm.SendCommandOutput, error)
+	GetCommandInvocation(context.Context, *ssm.GetCommandInvocationInput, ...func(*ssm.Options)) (*ssm.GetCommandInvocationOutput, error)
+	CancelCommand(context.Context, *ssm.CancelCommandInput, ...func(*ssm.Options)) (*ssm.CancelCommandOutput, error)
+}
+type SSMCommandClient interface {
+	SendCommand(context.Context, *ssm.SendCommandInput, ...func(*ssm.Options)) (*ssm.SendCommandOutput, error)
 }
 
-// providerChangeSetName keeps the durable client idempotency token unchanged
-// while giving CloudFormation a name whose first character is alphabetic.
-// The token is a canonical UUID, so this mapping is deterministic and remains
-// within CloudFormation's change-set name limits.
-func providerChangeSetName(token string) string { return "dirextalk-" + token }
-
-type ChangeSet struct {
-	ID, Name, StackName, ClientToken string
-	Region                           string
-	RequestDigest                    string
-	Status                           string
-	ExecutionStatus                  string
-	Operation                        Operation
-	TemplateSHA256                   string
-	Parameters, Tags                 map[string]string
+// EC2ReservationClient and PricingClient are deliberately separate from the
+// execution transport clients. Reserving capacity is a read-only catalog
+// operation and must not accidentally acquire any EC2 mutation method.
+type EC2ReservationClient interface {
+	DescribeInstanceTypeOfferings(context.Context, *ec2.DescribeInstanceTypeOfferingsInput, ...func(*ec2.Options)) (*ec2.DescribeInstanceTypeOfferingsOutput, error)
+	DescribeInstanceTypes(context.Context, *ec2.DescribeInstanceTypesInput, ...func(*ec2.Options)) (*ec2.DescribeInstanceTypesOutput, error)
 }
 
-// StackOutputKey is the deliberately small set of CloudFormation output
-// names that may cross the provider boundary.  Output values are template
-// controlled, so arbitrary output maps must never be exposed to callers.
-type StackOutputKey string
+type PricingClient interface {
+	GetProducts(context.Context, *pricing.GetProductsInput, ...func(*pricing.Options)) (*pricing.GetProductsOutput, error)
+}
 
-const (
-	StackOutputInstanceID    StackOutputKey = "InstanceId"
-	StackOutputPublicIP      StackOutputKey = "PublicIp"
-	StackOutputSecurityGroup StackOutputKey = "SecurityGroupId"
-	StackOutputStackID       StackOutputKey = "StackId"
-)
+type CloudFormationProvisionClient interface {
+	CreateStack(context.Context, *cloudformation.CreateStackInput, ...func(*cloudformation.Options)) (*cloudformation.CreateStackOutput, error)
+	DescribeStacks(context.Context, *cloudformation.DescribeStacksInput, ...func(*cloudformation.Options)) (*cloudformation.DescribeStacksOutput, error)
+	GetTemplate(context.Context, *cloudformation.GetTemplateInput, ...func(*cloudformation.Options)) (*cloudformation.GetTemplateOutput, error)
+}
 
-// RequiredOutputsTag is a durable, plan-bound marker for typed provisions.
-// Its persisted value uses '+' as the provider-safe delimiter. Legacy plans
-// may still contain comma-delimited values and are normalized at the provider
-// boundary without changing their durable digest.
-const RequiredOutputsTag = "dirextalk:required-outputs"
+type ClientFactory interface {
+	NewSTS(CredentialHandle) (STSClient, error)
+}
+type TypedClientFactory interface {
+	NewSTS(CredentialHandle) (STSClient, error)
+	NewEC2(CredentialHandle) (EC2Client, error)
+	NewSSM(CredentialHandle) (SSMClient, error)
+	NewSSMCommand(CredentialHandle) (SSMCommandClient, error)
+}
 
-// StackOutputs contains only validated values for the allowlisted output
-// keys.  It intentionally remains map-shaped so generic providers can carry
-// the typed keys without changing existing Stack consumers.
-type StackOutputs map[string]string
+// ReservationClientFactory is optional on custom factories. Production
+// reservation readiness remains false unless both live EC2 catalog and AWS
+// Price List Query clients can be constructed.
+type ReservationClientFactory interface {
+	NewEC2Reservation(Credentials) (EC2ReservationClient, error)
+	NewPricing(Credentials) (PricingClient, error)
+}
 
-func (o StackOutputs) Clone() StackOutputs {
-	if len(o) == 0 {
-		return nil
+// CloudFormationProvisionClientFactory is the narrow production mutation
+// boundary. The mutation client is configured with one SDK attempt; after a
+// durable intent is written, every ambiguous outcome is readback-only.
+type CloudFormationProvisionClientFactory interface {
+	NewCloudFormationProvision(Credentials) (CloudFormationProvisionClient, error)
+	NewEC2ProvisionReadback(Credentials) (EC2Client, error)
+	NewSSMProvisionReadback(Credentials) (SSMClient, error)
+}
+
+type SDKClients struct {
+	STS            STSClient
+	EC2            EC2Client
+	SSM            SSMClient
+	SSMCommand     SSMCommandClient
+	EC2Reservation EC2ReservationClient
+	Pricing        PricingClient
+	CloudFormation CloudFormationProvisionClient
+	SSMParameter   SSMSecretParameterClient
+}
+
+func (c SDKClients) NewEC2Reservation(Credentials) (EC2ReservationClient, error) {
+	if c.EC2Reservation != nil {
+		return c.EC2Reservation, nil
 	}
-	out := make(StackOutputs, len(o))
-	for k, v := range o {
-		out[k] = v
-	}
-	return out
-}
-
-// HasAll reports whether readback contains every requested typed output. An
-// empty requirement is intentionally satisfied for legacy generic plans.
-func (o StackOutputs) HasAll(required ...string) bool {
-	for _, key := range required {
-		if !isAllowedStackOutputKey(key) || strings.TrimSpace(o[key]) == "" {
-			return false
+	if c.EC2 != nil {
+		if client, ok := c.EC2.(EC2ReservationClient); ok {
+			return client, nil
 		}
 	}
-	return true
+	return nil, ErrInvalid
 }
-
-func isAllowedStackOutputKey(key string) bool {
-	switch StackOutputKey(key) {
-	case StackOutputInstanceID, StackOutputPublicIP, StackOutputSecurityGroup, StackOutputStackID:
-		return true
-	default:
-		return false
-	}
-}
-
-func requiredStackOutputs(p Plan) ([]string, bool) {
-	raw, ok := p.Tags[RequiredOutputsTag]
-	if !ok {
-		return nil, true
-	}
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil, false
-	}
-	delimiter := "+"
-	if strings.Contains(raw, ",") {
-		if strings.Contains(raw, "+") {
-			return nil, false
-		}
-		delimiter = ","
-	}
-	seen := make(map[string]bool)
-	out := make([]string, 0, 4)
-	for _, part := range strings.Split(raw, delimiter) {
-		key := strings.TrimSpace(part)
-		if !isAllowedStackOutputKey(key) || seen[key] {
-			return nil, false
-		}
-		seen[key] = true
-		out = append(out, key)
-	}
-	return out, len(out) > 0
-}
-
-// canonicalProviderTags is the narrow compatibility codec for values sent to
-// CloudFormation. Persisted plan tags and their digests remain untouched.
-func canonicalProviderTags(values map[string]string) map[string]string {
-	if values == nil {
-		return nil
-	}
-	out := cloneMap(values)
-	if raw, ok := out[RequiredOutputsTag]; ok && strings.Contains(raw, ",") && !strings.Contains(raw, "+") {
-		outputs, valid := requiredStackOutputs(Plan{Tags: values})
-		if valid {
-			out[RequiredOutputsTag] = strings.Join(outputs, "+")
-		}
-	}
-	return out
-}
-
-// validateProviderTags applies the shared CloudFormation boundary contract.
-// It returns the provider form while leaving the durable/raw tag map intact.
-func validateProviderTags(values map[string]string) (map[string]string, error) {
-	if len(values) > 50 {
+func (c SDKClients) NewPricing(Credentials) (PricingClient, error) {
+	if c.Pricing == nil {
 		return nil, ErrInvalid
 	}
-	if _, valid := requiredStackOutputs(Plan{Tags: values}); !valid {
+	return c.Pricing, nil
+}
+func (c SDKClients) NewCloudFormationProvision(Credentials) (CloudFormationProvisionClient, error) {
+	if c.CloudFormation == nil {
 		return nil, ErrInvalid
 	}
-	if isTypedEC2Plan(Plan{Tags: values}) {
-		if _, present := values[RequiredOutputsTag]; !present {
-			return nil, ErrInvalid
-		}
+	return c.CloudFormation, nil
+}
+func (c SDKClients) NewEC2ProvisionReadback(Credentials) (EC2Client, error) {
+	return c.NewEC2(CredentialHandle{})
+}
+func (c SDKClients) NewSSMProvisionReadback(Credentials) (SSMClient, error) {
+	return c.NewSSM(CredentialHandle{})
+}
+func (c SDKClients) NewSSMSecretParameter(Credentials) (SSMSecretParameterClient, error) {
+	if c.SSMParameter != nil {
+		return c.SSMParameter, nil
 	}
-	canonical := canonicalProviderTags(values)
-	for key, value := range canonical {
-		if strings.HasPrefix(strings.ToLower(key), "aws:") || !validCloudFormationTagText(key, 128) || !validCloudFormationTagText(value, 256) {
-			return nil, ErrInvalid
-		}
+	if client, ok := c.SSM.(SSMSecretParameterClient); ok {
+		return client, nil
 	}
-	return canonical, nil
+	return nil, ErrInvalid
 }
 
-func validCloudFormationTagText(value string, maxRunes int) bool {
-	if !utf8.ValidString(value) || value == "" || utf8.RuneCountInString(value) > maxRunes {
-		return false
+func (c SDKClients) NewSTS(CredentialHandle) (STSClient, error) {
+	if c.STS == nil {
+		return nil, ErrInvalid
 	}
-	for _, r := range value {
-		if unicode.IsLetter(r) || unicode.IsNumber(r) || unicode.Is(unicode.Z, r) {
-			continue
-		}
-		switch r {
-		case '_', '.', ':', '/', '=', '+', '-', '@':
-		default:
-			return false
-		}
+	return c.STS, nil
+}
+func (c SDKClients) NewEC2(CredentialHandle) (EC2Client, error) {
+	if c.EC2 == nil {
+		return nil, ErrInvalid
 	}
-	return true
+	return c.EC2, nil
+}
+func (c SDKClients) NewSSM(CredentialHandle) (SSMClient, error) {
+	if c.SSM == nil {
+		return nil, ErrInvalid
+	}
+	return c.SSM, nil
+}
+func (c SDKClients) NewSSMCommand(CredentialHandle) (SSMCommandClient, error) {
+	if c.SSMCommand == nil {
+		return nil, ErrInvalid
+	}
+	return c.SSMCommand, nil
 }
 
-type Stack struct {
-	Region, StackName string
-	Status            string
-	TemplateSHA256    string
-	Parameters, Tags  map[string]string
-	Outputs           StackOutputs
-}
+// Keep a mutex in the concrete factory so it remains safe to share between
+// concurrent typed execution requests.
+type SDKFactory struct{ mu sync.Mutex }
 
-// ProvisionReadbackFromStack is the sole conversion from provider values to a
-// durable typed provision readback. Unknown output keys are intentionally
-// discarded before persistence.
-func ProvisionReadbackFromStack(outputs StackOutputs, observedAt time.Time) (ProvisionReadback, error) {
-	allowed := map[string]string{}
-	for _, key := range []StackOutputKey{StackOutputStackID, StackOutputInstanceID, StackOutputPublicIP, StackOutputSecurityGroup} {
-		if value := strings.TrimSpace(outputs[string(key)]); value != "" {
-			allowed[string(key)] = value
-		}
+func NewSDKFactory() *SDKFactory { return &SDKFactory{} }
+func (f *SDKFactory) NewSTS(handle CredentialHandle) (STSClient, error) {
+	cfg, err := staticAWSConfig(handle)
+	if err != nil {
+		return nil, err
 	}
-	r := ProvisionReadback{StackID: allowed[string(StackOutputStackID)], InstanceID: allowed[string(StackOutputInstanceID)], PublicIP: allowed[string(StackOutputPublicIP)], SecurityGroupID: allowed[string(StackOutputSecurityGroup)], ObservedAt: observedAt.UTC()}
-	r.OutputDigest = canonicalDigest(allowed)
-	if r.Validate() != nil {
-		return ProvisionReadback{}, ErrInvalid
-	}
-	return r, nil
+	return sts.NewFromConfig(cfg), nil
 }
-
-// CloudProvider is deliberately closed over the exact CloudFormation calls
-// Core v1 needs; no generic API or HTTP escape hatch is provided.
-type CloudProvider interface {
-	CreateChangeSet(context.Context, CredentialHandle, ChangeSetRequest) (ChangeSet, error)
-	DescribeChangeSet(context.Context, CredentialHandle, string, string, string) (ChangeSet, error)
-	ExecuteChangeSet(context.Context, CredentialHandle, string, string, string, string) error
-	DeleteStack(context.Context, CredentialHandle, string, string, string) error
-	DescribeStack(context.Context, CredentialHandle, string, string) (Stack, error)
+func (f *SDKFactory) NewEC2(handle CredentialHandle) (EC2Client, error) {
+	cfg, err := staticAWSConfig(handle)
+	if err != nil {
+		return nil, err
+	}
+	return ec2.NewFromConfig(cfg), nil
+}
+func (f *SDKFactory) NewSSM(handle CredentialHandle) (SSMClient, error) {
+	cfg, err := staticAWSConfig(handle)
+	if err != nil {
+		return nil, err
+	}
+	return ssm.NewFromConfig(cfg), nil
+}
+func (f *SDKFactory) NewSSMCommand(handle CredentialHandle) (SSMCommandClient, error) {
+	cfg, err := staticAWSConfigWithRetry(handle, 1)
+	if err != nil {
+		return nil, err
+	}
+	return ssm.NewFromConfig(cfg), nil
+}
+func (f *SDKFactory) NewEC2Reservation(credential Credentials) (EC2ReservationClient, error) {
+	cfg, err := staticAWSConfig(credential.handle())
+	if err != nil {
+		return nil, err
+	}
+	return ec2.NewFromConfig(cfg), nil
+}
+func (f *SDKFactory) NewPricing(credential Credentials) (PricingClient, error) {
+	cfg, err := staticAWSConfig(credential.handle())
+	if err != nil {
+		return nil, err
+	}
+	// The Price List Query API is a global commercial-partition service whose
+	// signed endpoint is us-east-1. Product region selection remains an exact
+	// regionCode filter in the request; it is never inferred from this endpoint.
+	cfg.Region = "us-east-1"
+	return pricing.NewFromConfig(cfg), nil
+}
+func (f *SDKFactory) NewCloudFormationProvision(credential Credentials) (CloudFormationProvisionClient, error) {
+	cfg, err := staticAWSConfigWithRetry(credential.handle(), 1)
+	if err != nil {
+		return nil, err
+	}
+	return cloudformation.NewFromConfig(cfg), nil
+}
+func (f *SDKFactory) NewEC2ProvisionReadback(credential Credentials) (EC2Client, error) {
+	cfg, err := staticAWSConfig(credential.handle())
+	if err != nil {
+		return nil, err
+	}
+	return ec2.NewFromConfig(cfg), nil
+}
+func (f *SDKFactory) NewSSMProvisionReadback(credential Credentials) (SSMClient, error) {
+	cfg, err := staticAWSConfig(credential.handle())
+	if err != nil {
+		return nil, err
+	}
+	return ssm.NewFromConfig(cfg), nil
+}
+func (f *SDKFactory) NewSSMSecretParameter(credential Credentials) (SSMSecretParameterClient, error) {
+	cfg, err := staticAWSConfigWithRetry(credential.handle(), 1)
+	if err != nil {
+		return nil, err
+	}
+	return ssm.NewFromConfig(cfg), nil
 }
 
 type FakeSTSProvider struct {
@@ -245,206 +255,4 @@ func (f *FakeSTSProvider) GetCallerIdentity(_ context.Context, handle Credential
 		return Identity{}, ErrProvider
 	}
 	return f.Identity, nil
-}
-
-type fakeStack struct {
-	stack    Stack
-	sets     map[string]ChangeSet
-	executed map[string]bool
-}
-type FakeProvider struct {
-	mu                                                          sync.Mutex
-	Stacks                                                      map[string]Stack
-	Changes                                                     map[string]ChangeSet
-	Calls                                                       []string
-	DescribeChangeSetNames                                      []string
-	ResponseLoss                                                bool
-	ResponseLossCreate, ResponseLossExecute, ResponseLossDelete bool
-	Async                                                       bool
-	PollSequence                                                map[string][]string
-	DeletedTokens                                               map[string]bool
-	fail                                                        map[string]error
-}
-
-func NewFakeProvider() *FakeProvider {
-	return &FakeProvider{Stacks: map[string]Stack{}, Changes: map[string]ChangeSet{}, DeletedTokens: map[string]bool{}, fail: map[string]error{}, PollSequence: map[string][]string{}}
-}
-func (f *FakeProvider) SetFailure(op string, err error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.fail[op] = err
-}
-func (f *FakeProvider) maybeFail(op string) error {
-	if e := f.fail[op]; e != nil {
-		return e
-	}
-	return nil
-}
-func (f *FakeProvider) CreateChangeSet(_ context.Context, handle CredentialHandle, r ChangeSetRequest) (ChangeSet, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if handle.Region != r.Region {
-		return ChangeSet{}, ErrConflict
-	}
-	if !validChangeSetName(r.ChangeSetName) {
-		return ChangeSet{}, ErrInvalid
-	}
-	canonicalTags, validationErr := validateProviderTags(r.Tags)
-	if validationErr != nil {
-		return ChangeSet{}, validationErr
-	}
-	f.Calls = append(f.Calls, "create_change_set")
-	if e := f.maybeFail("create_change_set"); e != nil {
-		return ChangeSet{}, e
-	}
-	digest := providerRequestDigest(Plan{Region: r.Region, StackName: r.StackName, Operation: r.Operation, Template: r.Template, Parameters: r.Parameters, Tags: r.Tags, Capabilities: r.Capabilities}, r.ClientToken)
-	for _, v := range f.Changes {
-		if v.ClientToken == r.ClientToken {
-			if v.Region != r.Region || v.StackName != r.StackName || v.RequestDigest != digest {
-				return ChangeSet{}, ErrIdempotencyConflict
-			}
-			return v, nil
-		}
-	}
-	id := fmt.Sprintf("cs-%d", len(f.Changes)+1)
-	_, templateDigest, _ := normalizeTemplate(r.Template)
-	cs := ChangeSet{ID: id, Name: r.ChangeSetName, StackName: r.StackName, Region: r.Region, RequestDigest: digest, ClientToken: r.ClientToken, Status: "CREATE_COMPLETE", ExecutionStatus: "AVAILABLE", Operation: r.Operation, TemplateSHA256: templateDigest, Parameters: cloneMap(r.Parameters), Tags: canonicalTags}
-	f.Changes[id] = cs
-	if f.ResponseLoss || f.ResponseLossCreate {
-		return ChangeSet{}, ErrResponseUncertain
-	}
-	return cs, nil
-}
-func (f *FakeProvider) DescribeChangeSet(_ context.Context, handle CredentialHandle, region, stack, name string) (ChangeSet, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.Calls = append(f.Calls, "describe_change_set")
-	f.DescribeChangeSetNames = append(f.DescribeChangeSetNames, name)
-	if handle.Region != region {
-		return ChangeSet{}, ErrConflict
-	}
-	for _, v := range f.Changes {
-		if v.StackName == stack && v.Name == name {
-			if v.Region != region {
-				return ChangeSet{}, ErrConflict
-			}
-			return v, nil
-		}
-	}
-	return ChangeSet{}, ErrNotFound
-}
-func (f *FakeProvider) ExecuteChangeSet(_ context.Context, handle CredentialHandle, region, stack, id, token string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.Calls = append(f.Calls, "execute_change_set")
-	if handle.Region != region {
-		return ErrConflict
-	}
-	if strings.TrimSpace(token) == "" {
-		return ErrInvalid
-	}
-	if e := f.maybeFail("execute_change_set"); e != nil {
-		return e
-	}
-	cs, ok := f.Changes[id]
-	if !ok {
-		return ErrNotFound
-	}
-	if cs.Region != region || cs.StackName != stack {
-		return ErrConflict
-	}
-	if cs.ExecutionStatus == "EXECUTE_COMPLETE" {
-		return nil
-	}
-	cs.ExecutionStatus = "EXECUTE_COMPLETE"
-	f.Changes[id] = cs
-	status := "CREATE_COMPLETE"
-	if cs.Operation == OperationUpdate {
-		status = "UPDATE_COMPLETE"
-	}
-	if f.Async {
-		if cs.Operation == OperationUpdate {
-			status = "UPDATE_IN_PROGRESS"
-		} else {
-			status = "CREATE_IN_PROGRESS"
-		}
-	}
-	if cs.Operation == OperationUpdate {
-		status = "UPDATE_COMPLETE"
-	}
-	f.Stacks[region+"/"+stack] = Stack{Region: region, StackName: stack, Status: status, TemplateSHA256: cs.TemplateSHA256, Parameters: cloneMap(cs.Parameters), Tags: cloneMap(cs.Tags)}
-	if f.ResponseLoss || f.ResponseLossExecute {
-		return ErrResponseUncertain
-	}
-	return nil
-}
-func (f *FakeProvider) DeleteStack(_ context.Context, handle CredentialHandle, region, stack, token string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.Calls = append(f.Calls, "delete_stack")
-	if handle.Region != region {
-		return ErrConflict
-	}
-	if e := f.maybeFail("delete_stack"); e != nil {
-		return e
-	}
-	if f.DeletedTokens[token] {
-		return nil
-	}
-	stackKey := region + "/" + stack
-	if parsed, err := arn.Parse(stack); err == nil && parsed.Service == "cloudformation" {
-		parts := strings.Split(parsed.Resource, "/")
-		if len(parts) == 3 && parts[0] == "stack" {
-			stackKey = region + "/" + parts[1]
-		}
-	}
-	if _, ok := f.Stacks[stackKey]; !ok {
-		if f.ResponseLoss || f.ResponseLossDelete {
-			f.DeletedTokens[token] = true
-			return ErrResponseUncertain
-		}
-		return ErrNotFound
-	}
-	if f.Async {
-		current := f.Stacks[stackKey]
-		current.Status = "DELETE_IN_PROGRESS"
-		f.Stacks[stackKey] = current
-	} else {
-		delete(f.Stacks, stackKey)
-	}
-	f.DeletedTokens[token] = true
-	if f.ResponseLoss || f.ResponseLossDelete {
-		return ErrResponseUncertain
-	}
-	return nil
-}
-func (f *FakeProvider) DescribeStack(_ context.Context, handle CredentialHandle, region, stack string) (Stack, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.Calls = append(f.Calls, "describe_stack")
-	if handle.Region != region {
-		return Stack{}, ErrConflict
-	}
-	s, ok := f.Stacks[region+"/"+stack]
-	if !ok {
-		return Stack{}, ErrNotFound
-	}
-	if seq := f.PollSequence[region+"/"+stack]; len(seq) > 0 {
-		s.Status = seq[0]
-		f.PollSequence[region+"/"+stack] = seq[1:]
-		f.Stacks[region+"/"+stack] = s
-	}
-	s.Outputs = s.Outputs.Clone()
-	return s, nil
-}
-func (f *FakeProvider) UnconfirmedMutationCalls() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	n := 0
-	for _, c := range f.Calls {
-		if c == "execute_change_set" || c == "delete_stack" {
-			n++
-		}
-	}
-	return n
 }
