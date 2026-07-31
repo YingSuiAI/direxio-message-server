@@ -651,6 +651,11 @@ func (s *DatabaseTaskStore) Cancel(ctx context.Context, c task.CancelCommand) (t
 			}
 		}
 		if terminalizeErr == nil {
+			if current.Spec.Kind == task.TaskKindWorkload {
+				terminalizeErr = validateWorkloadTaskFenceTx(ctx, tx, current, stored)
+			}
+		}
+		if terminalizeErr == nil {
 			if current.Spec.Kind == task.TaskKindAWSChange {
 				terminalizeErr = terminalizeAWSPreProviderChangeTx(ctx, tx, stored, confirmationTaskRow{OwnerID: current.OwnerID, Status: string(current.Status), Attempt: int(current.Attempt), LeaseEpoch: int64(current.LeaseEpoch), Revision: int64(current.Revision)}, c.Reason, c.At.UTC())
 			} else {
