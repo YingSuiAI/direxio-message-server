@@ -22,6 +22,7 @@ func TestAgentConfirmationSweepRetriesWithBoundedBackoff(t *testing.T) {
 	var calls atomic.Int32
 	var first, second time.Time
 	done := make(chan struct{})
+	notifications := make(chan bool, 4)
 	processCtx := process.NewProcessContext()
 	ctx := processCtx.Context()
 	go func() {
@@ -38,7 +39,7 @@ func TestAgentConfirmationSweepRetriesWithBoundedBackoff(t *testing.T) {
 				processCtx.ShutdownDendrite()
 			}
 			return nil
-		})
+		}, func(_ error, recovered bool) { notifications <- recovered })
 		close(done)
 	}()
 	select {
@@ -55,6 +56,27 @@ func TestAgentConfirmationSweepRetriesWithBoundedBackoff(t *testing.T) {
 	if degraded, reasons := processCtx.IsDegraded(); degraded || len(reasons) != 0 {
 		t.Fatalf("transient sweep failure degraded process: %v", reasons)
 	}
+	select {
+	case recovered := <-notifications:
+		if recovered {
+			t.Fatal("first sweep notification was recovery")
+		}
+	default:
+		t.Fatal("sweep failure was not observed")
+	}
+	select {
+	case recovered := <-notifications:
+		if !recovered {
+			t.Fatal("second sweep notification was not recovery")
+		}
+	default:
+		t.Fatal("sweep recovery was not observed")
+	}
+	select {
+	case recovered := <-notifications:
+		t.Fatalf("unexpected extra sweep notification, recovered=%v", recovered)
+	default:
+	}
 }
 
 func TestAgentConfirmationSweepSkipsUnavailableOwner(t *testing.T) {
@@ -66,7 +88,7 @@ func TestAgentConfirmationSweepSkipsUnavailableOwner(t *testing.T) {
 		runAgentConfirmationSweep(ctx, time.Millisecond, func() string { return "" }, func(context.Context, string, time.Time) error {
 			called <- struct{}{}
 			return nil
-		})
+		}, nil)
 		close(done)
 	}()
 	time.Sleep(10 * time.Millisecond)
@@ -92,7 +114,7 @@ func TestAgentConfirmationSweepCancellationInterruptsInFlightCall(t *testing.T) 
 			close(started)
 			<-callCtx.Done()
 			return callCtx.Err()
-		})
+		}, nil)
 		close(done)
 	}()
 	select {

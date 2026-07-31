@@ -9,6 +9,7 @@ import (
 
 	p2pstorage "github.com/YingSuiAI/dirextalk-message-server/p2p/storage"
 	"github.com/YingSuiAI/dirextalk-message-server/setup/process"
+	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -21,7 +22,7 @@ const (
 // reads while remaining owned by the process lifecycle. Errors are retried
 // with bounded backoff; a failed sweep must not stop the worker or schedule
 // loop.
-func runAgentConfirmationSweep(ctx context.Context, interval time.Duration, owner func() string, sweep func(context.Context, string, time.Time) error) {
+func runAgentConfirmationSweep(ctx context.Context, interval time.Duration, owner func() string, sweep func(context.Context, string, time.Time) error, observe func(error, bool)) {
 	if ctx == nil || owner == nil || sweep == nil {
 		return
 	}
@@ -34,6 +35,7 @@ func runAgentConfirmationSweep(ctx context.Context, interval time.Duration, owne
 	timer := time.NewTimer(interval)
 	defer timer.Stop()
 	backoff := interval
+	failed := false
 	for {
 		select {
 		case <-ctx.Done():
@@ -51,16 +53,32 @@ func runAgentConfirmationSweep(ctx context.Context, interval time.Duration, owne
 		err := sweep(sweepCtx, ownerID, time.Now().UTC())
 		cancel()
 		if err != nil {
+			if ctx.Err() == nil && observe != nil {
+				observe(err, false)
+			}
+			failed = true
 			if backoff >= maxAgentConfirmationSweepBackoff/2 {
 				backoff = maxAgentConfirmationSweepBackoff
 			} else {
 				backoff *= 2
 			}
 		} else {
+			if failed && observe != nil {
+				observe(nil, true)
+			}
+			failed = false
 			backoff = interval
 		}
 		timer.Reset(backoff)
 	}
+}
+
+func observeAgentConfirmationSweep(err error, recovered bool) {
+	if recovered {
+		logrus.WithField("component", "agent_confirmation_sweeper").Info("embedded Agent confirmation expiry sweep recovered")
+		return
+	}
+	logrus.WithError(err).WithField("component", "agent_confirmation_sweeper").Warn("embedded Agent confirmation expiry sweep failed")
 }
 
 func startAgentConfirmationSweeper(processCtx *process.ProcessContext, owner func() string, sweep func(context.Context, string, time.Time) error, interval time.Duration) {
@@ -70,7 +88,7 @@ func startAgentConfirmationSweeper(processCtx *process.ProcessContext, owner fun
 	processCtx.ComponentStarted()
 	go func() {
 		defer processCtx.ComponentFinished()
-		runAgentConfirmationSweep(processCtx.Context(), interval, owner, sweep)
+		runAgentConfirmationSweep(processCtx.Context(), interval, owner, sweep, observeAgentConfirmationSweep)
 	}()
 }
 
