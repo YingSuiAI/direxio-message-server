@@ -3,8 +3,11 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"reflect"
 
+	workload "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcontrol/aws/workload"
 	coreconfirmation "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcontrol/confirmation"
 	coretask "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcontrol/task"
 )
@@ -42,10 +45,27 @@ func validateWorkloadTaskFenceTx(ctx context.Context, tx *sql.Tx, current coreta
 		stored.Binding.OperationDomain != "workload:"+operation {
 		return coreconfirmation.ErrConflict
 	}
+	var workloadRevision int64
+	var workloadPlanID, workloadDigest, workloadTargetKind, workloadState string
+	err = tx.QueryRowContext(ctx, `SELECT revision,plan_id::text,plan_digest,target_kind,state FROM core_workloads WHERE owner_id=$1 AND workload_id=$2 FOR UPDATE`, current.OwnerID, workloadID).Scan(
+		&workloadRevision, &workloadPlanID, &workloadDigest, &workloadTargetKind, &workloadState,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return coreconfirmation.ErrConflict
+	}
+	if err != nil {
+		return err
+	}
+	if workloadRevision < 1 || uint64(workloadRevision) != payload.ExpectedWorkloadRevision ||
+		workloadPlanID != payload.PlanID || workloadDigest != payload.PlanDigest || workloadTargetKind != payload.TargetKind ||
+		(operation == "destroy" && workloadState != "ready") {
+		return coreconfirmation.ErrConflict
+	}
 	var authoritativePlanID, authoritativeDigest, authoritativeTargetKind string
 	var authoritativeRevision int64
-	err = tx.QueryRowContext(ctx, `SELECT plan_id::text,revision,digest,target_kind FROM core_workload_plans WHERE owner_id=$1 AND plan_id=$2`, current.OwnerID, planID).Scan(
-		&authoritativePlanID, &authoritativeRevision, &authoritativeDigest, &authoritativeTargetKind,
+	var planRaw []byte
+	err = tx.QueryRowContext(ctx, `SELECT plan_id::text,revision,digest,target_kind,plan_json FROM core_workload_plans WHERE owner_id=$1 AND plan_id=$2 FOR SHARE`, current.OwnerID, planID).Scan(
+		&authoritativePlanID, &authoritativeRevision, &authoritativeDigest, &authoritativeTargetKind, &planRaw,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return coreconfirmation.ErrConflict
@@ -55,6 +75,28 @@ func validateWorkloadTaskFenceTx(ctx context.Context, tx *sql.Tx, current coreta
 	}
 	if authoritativePlanID != payload.PlanID || authoritativeRevision < 1 || uint64(authoritativeRevision) != payload.PlanRevision ||
 		authoritativeDigest != payload.PlanDigest || authoritativeTargetKind != payload.TargetKind {
+		return coreconfirmation.ErrConflict
+	}
+	var plan workload.Plan
+	if json.Unmarshal(planRaw, &plan) != nil {
+		return coreconfirmation.ErrConflict
+	}
+	declaredDigest := plan.Digest
+	plan.Digest = ""
+	normalizedPlan, err := plan.Normalize()
+	if err != nil || normalizedPlan.ID != authoritativePlanID || normalizedPlan.Revision != uint64(authoritativeRevision) ||
+		normalizedPlan.Digest != authoritativeDigest || declaredDigest != authoritativeDigest || normalizedPlan.TargetKind != workload.TargetKind(authoritativeTargetKind) {
+		return coreconfirmation.ErrConflict
+	}
+	canonicalPlan := plan
+	canonicalPlan.Digest = normalizedPlan.Digest
+	if !reflect.DeepEqual(normalizedPlan, canonicalPlan) {
+		return coreconfirmation.ErrConflict
+	}
+	expectedBinding := workload.BindingForOperation(normalizedPlan, payload.WorkloadID, workload.OperationKind(operation))
+	expectedBinding.OwnerID = current.OwnerID
+	expectedBinding, err = expectedBinding.Normalize()
+	if err != nil || !stored.Binding.Equal(expectedBinding) {
 		return coreconfirmation.ErrConflict
 	}
 	return nil
