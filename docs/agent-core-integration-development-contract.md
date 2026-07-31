@@ -16,6 +16,10 @@ read-only migration source and is not a runtime, fallback or release target.
   secret administration are one-shot commands from the same image.
 - Agent task workers, confirmations, schedules, AWS control, workload
   providers, remote MCP execution and deployment reads run in-process.
+- Execution Orchestration V2 permits a server-owned deterministic coordinator
+  that reaches remote targets through typed transports, but that path is a
+  contract-only, capability-gated design
+  until its route, storage, executor and acceptance tests are enabled.
 - There is no Agent Core address, token, CA, port, gRPC client, sidecar,
   Docker socket or Core Runner.
 - The Message Server never falls back to an external Agent service.
@@ -193,10 +197,58 @@ counters; `MAX+1` is forbidden. Deployment dashboard/list/get/events read
 `core_workloads`, `core_workload_operations` and `core_workload_events`
 directly—there is no external reconciliation loop.
 
+### Execution Orchestration V2 (contract gate; not live)
+
+The normative decision record is
+[`adr/2026-07-31-execution-orchestration-v2.md`](adr/2026-07-31-execution-orchestration-v2.md).
+
+The server may include built-in declarative Planning Skills/Recipes. They are
+trusted, versioned planning inputs only: each may produce immutable,
+canonical, secret-free plan fragments bound to a content digest and revision
+references, but may not execute shell/code/skills, call a provider, fetch
+third-party content, or mutate state. GeoLibre is a fixture/recipe for this
+boundary, not a product target or public contract.
+
+The boundaries are fixed:
+
+- the **planner** validates declarative requests and produces candidate plan
+  fragments without credentials or side effects;
+- the **compiler** merges and canonicalizes fragments into a typed stage graph
+  and immutable plan digest, without dispatch or mutation retry;
+- **policy** authenticates the owner and checks capability, target,
+  credential/configuration revisions, risk, expiry, quota, and idempotency;
+- the server-owned deterministic **coordinator** resolves only frozen typed
+  plans/stages, dispatches them to remote targets through a versioned typed
+  transport, and persists typed receipt/progress/readback/error evidence.
+
+The Message Server does not execute local third-party shell/code/skills, expose
+raw SSM/SSH/AWS passthrough, or provide a local fallback for the coordinator.
+Native Agent confirmation cannot authorize an execution.v2 mutation. The
+frozen plan and each mutating stage require an owner-scoped control-plane
+confirmation containing the exact plan/stage digests, policy/revision facts,
+expiry, and idempotency key. If dispatch is lost or ambiguous, the mutation is
+recorded as `uncertain`; it is never replayed, sent over another transport, or
+run locally. Only typed read-only reconciliation or explicitly authorized
+destroy/recovery may proceed against that uncertainty.
+
+V1 create remains until V2 acceptance is complete. It may be retired only
+after the V2 route, durable storage, typed executor/transport, focused tests,
+and deployment enablement all pass. V1 read, observe, reconcile, and destroy
+remain retained for compatibility and recovery.
+
+The first production slice is AWS SSM long-running services through the typed
+coordinator. SSH, generic HTTP, DNS, TLS, and Coding Worker are deferred and
+must not be advertised. `execution.v2.*` capabilities and actions are omitted
+until their server route, storage, executor, tests, and enablement are all
+ready; this contract does not claim any unimplemented phase is live.
+
 ## 7. Remote MCP and Skills
 
 Only HTTPS Streamable HTTP MCP is accepted. stdio, local MCP, subprocesses and
-third-party Skill execution are rejected before side effects.
+third-party Skill execution are rejected before side effects. The built-in
+declarative Planning Skills/Recipes described above are the narrow exception:
+they can only emit immutable plan fragments and never execute a skill or
+provider action.
 
 Discovery is bounded to the fixed Official Registry, Smithery, Glama and
 GitHub authorities. Candidate pins retain the public hyphenated values
