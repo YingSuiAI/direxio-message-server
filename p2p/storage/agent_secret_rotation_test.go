@@ -324,6 +324,22 @@ func TestPostgresPreV97LegacyRowsBootstrapAcrossAgentMigrations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("current startup migration from v96: %v", err)
 	}
+	for _, version := range []string{
+		"p2p: agent secret envelopes v97", "p2p: agent tasks and confirmations v98",
+		"p2p: agent extension lifecycle v99", "p2p: AWS control plane v100",
+		"p2p: workload control plane v101", "p2p: generic schedules and deployment cursors v102",
+	} {
+		var count int
+		if err := store.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM db_migrations WHERE version=$1`, version).Scan(&count); err != nil || count != 1 {
+			t.Fatalf("migration %s registrations=%d err=%v", version, count, err)
+		}
+	}
+	for _, table := range []string{"p2p_agent_secrets", "agent_tasks", "p2p_agent_extensions", "core_aws_credentials", "core_workload_operations", "p2p_agent_deployment_event_cursors"} {
+		var present bool
+		if err := store.DB().QueryRowContext(ctx, `SELECT to_regclass($1) IS NOT NULL`, table).Scan(&present); err != nil || !present {
+			t.Fatalf("migration table %s present=%v err=%v", table, present, err)
+		}
+	}
 	keyring, guard, err := BootstrapAgentSecretRuntime(ctx, store.DB(), keyringPath)
 	if err != nil {
 		t.Fatalf("auto bootstrap after v97-v102 migrations: %v", err)
