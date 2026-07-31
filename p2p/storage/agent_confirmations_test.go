@@ -105,6 +105,9 @@ func expectConfirmationReplayMiss(mock sqlmock.Sqlmock, owner, operation, key st
 }
 
 func expectConfirmationIdentity(mock sqlmock.Sqlmock, owner string) {
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT owner_id,COALESCE(provision_id::text,'') FROM core_aws_changes")).
+		WithArgs(owner, testConfirmationID).
+		WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT owner_id,task_id::text FROM agent_confirmations")).
 		WithArgs(testConfirmationID, owner).
 		WillReturnRows(sqlmock.NewRows([]string{"owner_id", "task_id"}).AddRow(testConfirmationOwner, testConfirmationTaskID))
@@ -827,7 +830,7 @@ func TestDatabaseConfirmationReleaseReservationPersistsReplayAfterTerminalFence(
 	}
 
 	mock.ExpectBegin()
-	expectConfirmationIdentity(mock, "")
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT owner_id,task_id::text FROM agent_confirmations")).WithArgs(testConfirmationID, "").WillReturnRows(sqlmock.NewRows([]string{"owner_id", "task_id"}).AddRow(testConfirmationOwner, testConfirmationTaskID))
 	expectConfirmationReplayMiss(mock, testConfirmationOwner, "release", key)
 	expectConfirmationTaskLock(mock, "succeeded", 2, 7, 10, nil)
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT confirmation_id::text,owner_id,operation_domain,target_id,target_revision,binding_digest,binding_json,task_id::text,state,revision,created_at,updated_at,expires_at,terminal_reason FROM agent_confirmations")).

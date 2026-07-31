@@ -314,6 +314,9 @@ func (s *DatabaseConfirmationStore) Confirm(ctx context.Context, c confirmation.
 	if found || e != nil {
 		return replay, e
 	}
+	if e = lockAWSPreProviderByConfirmationTx(ctx, tx, c.OwnerID, c.ID); e != nil {
+		return confirmation.Confirmation{}, e
+	}
 	_, taskID, e := confirmationIdentityTx(ctx, tx, c.OwnerID, c.ID)
 	if e != nil {
 		return confirmation.Confirmation{}, e
@@ -412,6 +415,9 @@ func (s *DatabaseConfirmationStore) Reject(ctx context.Context, c confirmation.R
 	if found || e != nil {
 		return replay, e
 	}
+	if e = lockAWSPreProviderByConfirmationTx(ctx, tx, c.OwnerID, c.ID); e != nil {
+		return confirmation.Confirmation{}, e
+	}
 	_, taskID, e := confirmationIdentityTx(ctx, tx, c.OwnerID, c.ID)
 	if e != nil {
 		return confirmation.Confirmation{}, e
@@ -430,7 +436,7 @@ func (s *DatabaseConfirmationStore) Reject(ctx context.Context, c confirmation.R
 	if stored.Revision != c.ExpectedRevision {
 		return confirmation.Confirmation{}, confirmation.ErrRevisionConflict
 	}
-	if stored.State != confirmation.StatePending {
+	if stored.State != confirmation.StatePending && !(stored.State == confirmation.StateConfirmed && taskRow.Status == "queued") {
 		return confirmation.Confirmation{}, confirmation.ErrConflict
 	}
 	if !stored.ExpiresAt.After(at) {
@@ -450,17 +456,20 @@ func (s *DatabaseConfirmationStore) Reject(ctx context.Context, c confirmation.R
 		}
 		return expired, confirmation.ErrExpired
 	}
-	if taskRow.Status != "waiting_user" {
+	if taskRow.Status != "waiting_user" && taskRow.Status != "queued" {
 		return confirmation.Confirmation{}, confirmation.ErrConflict
 	}
-	result, e := tx.ExecContext(ctx, `UPDATE agent_confirmations SET state='rejected',terminal_reason=$1,revision=revision+1,updated_at=$2 WHERE confirmation_id=$3 AND owner_id=$4 AND state='pending' AND revision=$5`, c.Reason, at, c.ID, c.OwnerID, c.ExpectedRevision)
+	if e = terminalizeAWSPreProviderChangeTx(ctx, tx, stored, taskRow, confirmation.ReasonUserRejected, at); e != nil {
+		return confirmation.Confirmation{}, e
+	}
+	result, e := tx.ExecContext(ctx, `UPDATE agent_confirmations SET state='rejected',terminal_reason=$1,revision=revision+1,updated_at=$2 WHERE confirmation_id=$3 AND owner_id=$4 AND state IN ('pending','confirmed') AND revision=$5`, c.Reason, at, c.ID, c.OwnerID, c.ExpectedRevision)
 	if e != nil {
 		return confirmation.Confirmation{}, e
 	}
 	if count, _ := result.RowsAffected(); count != 1 {
 		return confirmation.Confirmation{}, confirmation.ErrRevisionConflict
 	}
-	result, e = tx.ExecContext(ctx, `UPDATE agent_tasks SET status='canceled',failure_code='user_rejected',failure_summary=$1,lease_holder='',lease_expires_at=NULL,revision=revision+1,progress_sequence=progress_sequence+1,updated_at=$2 WHERE task_id=$3 AND owner_id=$4 AND status='waiting_user'`, c.Reason, at, taskID, c.OwnerID)
+	result, e = tx.ExecContext(ctx, `UPDATE agent_tasks SET status='canceled',failure_code='user_rejected',failure_summary=$1,lease_holder='',lease_expires_at=NULL,revision=revision+1,progress_sequence=progress_sequence+1,updated_at=$2 WHERE task_id=$3 AND owner_id=$4 AND status IN ('waiting_user','queued')`, c.Reason, at, taskID, c.OwnerID)
 	if e != nil {
 		return confirmation.Confirmation{}, e
 	}
@@ -656,6 +665,9 @@ func (s *DatabaseConfirmationStore) ReleaseReservation(ctx context.Context, c co
 	return out, nil
 }
 func expireConfirmationAndTaskTx(ctx context.Context, tx *sql.Tx, stored confirmation.Confirmation, taskRow confirmationTaskRow, reason string, at time.Time) error {
+	if err := terminalizeAWSPreProviderChangeTx(ctx, tx, stored, taskRow, reason, at); err != nil {
+		return err
+	}
 	result, err := tx.ExecContext(ctx, `UPDATE agent_confirmations SET state='expired',terminal_reason=$1,revision=revision+1,updated_at=$2 WHERE confirmation_id=$3 AND owner_id=$4 AND state IN ('pending','confirmed') AND revision=$5`, reason, at.UTC(), stored.ID, stored.OwnerID, stored.Revision)
 	if err != nil {
 		return err
@@ -789,6 +801,9 @@ func (s *DatabaseConfirmationStore) ExpireAt(ctx context.Context, owner, id stri
 		return err
 	}
 	defer tx.Rollback()
+	if err = lockAWSPreProviderByConfirmationTx(ctx, tx, owner, id); err != nil {
+		return err
+	}
 	_, taskID, err := confirmationIdentityTx(ctx, tx, owner, id)
 	if errors.Is(err, confirmation.ErrNotFound) {
 		return nil
@@ -834,6 +849,9 @@ func (s *DatabaseConfirmationStore) Expire(ctx context.Context, c confirmation.E
 		return confirmation.Confirmation{}, err
 	}
 	defer tx.Rollback()
+	if err = lockAWSPreProviderByConfirmationTx(ctx, tx, "", c.ConfirmationID); err != nil {
+		return confirmation.Confirmation{}, err
+	}
 	owner, taskID, err := confirmationIdentityTx(ctx, tx, "", c.ConfirmationID)
 	if err != nil {
 		return confirmation.Confirmation{}, err

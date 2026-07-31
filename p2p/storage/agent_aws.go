@@ -280,6 +280,9 @@ func (r *PostgresAWSRepository) RetryProvision(ctx context.Context, provisionID 
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return agentaws.Provision{}, err
 	}
+	if err = lockAWSPreProviderProvisionTx(ctx, tx, r.ownerID, provisionID); err != nil {
+		return agentaws.Provision{}, err
+	}
 	var p agentaws.Provision
 	var observed *time.Time
 	if err = tx.QueryRowContext(ctx, `SELECT provision_id::text,plan_id::text,credential_id::text,credential_revision,region,stack_name,profile,owner_digest,plan_revision,template_sha256,plan_digest,state,revision,COALESCE(create_change_id::text,''),COALESCE(destroy_change_id::text,''),stack_id,instance_id,public_ip,security_group_id,output_digest,observed_at,reconciliation_required,error_code,error_summary,created_at,updated_at FROM core_aws_ec2_provisions WHERE owner_id=$1 AND provision_id=$2 FOR UPDATE`, r.ownerID, provisionID).Scan(&p.ID, &p.PlanID, &p.CredentialID, &p.CredentialRevision, &p.Region, &p.StackName, &p.Profile, &p.OwnerDigest, &p.PlanRevision, &p.TemplateSHA256, &p.PlanDigest, &p.State, &p.Revision, &p.CreateChangeID, &p.DestroyChangeID, &p.Readback.StackID, &p.Readback.InstanceID, &p.Readback.PublicIP, &p.Readback.SecurityGroupID, &p.Readback.OutputDigest, &observed, &p.ReconciliationRequired, &p.ErrorCode, &p.ErrorSummary, &p.CreatedAt, &p.UpdatedAt); err != nil {
