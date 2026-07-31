@@ -38,6 +38,8 @@ CREATE INDEX IF NOT EXISTS agent_confirmations_expiry_idx ON agent_confirmations
 
 type DatabaseConfirmationStore struct{ db *sql.DB }
 
+const maxOverdueSweepCandidates = 64
+
 func NewDatabaseConfirmationStore(db *sql.DB) *DatabaseConfirmationStore {
 	return &DatabaseConfirmationStore{db: db}
 }
@@ -221,6 +223,12 @@ func (s *DatabaseConfirmationStore) Request(ctx context.Context, c confirmation.
 	if c.ExpiresAt.IsZero() || !expiresAt.After(at) {
 		return confirmation.Confirmation{}, confirmation.ErrInvalid
 	}
+	// Release an expired live target before the new insert. This is a bounded
+	// owner/domain/target sweep; each candidate uses ExpireAt so task,
+	// workload and deployment projections transition atomically.
+	if err = s.expireOverdue(ctx, c.OwnerID, string(b.OperationDomain), b.TargetID, at, 1); err != nil {
+		return confirmation.Confirmation{}, err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return confirmation.Confirmation{}, err
@@ -257,7 +265,30 @@ func (s *DatabaseConfirmationStore) get(ctx context.Context, owner, id string) (
 	return scanConfirmation(s.db.QueryRowContext(ctx, `SELECT confirmation_id::text,owner_id,operation_domain,target_id,target_revision,binding_digest,binding_json,task_id::text,state,revision,created_at,updated_at,expires_at,terminal_reason FROM agent_confirmations WHERE ($1='' OR owner_id=$1) AND confirmation_id=$2`, owner, id))
 }
 func (s *DatabaseConfirmationStore) Get(ctx context.Context, id string) (confirmation.Confirmation, error) {
+	// The legacy unscoped read cannot safely infer an owner for a mutation.
+	// Public owner-scoped callers should use GetForOwner below.
 	return s.get(ctx, "", id)
+}
+
+// GetForOwner returns an owner-fenced confirmation and lazily terminalizes an
+// overdue active card through ExpireAt's atomic task/workload transition.
+func (s *DatabaseConfirmationStore) GetForOwner(ctx context.Context, owner, id string) (confirmation.Confirmation, error) {
+	owner = strings.TrimSpace(owner)
+	if owner == "" || !validConfirmationUUID(id) {
+		return confirmation.Confirmation{}, confirmation.ErrInvalid
+	}
+	value, err := s.get(ctx, owner, id)
+	if err != nil {
+		return confirmation.Confirmation{}, err
+	}
+	now := time.Now().UTC()
+	if (value.State == confirmation.StatePending || value.State == confirmation.StateConfirmed) && !value.ExpiresAt.After(now) {
+		if err = s.ExpireAt(ctx, value.OwnerID, value.ID, now); err != nil {
+			return confirmation.Confirmation{}, err
+		}
+		return s.get(ctx, owner, id)
+	}
+	return value, nil
 }
 func (s *DatabaseConfirmationStore) Confirm(ctx context.Context, c confirmation.ConfirmCommand) (confirmation.Confirmation, error) {
 	c.OwnerID = strings.TrimSpace(c.OwnerID)
@@ -903,6 +934,9 @@ func (s *DatabaseConfirmationStore) List(ctx context.Context, q confirmation.Lis
 	if !hasCursor {
 		cursorID = uuid.Nil.String()
 	}
+	if err := s.expireOverdue(ctx, owner, domain, targetID, time.Now().UTC(), pageSize+1); err != nil {
+		return confirmation.Page{}, err
+	}
 	rows, e := s.db.QueryContext(ctx, `SELECT confirmation_id::text,owner_id,operation_domain,target_id,target_revision,binding_digest,binding_json,task_id::text,state,revision,created_at,updated_at,expires_at,terminal_reason
 FROM agent_confirmations
 WHERE owner_id=$1
@@ -946,6 +980,64 @@ LIMIT $8`, owner, domain, targetID, pq.Array(stateValues), hasCursor, cursorTime
 		page.NextPageToken = base64.RawURLEncoding.EncodeToString(encoded)
 	}
 	return page, nil
+}
+
+// ExpireOverdue performs a bounded owner-scoped maintenance sweep. Runtime
+// schedulers may call it independently of a read path; each candidate still
+// goes through ExpireAt and its task-first transaction.
+func (s *DatabaseConfirmationStore) ExpireOverdue(ctx context.Context, owner string, at time.Time) error {
+	owner = strings.TrimSpace(owner)
+	if owner == "" {
+		return confirmation.ErrInvalid
+	}
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+	return s.expireOverdue(ctx, owner, "", "", at.UTC(), maxOverdueSweepCandidates)
+}
+
+// expireOverdue terminalizes owner-scoped active cards before the list query.
+// ExpireAt owns the task/workload/deployment transition and lock order; this
+// scan only discovers candidates so pagination and state filters remain the
+// canonical query semantics after those transitions commit.
+func (s *DatabaseConfirmationStore) expireOverdue(ctx context.Context, owner, domain, targetID string, at time.Time, budget int) error {
+	if budget < 1 {
+		return nil
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT confirmation_id::text
+FROM agent_confirmations
+WHERE owner_id=$1
+  AND ($2='' OR operation_domain=$2)
+  AND ($3='' OR target_id=$3)
+  AND state IN ('pending','confirmed')
+  AND expires_at <= $4
+ORDER BY created_at ASC,confirmation_id ASC
+LIMIT $5`, owner, domain, targetID, at.UTC(), budget)
+	if err != nil {
+		return err
+	}
+	ids := make([]string, 0)
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		ids = append(ids, id)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err = rows.Close(); err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if err = s.ExpireAt(ctx, owner, id, at); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 type databaseConfirmationCursor struct {

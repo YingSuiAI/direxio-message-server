@@ -63,12 +63,9 @@ func (m *Module) confirmationHandler(action string) actionbase.Handler {
 			if e != nil {
 				return nil, e
 			}
-			v, err := m.cfg.Confirmations.Get(ctx, id)
+			v, err := getConfirmationForOwner(ctx, m.cfg.Confirmations, o, id)
 			if err != nil {
 				return nil, confirmationError(err)
-			}
-			if strings.TrimSpace(v.OwnerID) != o {
-				return nil, confirmationError(confirmation.ErrNotFound)
 			}
 			return map[string]any{"confirmation": confirmationMap(v)}, nil
 		case "confirm", "reject":
@@ -84,12 +81,9 @@ func (m *Module) confirmationHandler(action string) actionbase.Handler {
 			if e != nil {
 				return nil, e
 			}
-			stored, err := m.cfg.Confirmations.Get(ctx, id)
+			stored, err := getConfirmationForOwner(ctx, m.cfg.Confirmations, o, id)
 			if err != nil {
 				return nil, confirmationError(err)
-			}
-			if strings.TrimSpace(stored.OwnerID) != o {
-				return nil, confirmationError(confirmation.ErrNotFound)
 			}
 			var v confirmation.Confirmation
 			if op == "confirm" {
@@ -113,6 +107,25 @@ func (m *Module) confirmationHandler(action string) actionbase.Handler {
 		}
 	}
 }
+
+type ownerConfirmationGetter interface {
+	GetForOwner(context.Context, string, string) (confirmation.Confirmation, error)
+}
+
+func getConfirmationForOwner(ctx context.Context, repo confirmation.Repository, owner, id string) (confirmation.Confirmation, error) {
+	if scoped, ok := repo.(ownerConfirmationGetter); ok {
+		return scoped.GetForOwner(ctx, owner, id)
+	}
+	value, err := repo.Get(ctx, id)
+	if err != nil {
+		return confirmation.Confirmation{}, err
+	}
+	if strings.TrimSpace(value.OwnerID) != owner {
+		return confirmation.Confirmation{}, confirmation.ErrNotFound
+	}
+	return value, nil
+}
+
 func confirmationMap(v confirmation.Confirmation) map[string]any {
 	id := v.ID
 	if id == "" {
