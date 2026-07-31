@@ -9,6 +9,10 @@ import (
 )
 
 func (s *DatabaseStore) migrate(ctx context.Context) error {
+	return s.migrateTo(ctx, "")
+}
+
+func (s *DatabaseStore) migrateTo(ctx context.Context, target string) error {
 	m := sqlutil.NewMigrator(s.db)
 	m.AddMigrations(sqlutil.Migration{
 		Version: "p2p: integrated appservice tables v1",
@@ -1676,7 +1680,10 @@ func (s *DatabaseStore) migrate(ctx context.Context) error {
 			   )`,
 		})
 	}})
-	return m.Up(ctx)
+	if target == "" {
+		return m.Up(ctx)
+	}
+	return m.UpTo(ctx, target)
 }
 
 // backfillLegacyChannelFavorites preserves the owner-local channel-post

@@ -10,6 +10,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -82,11 +83,36 @@ func (m *Migrator) AddMigrations(migrations ...Migration) {
 
 // Up executes all migrations in order they were added.
 func (m *Migrator) Up(ctx context.Context) error {
+	return m.up(ctx, "")
+}
+
+// UpTo executes migrations in registration order through the named version.
+// The target must be known and is included in the transaction.
+func (m *Migrator) UpTo(ctx context.Context, target string) error {
+	if strings.TrimSpace(target) == "" {
+		return fmt.Errorf("unknown migration version %q", target)
+	}
+	return m.up(ctx, target)
+}
+
+func (m *Migrator) up(ctx context.Context, target string) error {
 	m.mutex.Lock()
 	addErr := m.addErr
+	known := target == ""
+	if target != "" {
+		for _, migration := range m.migrations {
+			if migration.Version == target {
+				known = true
+				break
+			}
+		}
+	}
 	m.mutex.Unlock()
 	if addErr != nil {
 		return addErr
+	}
+	if !known {
+		return fmt.Errorf("unknown migration version %q", target)
 	}
 	// ensure there is a table for known migrations
 	executedMigrations, err := m.ExecutedMigrations(ctx)
@@ -109,6 +135,9 @@ func (m *Migrator) Up(ctx context.Context) error {
 			}
 			if err = m.insertMigration(ctx, txn, migration.Version); err != nil {
 				return fmt.Errorf("unable to insert executed migrations: %w", err)
+			}
+			if target != "" && migration.Version == target {
+				break
 			}
 		}
 		return nil

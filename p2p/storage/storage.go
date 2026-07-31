@@ -15,6 +15,17 @@ type DatabaseStore struct {
 }
 
 func NewDatabaseStore(ctx context.Context, cm *sqlutil.Connections, dbProperties *config.DatabaseOptions) (*DatabaseStore, error) {
+	return newDatabaseStore(ctx, cm, dbProperties, "")
+}
+
+// NewDatabaseStoreAtMigration opens a PostgreSQL store and runs the same
+// production migration registry through target, for historical upgrade
+// fixtures. Production startup should use NewDatabaseStore.
+func NewDatabaseStoreAtMigration(ctx context.Context, cm *sqlutil.Connections, dbProperties *config.DatabaseOptions, target string) (*DatabaseStore, error) {
+	return newDatabaseStore(ctx, cm, dbProperties, target)
+}
+
+func newDatabaseStore(ctx context.Context, cm *sqlutil.Connections, dbProperties *config.DatabaseOptions, target string) (*DatabaseStore, error) {
 	if dbProperties.ConnectionString.IsSQLite() {
 		return nil, fmt.Errorf("SQLite is not supported for P2P product state; configure PostgreSQL")
 	}
@@ -23,7 +34,7 @@ func NewDatabaseStore(ctx context.Context, cm *sqlutil.Connections, dbProperties
 		return nil, err
 	}
 	store := &DatabaseStore{db: db, writer: writer}
-	if err := store.migrate(ctx); err != nil {
+	if err := store.migrateTo(ctx, target); err != nil {
 		return nil, err
 	}
 	return store, nil

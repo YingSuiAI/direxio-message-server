@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/YingSuiAI/dirextalk-message-server/internal/sqlutil"
@@ -129,5 +130,34 @@ func TestMigratorRejectsDuplicateVersionsBeforeOpeningDatabase(t *testing.T) {
 	err := m.Up(context.Background())
 	if err == nil || err.Error() != `duplicate database migration version "duplicate"` {
 		t.Fatalf("Up() error = %v, want duplicate-version error", err)
+	}
+}
+
+func TestMigratorUpToStopsAtKnownTargetAndRejectsUnknown(t *testing.T) {
+	ctx := context.Background()
+	connStr, closeDB := test.PrepareDBConnectionString(t, test.DBTypePostgres)
+	defer closeDB()
+	db, err := sql.Open("postgres", connStr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var ran []string
+	m := sqlutil.NewMigrator(db)
+	for _, version := range []string{"v1", "v2", "v3"} {
+		version := version
+		m.AddMigrations(sqlutil.Migration{Version: version, Up: func(context.Context, *sql.Tx) error {
+			ran = append(ran, version)
+			return nil
+		}})
+	}
+	if err := m.UpTo(ctx, "v2"); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(ran, ","); got != "v1,v2" {
+		t.Fatalf("UpTo execution = %q", got)
+	}
+	if err := m.UpTo(ctx, "missing"); err == nil {
+		t.Fatal("UpTo accepted unknown target")
 	}
 }

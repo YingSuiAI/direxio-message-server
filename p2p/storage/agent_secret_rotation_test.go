@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/YingSuiAI/dirextalk-message-server/internal/sqlutil"
 	"github.com/YingSuiAI/dirextalk-message-server/setup/config"
@@ -270,7 +271,7 @@ func TestPostgresPreV97LegacyRowsBootstrapAcrossAgentMigrations(t *testing.T) {
 	connStr, closeDB := test.PrepareDBConnectionString(t, test.DBTypePostgres)
 	defer closeDB()
 	dbOpts := config.DatabaseOptions{ConnectionString: config.DataSource(connStr)}
-	store, err := NewDatabaseStore(ctx, sqlutil.NewConnectionManager(nil, dbOpts), &dbOpts)
+	store, err := NewDatabaseStoreAtMigration(ctx, sqlutil.NewConnectionManager(nil, dbOpts), &dbOpts, "p2p: agent deployment public event cursor v96")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,13 +289,10 @@ func TestPostgresPreV97LegacyRowsBootstrapAcrossAgentMigrations(t *testing.T) {
 	if err := os.WriteFile(legacyPath, legacyKey, 0600); err != nil {
 		t.Fatal(err)
 	}
-	profiles, err := NewDatabaseModelProfileStoreWithKeyring(ctx, store, keyringPath, legacyPath)
-	if err != nil {
+	profileID := "legacy-profile"
+	now := time.Now().UTC()
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO p2p_agent_model_profiles(owner_id,profile_id,client_profile_id,provider,revision,created_at,updated_at) VALUES($1,$2,$3,$4,1,$5,$5)`, "owner", profileID, "legacy", "openai", now); err != nil {
 		t.Fatal(err)
-	}
-	result, err := profiles.SyncModelProfiles(ctx, "owner", "pre-v97", "", []ModelProfileSyncEntry{{ClientProfileID: "legacy", Provider: "openai", Model: "gpt", APIKey: stringPtr("legacy-secret")}})
-	if err != nil || len(result.Profiles) != 1 {
-		t.Fatalf("legacy source profile = %#v err=%v", result, err)
 	}
 	block, err := aes.NewCipher(legacyKey)
 	if err != nil {
@@ -308,36 +306,23 @@ func TestPostgresPreV97LegacyRowsBootstrapAcrossAgentMigrations(t *testing.T) {
 	for i := range nonce {
 		nonce[i] = byte(i + 1)
 	}
-	ciphertext := aead.Seal(nil, nonce, []byte("legacy-secret"), []byte(result.Profiles[0].ProfileID+"\x00openai"))
-	for _, table := range []string{"p2p_agent_model_profiles", "p2p_agent_model_profile_credentials"} {
-		if _, err := store.DB().ExecContext(ctx, `ALTER TABLE `+table+` DROP CONSTRAINT `+table+`_api_key_envelope_check`); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err := store.DB().ExecContext(ctx, `UPDATE p2p_agent_model_profiles SET api_key_key_id='',api_key_envelope_version=0,api_key_aad_version=0,api_key_nonce=$1,api_key_ciphertext=$2 WHERE owner_id='owner' AND profile_id=$3`, nonce, ciphertext, result.Profiles[0].ProfileID); err != nil {
+	ciphertext := aead.Seal(nil, nonce, []byte("legacy-secret"), []byte(profileID+"\x00openai"))
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO p2p_agent_model_profile_credentials(owner_id,profile_id,credential_version,provider,api_key_nonce,api_key_ciphertext,created_at) VALUES($1,$2,1,'openai',$3,$4,$5)`, "owner", profileID, nonce, ciphertext, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DB().ExecContext(ctx, `UPDATE p2p_agent_model_profile_credentials SET api_key_key_id='',api_key_envelope_version=0,api_key_aad_version=0,api_key_nonce=$1,api_key_ciphertext=$2 WHERE owner_id='owner' AND profile_id=$3 AND credential_version=1`, nonce, ciphertext, result.Profiles[0].ProfileID); err != nil {
+	if _, err := store.DB().ExecContext(ctx, `UPDATE p2p_agent_model_profiles SET api_key_nonce=$1,api_key_ciphertext=$2,credential_version=1 WHERE owner_id='owner' AND profile_id=$3`, nonce, ciphertext, profileID); err != nil {
 		t.Fatal(err)
 	}
 	var before []byte
-	if err := store.DB().QueryRowContext(ctx, `SELECT api_key_ciphertext FROM p2p_agent_model_profiles WHERE owner_id='owner' AND profile_id=$1`, result.Profiles[0].ProfileID).Scan(&before); err != nil {
+	if err := store.DB().QueryRowContext(ctx, `SELECT api_key_ciphertext FROM p2p_agent_model_profiles WHERE owner_id='owner' AND profile_id=$1`, profileID).Scan(&before); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Remove(keyringPath); err != nil {
+	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	for _, version := range []string{
-		"p2p: agent secret envelopes v97", "p2p: agent tasks and confirmations v98",
-		"p2p: agent extension lifecycle v99", "p2p: AWS control plane v100",
-		"p2p: workload control plane v101", "p2p: generic schedules and deployment cursors v102",
-	} {
-		if _, err := store.DB().ExecContext(ctx, `DELETE FROM db_migrations WHERE version=$1`, version); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := store.Migrate(ctx); err != nil {
-		t.Fatalf("pre-v97 migration replay: %v", err)
+	store, err = NewDatabaseStore(ctx, sqlutil.NewConnectionManager(nil, dbOpts), &dbOpts)
+	if err != nil {
+		t.Fatalf("current startup migration from v96: %v", err)
 	}
 	keyring, guard, err := BootstrapAgentSecretRuntime(ctx, store.DB(), keyringPath)
 	if err != nil {
@@ -359,7 +344,7 @@ func TestPostgresPreV97LegacyRowsBootstrapAcrossAgentMigrations(t *testing.T) {
 		t.Fatalf("restart legacy verification: %v", err)
 	}
 	var after []byte
-	if err := store.DB().QueryRowContext(ctx, `SELECT api_key_ciphertext FROM p2p_agent_model_profiles WHERE owner_id='owner' AND profile_id=$1`, result.Profiles[0].ProfileID).Scan(&after); err != nil {
+	if err := store.DB().QueryRowContext(ctx, `SELECT api_key_ciphertext FROM p2p_agent_model_profiles WHERE owner_id='owner' AND profile_id=$1`, profileID).Scan(&after); err != nil {
 		t.Fatal(err)
 	}
 	if string(after) != string(before) {
