@@ -120,6 +120,9 @@ type Service struct {
 	agentTaskRuntime          *agentruntime.Worker
 	agentScheduleLoop         *agentruntime.ScheduleLoop
 	agentRuntimeInitErr       error
+
+	agentConfirmationSweep         func(context.Context, string, time.Time) error
+	agentConfirmationSweepInterval time.Duration
 	// deploymentSourceReady is set only when the v106 PostgreSQL deployment
 	// projection is wired into the embedded module. Legacy in-memory and
 	// DatabaseStore ledger methods deliberately never set this flag.
@@ -968,6 +971,7 @@ func newService(cfg Config, store Store, transport Transport, state portalState,
 		ownerID := strings.TrimSpace(service.OwnerMXID())
 		taskStore := p2pstorage.NewDatabaseTaskStore(dbStore.DB())
 		confirmationStore := p2pstorage.NewDatabaseConfirmationStore(dbStore.DB())
+		service.agentConfirmationSweep = confirmationStore.ExpireOverdue
 		controls := newEmbeddedControlRuntime(dbStore, taskStore, confirmationStore, ownerID, service.agentSecretEnveloper)
 		service.agentTaskExecutor = &embeddedTaskExecutor{
 			agent:           service.agentModule,

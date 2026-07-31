@@ -5,7 +5,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/YingSuiAI/dirextalk-message-server/internal/sqlutil"
 	agentruntime "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcontrol/runtime"
@@ -14,6 +17,103 @@ import (
 	"github.com/YingSuiAI/dirextalk-message-server/setup/process"
 	"github.com/YingSuiAI/dirextalk-message-server/test"
 )
+
+func TestAgentConfirmationSweepRetriesWithBoundedBackoff(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	const interval = 20 * time.Millisecond
+	var calls atomic.Int32
+	var first, second time.Time
+	reported := make(chan error, 1)
+	done := make(chan struct{})
+	go func() {
+		runAgentConfirmationSweep(ctx, interval, func() string { return "@owner:example.com" }, func(_ context.Context, owner string, at time.Time) error {
+			if owner != "@owner:example.com" {
+				t.Errorf("sweep owner = %q", owner)
+			}
+			switch calls.Add(1) {
+			case 1:
+				first = at
+				return errors.New("temporary database failure")
+			case 2:
+				second = at
+				cancel()
+			}
+			return nil
+		}, func(err error) { reported <- err })
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("confirmation sweep did not stop after cancellation")
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("sweep calls = %d, want 2", calls.Load())
+	}
+	if second.Sub(first) < interval {
+		t.Fatalf("retry interval = %s, want at least %s", second.Sub(first), interval)
+	}
+	select {
+	case err := <-reported:
+		if err == nil || !strings.Contains(err.Error(), "temporary database failure") {
+			t.Fatalf("reported sweep error = %v", err)
+		}
+	default:
+		t.Fatal("sweep error was not reported")
+	}
+}
+
+func TestAgentConfirmationSweepSkipsUnavailableOwner(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	called := make(chan struct{}, 1)
+	done := make(chan struct{})
+	go func() {
+		runAgentConfirmationSweep(ctx, time.Millisecond, func() string { return "" }, func(context.Context, string, time.Time) error {
+			called <- struct{}{}
+			return nil
+		}, nil)
+		close(done)
+	}()
+	time.Sleep(10 * time.Millisecond)
+	select {
+	case <-called:
+		t.Fatal("sweep ran without an owner")
+	default:
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("owner-unavailable sweep did not stop")
+	}
+}
+
+func TestAgentConfirmationSweepCancellationInterruptsInFlightCall(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	started := make(chan struct{})
+	go func() {
+		runAgentConfirmationSweep(ctx, time.Millisecond, func() string { return "@owner:example.com" }, func(callCtx context.Context, _ string, _ time.Time) error {
+			close(started)
+			<-callCtx.Done()
+			return callCtx.Err()
+		}, nil)
+		close(done)
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("confirmation sweep did not tick")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("in-flight confirmation sweep did not cancel")
+	}
+}
 
 func TestAgentSecretFailureSuppressesSecretDependentCapabilities(t *testing.T) {
 	service := &Service{
