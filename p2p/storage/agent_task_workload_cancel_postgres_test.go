@@ -26,7 +26,7 @@ func TestPostgresWorkloadTaskCancelFencesWaitingAndQueued(t *testing.T) {
 	defer store.Close()
 	db := store.DB()
 	owner := "@workload-cancel-fence:example.test"
-	now := time.Now().UTC().Truncate(time.Microsecond)
+	now := time.Now().UTC()
 
 	for i, status := range []string{"waiting_user", "queued"} {
 		base := "7" + string(rune('1'+i))
@@ -68,7 +68,7 @@ func TestPostgresWorkloadTaskCancelFencesWaitingAndQueued(t *testing.T) {
 		if status == "queued" {
 			confirmationState = "confirmed"
 		}
-		if _, err = db.ExecContext(ctx, `INSERT INTO agent_confirmations(confirmation_id,owner_id,operation_domain,target_id,target_revision,binding_digest,binding_json,task_id,state,revision,expires_at,created_at,updated_at) VALUES($1,$2,'workload:apply',$3,1,$4,$5,$6,$7,1,$8,$9,$9)`, confirmationID, owner, workloadID, digest, bindingJSON, taskID, confirmationState, now.Add(time.Hour), now); err != nil {
+		if _, err = db.ExecContext(ctx, `INSERT INTO agent_confirmations(confirmation_id,owner_id,operation_domain,target_id,target_revision,binding_digest,binding_json,task_id,state,revision,expires_at,created_at,updated_at) VALUES($1,$2,'workload:apply',$3,1,$4,$5,$6,$7,1,$8,$9,$9)`, confirmationID, owner, workloadID, "", bindingJSON, taskID, confirmationState, now.Add(time.Hour), now); err != nil {
 			t.Fatal(err)
 		}
 		if _, err = db.ExecContext(ctx, `INSERT INTO core_workload_operations(operation_id,owner_id,workload_id,expected_workload_revision,plan_id,operation,plan_revision,plan_digest,target_kind,task_id,confirmation_id,status,revision,created_at,updated_at) VALUES($1,$2,$3,1,$4,'apply',1,$5,'AWS_EC2_SSM',$6,$7,'waiting_user',1,$8,$8)`, operationID, owner, workloadID, planID, digest, taskID, confirmationID, now); err != nil {
@@ -142,7 +142,7 @@ func TestPostgresWorkloadTaskCancelFencesWaitingAndQueued(t *testing.T) {
 		t.Fatal(err)
 	}
 	bindingJSON, _ := json.Marshal(binding)
-	if _, err = db.ExecContext(ctx, `INSERT INTO agent_confirmations(confirmation_id,owner_id,operation_domain,target_id,target_revision,binding_digest,binding_json,task_id,state,revision,expires_at,created_at,updated_at) VALUES($1,$2,'workload:apply',$3,1,$4,$5,$6,'pending',1,$7,$8,$8)`, confirmationID, owner, workloadID, digest, bindingJSON, taskID, now.Add(time.Hour), now); err != nil {
+	if _, err = db.ExecContext(ctx, `INSERT INTO agent_confirmations(confirmation_id,owner_id,operation_domain,target_id,target_revision,binding_digest,binding_json,task_id,state,revision,expires_at,created_at,updated_at) VALUES($1,$2,'workload:apply',$3,1,$4,$5,$6,'pending',1,$7,$8,$8)`, confirmationID, owner, workloadID, "", bindingJSON, taskID, now.Add(time.Hour), now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = db.ExecContext(ctx, `INSERT INTO core_workload_operations(operation_id,owner_id,workload_id,expected_workload_revision,plan_id,operation,plan_revision,plan_digest,target_kind,task_id,confirmation_id,status,revision,created_at,updated_at) VALUES($1,$2,$3,1,$4,'apply',1,$5,'AWS_EC2_SSM',$6,$7,'waiting_user',1,$8,$8)`, operationID, owner, workloadID, planID, digest, taskID, confirmationID, now); err != nil {
@@ -208,6 +208,14 @@ func TestPostgresWorkloadTaskCancelFencesWaitingAndQueued(t *testing.T) {
 	if status != "waiting_user" {
 		t.Fatalf("tampered plan mutated task to %s", status)
 	}
+	canonicalPlanJSON, _ := json.Marshal(plan)
+	if _, err = db.ExecContext(ctx, `UPDATE core_workload_plans SET plan_json=$1,resource_limits_json=$2 WHERE plan_id=$3`, canonicalPlanJSON, []byte(`{"cpu":9007199254740993}`), planID); err != nil {
+		t.Fatal(err)
+	}
+	_, err = NewDatabaseTaskStore(db).Cancel(ctx, coretask.CancelCommand{OwnerID: owner, TaskID: taskID, ExpectedRevision: 1, Mutation: coretask.MutationCommand{IdempotencyKey: "79099999-9999-4999-8999-999999999999", ExpectedRevision: 1}, Reason: "numeric tamper", At: now})
+	if !errors.Is(err, coretask.ErrConflict) {
+		t.Fatalf("numeric plan column tamper error = %v, want conflict", err)
+	}
 }
 
 func TestPostgresWorkloadDestroyCancelRejectsStaleWorkloadRevision(t *testing.T) {
@@ -222,7 +230,7 @@ func TestPostgresWorkloadDestroyCancelRejectsStaleWorkloadRevision(t *testing.T)
 	defer store.Close()
 	db := store.DB()
 	owner := "@workload-destroy-stale:example.test"
-	now := time.Now().UTC().Truncate(time.Microsecond)
+	now := time.Now().UTC()
 	operationID := "81111111-1111-4111-8111-111111111111"
 	workloadID := "82222222-2222-4222-8222-222222222222"
 	planID := "83333333-3333-4333-8333-333333333333"
@@ -255,7 +263,7 @@ func TestPostgresWorkloadDestroyCancelRejectsStaleWorkloadRevision(t *testing.T)
 		t.Fatal(err)
 	}
 	bindingJSON, _ := json.Marshal(binding)
-	if _, err = db.ExecContext(ctx, `INSERT INTO agent_confirmations(confirmation_id,owner_id,operation_domain,target_id,target_revision,binding_digest,binding_json,task_id,state,revision,expires_at,created_at,updated_at) VALUES($1,$2,'workload:destroy',$3,1,$4,$5,$6,'pending',1,$7,$8,$8)`, confirmationID, owner, workloadID, plan.Digest, bindingJSON, taskID, now.Add(time.Hour), now); err != nil {
+	if _, err = db.ExecContext(ctx, `INSERT INTO agent_confirmations(confirmation_id,owner_id,operation_domain,target_id,target_revision,binding_digest,binding_json,task_id,state,revision,expires_at,created_at,updated_at) VALUES($1,$2,'workload:destroy',$3,1,$4,$5,$6,'pending',1,$7,$8,$8)`, confirmationID, owner, workloadID, "", bindingJSON, taskID, now.Add(time.Hour), now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = db.ExecContext(ctx, `INSERT INTO core_workload_operations(operation_id,owner_id,workload_id,expected_workload_revision,plan_id,operation,plan_revision,plan_digest,target_kind,task_id,confirmation_id,status,revision,created_at,updated_at) VALUES($1,$2,$3,1,$4,'destroy',1,$5,'AWS_EC2_SSM',$6,$7,'waiting_user',1,$8,$8)`, operationID, owner, workloadID, planID, plan.Digest, taskID, confirmationID, now); err != nil {

@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -62,6 +63,17 @@ func validateWorkloadTaskFenceTx(ctx context.Context, tx *sql.Tx, current coreta
 		(operation == "destroy" && workloadState != "ready") {
 		return coreconfirmation.ErrConflict
 	}
+	var bindingDomain, bindingTarget, bindingDigest string
+	var bindingTargetRevision int64
+	var bindingRaw []byte
+	err = tx.QueryRowContext(ctx, `SELECT operation_domain,target_id,target_revision,binding_digest,binding_json FROM agent_confirmations WHERE owner_id=$1 AND confirmation_id=$2 AND task_id=$3 FOR SHARE`, current.OwnerID, stored.ID, current.ID).Scan(&bindingDomain, &bindingTarget, &bindingTargetRevision, &bindingDigest, &bindingRaw)
+	if err != nil {
+		return err
+	}
+	var persistedBinding coreconfirmation.Binding
+	if json.Unmarshal(bindingRaw, &persistedBinding) != nil || bindingDomain != stored.Binding.OperationDomain || bindingTarget != stored.Binding.TargetID || bindingTargetRevision != stored.Binding.TargetRevision {
+		return coreconfirmation.ErrConflict
+	}
 	var authoritativePlanID, authoritativeDigest, authoritativeTargetKind string
 	var authoritativeRevision int64
 	var planRaw, targetIdentityRaw, resourceLimitsRaw, secretGrantRefsRaw []byte
@@ -99,8 +111,8 @@ func validateWorkloadTaskFenceTx(ctx context.Context, tx *sql.Tx, current coreta
 	expectedTargetRaw, _ := json.Marshal(normalizedPlan.Target.Identity)
 	expectedLimitsRaw, _ := json.Marshal(normalizedPlan.ResourceLimits)
 	expectedRefsRaw, _ := json.Marshal(normalizedPlan.SecretGrantRefs)
-	if authoritativeSummary != normalizedPlan.Summary || !authoritativeExpiresAt.UTC().Equal(normalizedPlan.ExpiresAt.UTC()) ||
-		!authoritativeCreatedAt.UTC().Equal(normalizedPlan.CreatedAt.UTC()) ||
+	if authoritativeSummary != normalizedPlan.Summary || !authoritativeExpiresAt.UTC().Round(time.Microsecond).Equal(normalizedPlan.ExpiresAt.UTC().Round(time.Microsecond)) ||
+		!authoritativeCreatedAt.UTC().Round(time.Microsecond).Equal(normalizedPlan.CreatedAt.UTC().Round(time.Microsecond)) ||
 		!canonicalJSONEqual(targetIdentityRaw, expectedTargetRaw) || !canonicalJSONEqual(resourceLimitsRaw, expectedLimitsRaw) ||
 		!canonicalJSONEqual(secretGrantRefsRaw, expectedRefsRaw) {
 		return coreconfirmation.ErrConflict
@@ -108,13 +120,21 @@ func validateWorkloadTaskFenceTx(ctx context.Context, tx *sql.Tx, current coreta
 	expectedBinding := workload.BindingForOperation(normalizedPlan, payload.WorkloadID, workload.OperationKind(operation))
 	expectedBinding.OwnerID = current.OwnerID
 	expectedBinding, err = expectedBinding.Normalize()
-	if err != nil || !stored.Binding.Equal(expectedBinding) {
+	if err != nil || stored.Binding.Digest != expectedBinding.Digest || persistedBinding.Digest != expectedBinding.Digest || bindingDigest != string(expectedBinding.Digest) || !stored.Binding.Equal(expectedBinding) || !persistedBinding.Equal(expectedBinding) {
 		return coreconfirmation.ErrConflict
 	}
 	return nil
 }
 
 func canonicalJSONEqual(a, b []byte) bool {
-	var left, right any
-	return json.Unmarshal(a, &left) == nil && json.Unmarshal(b, &right) == nil && reflect.DeepEqual(left, right)
+	decode := func(raw []byte) (any, error) {
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		decoder.UseNumber()
+		var value any
+		err := decoder.Decode(&value)
+		return value, err
+	}
+	left, leftErr := decode(a)
+	right, rightErr := decode(b)
+	return leftErr == nil && rightErr == nil && reflect.DeepEqual(left, right)
 }
