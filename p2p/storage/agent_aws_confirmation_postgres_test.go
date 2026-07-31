@@ -164,6 +164,76 @@ func TestPostgresAWSConfirmationDeletePreservesReadback(t *testing.T) {
 	}
 }
 
+func TestPostgresAWSConfirmationTerminalizesServiceDerivedDestroy(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		reject bool
+	}{
+		{name: "expiry"},
+		{name: "reject", reject: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, repo, fx := newPreProviderPostgresFixture(t)
+			now := time.Now().UTC().Truncate(time.Microsecond)
+			readback, err := agentaws.ProvisionReadbackFromStack(agentaws.StackOutputs{"StackId": "stack", "InstanceId": "i-1", "SecurityGroupId": "sg-1"}, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Retire the fixture's synthetic create confirmation without changing
+			// the original create plan. The service call below must create the
+			// distinct derived delete plan through its production path.
+			if _, err = store.DB().ExecContext(fx.ctx, `UPDATE agent_tasks SET status='canceled',revision=8 WHERE owner_id=$1 AND task_id=$2`, fx.owner, fx.taskID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = store.DB().ExecContext(fx.ctx, `UPDATE agent_confirmations SET state='expired',revision=4,reservation_json=NULL,expires_at=$1 WHERE owner_id=$2 AND confirmation_id=$3`, now.Add(-time.Minute), fx.owner, fx.confirmationID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = store.DB().ExecContext(fx.ctx, `UPDATE core_aws_changes SET status='canceled',stage='canceled',revision=2 WHERE owner_id=$1 AND change_id=$2`, fx.owner, fx.changeID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = store.DB().ExecContext(fx.ctx, `UPDATE core_aws_ec2_provisions SET state='active',revision=1,active_change_id=NULL,stack_id=$1,instance_id=$2,security_group_id=$3,output_digest=$4,observed_at=$5,reconciliation_required=false,error_code='',error_summary='' WHERE owner_id=$6 AND provision_id=$7`, readback.StackID, readback.InstanceID, readback.SecurityGroupID, readback.OutputDigest, readback.ObservedAt, fx.owner, fx.provisionID); err != nil {
+				t.Fatal(err)
+			}
+			service := agentaws.NewServiceWithCoordinator(repo, repo, nil, nil, nil, nil, nil)
+			requested, err := service.RequestEC2Destroy(fx.ctx, fx.provisionID, 1, "99999999-9999-4999-8999-999999999991", fx.owner)
+			if err != nil {
+				t.Fatalf("RequestEC2Destroy = %v", err)
+			}
+			if requested.Change.PlanID == fx.planID || requested.Provision.PlanID != fx.planID || requested.Change.Operation != agentaws.OperationDelete {
+				t.Fatalf("derived destroy linkage = change plan %q provision plan %q operation %q", requested.Change.PlanID, requested.Provision.PlanID, requested.Change.Operation)
+			}
+			var originalOperation string
+			if err = store.DB().QueryRowContext(fx.ctx, `SELECT operation FROM core_aws_plans WHERE owner_id=$1 AND plan_id=$2`, fx.owner, fx.planID).Scan(&originalOperation); err != nil {
+				t.Fatal(err)
+			}
+			if originalOperation != string(agentaws.OperationCreate) {
+				t.Fatalf("RequestEC2Destroy mutated original plan operation to %q", originalOperation)
+			}
+			confirmations := NewDatabaseConfirmationStore(store.DB())
+			if tc.reject {
+				if _, err = confirmations.Reject(fx.ctx, coreconfirmation.RejectCommand{OwnerID: fx.owner, ConfirmationID: requested.Confirmation.ConfirmationID, IdempotencyKey: "99999999-9999-4999-8999-999999999992", ExpectedRevision: 1, Reason: "declined", At: now}); err != nil {
+					t.Fatalf("Reject = %v", err)
+				}
+			} else if err = confirmations.ExpireAt(fx.ctx, fx.owner, requested.Confirmation.ConfirmationID, now.Add(48*time.Hour)); err != nil {
+				t.Fatalf("ExpireAt = %v", err)
+			}
+			var state, active, status, stage string
+			if err = store.DB().QueryRowContext(fx.ctx, `SELECT state,COALESCE(active_change_id::text,'') FROM core_aws_ec2_provisions WHERE owner_id=$1 AND provision_id=$2`, fx.owner, fx.provisionID).Scan(&state, &active); err != nil {
+				t.Fatal(err)
+			}
+			if state != "active" || active != "" {
+				t.Fatalf("terminalized destroy provision = %q/%q", state, active)
+			}
+			if err = store.DB().QueryRowContext(fx.ctx, `SELECT status,stage FROM core_aws_changes WHERE owner_id=$1 AND change_id=$2`, fx.owner, requested.Change.ID).Scan(&status, &stage); err != nil {
+				t.Fatal(err)
+			}
+			if status != "canceled" || stage != "canceled" {
+				t.Fatalf("terminalized destroy change = %q/%q", status, stage)
+			}
+		})
+	}
+}
+
 func TestPostgresAWSConfirmationRejectReleasesCreate(t *testing.T) {
 	store, _, fx := newPreProviderPostgresFixture(t)
 	preparePreProviderConfirmation(t, store, fx, agentaws.OperationCreate)
