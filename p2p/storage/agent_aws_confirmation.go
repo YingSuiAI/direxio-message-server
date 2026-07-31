@@ -68,6 +68,29 @@ func terminalizeAWSPreProviderChangeTx(ctx context.Context, tx *sql.Tx, stored c
 	if json.Unmarshal(params, &plan.Parameters) != nil || json.Unmarshal(tags, &plan.Tags) != nil || json.Unmarshal(caps, &plan.Capabilities) != nil || plan.Validate() != nil || plan.ID != planID || plan.CredentialID != credentialID || plan.CredentialRevision != credentialRevision || string(plan.Operation) != operation || !preProviderProviderDigestMatches(plan, providerToken, providerDigest) {
 		return coreconfirmation.ErrConflict
 	}
+	var original agentaws.Plan
+	var originalParams, originalTags, originalCaps []byte
+	var originalPlanID string
+	if operation == string(agentaws.OperationDelete) && provisionID != "" {
+		// The provider/request path locks the current plan, then credential, then
+		// provision. Lock the immutable create plan before the provision as well;
+		// never acquire it after the provision row or the reverse order can deadlock
+		// against RequestChange (create plan -> credential -> provision).
+		if err := tx.QueryRowContext(ctx, `SELECT plan_id::text FROM core_aws_ec2_provisions WHERE owner_id=$1 AND provision_id=$2`, owner, provisionID).Scan(&originalPlanID); err != nil {
+			return coreconfirmation.ErrConflict
+		}
+		if !validAWSUUID(originalPlanID) {
+			return coreconfirmation.ErrConflict
+		}
+		if err := tx.QueryRowContext(ctx, `SELECT plan_id::text,credential_id::text,credential_revision,region,stack_name,operation,template,template_sha256,parameters_json,tags_json,capabilities_json,revision,created_at FROM core_aws_plans WHERE owner_id=$1 AND plan_id=$2 FOR UPDATE`, owner, originalPlanID).Scan(
+			&original.ID, &original.CredentialID, &original.CredentialRevision, &original.Region, &original.StackName, &original.Operation, &original.Template, &original.TemplateSHA256, &originalParams, &originalTags, &originalCaps, &original.Revision, &original.CreatedAt,
+		); err != nil {
+			return coreconfirmation.ErrConflict
+		}
+		if json.Unmarshal(originalParams, &original.Parameters) != nil || json.Unmarshal(originalTags, &original.Tags) != nil || json.Unmarshal(originalCaps, &original.Capabilities) != nil || original.Validate() != nil || original.ID != originalPlanID || original.Operation != agentaws.OperationCreate {
+			return coreconfirmation.ErrConflict
+		}
+	}
 
 	// Lock the confirmation before the credential.  This matches the provider
 	// consume path (task -> change -> plan -> confirmation -> credential) and
@@ -133,14 +156,7 @@ func terminalizeAWSPreProviderChangeTx(ctx context.Context, tx *sql.Tx, stored c
 				return coreconfirmation.ErrConflict
 			}
 		} else if operation == string(agentaws.OperationDelete) {
-			var original agentaws.Plan
-			var originalParams, originalTags, originalCaps []byte
-			if err := tx.QueryRowContext(ctx, `SELECT plan_id::text,credential_id::text,credential_revision,region,stack_name,operation,template,template_sha256,parameters_json,tags_json,capabilities_json,revision,created_at FROM core_aws_plans WHERE owner_id=$1 AND plan_id=$2 FOR UPDATE`, owner, provisionPlanID).Scan(
-				&original.ID, &original.CredentialID, &original.CredentialRevision, &original.Region, &original.StackName, &original.Operation, &original.Template, &original.TemplateSHA256, &originalParams, &originalTags, &originalCaps, &original.Revision, &original.CreatedAt,
-			); err != nil {
-				return coreconfirmation.ErrConflict
-			}
-			if json.Unmarshal(originalParams, &original.Parameters) != nil || json.Unmarshal(originalTags, &original.Tags) != nil || json.Unmarshal(originalCaps, &original.Capabilities) != nil || original.Validate() != nil || original.ID != provisionPlanID || original.Operation != agentaws.OperationCreate || !agentaws.ProvisionSnapshotMatches(provisionSnapshot, original) {
+			if provisionPlanID != originalPlanID || !agentaws.ProvisionSnapshotMatches(provisionSnapshot, original) {
 				return coreconfirmation.ErrConflict
 			}
 			derived := original

@@ -345,6 +345,47 @@ func TestPostgresAWSConfirmationDerivedDestroyCorruptionRollsBack(t *testing.T) 
 	}
 }
 
+func TestPostgresAWSConfirmationRejectVsLinkedRequestChangeIsBounded(t *testing.T) {
+	store, repo, fx, requested, now := newServiceDerivedDestroyPostgresFixture(t)
+	confirmations := NewDatabaseConfirmationStore(store.DB())
+	results := make(chan error, 2)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, err := confirmations.Reject(fx.ctx, coreconfirmation.RejectCommand{OwnerID: fx.owner, ConfirmationID: requested.Confirmation.ConfirmationID, IdempotencyKey: "99999999-9999-4999-8999-999999999988", ExpectedRevision: 1, Reason: "declined", At: now})
+		results <- err
+	}()
+	go func() {
+		defer wg.Done()
+		_, err := repo.RequestChange(fx.ctx, agentaws.RequestChangeInput{PlanID: fx.planID, ProvisionID: fx.provisionID, ExpectedProvisionRevision: requested.Provision.Revision, IdempotencyKey: "99999999-9999-4999-8999-999999999987"})
+		results <- err
+	}()
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("linked RequestChange and Reject deadlocked")
+	}
+	close(results)
+	for err := range results {
+		if err != nil && !errors.Is(err, agentaws.ErrRevisionConflict) && !errors.Is(err, coreconfirmation.ErrConflict) {
+			t.Fatalf("concurrent linked request error = %v", err)
+		}
+	}
+	var state, active string
+	if err := store.DB().QueryRowContext(fx.ctx, `SELECT state,COALESCE(active_change_id::text,'') FROM core_aws_ec2_provisions WHERE owner_id=$1 AND provision_id=$2`, fx.owner, fx.provisionID).Scan(&state, &active); err != nil {
+		t.Fatal(err)
+	}
+	if state != "active" || active != "" {
+		t.Fatalf("linked request final provision = %q/%q", state, active)
+	}
+}
+
 func TestPostgresAWSConfirmationRejectReleasesCreate(t *testing.T) {
 	store, _, fx := newPreProviderPostgresFixture(t)
 	preparePreProviderConfirmation(t, store, fx, agentaws.OperationCreate)
