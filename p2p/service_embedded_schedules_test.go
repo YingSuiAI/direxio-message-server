@@ -2,6 +2,7 @@ package p2p
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"os"
 	"path/filepath"
@@ -213,7 +214,7 @@ func TestDeploymentsCapabilityRejectsLegacyOrUnboundStores(t *testing.T) {
 	}
 }
 
-func TestDatabaseServiceMissingAgentKeyringFailsClosedWithoutCreatingIt(t *testing.T) {
+func TestDatabaseServiceMissingAgentKeyringInitializesAndIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	connStr, closeDB := test.PrepareDBConnectionString(t, test.DBTypePostgres)
 	t.Cleanup(closeDB)
@@ -232,14 +233,25 @@ func TestDatabaseServiceMissingAgentKeyringFailsClosedWithoutCreatingIt(t *testi
 	if err != nil {
 		t.Fatalf("ordinary service startup must survive unavailable Agent secrets: %v", err)
 	}
-	if service.agentSecretReady || !errors.Is(service.modelProfileInitErr, p2pstorage.ErrAgentSecretKeyringUnavailable) {
+	if !service.agentSecretReady || service.modelProfileInitErr != nil {
 		t.Fatalf("Agent secret readiness=%v error=%v", service.agentSecretReady, service.modelProfileInitErr)
 	}
-	if _, err := os.Stat(keyring); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("server startup created missing keyring: %v", err)
+	info, err := os.Stat(keyring)
+	if err != nil {
+		t.Fatalf("server startup did not create keyring: %v", err)
 	}
-	if service.embeddedAgentCapabilityReady("model_profiles.server") || service.embeddedAgentCapabilityReady("task") {
-		t.Fatal("Agent capability published without a verified keyring")
+	if got := info.Mode().Perm(); got != 0600 {
+		t.Fatalf("keyring mode = %o, want 0600", got)
+	}
+	dirInfo, dirErr := os.Stat(dir)
+	if dirErr != nil {
+		t.Fatal(dirErr)
+	}
+	if got := dirInfo.Mode().Perm(); got != 0700 {
+		t.Fatalf("keyring directory mode = %o, want 0700", got)
+	}
+	if !service.embeddedAgentCapabilityReady("model_profiles.server") {
+		t.Fatalf("model_profiles.server unavailable after automatic keyring initialization: ready=%v store=%v err=%v", service.agentSecretReady, service.modelProfiles != nil && service.modelProfiles.ModelProfileStoreReady(), service.modelProfileInitErr)
 	}
 	if !service.embeddedAgentCapabilityReady("deployments.server") {
 		t.Fatal("read-only deployments.server should remain available with a valid schema when Agent secrets are unavailable")
@@ -271,6 +283,86 @@ func TestDatabaseServiceMissingAgentKeyringFailsClosedWithoutCreatingIt(t *testi
 	}
 	if _, apiErr := service.Handle(ctx, "profile.get", nil); apiErr != nil {
 		t.Fatalf("ordinary ProductCore remains available: %v", apiErr)
+	}
+	// A restart with the same database/keyring must verify the existing file
+	// without replacing it or changing its permissions.
+	before, err := os.ReadFile(keyring)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := NewServiceWithStore(ctx, Config{ServerName: "example.com", AgentSecretKeyringFile: keyring}, store)
+	if err != nil {
+		t.Fatalf("restart with initialized keyring: %v", err)
+	}
+	if !restarted.agentSecretReady || restarted.modelProfileInitErr != nil {
+		t.Fatalf("restart Agent secret readiness=%v error=%v", restarted.agentSecretReady, restarted.modelProfileInitErr)
+	}
+	after, err := os.ReadFile(keyring)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("restart replaced initialized keyring")
+	}
+}
+
+func TestDatabaseServiceLostAgentKeyringWithCiphertextSurvivesOrdinaryStartup(t *testing.T) {
+	ctx := context.Background()
+	connStr, closeDB := test.PrepareDBConnectionString(t, test.DBTypePostgres)
+	t.Cleanup(closeDB)
+	dbOpts := config.DatabaseOptions{ConnectionString: config.DataSource(connStr)}
+	store, err := NewDatabaseStore(ctx, sqlutil.NewConnectionManager(nil, dbOpts), &dbOpts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	keyring := filepath.Join(dir, "lost-keyring.json")
+	loaded, err := p2pstorage.InitializeAgentSecretKeyringForDatabase(ctx, store.DB(), keyring)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enveloper, err := p2pstorage.NewAgentSecretEnveloper(loaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := p2pstorage.AgentSecretBinding{
+		Domain: "test", OwnerID: "owner", EntityID: "entity", Revision: 1,
+		Purpose: "purpose", Reference: "reference", BindingDigest: sha256.Sum256([]byte("lost-key")),
+	}
+	envelope, err := enveloper.Seal(binding, []byte("unrecoverable"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO p2p_agent_secrets(
+		secret_domain,owner_id,entity_id,secret_revision,purpose,reference,binding_digest,
+		envelope_version,aad_version,key_id,nonce,ciphertext
+	) VALUES($1,$2,$3,$4,$5,$6,$7,1,1,$8,$9,$10)`,
+		binding.Domain, binding.OwnerID, binding.EntityID, binding.Revision, binding.Purpose, binding.Reference,
+		binding.BindingDigest[:], envelope.KeyID, envelope.Nonce, envelope.Ciphertext); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(keyring); err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewServiceWithStore(ctx, Config{ServerName: "example.com", AgentSecretKeyringFile: keyring}, store)
+	if err != nil {
+		t.Fatalf("ordinary service startup must survive lost Agent keyring: %v", err)
+	}
+	if service.agentSecretReady || service.modelProfiles != nil {
+		t.Fatalf("lost keyring unexpectedly enabled Agent secrets: ready=%v profiles=%v", service.agentSecretReady, service.modelProfiles != nil)
+	}
+	if !errors.Is(service.modelProfileInitErr, p2pstorage.ErrAgentSecretKeyringUnavailable) {
+		t.Fatalf("lost keyring error = %v", service.modelProfileInitErr)
+	}
+	if _, err := os.Stat(keyring); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("lost keyring must not be replaced: %v", err)
+	}
+	if _, apiErr := service.Handle(ctx, "profile.get", nil); apiErr != nil {
+		t.Fatalf("ordinary ProductCore unavailable after lost keyring: %v", apiErr)
 	}
 }
 

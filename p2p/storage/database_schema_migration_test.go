@@ -96,6 +96,35 @@ func TestDatabaseStoreCreatesBusinessIndexes(t *testing.T) {
 	if messageTableCount != 0 {
 		t.Fatalf("p2p_messages table must not be created after Matrix-source migration")
 	}
+	for _, migration := range []string{
+		"p2p: agent secret envelopes v97",
+		"p2p: agent tasks and confirmations v98",
+		"p2p: agent extension lifecycle v99",
+		"p2p: AWS control plane v100",
+		"p2p: workload control plane v101",
+		"p2p: generic schedules and deployment cursors v102",
+	} {
+		t.Run(migration, func(t *testing.T) {
+			var registrations int
+			if err := store.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM db_migrations WHERE version=$1`, migration).Scan(&registrations); err != nil {
+				t.Fatal(err)
+			}
+			if registrations != 1 {
+				t.Fatalf("migration registrations = %d, want 1", registrations)
+			}
+		})
+	}
+	for _, table := range []string{"p2p_agent_secrets", "agent_tasks", "p2p_agent_secret_rotations", "core_aws_credentials", "core_workload_operations", "p2p_agent_deployment_event_cursors"} {
+		t.Run(table, func(t *testing.T) {
+			var present bool
+			if err := store.DB().QueryRowContext(ctx, `SELECT to_regclass($1) IS NOT NULL`, table).Scan(&present); err != nil {
+				t.Fatal(err)
+			}
+			if !present {
+				t.Fatalf("migration table %s is missing", table)
+			}
+		})
+	}
 }
 
 func TestDatabasePublicDeploymentUUIDMigrationIsCanonicalAndRegisteredOnce(t *testing.T) {

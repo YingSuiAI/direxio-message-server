@@ -31,8 +31,6 @@ services:
     environment:
       MESSAGE_SERVER_NAME: ${MESSAGE_SERVER_NAME:-localhost}
       MESSAGE_CLIENT_BASE_URL: ${MESSAGE_CLIENT_BASE_URL:-http://localhost:8008}
-      P2P_AGENT_SECRET_KEYRING_FILE: /var/dirextalk-message-server/agent/secret-keyring.json
-      P2P_AGENT_SECRET_DATABASE_DSN: postgres://dirextalk_message_server:dirextalk_message_server@postgres/dirextalk_message_server?sslmode=disable
     restart: "no"
     entrypoint: ["/bin/sh", "-c"]
     command:
@@ -57,7 +55,10 @@ services:
             > /etc/dirextalk-message-server/message-server.yaml
         fi
         sed -i 's|well_known_client_name: .*|well_known_client_name: "'"${MESSAGE_CLIENT_BASE_URL:-http://localhost:8008}"'"|' /etc/dirextalk-message-server/message-server.yaml
-        /usr/bin/agent-secretctl init
+        # The serving process initializes an absent Agent keyring after its
+        # PostgreSQL migrations. Keep this sidecar limited to config and
+        # certificate bootstrap so it is not a required secret-maintenance
+        # step (and never replaces a keyring bound to existing ciphertext).
     volumes:
       - p2p_message_server_config:/etc/dirextalk-message-server
       - p2p_message_server_data:/var/dirextalk-message-server

@@ -139,8 +139,10 @@ confirmations and workload records retain references and digests only.
 Existing legacy model credentials are upgraded only by an explicit offline
 `agent-secretctl upgrade` run. Before the migration, stop the persistent
 service and make one restorable backup set containing PostgreSQL, the keyring,
-and the legacy model-profile raw-key file. Initialize or validate the v1
-keyring with `agent-secretctl init`, then run `upgrade` with
+and the legacy model-profile raw-key file. A serving process initializes an
+absent v1 keyring after PostgreSQL migrations only when no keyring-bound
+ciphertext exists; `agent-secretctl init` remains an optional explicit
+preflight. Then run `upgrade` with
 `P2P_AGENT_SECRET_KEYRING_FILE`, `P2P_AGENT_SECRET_DATABASE_DSN`, and
 `P2P_AGENT_MODEL_PROFILE_KEY_FILE` supplied through the environment; key
 material and database credentials are never command-line arguments. The

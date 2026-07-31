@@ -862,11 +862,12 @@ func newService(cfg Config, store Store, transport Transport, state portalState,
 			legacyKeyFile = filepath.Join(dataDir, "model-profile.master.key")
 		}
 		service.agentSecretKeyringFile = keyringFile
-		// A long-running server only verifies an existing keyring. Creating a
-		// missing keyring belongs exclusively to the offline agent-secretctl
-		// init command, otherwise a lost keyring could make encrypted rows
-		// permanently unreadable.
-		keyring, secretErr := p2pstorage.LoadAgentSecretKeyring(keyringFile)
+		// Initialize an absent keyring only after the database migrations have
+		// completed and the exclusive maintenance guard has proved that no
+		// keyring-bound ciphertext exists. Existing or corrupt keyrings are
+		// still loaded fail-closed; legacy model-profile rows remain a separate
+		// explicit upgrade concern.
+		keyring, secretErr := p2pstorage.InitializeAgentSecretKeyringForDatabase(context.Background(), dbStore.DB(), keyringFile)
 		if secretErr == nil {
 			service.agentSecretGuard, secretErr = p2pstorage.AcquireAgentSecretRuntimeGuard(context.Background(), dbStore.DB())
 		}

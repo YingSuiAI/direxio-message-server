@@ -168,14 +168,14 @@ Agent Matrix conversations remain a separate transport.
 
 Added owner-only `agent.model_profiles.sync`, `.list`, `.get`, and `.delete`
 actions. Profiles are persisted in PostgreSQL with an independently managed
-AES-GCM keyring in the mounted Message Server Agent data volume. The same
-Message Server image runs `message-server-init` before the serving container:
-it creates/verifies the protected keyring at
-`P2P_AGENT_SECRET_KEYRING_FILE` (normally
-`/var/dirextalk-message-server/agent/secret-keyring.json`). The keyring volume
-and PostgreSQL must be restored or reset atomically; losing only the keyring
-while retaining encrypted rows fails closed. No updater, external Agent, or
-second persistent service participates in this initialization. API keys are write-only and are
+AES-GCM keyring in the mounted Message Server Agent data volume. The serving
+Message Server initializes/verifies the protected keyring after PostgreSQL
+migrations at `P2P_AGENT_SECRET_KEYRING_FILE` (normally
+`/var/dirextalk-message-server/agent/secret-keyring.json`) when the file is
+absent and no keyring-bound ciphertext exists. The keyring volume and
+PostgreSQL must be restored or reset atomically; losing only the keyring while
+retaining encrypted rows fails closed. No updater, external Agent, or second
+persistent service participates in this initialization. API keys are write-only and are
 never returned; reads expose `api_key_configured`, credential version, and an
 optional read-only `api_key_hint` mask (for example `sk-********0420`) for
 non-speech profiles. The hint is never accepted as a credential or stored in
