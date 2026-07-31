@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"regexp"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ import (
 	agentaws "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcontrol/aws"
 	coreconfirmation "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcontrol/confirmation"
 	coretask "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcontrol/task"
+	"github.com/google/uuid"
 )
 
 func preparePreProviderConfirmation(t *testing.T, store *DatabaseStore, fx preProviderPostgresFixture, operation agentaws.Operation) agentaws.ProvisionReadback {
@@ -24,14 +26,31 @@ func preparePreProviderConfirmation(t *testing.T, store *DatabaseStore, fx prePr
 	if _, err := store.DB().ExecContext(fx.ctx, `UPDATE agent_confirmations SET state='pending',revision=1,reservation_json=NULL,expires_at=$1,terminal_reason='' WHERE owner_id=$2 AND confirmation_id=$3`, now.Add(-time.Minute), fx.owner, fx.confirmationID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DB().ExecContext(fx.ctx, `UPDATE core_aws_plans SET operation=$1 WHERE owner_id=$2 AND plan_id=$3`, operation, fx.owner, fx.planID); err != nil {
+	deletePlanID := ""
+	if operation == agentaws.OperationDelete {
+		deletePlanID = uuid.NewSHA1(uuid.Nil, []byte("ec2-destroy:"+fx.provisionID)).String()
+		if _, err := store.DB().ExecContext(fx.ctx, `INSERT INTO core_aws_plans(owner_id,plan_id,credential_id,credential_revision,region,stack_name,operation,template,template_sha256,parameters_json,tags_json,capabilities_json,revision,created_at) SELECT owner_id,$1,credential_id,credential_revision,region,stack_name,'delete',template,template_sha256,parameters_json,tags_json,capabilities_json,1,$2 FROM core_aws_plans WHERE owner_id=$3 AND plan_id=$4`, deletePlanID, now, fx.owner, fx.planID); err != nil {
+			t.Fatal(err)
+		}
+	} else if _, err := store.DB().ExecContext(fx.ctx, `UPDATE core_aws_plans SET operation=$1 WHERE owner_id=$2 AND plan_id=$3`, operation, fx.owner, fx.planID); err != nil {
 		t.Fatal(err)
 	}
 	state := "creating"
 	if operation == agentaws.OperationDelete {
 		state = "destroying"
 	}
-	if _, err := store.DB().ExecContext(fx.ctx, `UPDATE core_aws_changes SET operation=$1,status='waiting_user',stage='requested',change_set_id='',revision=1,error_code='',error_summary='' WHERE owner_id=$2 AND change_id=$3`, operation, fx.owner, fx.changeID); err != nil {
+	planID := fx.planID
+	providerDigest := fx.change.ProviderRequestDigest
+	if operation == agentaws.OperationDelete {
+		planID = deletePlanID
+		deletePlan := fx.plan
+		deletePlan.ID = deletePlanID
+		deletePlan.Operation = agentaws.OperationDelete
+		deletePlan.Revision = 1
+		deletePlan.CreatedAt = now
+		providerDigest = agentaws.ProviderRequestDigest(deletePlan, fx.confirmationID)
+	}
+	if _, err := store.DB().ExecContext(fx.ctx, `UPDATE core_aws_changes SET plan_id=$1,operation=$2,status='waiting_user',stage='requested',change_set_id='',provider_request_digest=$3,revision=1,error_code='',error_summary='' WHERE owner_id=$4 AND change_id=$5`, planID, operation, providerDigest, fx.owner, fx.changeID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.DB().ExecContext(fx.ctx, `UPDATE core_aws_ec2_provisions SET state=$1,revision=2,active_change_id=$2,stack_id='',instance_id='',public_ip='',security_group_id='',output_digest='',observed_at=NULL,reconciliation_required=false,error_code='',error_summary='' WHERE owner_id=$3 AND provision_id=$4`, state, fx.changeID, fx.owner, fx.provisionID); err != nil {
@@ -229,6 +248,98 @@ func TestPostgresAWSConfirmationTerminalizesServiceDerivedDestroy(t *testing.T) 
 			}
 			if status != "canceled" || stage != "canceled" {
 				t.Fatalf("terminalized destroy change = %q/%q", status, stage)
+			}
+		})
+	}
+}
+
+func newServiceDerivedDestroyPostgresFixture(t *testing.T) (*DatabaseStore, *PostgresAWSRepository, preProviderPostgresFixture, agentaws.ChangeRequestResult, time.Time) {
+	t.Helper()
+	store, repo, fx := newPreProviderPostgresFixture(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	readback, err := agentaws.ProvisionReadbackFromStack(agentaws.StackOutputs{"StackId": "stack", "InstanceId": "i-1", "SecurityGroupId": "sg-1"}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.DB().ExecContext(fx.ctx, `UPDATE agent_tasks SET status='canceled',revision=8 WHERE owner_id=$1 AND task_id=$2`, fx.owner, fx.taskID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.DB().ExecContext(fx.ctx, `UPDATE agent_confirmations SET state='expired',revision=4,reservation_json=NULL,expires_at=$1 WHERE owner_id=$2 AND confirmation_id=$3`, now.Add(-time.Minute), fx.owner, fx.confirmationID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.DB().ExecContext(fx.ctx, `UPDATE core_aws_changes SET status='canceled',stage='canceled',revision=2 WHERE owner_id=$1 AND change_id=$2`, fx.owner, fx.changeID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.DB().ExecContext(fx.ctx, `UPDATE core_aws_ec2_provisions SET state='active',revision=1,active_change_id=NULL,stack_id=$1,instance_id=$2,security_group_id=$3,output_digest=$4,observed_at=$5,reconciliation_required=false,error_code='',error_summary='' WHERE owner_id=$6 AND provision_id=$7`, readback.StackID, readback.InstanceID, readback.SecurityGroupID, readback.OutputDigest, readback.ObservedAt, fx.owner, fx.provisionID); err != nil {
+		t.Fatal(err)
+	}
+	service := agentaws.NewServiceWithCoordinator(repo, repo, nil, nil, nil, nil, nil)
+	requested, err := service.RequestEC2Destroy(fx.ctx, fx.provisionID, 1, "99999999-9999-4999-8999-999999999990", fx.owner)
+	if err != nil {
+		t.Fatalf("RequestEC2Destroy = %v", err)
+	}
+	return store, repo, fx, requested, now
+}
+
+func TestPostgresAWSConfirmationDerivedDestroyCorruptionRollsBack(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		corrupt   string
+		provision bool
+		reject    bool
+	}{
+		{name: "reject original operation", corrupt: `UPDATE core_aws_plans SET operation='delete' WHERE owner_id=$1 AND plan_id=$2`, reject: true},
+		{name: "expiry original operation", corrupt: `UPDATE core_aws_plans SET operation='delete' WHERE owner_id=$1 AND plan_id=$2`},
+		{name: "reject region snapshot", corrupt: `UPDATE core_aws_ec2_provisions SET region='eu-west-1' WHERE owner_id=$1 AND provision_id=$2`, provision: true, reject: true},
+		{name: "reject stack snapshot", corrupt: `UPDATE core_aws_ec2_provisions SET stack_name='other-stack' WHERE owner_id=$1 AND provision_id=$2`, provision: true, reject: true},
+		{name: "reject profile snapshot", corrupt: `UPDATE core_aws_ec2_provisions SET profile='other-profile' WHERE owner_id=$1 AND provision_id=$2`, provision: true, reject: true},
+		{name: "reject owner snapshot", corrupt: `UPDATE core_aws_ec2_provisions SET owner_digest=$1 WHERE owner_id=$2 AND provision_id=$3`, provision: true, reject: true},
+		{name: "reject plan revision snapshot", corrupt: `UPDATE core_aws_ec2_provisions SET plan_revision=2 WHERE owner_id=$1 AND provision_id=$2`, provision: true, reject: true},
+		{name: "reject template snapshot", corrupt: `UPDATE core_aws_ec2_provisions SET template_sha256=$1 WHERE owner_id=$2 AND provision_id=$3`, provision: true, reject: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, _, fx, requested, now := newServiceDerivedDestroyPostgresFixture(t)
+			corruptID := fx.planID
+			if tc.provision {
+				corruptID = fx.provisionID
+			}
+			args := []any{fx.owner, corruptID}
+			if tc.name == "reject owner snapshot" {
+				args = []any{"sha256:" + strings.Repeat("b", 64), fx.owner, corruptID}
+			} else if tc.name == "reject template snapshot" {
+				args = []any{strings.Repeat("b", 64), fx.owner, corruptID}
+			}
+			if _, err := store.DB().ExecContext(fx.ctx, tc.corrupt, args...); err != nil {
+				t.Fatal(err)
+			}
+			confirmations := NewDatabaseConfirmationStore(store.DB())
+			var err error
+			if tc.reject {
+				_, err = confirmations.Reject(fx.ctx, coreconfirmation.RejectCommand{OwnerID: fx.owner, ConfirmationID: requested.Confirmation.ConfirmationID, IdempotencyKey: "99999999-9999-4999-8999-999999999989", ExpectedRevision: 1, Reason: "declined", At: now})
+			} else {
+				err = confirmations.ExpireAt(fx.ctx, fx.owner, requested.Confirmation.ConfirmationID, now.Add(48*time.Hour))
+			}
+			if !errors.Is(err, coreconfirmation.ErrConflict) {
+				t.Fatalf("terminalization error = %v, want conflict", err)
+			}
+			var state, active, status, stage, confirmationState string
+			if err = store.DB().QueryRowContext(fx.ctx, `SELECT state,COALESCE(active_change_id::text,'') FROM core_aws_ec2_provisions WHERE owner_id=$1 AND provision_id=$2`, fx.owner, fx.provisionID).Scan(&state, &active); err != nil {
+				t.Fatal(err)
+			}
+			if state != "destroying" || active != requested.Change.ID {
+				t.Fatalf("corrupt provision mutated = %q/%q", state, active)
+			}
+			if err = store.DB().QueryRowContext(fx.ctx, `SELECT status,stage FROM core_aws_changes WHERE owner_id=$1 AND change_id=$2`, fx.owner, requested.Change.ID).Scan(&status, &stage); err != nil {
+				t.Fatal(err)
+			}
+			if status != "waiting_user" || stage != "requested" {
+				t.Fatalf("corrupt change mutated = %q/%q", status, stage)
+			}
+			if err = store.DB().QueryRowContext(fx.ctx, `SELECT state FROM agent_confirmations WHERE owner_id=$1 AND confirmation_id=$2`, fx.owner, requested.Confirmation.ConfirmationID).Scan(&confirmationState); err != nil {
+				t.Fatal(err)
+			}
+			if confirmationState != "pending" {
+				t.Fatalf("corrupt confirmation mutated = %q", confirmationState)
 			}
 		})
 	}

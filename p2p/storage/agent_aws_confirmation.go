@@ -99,14 +99,14 @@ func terminalizeAWSPreProviderChangeTx(ctx context.Context, tx *sql.Tx, stored c
 		return coreconfirmation.ErrConflict
 	}
 
-	var provisionPlanID, provisionCredentialID, provisionPlanDigest, provisionState, activeChangeID string
-	var provisionCredentialRevision, provisionRevision int64
+	var provisionPlanID, provisionCredentialID, provisionRegion, provisionStackName, provisionProfile, provisionOwnerDigest, provisionTemplateSHA256, provisionPlanDigest, provisionState, activeChangeID string
+	var provisionCredentialRevision, provisionPlanRevision, provisionRevision int64
 	var stackID, instanceID, publicIP, securityGroupID, outputDigest, errorCode, errorSummary string
 	var observed *time.Time
 	var reconciliationRequired bool
 	if provisionID != "" {
-		if err := tx.QueryRowContext(ctx, `SELECT plan_id::text,credential_id::text,credential_revision,plan_digest,state,revision,COALESCE(active_change_id::text,''),stack_id,instance_id,public_ip,security_group_id,output_digest,observed_at,reconciliation_required,error_code,error_summary FROM core_aws_ec2_provisions WHERE owner_id=$1 AND provision_id=$2 FOR UPDATE`, owner, provisionID).Scan(
-			&provisionPlanID, &provisionCredentialID, &provisionCredentialRevision, &provisionPlanDigest, &provisionState, &provisionRevision, &activeChangeID, &stackID, &instanceID, &publicIP, &securityGroupID, &outputDigest, &observed, &reconciliationRequired, &errorCode, &errorSummary,
+		if err := tx.QueryRowContext(ctx, `SELECT plan_id::text,credential_id::text,credential_revision,region,stack_name,profile,owner_digest,plan_revision,template_sha256,plan_digest,state,revision,COALESCE(active_change_id::text,''),stack_id,instance_id,public_ip,security_group_id,output_digest,observed_at,reconciliation_required,error_code,error_summary FROM core_aws_ec2_provisions WHERE owner_id=$1 AND provision_id=$2 FOR UPDATE`, owner, provisionID).Scan(
+			&provisionPlanID, &provisionCredentialID, &provisionCredentialRevision, &provisionRegion, &provisionStackName, &provisionProfile, &provisionOwnerDigest, &provisionPlanRevision, &provisionTemplateSHA256, &provisionPlanDigest, &provisionState, &provisionRevision, &activeChangeID, &stackID, &instanceID, &publicIP, &securityGroupID, &outputDigest, &observed, &reconciliationRequired, &errorCode, &errorSummary,
 		); err != nil {
 			return coreconfirmation.ErrConflict
 		}
@@ -121,24 +121,33 @@ func terminalizeAWSPreProviderChangeTx(ctx context.Context, tx *sql.Tx, stored c
 	}
 	var readback agentaws.ProvisionReadback
 	if provisionID != "" {
-		if provisionCredentialID != credentialID || provisionCredentialRevision != credentialRevision || provisionPlanDigest == "" || activeChangeID != changeID || reconciliationRequired || errorCode != "" || errorSummary != "" {
+		if provisionCredentialID != credentialID || provisionCredentialRevision != credentialRevision || provisionRegion == "" || provisionStackName == "" || provisionProfile == "" || provisionOwnerDigest == "" || provisionPlanRevision < 1 || provisionTemplateSHA256 == "" || provisionPlanDigest == "" || activeChangeID != changeID || reconciliationRequired || errorCode != "" || errorSummary != "" {
 			return coreconfirmation.ErrConflict
 		}
+		provisionSnapshot := agentaws.Provision{ID: provisionID, PlanID: provisionPlanID, CredentialID: provisionCredentialID, CredentialRevision: provisionCredentialRevision, Region: provisionRegion, StackName: provisionStackName, Profile: provisionProfile, OwnerDigest: provisionOwnerDigest, PlanRevision: provisionPlanRevision, TemplateSHA256: provisionTemplateSHA256, PlanDigest: provisionPlanDigest, State: provisionState, Revision: provisionRevision}
 		// Create provisions retain the original create-plan ID. Destroy requests
 		// intentionally use a derived delete plan, so validate that plan against
 		// the immutable create snapshot instead of requiring the IDs to match.
 		if operation == string(agentaws.OperationCreate) {
-			if provisionPlanID != planID || provisionPlanDigest != agentaws.PlanDigest(plan) {
+			if provisionPlanID != planID || !agentaws.ProvisionSnapshotMatches(provisionSnapshot, plan) {
 				return coreconfirmation.ErrConflict
 			}
 		} else if operation == string(agentaws.OperationDelete) {
-			original := plan
-			original.ID = provisionPlanID
-			original.Operation = agentaws.OperationCreate
+			var original agentaws.Plan
+			var originalParams, originalTags, originalCaps []byte
+			if err := tx.QueryRowContext(ctx, `SELECT plan_id::text,credential_id::text,credential_revision,region,stack_name,operation,template,template_sha256,parameters_json,tags_json,capabilities_json,revision,created_at FROM core_aws_plans WHERE owner_id=$1 AND plan_id=$2 FOR UPDATE`, owner, provisionPlanID).Scan(
+				&original.ID, &original.CredentialID, &original.CredentialRevision, &original.Region, &original.StackName, &original.Operation, &original.Template, &original.TemplateSHA256, &originalParams, &originalTags, &originalCaps, &original.Revision, &original.CreatedAt,
+			); err != nil {
+				return coreconfirmation.ErrConflict
+			}
+			if json.Unmarshal(originalParams, &original.Parameters) != nil || json.Unmarshal(originalTags, &original.Tags) != nil || json.Unmarshal(originalCaps, &original.Capabilities) != nil || original.Validate() != nil || original.ID != provisionPlanID || original.Operation != agentaws.OperationCreate || !agentaws.ProvisionSnapshotMatches(provisionSnapshot, original) {
+				return coreconfirmation.ErrConflict
+			}
 			derived := original
 			derived.ID = planID
 			derived.Operation = agentaws.OperationDelete
-			if provisionPlanDigest != agentaws.PlanDigest(original) || agentaws.PlanDigest(plan) != agentaws.PlanDigest(derived) {
+			derived.Revision = 1
+			if plan.Revision != derived.Revision || agentaws.PlanDigest(plan) != agentaws.PlanDigest(derived) {
 				return coreconfirmation.ErrConflict
 			}
 		} else {
