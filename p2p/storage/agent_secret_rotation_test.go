@@ -5,6 +5,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/sha256"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -261,6 +262,108 @@ func TestPostgresAgentSecretRotationMigratesRealLegacyModelCurrentAndHistory(t *
 		if err := store.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM `+table+` WHERE api_key_key_id='' OR api_key_envelope_version<>1 OR api_key_aad_version<>1`).Scan(&count); err != nil || count != 0 {
 			t.Fatalf("post-rotation legacy rows in %s = %d err=%v", table, count, err)
 		}
+	}
+}
+
+func TestPostgresPreV97LegacyRowsBootstrapAcrossAgentMigrations(t *testing.T) {
+	ctx := context.Background()
+	connStr, closeDB := test.PrepareDBConnectionString(t, test.DBTypePostgres)
+	defer closeDB()
+	dbOpts := config.DatabaseOptions{ConnectionString: config.DataSource(connStr)}
+	store, err := NewDatabaseStore(ctx, sqlutil.NewConnectionManager(nil, dbOpts), &dbOpts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	keyringPath := filepath.Join(dir, "keyring.json")
+	legacyPath := filepath.Join(dir, "legacy.key")
+	legacyKey := make([]byte, 32)
+	for i := range legacyKey {
+		legacyKey[i] = byte(i + 1)
+	}
+	if err := os.WriteFile(legacyPath, legacyKey, 0600); err != nil {
+		t.Fatal(err)
+	}
+	profiles, err := NewDatabaseModelProfileStoreWithKeyring(ctx, store, keyringPath, legacyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := profiles.SyncModelProfiles(ctx, "owner", "pre-v97", "", []ModelProfileSyncEntry{{ClientProfileID: "legacy", Provider: "openai", Model: "gpt", APIKey: stringPtr("legacy-secret")}})
+	if err != nil || len(result.Profiles) != 1 {
+		t.Fatalf("legacy source profile = %#v err=%v", result, err)
+	}
+	block, err := aes.NewCipher(legacyKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonce := make([]byte, aead.NonceSize())
+	for i := range nonce {
+		nonce[i] = byte(i + 1)
+	}
+	ciphertext := aead.Seal(nil, nonce, []byte("legacy-secret"), []byte(result.Profiles[0].ProfileID+"\x00openai"))
+	for _, table := range []string{"p2p_agent_model_profiles", "p2p_agent_model_profile_credentials"} {
+		if _, err := store.DB().ExecContext(ctx, `ALTER TABLE `+table+` DROP CONSTRAINT `+table+`_api_key_envelope_check`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := store.DB().ExecContext(ctx, `UPDATE p2p_agent_model_profiles SET api_key_key_id='',api_key_envelope_version=0,api_key_aad_version=0,api_key_nonce=$1,api_key_ciphertext=$2 WHERE owner_id='owner' AND profile_id=$3`, nonce, ciphertext, result.Profiles[0].ProfileID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `UPDATE p2p_agent_model_profile_credentials SET api_key_key_id='',api_key_envelope_version=0,api_key_aad_version=0,api_key_nonce=$1,api_key_ciphertext=$2 WHERE owner_id='owner' AND profile_id=$3 AND credential_version=1`, nonce, ciphertext, result.Profiles[0].ProfileID); err != nil {
+		t.Fatal(err)
+	}
+	var before []byte
+	if err := store.DB().QueryRowContext(ctx, `SELECT api_key_ciphertext FROM p2p_agent_model_profiles WHERE owner_id='owner' AND profile_id=$1`, result.Profiles[0].ProfileID).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(keyringPath); err != nil {
+		t.Fatal(err)
+	}
+	for _, version := range []string{
+		"p2p: agent secret envelopes v97", "p2p: agent tasks and confirmations v98",
+		"p2p: agent extension lifecycle v99", "p2p: AWS control plane v100",
+		"p2p: workload control plane v101", "p2p: generic schedules and deployment cursors v102",
+	} {
+		if _, err := store.DB().ExecContext(ctx, `DELETE FROM db_migrations WHERE version=$1`, version); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatalf("pre-v97 migration replay: %v", err)
+	}
+	keyring, guard, err := BootstrapAgentSecretRuntime(ctx, store.DB(), keyringPath)
+	if err != nil {
+		t.Fatalf("auto bootstrap after v97-v102 migrations: %v", err)
+	}
+	if keyring == nil {
+		t.Fatal("bootstrap returned no keyring")
+	}
+	if err := VerifyAgentSecretDatabase(ctx, store.DB(), AgentSecretRotationOptions{KeyringFile: keyringPath, LegacyModelProfileKeyFile: legacyPath}); err != nil {
+		t.Fatalf("legacy compatibility verification: %v", err)
+	}
+	if err := guard.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewDatabaseModelProfileStoreWithKeyring(ctx, store, keyringPath, legacyPath); !errors.Is(err, ErrModelProfileUpgradeRequired) {
+		t.Fatalf("restart legacy model store error = %v, want explicit upgrade boundary", err)
+	}
+	if err := VerifyAgentSecretDatabase(ctx, store.DB(), AgentSecretRotationOptions{KeyringFile: keyringPath, LegacyModelProfileKeyFile: legacyPath}); err != nil {
+		t.Fatalf("restart legacy verification: %v", err)
+	}
+	var after []byte
+	if err := store.DB().QueryRowContext(ctx, `SELECT api_key_ciphertext FROM p2p_agent_model_profiles WHERE owner_id='owner' AND profile_id=$1`, result.Profiles[0].ProfileID).Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("auto bootstrap modified legacy ciphertext")
 	}
 }
 

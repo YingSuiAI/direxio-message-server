@@ -126,17 +126,18 @@ type Service struct {
 	// deploymentSourceReady is set only when the v106 PostgreSQL deployment
 	// projection is wired into the embedded module. Legacy in-memory and
 	// DatabaseStore ledger methods deliberately never set this flag.
-	deploymentSourceReady    bool
-	agentSecretGuard         *p2pstorage.AgentSecretRuntimeGuard
-	agentSecretEnveloper     *p2pstorage.AgentSecretEnveloper
-	agentSecretKeyringFile   string
-	agentSecretReady         bool
-	modelProfiles            p2pstorage.ModelProfileStore
-	modelProfileInitErr      error
-	mcpModule                *mcpmodule.Module
-	mcpCapabilities          *dirextalkmcp.Service
-	releaseController        releasecontrol.Controller
-	legacyAgentGatewayModule *legacygatewaymodule.Module
+	deploymentSourceReady     bool
+	agentSecretGuard          *p2pstorage.AgentSecretRuntimeGuard
+	agentSecretGuardCloseOnce sync.Once
+	agentSecretEnveloper      *p2pstorage.AgentSecretEnveloper
+	agentSecretKeyringFile    string
+	agentSecretReady          bool
+	modelProfiles             p2pstorage.ModelProfileStore
+	modelProfileInitErr       error
+	mcpModule                 *mcpmodule.Module
+	mcpCapabilities           *dirextalkmcp.Service
+	releaseController         releasecontrol.Controller
+	legacyAgentGatewayModule  *legacygatewaymodule.Module
 
 	servicePortalState
 	actions              map[string]actionHandler
@@ -867,9 +868,9 @@ func newService(cfg Config, store Store, transport Transport, state portalState,
 		// keyring-bound ciphertext exists. Existing or corrupt keyrings are
 		// still loaded fail-closed; legacy model-profile rows remain a separate
 		// explicit upgrade concern.
-		keyring, secretErr := p2pstorage.InitializeAgentSecretKeyringForDatabase(context.Background(), dbStore.DB(), keyringFile)
+		keyring, guard, secretErr := p2pstorage.BootstrapAgentSecretRuntime(context.Background(), dbStore.DB(), keyringFile)
 		if secretErr == nil {
-			service.agentSecretGuard, secretErr = p2pstorage.AcquireAgentSecretRuntimeGuard(context.Background(), dbStore.DB())
+			service.agentSecretGuard = guard
 		}
 		if secretErr == nil {
 			service.agentSecretEnveloper, secretErr = p2pstorage.NewAgentSecretEnveloper(keyring)

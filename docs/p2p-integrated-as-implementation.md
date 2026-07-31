@@ -99,7 +99,7 @@ docker compose -f docker-compose.p2p.yml up --build
 Services:
 
 - `postgres`: `postgres:18`, persisted in the `p2p_postgres_data` volume and exposed on host port `15432`.
-- `message-server-init`: one-shot initializer that creates `/etc/dirextalk-message-server/matrix_key.pem`, `/etc/dirextalk-message-server/message-server.yaml`, and the Agent keyring if they do not already exist.
+- `message-server-init`: one-shot initializer that creates `/etc/dirextalk-message-server/matrix_key.pem` and `/etc/dirextalk-message-server/message-server.yaml`; the serving container initializes an absent Agent keyring after PostgreSQL migrations when no keyring-bound ciphertext exists.
 - `message-server`: the single long-running application container using the local image built from this fork's root `Dockerfile`, persisted config/data volumes, HTTP exposed on host port `8008`, and `P2P_PORTAL_CREDENTIALS_FILE=/var/dirextalk-message-server/p2p/bootstrap.json`.
 
 Read the generated local login credentials from the running container:
@@ -342,7 +342,7 @@ Live smoke:
 
 - Started the `docker-compose.p2p.yml` stack from the local `postgres:18` image and the locally built Dirextalk Message Server image.
 - Verified the database version as `PostgreSQL 18.4`.
-- Generated persisted Dirextalk Message Server config/key material through the one-shot `message-server-init` service.
+- Generated persisted Dirextalk Message Server config/key material through the one-shot `message-server-init` service; Agent keyring bootstrap is owned by the serving process after migrations.
 - Started the integrated Dirextalk Message Server service on `127.0.0.1:8008`.
 - Verified `GET /_p2p/health` returned `{"status":"ok"}`.
 - Verified body-action API calls through `POST /_p2p/command` and `POST /_p2p/query` for `portal.bootstrap`, `profile.get`, and `groups.create`.

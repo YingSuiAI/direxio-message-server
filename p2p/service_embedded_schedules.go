@@ -115,6 +115,31 @@ func (s *Service) agentSecretRuntimeReadyLocked() bool {
 		s.modelProfiles.ModelProfileStoreReady()
 }
 
+func (s *Service) closeAgentSecretGuard() {
+	if s == nil {
+		return
+	}
+	s.agentSecretGuardCloseOnce.Do(func() {
+		s.mu.Lock()
+		guard := s.agentSecretGuard
+		s.agentSecretGuard = nil
+		s.mu.Unlock()
+		_ = guard.Close()
+	})
+}
+
+func (s *Service) watchAgentSecretGuardShutdown(processCtx *process.ProcessContext) {
+	if s == nil || processCtx == nil {
+		return
+	}
+	processCtx.ComponentStarted()
+	go func() {
+		defer processCtx.ComponentFinished()
+		<-processCtx.Context().Done()
+		s.closeAgentSecretGuard()
+	}()
+}
+
 func (s *Service) embeddedAgentCapabilityReady(capability string) bool {
 	if s == nil {
 		return false
@@ -185,7 +210,6 @@ func (s *Service) StartEmbeddedScheduler(processCtx *process.ProcessContext, wor
 	s.agentRuntimeStarted = true
 	worker := s.agentTaskRuntime
 	loop := s.agentScheduleLoop
-	guard := s.agentSecretGuard
 	confirmationSweep := s.agentConfirmationSweep
 	confirmationSweepInterval := s.agentConfirmationSweepInterval
 	owner := s.OwnerMXID
@@ -196,16 +220,9 @@ func (s *Service) StartEmbeddedScheduler(processCtx *process.ProcessContext, wor
 		loop != nil &&
 		s.agentRuntimeInitErr == nil
 	s.mu.Unlock()
+	s.watchAgentSecretGuardShutdown(processCtx)
 	startAgentConfirmationSweeper(processCtx, owner, confirmationSweep, confirmationSweepInterval)
 	if !ready {
-		if guard != nil {
-			processCtx.ComponentStarted()
-			go func() {
-				defer processCtx.ComponentFinished()
-				<-processCtx.Context().Done()
-				_ = guard.Close()
-			}()
-		}
 		return false
 	}
 	s.mu.Lock()
@@ -217,12 +234,8 @@ func (s *Service) StartEmbeddedScheduler(processCtx *process.ProcessContext, wor
 	go func() {
 		defer processCtx.ComponentFinished()
 		defer func() {
-			if guard != nil {
-				_ = guard.Close()
-			}
 			s.mu.Lock()
 			s.scheduleRunning = false
-			s.agentSecretReady = false
 			s.mu.Unlock()
 		}()
 		workerCtx, cancelWorker := context.WithCancel(context.Background())

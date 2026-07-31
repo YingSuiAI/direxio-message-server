@@ -131,6 +131,53 @@ func InitializeAgentSecretKeyringForDatabase(ctx context.Context, db *sql.DB, pa
 	return LoadOrCreateAgentSecretKeyring(path)
 }
 
+// BootstrapAgentSecretRuntime performs keyring load/create and shared-guard
+// acquisition as one PostgreSQL-session handoff. The exclusive maintenance
+// lock is downgraded on that same session before returning, so startup never
+// exposes a rotation window between keyring verification and runtime use.
+func BootstrapAgentSecretRuntime(ctx context.Context, db *sql.DB, path string) (*AgentSecretKeyring, *AgentSecretRuntimeGuard, error) {
+	path = strings.TrimSpace(path)
+	if db == nil || path == "" {
+		return nil, nil, ErrAgentSecretKeyringUnavailable
+	}
+	conn, err := acquireAgentSecretMaintenanceGuard(ctx, db)
+	if err != nil {
+		return nil, nil, ErrAgentSecretKeyringUnavailable
+	}
+	release := true
+	defer func() {
+		if release {
+			releaseAgentSecretMaintenanceGuard(conn)
+		}
+	}()
+	var keyring *AgentSecretKeyring
+	if _, statErr := os.Stat(path); statErr == nil {
+		keyring, err = LoadAgentSecretKeyring(path)
+	} else if errors.Is(statErr, os.ErrNotExist) {
+		if err = agentSecretDatabaseHasCiphertext(ctx, conn); err == nil {
+			keyring, err = LoadOrCreateAgentSecretKeyring(path)
+		}
+	} else {
+		err = ErrAgentSecretKeyringUnavailable
+	}
+	if err != nil {
+		return nil, nil, ErrAgentSecretKeyringUnavailable
+	}
+	// Advisory locks are re-entrant per PostgreSQL session. Acquiring the
+	// shared mode first and releasing one exclusive hold leaves the shared
+	// hold attached to this same connection.
+	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock_shared($1)", agentSecretAdvisoryLockKey); err != nil {
+		return nil, nil, ErrAgentSecretKeyringUnavailable
+	}
+	var exclusiveReleased bool
+	if err := conn.QueryRowContext(ctx, "SELECT pg_advisory_unlock($1)", agentSecretAdvisoryLockKey).Scan(&exclusiveReleased); err != nil || !exclusiveReleased {
+		_, _ = conn.ExecContext(context.Background(), "SELECT pg_advisory_unlock_shared($1)", agentSecretAdvisoryLockKey)
+		return nil, nil, ErrAgentSecretKeyringUnavailable
+	}
+	release = false
+	return keyring, &AgentSecretRuntimeGuard{conn: conn}, nil
+}
+
 type agentSecretCiphertextStore struct {
 	table, column, keyIDColumn string
 }

@@ -284,6 +284,15 @@ func TestDatabaseServiceMissingAgentKeyringInitializesAndIsIdempotent(t *testing
 	if _, apiErr := service.Handle(ctx, "profile.get", nil); apiErr != nil {
 		t.Fatalf("ordinary ProductCore remains available: %v", apiErr)
 	}
+	// A concurrent startup cannot steal the live process's shared guard.
+	blocked, err := NewServiceWithStore(ctx, Config{ServerName: "example.com", AgentSecretKeyringFile: keyring}, store)
+	if err != nil {
+		t.Fatalf("concurrent startup: %v", err)
+	}
+	if blocked.agentSecretReady {
+		t.Fatal("concurrent startup bypassed the live Agent runtime guard")
+	}
+	service.closeAgentSecretGuard()
 	// A restart with the same database/keyring must verify the existing file
 	// without replacing it or changing its permissions.
 	before, err := os.ReadFile(keyring)

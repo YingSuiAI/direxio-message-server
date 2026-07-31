@@ -127,3 +127,24 @@ func TestInitializeAgentSecretKeyringRefusesLostKeyWithCiphertext(t *testing.T) 
 		t.Fatalf("lost keyring must not be replaced, stat err=%v", err)
 	}
 }
+
+func TestBootstrapAgentSecretRuntimeFencesRotationDuringHandoff(t *testing.T) {
+	ctx := context.Background()
+	store := newAgentSecretGuardTestStore(t)
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "bootstrap-keyring.json")
+	keyring, guard, err := BootstrapAgentSecretRuntime(ctx, store.DB(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if keyring == nil || guard == nil {
+		t.Fatal("bootstrap returned incomplete runtime state")
+	}
+	defer guard.Close()
+	if err := RotateAgentSecrets(ctx, store.DB(), AgentSecretRotationOptions{KeyringFile: path, LeaseOwner: "bootstrap-fence"}); !errors.Is(err, ErrAgentSecretRotation) {
+		t.Fatalf("rotation during bootstrap handoff = %v, want fenced failure", err)
+	}
+}
