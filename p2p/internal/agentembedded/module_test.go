@@ -133,6 +133,52 @@ func TestConfirmationRejectLateExpiryReturnsGoneAfterTerminalizing(t *testing.T)
 	}
 }
 
+type expiredScopedConfirmationRepository struct {
+	confirmation.Repository
+	value        confirmation.Confirmation
+	confirmCalls int
+	rejectCalls  int
+}
+
+func (r *expiredScopedConfirmationRepository) GetForOwner(context.Context, string, string) (confirmation.Confirmation, error) {
+	return r.value, nil
+}
+
+func (r *expiredScopedConfirmationRepository) Confirm(context.Context, confirmation.ConfirmCommand) (confirmation.Confirmation, error) {
+	r.confirmCalls++
+	return confirmation.Confirmation{}, errors.New("confirm must not be called for expired card")
+}
+
+func (r *expiredScopedConfirmationRepository) Reject(context.Context, confirmation.RejectCommand) (confirmation.Confirmation, error) {
+	r.rejectCalls++
+	return confirmation.Confirmation{}, errors.New("reject must not be called for expired card")
+}
+
+func TestConfirmationHandlersRejectExpiredScopedCardBeforeMutation(t *testing.T) {
+	const (
+		owner = "@expired-handler:example.test"
+		id    = "11111111-1111-4111-8111-111111111111"
+	)
+	for _, action := range []string{"agent.core.confirmations.confirm", "agent.core.confirmations.reject"} {
+		t.Run(action, func(t *testing.T) {
+			repository := &expiredScopedConfirmationRepository{value: confirmation.Confirmation{
+				ID: id, ConfirmationID: id, OwnerID: owner, TaskID: "22222222-2222-4222-8222-222222222222",
+				State: confirmation.StateExpired, Revision: 2,
+			}}
+			module := New(Config{OwnerID: func() string { return owner }, Confirmations: repository})
+			result, apiErr := module.Handlers()[action](context.Background(), map[string]any{
+				"confirmation_id": id, "idempotency_key": "33333333-3333-4333-8333-333333333333", "expected_revision": int64(2),
+			})
+			if result != nil || apiErr == nil || apiErr.Status != http.StatusGone || apiErr.Code != "confirmation_expired" {
+				t.Fatalf("expired %s result=%#v error=%#v, want 410 confirmation_expired", action, result, apiErr)
+			}
+			if repository.confirmCalls != 0 || repository.rejectCalls != 0 {
+				t.Fatalf("expired %s invoked mutation: confirm=%d reject=%d", action, repository.confirmCalls, repository.rejectCalls)
+			}
+		})
+	}
+}
+
 func TestHandlersDoNotClaimLegacyEmbeddedScheduleAliases(t *testing.T) {
 	h := New(Config{}).Handlers()
 	for _, name := range []string{

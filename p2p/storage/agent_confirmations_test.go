@@ -887,7 +887,7 @@ func TestDatabaseConfirmationListBindsCursorToOwnerAndFilters(t *testing.T) {
 	}
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT confirmation_id::text FROM agent_confirmations")).WithArgs(testConfirmationOwner, binding.OperationDomain, binding.TargetID, sqlmock.AnyArg(), 3).WillReturnRows(sqlmock.NewRows([]string{"confirmation_id"}))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT confirmation_id::text,owner_id,operation_domain,target_id,target_revision,binding_digest,binding_json,task_id::text,state,revision,created_at,updated_at,expires_at,terminal_reason FROM agent_confirmations")).
-		WithArgs(testConfirmationOwner, binding.OperationDomain, binding.TargetID, sqlmock.AnyArg(), false, sqlmock.AnyArg(), "00000000-0000-0000-0000-000000000000", 3).
+		WithArgs(testConfirmationOwner, binding.OperationDomain, binding.TargetID, sqlmock.AnyArg(), false, sqlmock.AnyArg(), "00000000-0000-0000-0000-000000000000", 3, sqlmock.AnyArg()).
 		WillReturnRows(rows)
 
 	page, err := store.List(t.Context(), confirmation.ListQuery{
@@ -985,13 +985,36 @@ func TestDatabaseConfirmationListLazilyExpiresOverduePendingFilter(t *testing.T)
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE agent_confirmations SET state=CASE WHEN state IN ('pending','confirmed') THEN 'expired' ELSE state END")).WithArgs(testConfirmationTaskID, confirmation.ReasonExpired, sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO agent_task_events")).WithArgs(confirmation.ReasonExpired, sqlmock.AnyArg(), testConfirmationTaskID, testConfirmationOwner).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT confirmation_id::text,owner_id,operation_domain,target_id,target_revision,binding_digest,binding_json,task_id::text,state,revision,created_at,updated_at,expires_at,terminal_reason FROM agent_confirmations")).WithArgs(testConfirmationOwner, binding.OperationDomain, binding.TargetID, sqlmock.AnyArg(), false, sqlmock.AnyArg(), "00000000-0000-0000-0000-000000000000", 3).WillReturnRows(sqlmock.NewRows([]string{"confirmation_id", "owner_id", "operation_domain", "target_id", "target_revision", "binding_digest", "binding_json", "task_id", "state", "revision", "created_at", "updated_at", "expires_at", "terminal_reason"}))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT confirmation_id::text,owner_id,operation_domain,target_id,target_revision,binding_digest,binding_json,task_id::text,state,revision,created_at,updated_at,expires_at,terminal_reason FROM agent_confirmations")).WithArgs(testConfirmationOwner, binding.OperationDomain, binding.TargetID, sqlmock.AnyArg(), false, sqlmock.AnyArg(), "00000000-0000-0000-0000-000000000000", 3, sqlmock.AnyArg()).WillReturnRows(sqlmock.NewRows([]string{"confirmation_id", "owner_id", "operation_domain", "target_id", "target_revision", "binding_digest", "binding_json", "task_id", "state", "revision", "created_at", "updated_at", "expires_at", "terminal_reason"}))
 	page, err := store.List(t.Context(), confirmation.ListQuery{OwnerID: testConfirmationOwner, PageSize: 2, Domain: binding.OperationDomain, TargetID: binding.TargetID, States: []confirmation.State{confirmation.StatePending}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(page.Confirmations) != 0 {
 		t.Fatalf("overdue pending card remained in list: %+v", page.Confirmations)
+	}
+	if err = mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDatabaseConfirmationListAppliesCutoffAfterBoundedSweep(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	store := NewDatabaseConfirmationStore(db)
+	binding := testConfirmationBinding(t)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT confirmation_id::text FROM agent_confirmations")).WithArgs(testConfirmationOwner, binding.OperationDomain, binding.TargetID, sqlmock.AnyArg(), 2).WillReturnRows(sqlmock.NewRows([]string{"confirmation_id"}))
+	mainQuery := regexp.QuoteMeta("AND NOT (state IN ('pending','confirmed') AND expires_at <= $9)")
+	mock.ExpectQuery(mainQuery).WithArgs(testConfirmationOwner, binding.OperationDomain, binding.TargetID, sqlmock.AnyArg(), false, sqlmock.AnyArg(), "00000000-0000-0000-0000-000000000000", 2, sqlmock.AnyArg()).WillReturnRows(sqlmock.NewRows([]string{"confirmation_id", "owner_id", "operation_domain", "target_id", "target_revision", "binding_digest", "binding_json", "task_id", "state", "revision", "created_at", "updated_at", "expires_at", "terminal_reason"}))
+	page, err := store.List(t.Context(), confirmation.ListQuery{OwnerID: testConfirmationOwner, PageSize: 1, Domain: binding.OperationDomain, TargetID: binding.TargetID, States: []confirmation.State{confirmation.StatePending}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Confirmations) != 0 {
+		t.Fatalf("cutoff-filtered list = %+v", page.Confirmations)
 	}
 	if err = mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

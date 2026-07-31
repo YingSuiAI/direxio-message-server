@@ -934,7 +934,8 @@ func (s *DatabaseConfirmationStore) List(ctx context.Context, q confirmation.Lis
 	if !hasCursor {
 		cursorID = uuid.Nil.String()
 	}
-	if err := s.expireOverdue(ctx, owner, domain, targetID, time.Now().UTC(), pageSize+1); err != nil {
+	cutoff := time.Now().UTC()
+	if err := s.expireOverdue(ctx, owner, domain, targetID, cutoff, pageSize+1); err != nil {
 		return confirmation.Page{}, err
 	}
 	rows, e := s.db.QueryContext(ctx, `SELECT confirmation_id::text,owner_id,operation_domain,target_id,target_revision,binding_digest,binding_json,task_id::text,state,revision,created_at,updated_at,expires_at,terminal_reason
@@ -944,8 +945,9 @@ WHERE owner_id=$1
   AND ($3='' OR target_id=$3)
   AND (cardinality($4::text[])=0 OR state=ANY($4::text[]))
   AND (NOT $5 OR created_at>$6 OR (created_at=$6 AND confirmation_id>$7::uuid))
+  AND NOT (state IN ('pending','confirmed') AND expires_at <= $9)
 ORDER BY created_at ASC,confirmation_id ASC
-LIMIT $8`, owner, domain, targetID, pq.Array(stateValues), hasCursor, cursorTime, cursorID, pageSize+1)
+LIMIT $8`, owner, domain, targetID, pq.Array(stateValues), hasCursor, cursorTime, cursorID, pageSize+1, cutoff)
 	if e != nil {
 		return confirmation.Page{}, e
 	}

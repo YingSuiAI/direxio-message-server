@@ -85,6 +85,9 @@ func (m *Module) confirmationHandler(action string) actionbase.Handler {
 			if err != nil {
 				return nil, confirmationError(err)
 			}
+			if stored.State == confirmation.StateExpired {
+				return nil, confirmationError(confirmation.ErrExpired)
+			}
 			var v confirmation.Confirmation
 			if op == "confirm" {
 				v, err = m.cfg.Confirmations.Confirm(ctx, confirmation.ConfirmCommand{
