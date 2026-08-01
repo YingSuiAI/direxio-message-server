@@ -27,6 +27,20 @@ func toolEnabled(tools []Tool, name string) bool {
 	return false
 }
 
+func TestEnabledToolsAddsExecutionV2AfterUpgrade(t *testing.T) {
+	runtime := New(Config{Tools: []Tool{
+		{Name: "dirextalk_contacts_list", Handler: func(context.Context, map[string]any) (any, error) { return nil, nil }},
+		{Name: "native_agent_execution_v2_projects_analyze", Handler: func(context.Context, map[string]any) (any, error) { return nil, nil }},
+		{Name: "native_agent_execution_v2_runs_create", Handler: func(context.Context, map[string]any) (any, error) { return nil, nil }},
+	}})
+	tools := runtime.enabledTools(context.Background(), map[string]any{"enabled_tools": []any{"dirextalk_contacts_list"}}, nil)
+	for _, name := range []string{"dirextalk_contacts_list", "native_agent_execution_v2_projects_analyze", "native_agent_execution_v2_runs_create"} {
+		if !toolEnabled(tools, name) {
+			t.Fatalf("upgraded config omitted compiled V2 tool %q: %#v", name, tools)
+		}
+	}
+}
+
 func TestEmbeddedDirextalkToolUsesExactControlAllowlist(t *testing.T) {
 	for _, name := range []string{"native_agent_schedules_list", "native_agent_schedules_get", "native_agent_schedule_runs_list", "native_agent_schedule_runs_get"} {
 		if !embeddedDirextalkTool(name) {

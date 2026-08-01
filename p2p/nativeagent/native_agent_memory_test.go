@@ -95,6 +95,24 @@ func TestRuntimeInjectsConfiguredOwnerAndFailsClosedWithoutPersistentStore(t *te
 	}
 }
 
+func TestPersistentConversationMemoryRejectsClientHistoryReplay(t *testing.T) {
+	store := NewInMemoryConversationMemoryStore()
+	runtime := New(Config{Memory: store, Conversations: store, PersistentMemoryReady: true})
+	_, err := runtime.prepareEinoRun(
+		runtime.withRequestContext(context.Background(), map[string]any{"conversation_id": "server-memory"}),
+		nil,
+		map[string]any{
+			"conversation_id": "server-memory",
+			"prompt":          "current instruction",
+			"messages":        []any{map[string]any{"role": "user", "content": "client replayed history"}},
+		},
+		nativeModelProfile{},
+	)
+	if err == nil || !IsValidationError(err) || !strings.Contains(err.Error(), "send only the current prompt") {
+		t.Fatalf("client history replay error = %v", err)
+	}
+}
+
 func TestContextCompressSummarizesOlderMemoryTurns(t *testing.T) {
 	runtime := New(Config{DataDir: filepath.Join(t.TempDir(), "agent")})
 	ctx := context.Background()

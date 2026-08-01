@@ -12,8 +12,10 @@ const nativeAgentDefaultMemoryWindow = 12
 
 type nativeAgentMemory struct {
 	ConversationID string                    `json:"conversation_id"`
+	Title          string                    `json:"-"`
 	Summary        string                    `json:"summary,omitempty"`
 	Messages       []*schema.Message         `json:"messages,omitempty"`
+	LastMessageSeq int64                     `json:"-"`
 	UpdatedAt      int64                     `json:"updated_at"`
 	Metadata       map[string]map[string]any `json:"metadata,omitempty"`
 }
@@ -34,6 +36,9 @@ func (r *Runtime) prepareEinoRun(ctx context.Context, config map[string]any, par
 		memoryDisabled: boolParam(params["memory_disabled"]) || boolParam(config["memory_disabled"]),
 		maxSteps:       nativeAgentMaxSteps(config, params),
 	}
+	if r.persistentMemoryReady && run.conversationID != "" && hasExplicitRequestMessages(params) {
+		return run, validationErrorf("messages is not accepted when server conversation memory is enabled; send only the current prompt")
+	}
 	if _, explicit := selectedSkillIDs(config, params); explicit {
 		if _, err := r.selectPlanningSkills(ctx, config, params); err != nil {
 			return run, fmt.Errorf("invalid planning skill selection: %w", err)
@@ -45,14 +50,34 @@ func (r *Runtime) prepareEinoRun(ctx context.Context, config map[string]any, par
 	if run.memoryDisabled || run.conversationID == "" {
 		run.inputMessages = requestMessages
 		run.memoryMessages = memoryMessagesFromRequest(params, requestMessages)
-		run.session = einoAgentSession{systemPrompt: systemPrompt, contextWindow: profile.ContextWindow}
+		run.session = einoAgentSession{systemPrompt: systemPrompt, contextWindow: profile.ContextWindow, maxOutputTokens: profile.MaxOutputTokens}
 		return run, nil
 	}
 	memory, err := r.loadMemory(ctx, run.conversationID)
 	if err != nil {
 		return run, err
 	}
+	compacted := false
+	window := nativeAgentMemoryWindow(config, params)
+	if contextWindow := nativeAgentMemoryContextWindow(memory, systemPrompt, requestMessages, profile); contextWindow > 0 && contextWindow < window {
+		window = contextWindow
+	}
+	if len(memory.Messages) > window {
+		if r.persistentMemoryReady && memoryCompressionUsesModel(config, params) && profile.APIKey != "" {
+			if modelCompacted, compactErr := r.compactNativeAgentMemoryWithModel(ctx, memory, window, profile); compactErr == nil {
+				memory = modelCompacted
+			} else {
+				memory = compactNativeAgentMemory(memory, window)
+			}
+		} else {
+			memory = compactNativeAgentMemory(memory, window)
+		}
+		compacted = true
+	}
 	run.memory = memory
+	if compacted {
+		_ = r.saveMemory(ctx, memory)
+	}
 	if strings.TrimSpace(memory.Summary) != "" {
 		systemPrompt = appendPromptBlock(systemPrompt, "Conversation memory summary:\n"+strings.TrimSpace(memory.Summary))
 	}
@@ -61,8 +86,34 @@ func (r *Runtime) prepareEinoRun(ctx context.Context, config map[string]any, par
 	}
 	run.inputMessages = append(run.inputMessages, requestMessages...)
 	run.memoryMessages = memoryMessagesFromRequest(params, requestMessages)
-	run.session = einoAgentSession{systemPrompt: systemPrompt, contextWindow: profile.ContextWindow}
+	run.session = einoAgentSession{systemPrompt: systemPrompt, contextWindow: profile.ContextWindow, maxOutputTokens: profile.MaxOutputTokens}
 	return run, nil
+}
+
+func nativeAgentMemoryContextWindow(memory nativeAgentMemory, systemPrompt string, requestMessages []*schema.Message, profile nativeModelProfile) int {
+	if profile.ContextWindow <= 0 || len(memory.Messages) <= 1 {
+		return len(memory.Messages)
+	}
+	remaining := nativeAgentInputTokenBudget(profile.ContextWindow, profile.MaxOutputTokens)
+	remaining -= estimateNativeAgentTextTokens(systemPrompt)
+	remaining -= estimateNativeAgentTextTokens(memory.Summary)
+	remaining -= estimateEinoMessagesTokens(requestMessages)
+	if remaining <= 0 {
+		return 1
+	}
+	used, keep := 0, 0
+	for i := len(memory.Messages) - 1; i >= 0; i-- {
+		cost := estimateEinoMessageTokens(memory.Messages[i])
+		if keep > 0 && used+cost > remaining {
+			break
+		}
+		used += cost
+		keep++
+	}
+	if keep <= 0 {
+		return 1
+	}
+	return keep
 }
 
 func (r *Runtime) rememberEinoMessages(ctx context.Context, config map[string]any, params map[string]any, profile nativeModelProfile, run nativeAgentRunContext, produced []*schema.Message) error {
@@ -108,15 +159,10 @@ func (r *Runtime) rememberEinoMessages(ctx context.Context, config map[string]an
 			return err
 		}
 	}
+	r.maybeSetAutomaticConversationTitle(ctx, profile, run, produced)
 	memory.Messages = append(memory.Messages, newMessages...)
-	window := int(int64Param(params["memory_window"]))
-	if window <= 0 {
-		window = int(int64Param(config["memory_window"]))
-	}
-	if window <= 0 {
-		window = nativeAgentDefaultMemoryWindow
-	}
-	if memoryCompressionUsesModel(config, params) && profile.APIKey != "" {
+	window := nativeAgentMemoryWindow(config, params)
+	if r.persistentMemoryReady && memoryCompressionUsesModel(config, params) && profile.APIKey != "" {
 		if compacted, err := r.compactNativeAgentMemoryWithModel(ctx, memory, window, profile); err == nil {
 			memory = compacted
 		} else {
@@ -132,6 +178,17 @@ func (r *Runtime) rememberEinoMessages(ctx context.Context, config map[string]an
 		return nil
 	}
 	return nil
+}
+
+func nativeAgentMemoryWindow(config, params map[string]any) int {
+	window := int(int64Param(params["memory_window"]))
+	if window <= 0 {
+		window = int(int64Param(config["memory_window"]))
+	}
+	if window <= 0 {
+		window = nativeAgentDefaultMemoryWindow
+	}
+	return window
 }
 
 func memoryMessagesFromRequest(params map[string]any, requestMessages []*schema.Message) []*schema.Message {

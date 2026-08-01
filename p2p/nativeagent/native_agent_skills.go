@@ -73,6 +73,12 @@ func (r *Runtime) selectPlanningSkills(ctx context.Context, config, params map[s
 	if intent == "" {
 		return nil, nil
 	}
+	if intent == "deploy" {
+		_, _, userText := RequestContext(ctx)
+		if selected := r.selectDeploymentPlanningSkills(userText); len(selected) > 0 {
+			return selected, nil
+		}
+	}
 	capabilities := make([]string, 0)
 	seen := map[string]struct{}{}
 	for _, manifest := range r.planningSkills.Manifests() {
@@ -97,6 +103,31 @@ func (r *Runtime) selectPlanningSkills(ctx context.Context, config, params map[s
 		result = append(result, manifest)
 	}
 	return result, nil
+}
+
+func (r *Runtime) selectDeploymentPlanningSkills(userText string) []agentskills.Manifest {
+	byID := map[string]agentskills.Manifest{}
+	for _, manifest := range r.planningSkills.Manifests() {
+		if !isFixtureSkill(manifest) {
+			byID[manifest.ID] = manifest
+		}
+	}
+	recipe := "container-service-deploy"
+	text := strings.ToLower(userText)
+	for _, term := range []string{"source", "源码", "原始碼", "github", "gitlab", "systemd", "go service", "rust", "node.js", "python"} {
+		if strings.Contains(text, term) {
+			recipe = "source-build-systemd"
+			break
+		}
+	}
+	ids := []string{"project-intake-analyzer", "aws-target-advisor", recipe}
+	result := make([]agentskills.Manifest, 0, maxNativeAgentSkills)
+	for _, id := range ids {
+		if manifest, ok := byID[id]; ok {
+			result = append(result, manifest)
+		}
+	}
+	return result
 }
 
 func (r *Runtime) resolveSelectedSkills(ids []string) ([]agentskills.Manifest, error) {
@@ -264,11 +295,22 @@ func isFixtureSkill(manifest agentskills.Manifest) bool {
 }
 
 func skillMetadata(manifest agentskills.Manifest) map[string]any {
+	steps := make([]map[string]any, 0, len(manifest.Steps))
+	for _, step := range manifest.Steps {
+		steps = append(steps, map[string]any{
+			"id":      step.ID,
+			"kind":    step.Kind,
+			"inputs":  append([]string(nil), step.Inputs...),
+			"outputs": append([]string(nil), step.Outputs...),
+		})
+	}
 	return map[string]any{
 		"id":                           manifest.ID,
 		"version":                      manifest.Version,
 		"content_digest":               manifest.ContentDigest,
+		"intent_tags":                  append([]string(nil), manifest.IntentTags...),
 		"allowed_step_kinds":           append([]string(nil), manifest.AllowedStepKinds...),
 		"required_target_capabilities": append([]string(nil), manifest.RequiredTargetCapabilities...),
+		"planning_steps":               steps,
 	}
 }

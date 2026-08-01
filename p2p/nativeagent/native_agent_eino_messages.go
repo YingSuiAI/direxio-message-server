@@ -9,12 +9,13 @@ import (
 )
 
 type einoAgentSession struct {
-	systemPrompt  string
-	contextWindow int
+	systemPrompt    string
+	contextWindow   int
+	maxOutputTokens int
 }
 
 func (s einoAgentSession) rewrite(_ context.Context, messages []*schema.Message) []*schema.Message {
-	return sanitizeEinoMessagesForModel(compactEinoMessages(messages, s.contextWindow))
+	return compactEinoMessagesForContext(messages, s.contextWindow, s.maxOutputTokens)
 }
 
 func (s einoAgentSession) modify(_ context.Context, messages []*schema.Message) []*schema.Message {
@@ -89,6 +90,108 @@ func compactEinoMessages(messages []*schema.Message, contextWindow int) []*schem
 	}
 	result = append(result, messages[len(messages)-contextWindow:]...)
 	return sanitizeEinoMessagesForModel(result)
+}
+
+// compactEinoMessagesForContext treats model context_window as a token budget.
+// The previous implementation treated it as a message count, so a 128k model
+// effectively never compacted and could overflow on a few large tool results.
+// This conservative estimator deliberately reserves space for output and tool
+// schemas; the provider remains authoritative for exact tokenization.
+func compactEinoMessagesForContext(messages []*schema.Message, contextWindow, maxOutputTokens int) []*schema.Message {
+	messages = sanitizeEinoMessagesForModel(messages)
+	if contextWindow <= 0 {
+		return compactEinoMessages(messages, 48)
+	}
+	budget := nativeAgentInputTokenBudget(contextWindow, maxOutputTokens)
+	if budget <= 0 || estimateEinoMessagesTokens(messages) <= budget {
+		return messages
+	}
+
+	var system *schema.Message
+	start := 0
+	if len(messages) > 0 && messages[0] != nil && messages[0].Role == schema.System {
+		system = messages[0]
+		start = 1
+	}
+	used := estimateEinoMessageTokens(system)
+	kept := make([]*schema.Message, 0, len(messages)-start)
+	for i := len(messages) - 1; i >= start; i-- {
+		cost := estimateEinoMessageTokens(messages[i])
+		if len(kept) > 0 && used+cost > budget {
+			break
+		}
+		kept = append(kept, messages[i])
+		used += cost
+	}
+	for left, right := 0, len(kept)-1; left < right; left, right = left+1, right-1 {
+		kept[left], kept[right] = kept[right], kept[left]
+	}
+	result := make([]*schema.Message, 0, len(kept)+1)
+	if system != nil {
+		result = append(result, system)
+	}
+	result = append(result, kept...)
+	return sanitizeEinoMessagesForModel(result)
+}
+
+func nativeAgentInputTokenBudget(contextWindow, maxOutputTokens int) int {
+	if contextWindow <= 0 {
+		return 0
+	}
+	outputReserve := maxOutputTokens
+	if outputReserve <= 0 {
+		outputReserve = contextWindow / 4
+	}
+	if outputReserve > contextWindow/2 {
+		outputReserve = contextWindow / 2
+	}
+	toolReserve := contextWindow / 10
+	if toolReserve > 4096 {
+		toolReserve = 4096
+	}
+	budget := contextWindow - outputReserve - toolReserve
+	if budget < contextWindow/4 {
+		budget = contextWindow / 4
+	}
+	return budget
+}
+
+func estimateEinoMessagesTokens(messages []*schema.Message) int {
+	total := 0
+	for _, message := range messages {
+		total += estimateEinoMessageTokens(message)
+	}
+	return total
+}
+
+func estimateEinoMessageTokens(message *schema.Message) int {
+	if message == nil {
+		return 0
+	}
+	total := 12 + estimateNativeAgentTextTokens(message.Content)
+	for _, call := range message.ToolCalls {
+		total += 16 + estimateNativeAgentTextTokens(call.Function.Name) + estimateNativeAgentTextTokens(call.Function.Arguments)
+	}
+	for _, part := range message.UserInputMultiContent {
+		if part.Text != "" {
+			total += estimateNativeAgentTextTokens(part.Text)
+		} else {
+			total += 256
+		}
+	}
+	return total
+}
+
+func estimateNativeAgentTextTokens(value string) int {
+	ascii, other := 0, 0
+	for _, r := range value {
+		if r < 128 {
+			ascii++
+		} else {
+			other++
+		}
+	}
+	return (ascii+2)/3 + other + 1
 }
 
 func sanitizeEinoMessagesForModel(messages []*schema.Message) []*schema.Message {

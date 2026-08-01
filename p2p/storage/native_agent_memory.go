@@ -28,7 +28,7 @@ func (s *DatabaseStore) LoadConversationMemory(ctx context.Context, owner, conve
 	}
 	var out agentmemory.ConversationMemory
 	var deleted bool
-	err := s.db.QueryRowContext(ctx, `SELECT conversation_id,summary,summary_through_seq,last_message_seq,deleted FROM p2p_native_agent_conversations WHERE owner_id=$1 AND conversation_id=$2`, owner, conversation).Scan(&out.ConversationID, &out.Summary, &out.SummaryThroughSeq, &out.LastMessageSeq, &deleted)
+	err := s.db.QueryRowContext(ctx, `SELECT conversation_id,title,summary,summary_through_seq,last_message_seq,deleted FROM p2p_native_agent_conversations WHERE owner_id=$1 AND conversation_id=$2`, owner, conversation).Scan(&out.ConversationID, &out.Title, &out.Summary, &out.SummaryThroughSeq, &out.LastMessageSeq, &deleted)
 	if err == sql.ErrNoRows {
 		_, err = s.db.ExecContext(ctx, `INSERT INTO p2p_native_agent_conversations(owner_id,conversation_id,title,active,deleted,revision,last_message_seq,summary,summary_through_seq,created_at,updated_at) VALUES($1,$2,'',TRUE,FALSE,1,0,'',0,NOW(),NOW()) ON CONFLICT DO NOTHING`, owner, conversation)
 		if err != nil {
@@ -117,8 +117,22 @@ func (s *DatabaseStore) SaveConversationSummary(ctx context.Context, owner, conv
 	return err
 }
 
+func (s *DatabaseStore) SetAutomaticConversationTitle(ctx context.Context, owner, conversation, title string) (bool, error) {
+	owner, conversation, title = strings.TrimSpace(owner), strings.TrimSpace(conversation), strings.TrimSpace(title)
+	if owner == "" || conversation == "" || title == "" {
+		return false, nil
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE p2p_native_agent_conversations SET title=$3,revision=revision+1,updated_at=NOW() WHERE owner_id=$1 AND conversation_id=$2 AND deleted=FALSE AND title=''`, owner, conversation, title)
+	if err != nil {
+		return false, err
+	}
+	updated, err := result.RowsAffected()
+	return updated == 1, err
+}
+
 var _ agentmemory.Store = (*DatabaseStore)(nil)
 var _ agentmemory.ConversationStore = (*DatabaseStore)(nil)
+var _ agentmemory.AutomaticConversationTitleStore = (*DatabaseStore)(nil)
 var _ agentmemory.ManagedKnowledgeStore = (*DatabaseStore)(nil)
 var _ agentmemory.KnowledgeSourceStore = (*DatabaseStore)(nil)
 

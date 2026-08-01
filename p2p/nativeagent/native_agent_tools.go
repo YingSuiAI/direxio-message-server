@@ -56,7 +56,7 @@ func (r *Runtime) enabledTools(ctx context.Context, config map[string]any, param
 	// Durable knowledge tools are a compiled core capability. Keep them
 	// available after upgrades even when an older enabled_tools list omits them.
 	for _, tool := range availableTools {
-		if nativeAgentMemoryToolName(tool.Name) != "" {
+		if nativeAgentMemoryToolName(tool.Name) != "" || nativeAgentExecutionV2Tool(tool.Name) {
 			enable(tool)
 		}
 	}
@@ -234,6 +234,26 @@ func nativeAgentMemoryToolName(name string) string {
 		return strings.TrimSpace(name)
 	default:
 		return ""
+	}
+}
+
+// Execution V2 planning and orchestration tools are part of the embedded
+// control plane, not optional user-installed extensions. Older Agent configs
+// persist an explicit enabled_tools allowlist, so upgrades must add these safe
+// owner-scoped tools when their server capability is ready. The allowlist in
+// embeddedDirextalkTool deliberately excludes confirmation and raw transports.
+func nativeAgentExecutionV2Tool(name string) bool {
+	switch strings.TrimSpace(name) {
+	case "native_agent_execution_v2_projects_analyze",
+		"native_agent_execution_v2_targets_list", "native_agent_execution_v2_targets_get",
+		"native_agent_execution_v2_plans_create", "native_agent_execution_v2_plans_get",
+		"native_agent_execution_v2_runs_create", "native_agent_execution_v2_runs_get",
+		"native_agent_execution_v2_runs_status", "native_agent_execution_v2_runs_events",
+		"native_agent_execution_v2_service_bindings_list", "native_agent_execution_v2_service_bindings_get",
+		"native_agent_execution_v2_service_bindings_invoke":
+		return true
+	default:
+		return false
 	}
 }
 

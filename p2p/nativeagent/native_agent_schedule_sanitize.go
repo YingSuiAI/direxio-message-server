@@ -10,6 +10,7 @@ const scheduledResultLimit = 8192
 var scheduledSecretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)(bearer\s+)[A-Za-z0-9._~+/-]{8,}`),
 	regexp.MustCompile(`(?i)((?:api[_-]?key|token|secret)\s*[=:]\s*)[^\s,;]+`),
+	regexp.MustCompile(`(?i)\bsk-(?:or-v1-)?[A-Za-z0-9_-]{16,}`),
 }
 
 // SanitizeScheduledText is the single durable boundary for outputs/errors

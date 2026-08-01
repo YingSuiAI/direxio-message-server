@@ -93,6 +93,6 @@ func (r *ScheduledRunner) ExecuteScheduled(ctx context.Context, prompt string, p
 
 func (r *ScheduledRunner) execute(ctx context.Context, profile nativeModelProfile, prompt string, tools []einotool.BaseTool) (string, error) {
 	// Avoid agent memory/session persistence: this is a one-prompt run.
-	text, _, _, err := r.runtime.runEinoAgent(ctx, profile, []*schema.Message{schema.UserMessage(prompt)}, einoAgentSession{systemPrompt: profile.SystemPrompt, contextWindow: profile.ContextWindow}, tools, 24)
+	text, _, _, err := r.runtime.runEinoAgent(ctx, profile, []*schema.Message{schema.UserMessage(prompt)}, einoAgentSession{systemPrompt: profile.SystemPrompt, contextWindow: profile.ContextWindow, maxOutputTokens: profile.MaxOutputTokens}, tools, 24)
 	return text, err
 }

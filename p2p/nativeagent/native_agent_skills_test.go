@@ -49,7 +49,7 @@ func TestEnabledSkillsPromptSelectsExplicitOrIntentSkillsFailClosed(t *testing.T
 	if prompt == "" || !strings.Contains(prompt, "content_digest") || !strings.Contains(prompt, "allowed_step_kinds") || !strings.Contains(prompt, "required_target_capabilities") {
 		t.Fatalf("intent-selected prompt omitted fixed metadata: %q", prompt)
 	}
-	if strings.Count(prompt, `"id"`) > maxNativeAgentSkills {
+	if strings.Count(prompt, `"content_digest"`) > maxNativeAgentSkills {
 		t.Fatalf("intent selection exceeded cap: %q", prompt)
 	}
 

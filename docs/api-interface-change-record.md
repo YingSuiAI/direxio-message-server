@@ -1,5 +1,13 @@
 # API Interface Change Record
 
+## 2026-08-01 Native Agent deployment tools, server context, and titles
+
+Embedded Native Agent now treats the allowlisted Execution V2 analysis, target, plan, run, status, event, and Service Binding tools as compiled control-plane capabilities. A persisted pre-V2 `enabled_tools` list no longer hides them after upgrade; confirmation, raw SSM/SSH, AWS SDK passthrough, and arbitrary URL tools remain unavailable. Deployment intent selects at most three immutable planning skills: project intake, AWS target advice, and one container or source/systemd deployment recipe.
+
+When persistent server conversation memory is ready, chat requests with a `conversation_id` accept only the current prompt/message and attachment references. Client-supplied `messages` history is rejected; the server loads, token-budgets, summarizes, and stores authoritative context. Model summarization is automatic when a configured model is available, with deterministic bounded text compaction as fallback. Context windows are interpreted as token capacity rather than message count.
+
+After the first successful persistent turn, the server best-effort generates a short title with the active conversation model and updates only an empty title. Provider failure falls back to a redacted, bounded title derived from the first user instruction; explicit user renames always win.
+
 Last updated: 2026-07-31
 
 ## 2026-07-31 Execution V2 reset and direct-final schema

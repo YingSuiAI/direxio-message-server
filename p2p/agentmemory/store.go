@@ -46,6 +46,7 @@ type KnowledgeEmbeddingSessionFunc func(context.Context) (KnowledgeEmbeddingSess
 
 type ConversationMemory struct {
 	ConversationID                    string
+	Title                             string
 	Summary                           string
 	SummaryThroughSeq, LastMessageSeq int64
 	Messages                          []*schema.Message
@@ -129,6 +130,13 @@ type ConversationStore interface {
 	RenameConversation(context.Context, string, string, string, int64, string, [32]byte) (Conversation, bool, error)
 	DeleteConversation(context.Context, string, string, int64, string, [32]byte) (Conversation, bool, error)
 }
+
+// AutomaticConversationTitleStore is an optional store extension used after
+// the first successful Agent turn. Implementations must only replace an empty
+// title so a user rename always wins a race with best-effort title generation.
+type AutomaticConversationTitleStore interface {
+	SetAutomaticConversationTitle(context.Context, string, string, string) (bool, error)
+}
 type InMemoryStore struct {
 	mu                sync.Mutex
 	data              map[string]*record
@@ -188,11 +196,42 @@ func (s *InMemoryStore) LoadConversationMemory(ctx context.Context, o, c string)
 		s.data[key(o, c)] = r
 	}
 	out := r.memory
+	if conversation, ok := s.conversations[key(o, c)]; ok {
+		out.Title = conversation.Title
+	}
 	out.Messages = make([]*schema.Message, 0, len(r.memory.Messages))
 	for _, m := range r.memory.Messages {
 		out.Messages = append(out.Messages, clone(m))
 	}
 	return out, nil
+}
+
+func (s *InMemoryStore) SetAutomaticConversationTitle(ctx context.Context, owner, id, title string) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return false, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	k := key(owner, id)
+	conversation, ok := s.conversations[k]
+	if !ok {
+		return false, ErrNotFound
+	}
+	if conversation.Deleted || strings.TrimSpace(conversation.Title) != "" {
+		return false, nil
+	}
+	conversation.Title = title
+	conversation.Revision++
+	conversation.UpdatedAt = time.Now().UTC()
+	s.conversations[k] = conversation
+	if record := s.data[k]; record != nil {
+		record.memory.Title = title
+	}
+	return true, nil
 }
 func (s *InMemoryStore) AppendConversationMessages(ctx context.Context, o, c, t string, msgs []StoredMessage) error {
 	if err := ctx.Err(); err != nil {

@@ -28,7 +28,7 @@ func (r *Runtime) loadMemory(ctx context.Context, conversationID string) (native
 	if err != nil {
 		return nativeAgentMemory{}, err
 	}
-	return nativeAgentMemory{ConversationID: m.ConversationID, Summary: m.Summary, Messages: compactEinoMessagesForMemory(m.Messages), UpdatedAt: 0}, nil
+	return nativeAgentMemory{ConversationID: m.ConversationID, Title: m.Title, Summary: m.Summary, Messages: compactEinoMessagesForMemory(m.Messages), LastMessageSeq: m.LastMessageSeq, UpdatedAt: 0}, nil
 }
 
 func (r *Runtime) saveMemory(ctx context.Context, memory nativeAgentMemory) error {

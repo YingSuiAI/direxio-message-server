@@ -129,6 +129,30 @@ func TestIntentSelectionExcludesFixtureManifest(t *testing.T) {
 	}
 }
 
+func TestDeploymentIntentSelectsAnalysisAWSTargetAndOneRecipe(t *testing.T) {
+	runtime := New(Config{})
+	selected, err := runtime.selectPlanningSkills(WithRequestContext(context.Background(), "owner", "conversation", "请把这个 Docker 服务部署到 AWS"), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := make([]string, 0, len(selected))
+	for _, manifest := range selected {
+		ids = append(ids, manifest.ID)
+	}
+	want := []string{"project-intake-analyzer", "aws-target-advisor", "container-service-deploy"}
+	if strings.Join(ids, ",") != strings.Join(want, ",") {
+		t.Fatalf("deployment skills = %#v, want %#v", ids, want)
+	}
+
+	selected, err = runtime.selectPlanningSkills(WithRequestContext(context.Background(), "owner", "conversation", "部署 GitHub 上的 Go 源码服务"), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(selected) != 3 || selected[2].ID != "source-build-systemd" {
+		t.Fatalf("source deployment skills = %#v", selected)
+	}
+}
+
 func mustManifestJSON(t *testing.T, manifests []agentskills.Manifest, id string) []byte {
 	t.Helper()
 	for _, manifest := range manifests {
