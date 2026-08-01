@@ -12,7 +12,7 @@ import (
 )
 
 func (m *Module) backendsGet(_ context.Context, _ map[string]any) (any, *actionbase.Error) {
-	capabilities := []string{}
+	capabilities := []string{"planning.skills"}
 	if m != nil && m.cfg.ModelProfiles != nil && m.cfg.ModelProfiles.ModelProfileStoreReady() && m.capabilityReady("model_profiles.server", true) {
 		capabilities = append(capabilities, "model_profiles.server", "model_roles.server")
 	}

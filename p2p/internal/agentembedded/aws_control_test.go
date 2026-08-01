@@ -52,9 +52,18 @@ func TestAWSActionPortCredentialCRUDIsOwnerScopedAndRedacted(t *testing.T) {
 	}
 	updated, actionErr := port.Handle(ctx, "owner-1", "agent.core.aws.credentials.update", map[string]any{
 		"idempotency_key": uuid.NewString(), "credential_id": id, "expected_revision": revision, "name": "prod-2",
+		"access_key_id": "AKIA********1234", "secret_access_key": "••••••••", "session_token": "********",
 	})
 	if actionErr != nil || updated == nil {
 		t.Fatalf("update = %#v, %#v", updated, actionErr)
+	}
+	stored, err := repo.GetCredential(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	access, storedSecret, session := stored.StoredSecretBytes()
+	if string(access) != "AKIA" || string(storedSecret) != secret || len(session) != 0 {
+		t.Fatalf("masked update changed stored credential: access=%q secret_changed=%v session_set=%v", access, string(storedSecret) != secret, len(session) != 0)
 	}
 	if _, actionErr = port.Handle(ctx, "owner-1", "agent.core.aws.credentials.list", map[string]any{"unexpected": true}); actionErr == nil || actionErr.Code != "unknown_field" {
 		t.Fatalf("unknown field = %#v", actionErr)

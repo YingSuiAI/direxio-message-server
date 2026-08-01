@@ -51,6 +51,7 @@ func TestNativeAgentControlRequirementsExposeOnlySafeExecutionV2Tools(t *testing
 		"agent.execution.v2.projects.analyze":        {"execution.v2.plan"},
 		"agent.execution.v2.targets.list":            {"execution.v2"},
 		"agent.execution.v2.targets.get":             {"execution.v2"},
+		"agent.execution.v2.targets.reserve":         {"aws.control", "execution.v2.provision"},
 		"agent.execution.v2.plans.create":            {"execution.v2.plan"},
 		"agent.execution.v2.plans.get":               {"execution.v2.plan"},
 		"agent.execution.v2.runs.create":             {"execution.v2.run"},

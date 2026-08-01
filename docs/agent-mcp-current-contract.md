@@ -35,6 +35,21 @@ actions are currently live.
 - Native Agent is not installed, enabled, configured, or invoked through `plugins.*`. Backend `plugins.*` actions remain for non-Agent plugins.
 - Model-backed Native Agent chat and compression resolve the owner’s default `conversation` model profile when the request omits profile configuration. Legacy inline `model_profile` requests remain supported for compatibility, but server-owned profiles are preferred and model API keys must not be persisted, returned, or injected into plugin or runtime environment state.
 - With persistent server conversation memory, the client sends only the current prompt, `conversation_id`, durable `turn_id`, and attachment references. It does not replay `messages`; the server rejects such history, loads the authoritative transcript, automatically summarizes older context against the model token budget, and generates the first successful conversation title with a redacted first-instruction fallback.
+- Native Agent deployment planning treats an empty target inventory as a signal
+  to compare and reserve a new AWS target, not as a terminal error. The bounded
+  target-reservation tool creates only a logical revision-1 reservation; EC2
+  creation remains an owner-confirmed `resource_purchase` stage. AI runtime
+  plans ask the owner to choose an existing server-owned API-key secret
+  reference or an interactive authorization gate and never collect secret
+  plaintext in chat.
+- If AWS credential inventory is empty, Native Agent directs the owner to the
+  AWS credential management surface and does not reserve a target. A listed
+  credential is eligible only when `verified_revision == revision`. Credential
+  and model-secret readback exposes configured state and conservative display
+  hints only; display masks are never accepted as replacement secret values.
+- `planning.skills` gates the read-only built-in Planning Skill catalog exposed
+  by `agent.skills.list`. These records are immutable planning metadata, not
+  locally executable or user-installable Skills.
 - Supported model-provider identifiers are `openai`, `anthropic`, `deepseek`, `gemini`, `xai`, `openai_compatible`, and `openrouter`. `litellm`, `vertex`, and unknown identifiers are rejected; clients use `openai_compatible` for custom compatible endpoints.
 - `agent.models.list` preserves upstream `input_modalities` only when the
   provider explicitly returns it on the model or its `architecture`. The
@@ -66,7 +81,7 @@ actions are currently live.
 - `native_agent_schedules_confirm` can execute only on a later owner-authored turn in the same conversation whose current user text exactly normalizes to `确认执行 <code>`. Model arguments, previous-turn text, `dangerous_tools_confirm`, another owner, or another conversation cannot approve it. Completed/failed confirmations replay the authoritative terminal result; restart and concurrent retries are receipt-fenced and do not execute the Stage A mutation twice.
 - These interactive tools are separate from the restricted scheduled runner allowlist and from the Online Agent Matrix room/timeline. The scheduled runner cannot call mutation tools, and Flutter must present the proposal phrase then wait for a new Native turn.
 
-## Execution Orchestration V2 (contract gate; not live)
+## Execution Orchestration V2
 
 The backend permits built-in declarative Planning Skills/Recipes only as
 side-effect-free planning inputs. They may emit immutable, canonical,
@@ -99,12 +114,10 @@ deployment/execution contract. The first production slice is AWS SSM
 long-running services. SSH, generic HTTP, DNS, TLS and Coding Worker are
 deferred and must not be advertised.
 
-The server must omit `execution.v2.*` capabilities and execution ProductCore
-actions (`projects.*`, `analyses.*`, `targets.*`, `plans.*`, `deployments.*`,
-`runs.*`, `confirmations.*`, `artifacts.get`, `service_bindings.*`) until the
-corresponding route, durable storage, typed executor/transport, focused tests,
-and explicit enablement all exist. This document does not describe any
-unimplemented V2 phase as live.
+The server publishes each `execution.v2.*` capability and ProductCore action
+only when its route, durable storage, typed executor/transport, focused tests,
+and explicit readiness check exist. Deferred transports and step kinds remain
+omitted rather than being presented as successful or available.
 
 ## Consumer Boundaries
 

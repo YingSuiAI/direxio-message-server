@@ -96,6 +96,7 @@ func nativeToolAlias(value string) string {
 		"agent_execution_v2_projects_analyze":        "native_agent_execution_v2_projects_analyze",
 		"agent_execution_v2_targets_list":            "native_agent_execution_v2_targets_list",
 		"agent_execution_v2_targets_get":             "native_agent_execution_v2_targets_get",
+		"agent_execution_v2_targets_reserve":         "native_agent_execution_v2_targets_reserve",
 		"agent_execution_v2_plans_create":            "native_agent_execution_v2_plans_create",
 		"agent_execution_v2_plans_get":               "native_agent_execution_v2_plans_get",
 		"agent_execution_v2_runs_create":             "native_agent_execution_v2_runs_create",
@@ -216,7 +217,7 @@ func embeddedDirextalkTool(name string) bool {
 		"native_agent_schedule_runs_list", "native_agent_schedule_runs_get",
 		"native_agent_aws_credentials_list", "native_agent_aws_credentials_test",
 		"native_agent_execution_v2_projects_analyze",
-		"native_agent_execution_v2_targets_list", "native_agent_execution_v2_targets_get",
+		"native_agent_execution_v2_targets_list", "native_agent_execution_v2_targets_get", "native_agent_execution_v2_targets_reserve",
 		"native_agent_execution_v2_plans_create", "native_agent_execution_v2_plans_get",
 		"native_agent_execution_v2_runs_create", "native_agent_execution_v2_runs_get",
 		"native_agent_execution_v2_runs_status", "native_agent_execution_v2_runs_events",
@@ -244,8 +245,9 @@ func nativeAgentMemoryToolName(name string) string {
 // embeddedDirextalkTool deliberately excludes confirmation and raw transports.
 func nativeAgentExecutionV2Tool(name string) bool {
 	switch strings.TrimSpace(name) {
-	case "native_agent_execution_v2_projects_analyze",
-		"native_agent_execution_v2_targets_list", "native_agent_execution_v2_targets_get",
+	case "native_agent_aws_credentials_list", "native_agent_aws_credentials_test",
+		"native_agent_execution_v2_projects_analyze",
+		"native_agent_execution_v2_targets_list", "native_agent_execution_v2_targets_get", "native_agent_execution_v2_targets_reserve",
 		"native_agent_execution_v2_plans_create", "native_agent_execution_v2_plans_get",
 		"native_agent_execution_v2_runs_create", "native_agent_execution_v2_runs_get",
 		"native_agent_execution_v2_runs_status", "native_agent_execution_v2_runs_events",

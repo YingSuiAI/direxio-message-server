@@ -50,7 +50,7 @@ func TestEmbeddedDirextalkToolUsesExactControlAllowlist(t *testing.T) {
 	for _, name := range []string{
 		"native_agent_aws_credentials_list", "native_agent_aws_credentials_test",
 		"native_agent_execution_v2_projects_analyze",
-		"native_agent_execution_v2_targets_list", "native_agent_execution_v2_targets_get",
+		"native_agent_execution_v2_targets_list", "native_agent_execution_v2_targets_get", "native_agent_execution_v2_targets_reserve",
 		"native_agent_execution_v2_plans_create", "native_agent_execution_v2_plans_get",
 		"native_agent_execution_v2_runs_create", "native_agent_execution_v2_runs_get",
 		"native_agent_execution_v2_runs_status", "native_agent_execution_v2_runs_events",
@@ -91,6 +91,7 @@ func TestExecutionV2AliasesRequireExactPublicActionNames(t *testing.T) {
 		"agent.execution.v2.projects.analyze":        "native_agent_execution_v2_projects_analyze",
 		"agent.execution.v2.targets.list":            "native_agent_execution_v2_targets_list",
 		"agent.execution.v2.targets.get":             "native_agent_execution_v2_targets_get",
+		"agent.execution.v2.targets.reserve":         "native_agent_execution_v2_targets_reserve",
 		"agent.execution.v2.plans.create":            "native_agent_execution_v2_plans_create",
 		"agent.execution.v2.plans.get":               "native_agent_execution_v2_plans_get",
 		"agent.execution.v2.runs.create":             "native_agent_execution_v2_runs_create",

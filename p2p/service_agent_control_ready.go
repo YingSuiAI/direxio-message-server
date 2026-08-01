@@ -19,6 +19,8 @@ func nativeAgentControlRequirements(action string) (nativeAgentControlRequiremen
 	case "agent.execution.v2.targets.list",
 		"agent.execution.v2.targets.get":
 		return nativeAgentControlRequirement{all: []string{"execution.v2"}}, true
+	case "agent.execution.v2.targets.reserve":
+		return nativeAgentControlRequirement{all: []string{"aws.control", "execution.v2.provision"}}, true
 	case "agent.execution.v2.runs.create",
 		"agent.execution.v2.runs.get",
 		"agent.execution.v2.runs.events":

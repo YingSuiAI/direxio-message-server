@@ -430,7 +430,7 @@ func (r *Runtime) runtimeInspect(ctx context.Context) (map[string]any, error) {
 		"framework":     "eino",
 		"configured":    exists,
 		"data_dir":      r.dataDir,
-		"skills":        []map[string]any{},
+		"skills":        r.builtinSkillMetadata(),
 		"mcp_servers":   []map[string]any{},
 		"runtime_tools": []map[string]any{},
 		"capabilities": func() []string {

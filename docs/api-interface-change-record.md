@@ -1,5 +1,28 @@
 # API Interface Change Record
 
+## 2026-08-01 Native Agent new-target planning and built-in Skills
+
+An empty `agent.execution.v2.targets.list` result is an inventory state, not a
+deployment-planning terminal. When AWS control and V2 provisioning are ready,
+the embedded Native Agent can call the bounded
+`native_agent_execution_v2_targets_reserve` tool. Reservation creates only a
+revision-1 logical AWS compute target and does not call AWS or incur cost. The
+Agent then creates an `aws-ec2-provision` plan/run; the owner-facing R2
+`resource_purchase` confirmation remains the only path that creates the EC2
+resource and promotes the target to its executable revision.
+
+The global Native Agent rules require comparison of existing targets with a
+new reservation and prohibit instructing the owner to prepare a target merely
+because inventory is empty. Codex CLI, OpenClaw, Claude Code, and other AI
+runtime plans must ask the owner to choose either an existing server-owned API
+key secret reference or an interactive authorization gate. Secret plaintext is
+never accepted in the chat or plan.
+
+Embedded backend discovery now advertises `planning.skills` and
+`agent.skills.list` returns the immutable built-in Planning Skill metadata.
+This is a read-only catalog; mutable third-party/local Skill installation and
+Message Server host execution remain unavailable.
+
 ## 2026-08-01 Native Agent deployment tools, server context, and titles
 
 Embedded Native Agent now treats the allowlisted Execution V2 analysis, target, plan, run, status, event, and Service Binding tools as compiled control-plane capabilities. A persisted pre-V2 `enabled_tools` list no longer hides them after upgrade; confirmation, raw SSM/SSH, AWS SDK passthrough, and arbitrary URL tools remain unavailable. Deployment intent selects at most three immutable planning skills: project intake, AWS target advice, and one container or source/systemd deployment recipe.

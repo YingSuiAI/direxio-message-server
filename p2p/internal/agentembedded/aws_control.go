@@ -137,19 +137,32 @@ func awsCredentialUpdate(ctx context.Context, service *coreaws.Service, params m
 	if e != nil {
 		return nil, e
 	}
+	if awsCredentialDisplayMask(access) {
+		access = ""
+	}
 	secret, e := optionalString(params, "secret_access_key")
 	if e != nil {
 		return nil, e
 	}
+	if awsCredentialDisplayMask(secret) {
+		secret = ""
+	}
 	session, e := optionalString(params, "session_token")
 	if e != nil {
 		return nil, e
+	}
+	if awsCredentialDisplayMask(session) {
+		session = ""
 	}
 	view, err := service.ReplaceCredential(ctx, coreaws.CredentialInput{ID: id, Name: name, Region: region, AccessKeyID: access, SecretAccessKey: secret, SessionToken: session}, expected, idem)
 	if err != nil {
 		return nil, mapAWSServiceError(err)
 	}
 	return map[string]any{"credential": awsCredentialView(view)}, nil
+}
+
+func awsCredentialDisplayMask(value string) bool {
+	return strings.Contains(value, "****") || strings.Contains(value, "••••")
 }
 
 func awsCredentialDelete(ctx context.Context, service *coreaws.Service, params map[string]any) (any, *action.Error) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"reflect"
 	"testing"
 	"time"
 
@@ -247,8 +248,8 @@ func TestBackendsCapabilitiesOnlyExposeReadyEmbeddedPorts(t *testing.T) {
 		t.Fatalf("backends error: %#v", err)
 	}
 	embedded := result.(map[string]any)["embedded"].(map[string]any)
-	if got := embedded["capabilities"].([]string); len(got) != 0 {
-		t.Fatalf("capabilities = %#v, want empty without ports", got)
+	if got := embedded["capabilities"].([]string); !reflect.DeepEqual(got, []string{"planning.skills"}) {
+		t.Fatalf("capabilities = %#v, want built-in planning skills without optional ports", got)
 	}
 }
 

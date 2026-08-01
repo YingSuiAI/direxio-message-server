@@ -33,6 +33,15 @@ func ControlTools(control ControlInvoker) []nativeagent.Tool {
 				if err != nil {
 					return nil, err
 				}
+				// A project is a control-plane identity, not an identifier the
+				// owner or model should have to manufacture. Keep the public V2
+				// action strict while allocating a stable per-turn UUID at the
+				// bounded Native Agent adapter.
+				if action == "agent.execution.v2.projects.analyze" {
+					if _, ok := request["project_id"]; !ok {
+						request["project_id"] = controlProjectID(ctx)
+					}
+				}
 				if err := rejectNativeControlSecrets(request); err != nil {
 					return nil, err
 				}
@@ -59,17 +68,22 @@ func ControlTools(control ControlInvoker) []nativeagent.Tool {
 		tool("native_agent_aws_credentials_list", "List redacted AWS credentials.", "agent.core.aws.credentials.list", pageSchema(), []string{"page_size", "page_token"}, false, false),
 		tool("native_agent_aws_credentials_test", "Test an exact AWS credential revision without returning secret material.", "agent.core.aws.credentials.test", strictObjectSchema(map[string]any{"credential_id": uuidSchema(), "expected_revision": positiveIntegerSchema()}, "credential_id", "expected_revision"), []string{"credential_id", "expected_revision"}, true, true),
 
-		tool("native_agent_execution_v2_projects_analyze", "Analyze one immutable project source. The server computes the analysis and its digest.", "agent.execution.v2.projects.analyze", strictObjectSchema(map[string]any{
+		tool("native_agent_execution_v2_projects_analyze", "Analyze one immutable project source. The server allocates the project identity when omitted and computes the analysis and its digest.", "agent.execution.v2.projects.analyze", strictObjectSchema(map[string]any{
 			"project_id": uuidSchema(), "source": immutableSourceSchema(),
-		}, "project_id", "source"), []string{"project_id", "source"}, true, true),
+		}, "source"), []string{"project_id", "source"}, true, true),
 		tool("native_agent_execution_v2_targets_list", "List owner-scoped imported or reserved targets with their latest revision and capabilities.", "agent.execution.v2.targets.list", pageSchema(), []string{"page_size", "page_token"}, false, false),
 		tool("native_agent_execution_v2_targets_get", "Get one owner-scoped imported or reserved target at an exact revision.", "agent.execution.v2.targets.get", strictObjectSchema(map[string]any{
 			"target_id": uuidSchema(), "revision": positiveIntegerSchema(),
 		}, "target_id"), []string{"target_id", "revision"}, false, false),
+		tool("native_agent_execution_v2_targets_reserve", "Reserve a server-validated AWS compute selection without creating resources. A later compute.provision Plan/Run requires explicit owner confirmation before purchase.", "agent.execution.v2.targets.reserve", strictObjectSchema(map[string]any{
+			"credential_id": uuidSchema(), "credential_revision": positiveIntegerSchema(),
+			"instance_type": stringSchema(), "volume_gib": positiveIntegerSchema(),
+		}, "credential_id", "credential_revision", "instance_type", "volume_gib"), []string{"credential_id", "credential_revision", "instance_type", "volume_gib"}, true, true),
 		tool("native_agent_execution_v2_plans_create", "Compile and persist a reviewable execution-plan/v2 snapshot from a server-authored analysis and a pinned built-in recipe.", "agent.execution.v2.plans.create", strictObjectSchema(map[string]any{
 			"project_id": uuidSchema(), "analysis_id": uuidSchema(), "intent": nameTokenSchema(), "recipe_id": nameTokenSchema(),
 			"target_id": uuidSchema(), "target_revision": positiveIntegerSchema(), "purpose": enumStringSchema("service", "job"),
-		}, "project_id", "analysis_id", "intent", "recipe_id", "target_id", "target_revision", "purpose"), []string{"project_id", "analysis_id", "intent", "recipe_id", "target_id", "target_revision", "purpose"}, true, true),
+			"ai_configuration": nativeAIConfigurationSchema(),
+		}, "project_id", "analysis_id", "intent", "recipe_id", "target_id", "target_revision", "purpose"), []string{"project_id", "analysis_id", "intent", "recipe_id", "target_id", "target_revision", "purpose", "ai_configuration"}, true, true),
 		tool("native_agent_execution_v2_plans_get", "Get an immutable execution-plan/v2 snapshot for review.", "agent.execution.v2.plans.get", strictObjectSchema(map[string]any{"plan_id": uuidSchema(), "revision": positiveIntegerSchema()}, "plan_id"), []string{"plan_id", "revision"}, false, false),
 		tool("native_agent_execution_v2_runs_create", "Create an initial deployment run from an exact plan revision. Gated stages still require owner confirmation in the client; upgrade, repair, destroy, and rollback recipes are not enabled yet.", "agent.execution.v2.runs.create", strictObjectSchema(map[string]any{
 			"plan_id": uuidSchema(), "plan_revision": positiveIntegerSchema(), "operation": enumStringSchema("execute", "deploy"),
@@ -256,6 +270,24 @@ func validateNativeControlRequest(action string, request map[string]any) error {
 			return err
 		}
 		return positive("revision", false)
+	case "agent.execution.v2.targets.reserve":
+		if err := requireUUID("credential_id"); err != nil {
+			return err
+		}
+		if err := positive("credential_revision", true); err != nil {
+			return err
+		}
+		instanceType, ok := request["instance_type"].(string)
+		if !ok || !nativeControlInstanceType(strings.TrimSpace(instanceType)) {
+			return fmt.Errorf("native agent control request contains invalid instance_type")
+		}
+		if err := positive("volume_gib", true); err != nil {
+			return err
+		}
+		if volume, _ := nativeControlInteger(request["volume_gib"]); volume < 8 || volume > 16384 {
+			return fmt.Errorf("native agent control request contains invalid volume_gib")
+		}
+		return nil
 	case "agent.execution.v2.plans.create":
 		for _, key := range []string{"project_id", "analysis_id", "target_id"} {
 			if err := requireUUID(key); err != nil {
@@ -275,7 +307,7 @@ func validateNativeControlRequest(action string, request map[string]any) error {
 		if !ok || (purpose != "service" && purpose != "job") {
 			return fmt.Errorf("native agent control request contains invalid purpose")
 		}
-		return nil
+		return validateNativeAIConfiguration(request["ai_configuration"])
 	case "agent.execution.v2.plans.get":
 		if err := requireUUID("plan_id"); err != nil {
 			return err
@@ -472,6 +504,65 @@ func nativeControlNameToken(value string) bool {
 	return !previousSeparator
 }
 
+func nativeControlInstanceType(value string) bool {
+	parts := strings.Split(value, ".")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" || len(parts[0]) > 32 || len(parts[1]) > 32 {
+		return false
+	}
+	for _, part := range parts {
+		for index, r := range part {
+			if !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || (r == '-' && index > 0)) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func validateNativeAIConfiguration(value any) error {
+	if value == nil {
+		return nil
+	}
+	configuration, ok := value.(map[string]any)
+	if !ok {
+		return fmt.Errorf("native agent control request contains invalid ai_configuration")
+	}
+	mode, modeOK := configuration["mode"].(string)
+	provider, providerOK := configuration["provider"].(string)
+	if !modeOK || !providerOK || !nativeControlNameToken(strings.TrimSpace(provider)) {
+		return fmt.Errorf("native agent control request contains invalid ai_configuration")
+	}
+	allowed := map[string]bool{"mode": true, "provider": true}
+	switch strings.TrimSpace(mode) {
+	case "api_key":
+		for _, key := range []string{"secret_ref", "secret_revision", "secret_purpose", "secret_binding_digest"} {
+			allowed[key] = true
+		}
+		secretRef, refOK := configuration["secret_ref"].(string)
+		purpose, purposeOK := configuration["secret_purpose"].(string)
+		digest, digestOK := configuration["secret_binding_digest"].(string)
+		revision, revisionOK := nativeControlInteger(configuration["secret_revision"])
+		if !refOK || uuid.Validate(strings.TrimSpace(secretRef)) != nil || !revisionOK || revision < 1 ||
+			!purposeOK || strings.TrimSpace(purpose) != "ai_provider_api_key" || !digestOK || !nativeControlHexPin(digest, 64) {
+			return fmt.Errorf("native agent control request contains invalid api_key ai_configuration")
+		}
+	case "auth_gate":
+		allowed["status"] = true
+		status, statusOK := configuration["status"].(string)
+		if !statusOK || strings.TrimSpace(status) != "pending_external_auth" {
+			return fmt.Errorf("native agent control request contains invalid auth_gate ai_configuration")
+		}
+	default:
+		return fmt.Errorf("native agent control request contains invalid ai_configuration mode")
+	}
+	for key := range configuration {
+		if !allowed[key] {
+			return fmt.Errorf("native agent control request contains unknown ai_configuration field %q", key)
+		}
+	}
+	return nil
+}
+
 func nativeControlInputSecretKey(key string) bool {
 	switch normalizedControlKey(key) {
 	case "secret", "secretvalue", "secretbytes", "password", "passphrase", "token", "accesstoken", "refreshtoken", "sessiontoken", "authorization", "proxyauthorization", "cookie", "setcookie", "apikey", "privatekey", "secretaccesskey":
@@ -521,6 +612,11 @@ func controlIdempotencyKey(ctx context.Context, _ string, _ map[string]any) stri
 	return uuid.NewSHA1(uuid.Nil, digest[:]).String()
 }
 
+func controlProjectID(ctx context.Context) string {
+	idempotency := controlIdempotencyKey(ctx, "agent.execution.v2.projects.analyze", nil)
+	return uuid.NewSHA1(uuid.Nil, []byte("project\x00"+idempotency)).String()
+}
+
 func pageSchema() map[string]any {
 	return strictObjectSchema(map[string]any{"page_size": integerSchema(), "page_token": stringSchema()})
 }
@@ -563,6 +659,21 @@ func immutableSourceSchema() map[string]any {
 		base("git_https", map[string]any{"location": stringSchema(), "commit": stringSchema(), "credential_ref": uuidSchema(), "credential_revision": positiveIntegerSchema()}, "location", "commit"),
 		base("oci_image", map[string]any{"location": stringSchema()}, "location"),
 		base("uploaded_artifact", map[string]any{"artifact_id": uuidSchema()}, "artifact_id"),
+	}}
+}
+
+func nativeAIConfigurationSchema() map[string]any {
+	return map[string]any{"oneOf": []any{
+		strictObjectSchema(map[string]any{
+			"mode": map[string]any{"type": "string", "const": "api_key"}, "provider": nameTokenSchema(),
+			"secret_ref": uuidSchema(), "secret_revision": positiveIntegerSchema(),
+			"secret_purpose":        map[string]any{"type": "string", "const": "ai_provider_api_key"},
+			"secret_binding_digest": map[string]any{"type": "string", "pattern": `^[a-f0-9]{64}$`},
+		}, "mode", "provider", "secret_ref", "secret_revision", "secret_purpose", "secret_binding_digest"),
+		strictObjectSchema(map[string]any{
+			"mode": map[string]any{"type": "string", "const": "auth_gate"}, "provider": nameTokenSchema(),
+			"status": map[string]any{"type": "string", "const": "pending_external_auth"},
+		}, "mode", "provider", "status"),
 	}}
 }
 

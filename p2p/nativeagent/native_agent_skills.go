@@ -21,6 +21,13 @@ func (r *Runtime) skillsList(context.Context) (map[string]any, error) {
 	if r == nil || r.planningSkills == nil {
 		return nil, fmt.Errorf("built-in planning skill registry is unavailable")
 	}
+	return map[string]any{"skills": r.builtinSkillMetadata()}, nil
+}
+
+func (r *Runtime) builtinSkillMetadata() []map[string]any {
+	if r == nil || r.planningSkills == nil {
+		return []map[string]any{}
+	}
 	manifests := r.planningSkills.Manifests()
 	result := make([]map[string]any, 0, len(manifests))
 	for _, manifest := range manifests {
@@ -29,7 +36,7 @@ func (r *Runtime) skillsList(context.Context) (map[string]any, error) {
 		}
 		result = append(result, skillMetadata(manifest))
 	}
-	return map[string]any{"skills": result}, nil
+	return result
 }
 
 // enabledSkillsPrompt is retained as a small compatibility wrapper for tests
