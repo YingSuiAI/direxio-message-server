@@ -681,6 +681,7 @@ func newService(cfg Config, store Store, transport Transport, state portalState,
 			NewEventID: func(contentID string) string {
 				return "$" + contentID + ":" + service.serverName
 			},
+			RequireJoined:     service.requireJoinedChannelContent,
 			AuthorizeRecall:   service.authorizeChannelContentRecall,
 			MapTransportError: transportWriteError,
 		},

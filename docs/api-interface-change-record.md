@@ -18,6 +18,23 @@ The migration history from upstream `main` through v77 is unchanged. All
 branch-only Agent and Execution V2 schema is created by one direct-final v78
 migration; there is no branch compatibility/backfill migration chain.
 
+## 2026-07-30 Channel Post Visibility And Public-Post Paging
+
+`channels.posts.create` accepts optional `visibility="public"|"private"`.
+Missing visibility defaults to `private`; other explicit values return `400`.
+The canonical visibility is written into the Matrix channel-post event and its
+PostgreSQL projection.
+
+`channels.posts.list` keeps its authenticated unfiltered behavior when paging
+is omitted. Optional `page`/`page_size` enables newest-first paging. The new
+unauthenticated `channels.public.posts.list` action always returns only public
+posts, supports owner-node forwarding, and rejects mismatched or non-public
+remote results. Visitor results remain non-personalized.
+
+Channel content mutations require a joined member projection before Matrix or
+ProductCore writes. Missing reaction targets return `404`. Empty detail fields
+on `channels.update` and `groups.update` no longer clear existing values.
+
 ## 2026-07-31 Offline legacy model-secret upgrade
 
 `agent-secretctl upgrade` is the explicit one-shot migration for legacy
@@ -977,7 +994,7 @@ Breaking removals and contract changes:
 - Added protected action `agent.matrix_session.create` on `POST /_p2p/command`. It initially required bearer `access_token`; current servers accept owner `access_token` or `agent_token`. It returns a Matrix Client-Server session: `access_token`, `device_id`, `user_id`, and `homeserver`.
 - `portal.bootstrap`, `portal.auth`, and `portal.password` return one setup state field: `initialized`. It is `false` while the generated initial password is still in use and becomes `true` after `portal.password` changes that password. Clients should store `access_token` and route by `initialized`; profile completion is independent.
 
-The live P2P body-action contract is generated from `p2p/serviceapi.ActionSpecs` into `docs/product-action-contract.json`. Public actions are `portal.bootstrap`, `portal.auth`, `portal.status`, `contacts.reactivate`, `rooms.reactivate`, `reports.submit`, `channels.public.search`, `channels.public.get`, `channels.public.join_request`, `channels.public.join_result`, and `users.public_channels`. `rooms.reactivate` and `channels.public.join_result` are public HTTP-only node-to-node callbacks and are not valid WS `client.request` actions.
+The live P2P body-action contract is generated from `p2p/serviceapi.ActionSpecs` into `docs/product-action-contract.json`. Public actions are `portal.bootstrap`, `portal.auth`, `portal.status`, `contacts.reactivate`, `rooms.reactivate`, `reports.submit`, `channels.public.search`, `channels.public.get`, `channels.public.posts.list`, `channels.public.join_request`, `channels.public.join_result`, and `users.public_channels`. `rooms.reactivate` and `channels.public.join_result` are public HTTP-only node-to-node callbacks and are not valid WS `client.request` actions.
 
 ## Current Pass
 
@@ -1063,7 +1080,7 @@ The product route contract remains:
 - `GET /_p2p/events`
 - `GET /.well-known/portal/owner.json`
 
-At that point, protected product actions required bearer `access_token`, while `agent_token` was accepted only for fixed `mcp.*` actions and `GET /_p2p/events`. Current servers have removed `GET /_p2p/events` and accept `agent_token` only for product body-action `agent.matrix_session.create` and standard `POST /mcp`. Current public actions are generated into `docs/product-action-contract.json` and include `portal.bootstrap`, `portal.auth`, `portal.status`, `contacts.reactivate`, `rooms.reactivate`, `reports.submit`, `channels.public.search`, `channels.public.get`, `channels.public.join_request`, `channels.public.join_result`, and `users.public_channels`.
+At that point, protected product actions required bearer `access_token`, while `agent_token` was accepted only for fixed `mcp.*` actions and `GET /_p2p/events`. Current servers have removed `GET /_p2p/events` and accept `agent_token` only for product body-action `agent.matrix_session.create` and standard `POST /mcp`. Current public actions are generated into `docs/product-action-contract.json` and include `portal.bootstrap`, `portal.auth`, `portal.status`, `contacts.reactivate`, `rooms.reactivate`, `reports.submit`, `channels.public.search`, `channels.public.get`, `channels.public.posts.list`, `channels.public.join_request`, `channels.public.join_result`, and `users.public_channels`.
 
 Current action metadata is generated into `docs/product-action-contract.json`.
 

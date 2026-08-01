@@ -3,6 +3,7 @@ package channels
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 	"time"
 
@@ -39,27 +40,32 @@ func (m *ContentModule) ToggleReaction(ctx context.Context, action string, raw m
 		if err != nil {
 			return nil, actionbase.InternalError(err)
 		}
-		if ok {
-			eventID = post.EventID
-			roomID = fallback(roomID, post.RoomID)
-			channelID = fallback(channelID, post.ChannelID)
-			postID = post.PostID
+		if !ok {
+			return nil, actionbase.StatusError(http.StatusNotFound, "post not found")
 		}
+		eventID = post.EventID
+		roomID = fallback(roomID, post.RoomID)
+		channelID = fallback(channelID, post.ChannelID)
+		postID = post.PostID
 	} else {
 		comment, ok, err := m.CommentByID(ctx, targetID, postID)
 		if err != nil {
 			return nil, actionbase.InternalError(err)
 		}
-		if ok {
-			eventID = comment.EventID
-			channelID = fallback(channelID, comment.ChannelID)
-			postID = fallback(postID, comment.PostID)
-			commentID = comment.CommentID
-			roomID, err = m.RoomIDForComment(ctx, comment, roomID)
-			if err != nil {
-				return nil, actionbase.InternalError(err)
-			}
+		if !ok {
+			return nil, actionbase.StatusError(http.StatusNotFound, "comment not found")
 		}
+		eventID = comment.EventID
+		channelID = fallback(channelID, comment.ChannelID)
+		postID = fallback(postID, comment.PostID)
+		commentID = comment.CommentID
+		roomID, err = m.RoomIDForComment(ctx, comment, roomID)
+		if err != nil {
+			return nil, actionbase.InternalError(err)
+		}
+	}
+	if actionErr := m.requireJoined(ctx, roomID); actionErr != nil {
+		return nil, actionErr
 	}
 	if m.store == nil {
 		return nil, actionbase.InternalError(errors.New("channel content store is not configured"))
@@ -127,6 +133,7 @@ func (m *ContentModule) EnrichPosts(ctx context.Context, posts []Post, ownerMXID
 		}
 		if count, err := m.store.CountActiveReactions(ctx, "post", posts[i].PostID, "like"); err == nil {
 			posts[i].ReactionCount = count
+			posts[i].LikeCount = count
 		}
 		if ownerMXID != "" {
 			if reaction, ok, err := m.store.GetReaction(ctx, "post", posts[i].PostID, "like", ownerMXID); err == nil && ok {
@@ -271,6 +278,7 @@ func (m *ContentModule) ProjectPost(ctx context.Context, event ProjectionEvent) 
 		EventID: event.EventID, AuthorMXID: event.SenderMXID,
 		AuthorName: params.String("sender_name"), Body: event.Body,
 		MessageType: event.MessageType, MediaJSON: params.String("media_json"),
+		Visibility:     dirextalkdomain.NormalizeChannelPostVisibility(params.String("visibility")),
 		OriginServerTS: event.OriginServerTS,
 	})
 }

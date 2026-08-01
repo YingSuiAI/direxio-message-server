@@ -90,6 +90,10 @@ func TestGroupHandlersHappyWorkflow(t *testing.T) {
 			}
 			return nil
 		},
+		RequireOwner: func(context.Context, string) *actionbase.Error {
+			events = append(events, "owner.require")
+			return nil
+		},
 		OwnerMXID: func() string { return "@owner:example.com" },
 	})
 	handlers := module.Handlers()

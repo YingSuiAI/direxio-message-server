@@ -285,6 +285,7 @@ var actionSpecs = []ActionSpec{
 	{Name: "channels.members", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
 	{Name: "channels.public.search", Auth: ActionAuthPublic, Transport: ActionTransportHTTPAndWS},
 	{Name: "channels.public.get", Auth: ActionAuthPublic, Transport: ActionTransportHTTPAndWS},
+	{Name: "channels.public.posts.list", Auth: ActionAuthPublic, Transport: ActionTransportHTTPAndWS},
 	{Name: "channels.public.join_request", Auth: ActionAuthPublic, Transport: ActionTransportHTTPAndWS},
 	{Name: "channels.public.join_result", Auth: ActionAuthPublic, Transport: ActionTransportHTTPOnly},
 	{Name: "users.public_channels", Auth: ActionAuthPublic, Transport: ActionTransportHTTPAndWS},

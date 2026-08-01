@@ -53,6 +53,7 @@ Protected action 通过 HTTP route 调用时需要 `Authorization: Bearer <acces
 - `reports.submit`
 - `channels.public.search`
 - `channels.public.get`
+- `channels.public.posts.list`
 - `channels.public.join_request`
 - `channels.public.join_result`
 - `users.public_channels`
@@ -283,6 +284,7 @@ Blocks：
 Groups：
 
 - group create 写 Matrix room type 与 `io.dirextalk.room.profile`。
+- `groups.update` 负责修改群名称、头像和 `topic`；字符串字段缺失或传空字符串时保留原值。更新前校验当前身份是该群的 `owner`，普通成员返回 `403`。
 - invite/join/leave/remove/mute/unmute/dissolve 通过 `p2p.Transport` 与 native state 进入 Matrix。
 - member list 来自 P2P projection，但最终事实是 Matrix membership。
 - 群聊和频道只有 `owner` 与 `member` 两种产品角色。
@@ -291,6 +293,7 @@ Channels：
 
 - channel create/update 写 Matrix room type 与 `io.dirextalk.room.profile`。
 - public search/get 是只读发现，不创建占位记录。
+- `channels.update` 负责修改频道名称、简介和头像；字符串字段缺失或传空字符串时保留原值。更新前校验当前身份是该频道的 `owner`，普通成员返回 `403`。
 - invite grant 用于私有或分享卡片加入。
 - public join request 使用上面的申请审批自动 join 生命周期。
 - channel member、mute、read marker、dissolve 都保持 Matrix-first。
@@ -300,6 +303,9 @@ Channel posts/comments/reactions：
 
 - 仍是产品内容 projection。
 - 使用 Matrix `m.room.message` 携带 `p2p_kind=channel_post` 或 `p2p_kind=channel_comment`。
+- `channels.posts.create` 的 `visibility` 只接受 `public`/`private`，缺省为 `private`；该字段随 Matrix 帖子事件传播并投影到 PostgreSQL，缺少字段的历史帖子按私有处理。
+- `channels.posts.list` 保持原有 owner 鉴权且不接受 `visibility`；不传 `page/page_size` 时仍一次返回频道全部帖子，传任一分页字段时按最新优先分页，另一字段缺省为 `page=1`/`page_size=5`，每页最大 100 条。
+- `channels.public.posts.list` 是无需 bearer 的独立公开帖子只读接口，接受 `channel_id` 或 `room_id`，始终只查帖子 `visibility=public`，默认每页 5 条并支持翻页与跨节点转发；帖子可见性独立于频道可见性，已知私有频道标识的访客也只能获得其中明确公开的帖子。每条结果提供 `comment_count`、`like_count`/兼容字段 `reaction_count`、`favorite_count`，但不计算访客的 `reacted_by_me`/`favorited_by_me`。非成员不能评论、点赞或收藏，写动作在 Matrix 写入和本地 projection 写入前要求 joined 成员投影，Matrix ProductPolicy 继续做最终权限校验。
 - reaction 使用 Matrix reaction/内容字段投影到 P2P reaction read model；点赞开关事件携带 `active`，因此取消点赞也会覆盖到其他节点的 read model。
 - 新成员加入 channel 后，服务端会从 Matrix `/messages` 历史回填当前频道已有 posts/comments/reactions 到本节点 projection，客户端可通过 product list 接口和 Matrix history 同时看到入群前内容。普通聊天消息仍走 Matrix timeline，不写入帖子/评论 projection。
 - recall 通过 Matrix redaction。

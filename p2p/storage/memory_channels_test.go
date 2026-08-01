@@ -182,6 +182,31 @@ func TestMemoryStoreChannelContentOrderUpsertPaginationAndDelete(t *testing.T) {
 	if more || len(page) != 1 || page[0].PostID != "post_old" {
 		t.Fatalf("post cursor page = %#v more=%v", page, more)
 	}
+	offsetPage, more, err := store.ListChannelPostsOffsetPage(ctx, "ch", 1, 1)
+	if err != nil || !more || len(offsetPage) != 1 || offsetPage[0].PostID != "post_new_a" {
+		t.Fatalf("post offset page = %#v more=%v err=%v", offsetPage, more, err)
+	}
+	for _, post := range []channelPostRecord{
+		{PostID: "public_old", ChannelID: "ch", Visibility: "public", OriginServerTS: 30},
+		{PostID: "public_new", ChannelID: "ch", Visibility: "public", OriginServerTS: 40},
+		{PostID: "other_public", ChannelID: "other", Visibility: "public", OriginServerTS: 50},
+	} {
+		if err := store.InsertChannelPost(ctx, post); err != nil {
+			t.Fatalf("InsertChannelPost(%s): %v", post.PostID, err)
+		}
+	}
+	publicPage, more, err := store.ListChannelPostsByVisibilityPage(ctx, "ch", "public", 0, 1)
+	if err != nil || !more || len(publicPage) != 1 || publicPage[0].PostID != "public_new" {
+		t.Fatalf("first public page = %#v more=%v err=%v", publicPage, more, err)
+	}
+	publicPage, more, err = store.ListChannelPostsByVisibilityPage(ctx, "ch", "public", 1, 1)
+	if err != nil || more || len(publicPage) != 1 || publicPage[0].PostID != "public_old" {
+		t.Fatalf("second public page = %#v more=%v err=%v", publicPage, more, err)
+	}
+	storedDefault, ok, err := store.GetChannelPostByID(ctx, "post_old", "ch")
+	if err != nil || !ok || storedDefault.Visibility != "private" {
+		t.Fatalf("legacy/default visibility = %#v ok=%v err=%v", storedDefault, ok, err)
+	}
 
 	if removed, err := store.DeleteChannelPost(ctx, "$old"); err != nil || !removed {
 		t.Fatalf("DeleteChannelPost by event = (%v, %v), want (true, nil)", removed, err)

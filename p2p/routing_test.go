@@ -195,6 +195,16 @@ func TestPublicChannelActionsDoNotRequireBearer(t *testing.T) {
 		"join_policy": "approval",
 	})
 	roomID := channelRaw.RoomID
+	publicPost := mustHandle[channelPostRecord](t, service, "channels.posts.create", map[string]any{
+		"channel_id": channelRaw.ChannelID,
+		"body":       "public update",
+		"visibility": "public",
+	})
+	mustHandle[channelPostRecord](t, service, "channels.posts.create", map[string]any{
+		"channel_id": channelRaw.ChannelID,
+		"body":       "members only",
+		"visibility": "private",
+	})
 
 	detailReq := jsonRequest(t, "/_p2p/query", map[string]any{
 		"action": "channels.public.get",
@@ -211,6 +221,25 @@ func TestPublicChannelActionsDoNotRequireBearer(t *testing.T) {
 	}
 	if detail["channel_id"] != "public-news" {
 		t.Fatalf("expected public channel detail, got %#v", detail)
+	}
+
+	postsReq := jsonRequest(t, "/_p2p/query", map[string]any{
+		"action": "channels.public.posts.list",
+		"params": map[string]any{"room_id": roomID},
+	})
+	postsRec := httptest.NewRecorder()
+	router.ServeHTTP(postsRec, postsReq)
+	if postsRec.Code != http.StatusOK {
+		t.Fatalf("expected public posts without bearer, got %d body=%s", postsRec.Code, postsRec.Body.String())
+	}
+	var publicPosts map[string]any
+	if err := json.Unmarshal(postsRec.Body.Bytes(), &publicPosts); err != nil {
+		t.Fatal(err)
+	}
+	posts, ok := publicPosts["posts"].([]any)
+	if !ok || len(posts) != 1 || posts[0].(map[string]any)["post_id"] != publicPost.PostID ||
+		posts[0].(map[string]any)["visibility"] != "public" {
+		t.Fatalf("expected only public posts, got %#v", publicPosts)
 	}
 
 	joinReq := jsonRequest(t, "/_p2p/command", map[string]any{

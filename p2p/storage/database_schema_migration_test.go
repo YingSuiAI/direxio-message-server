@@ -583,6 +583,16 @@ func TestFreshAgentExecutionV2SchemaRegistersOnceWithoutV1Ledgers(t *testing.T) 
 			t.Fatalf("fresh V2 table %s present=%v err=%v", table, present, err)
 		}
 	}
+	var channelPostVisibilityColumn, channelPostVisibilityIndex bool
+	if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='p2p_channel_posts' AND column_name='visibility')`).Scan(&channelPostVisibilityColumn); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DB().QueryRowContext(ctx, `SELECT to_regclass('p2p_channel_posts_channel_visibility_idx') IS NOT NULL`).Scan(&channelPostVisibilityIndex); err != nil {
+		t.Fatal(err)
+	}
+	if !channelPostVisibilityColumn || !channelPostVisibilityIndex {
+		t.Fatalf("fresh v78 channel post visibility column=%v index=%v", channelPostVisibilityColumn, channelPostVisibilityIndex)
+	}
 	for _, forbidden := range []string{
 		"core_aws_changes", "core_aws_plans", "core_aws_ec2_provisions",
 		"core_aws_ec2_provision_events", "core_aws_ec2_provision_event_counters", "core_aws_ec2_provision_mutation_leases",
