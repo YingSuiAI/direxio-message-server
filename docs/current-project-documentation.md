@@ -72,6 +72,9 @@ Native Agent model-profile contract: the server persists encrypted owner profile
 
 Current model-profile contract: the server persists encrypted owner model profiles and default roles. Native Agent chat, stream, and compression omit model fields and resolve the owner default conversation profile; inline profile/key input is legacy compatibility only. `agent.models.list` remains an explicit request-scoped lookup and does not persist profiles.
 
+Agent keyring 与 execution artifact 默认分别位于现有 Message Server 数据卷内的
+`/var/dirextalk-message-server/agent/secret-keyring.json` 和
+`/var/dirextalk-message-server/agent/artifacts`；相关环境变量仅用于覆盖默认位置，标准部署不增加独立 Agent 数据卷。
 服务启动会在 PostgreSQL migration 完成后，在数据库没有 keyring 绑定密文时幂等创建缺失的 v1 keyring；不会自动升级历史模型凭据。迁移前必须停止服务，并将
 PostgreSQL、`P2P_AGENT_SECRET_KEYRING_FILE` 指向的 keyring 以及旧模型 master-key
 文件作为同一可恢复备份集；`agent-secretctl init` 仍可作为可选预检，再通过环境变量

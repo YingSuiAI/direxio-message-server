@@ -165,7 +165,9 @@ environment, secret references, privilege, network grants, accepted exit
 codes, timeout, output limit, redaction and postcondition.
 
 Artifact metadata is durable in PostgreSQL. The first content backend is a
-SHA-256-addressed atomic file store rooted at `P2P_AGENT_ARTIFACT_DIR`.
+SHA-256-addressed atomic file store. It defaults to
+`/var/dirextalk-message-server/agent/artifacts` inside the existing Message
+Server data volume; `P2P_AGENT_ARTIFACT_DIR` is only an optional override.
 Artifact paths are never trusted as authority and secret plaintext is
 forbidden.
 
@@ -287,7 +289,10 @@ write, target retention and destruction remain separately confirmed stages.
 
 ## 10. Secrets and remote MCP
 
-`P2P_AGENT_SECRET_KEYRING_FILE` points to the version-1 AES-256-GCM keyring.
+The version-1 AES-256-GCM keyring defaults to
+`/var/dirextalk-message-server/agent/secret-keyring.json` inside the existing
+Message Server data volume. `P2P_AGENT_SECRET_KEYRING_FILE` is only an
+optional override.
 Each encrypted row pins envelope/AAD version, key ID, nonce and ciphertext.
 Canonical length-prefixed AAD binds secret domain, owner, entity,
 revision/version, purpose/reference and binding digest.

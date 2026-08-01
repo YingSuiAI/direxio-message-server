@@ -62,7 +62,6 @@ services:
     volumes:
       - p2p_message_server_config:/etc/dirextalk-message-server
       - p2p_message_server_data:/var/dirextalk-message-server
-      - p2p_agent_data:/var/dirextalk-message-server/agent
     depends_on:
       postgres:
         condition: service_healthy
@@ -74,8 +73,6 @@ services:
       P2P_PORTAL_CREDENTIALS_FILE: /var/dirextalk-message-server/p2p/bootstrap.json
       P2P_PLUGIN_DOCKER_ENABLED: "false"
       P2P_PLUGIN_BACKEND_BASE_URL: http://message-server:8008
-      P2P_NATIVE_AGENT_DATA_DIR: /var/dirextalk-message-server/agent
-      P2P_AGENT_SECRET_KEYRING_FILE: /var/dirextalk-message-server/agent/secret-keyring.json
     command:
       - --config
       - /etc/dirextalk-message-server/message-server.yaml
@@ -90,7 +87,6 @@ services:
       - p2p_message_server_config:/etc/dirextalk-message-server
       - p2p_message_server_data:/var/dirextalk-message-server
       - p2p_plugins_data:/var/dirextalk-message-server/plugins
-      - p2p_agent_data:/var/dirextalk-message-server/agent
     depends_on:
       postgres:
         condition: service_healthy
@@ -107,4 +103,3 @@ volumes:
   p2p_message_server_config:
   p2p_message_server_data:
   p2p_plugins_data:
-  p2p_agent_data:

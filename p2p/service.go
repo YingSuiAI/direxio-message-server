@@ -75,10 +75,31 @@ type Config struct {
 }
 
 const (
-	ownerLocalpart = "owner"
-	agentLocalpart = "agent"
-	agentRoomName  = "Agents"
+	ownerLocalpart            = "owner"
+	agentLocalpart            = "agent"
+	agentRoomName             = "Agents"
+	defaultNativeAgentDataDir = "/var/dirextalk-message-server/agent"
 )
+
+func nativeAgentDataDir(configured string) string {
+	if dataDir := strings.TrimSpace(configured); dataDir != "" {
+		return dataDir
+	}
+	if dataDir := strings.TrimSpace(os.Getenv("P2P_NATIVE_AGENT_DATA_DIR")); dataDir != "" {
+		return dataDir
+	}
+	return defaultNativeAgentDataDir
+}
+
+func agentArtifactDir(configured, dataDir string) string {
+	if artifactDir := strings.TrimSpace(configured); artifactDir != "" {
+		return artifactDir
+	}
+	if artifactDir := strings.TrimSpace(os.Getenv("P2P_AGENT_ARTIFACT_DIR")); artifactDir != "" {
+		return artifactDir
+	}
+	return filepath.Join(dataDir, "artifacts")
+}
 
 func transportWriteError(err error) *apiError {
 	if err == nil {
@@ -878,23 +899,17 @@ func newService(cfg Config, store Store, transport Transport, state portalState,
 		Now:                   time.Now,
 	})
 	service.mcpCapabilities = service.mcpModule.Service()
+	agentDataDir := nativeAgentDataDir(cfg.NativeAgentDataDir)
 	if profileStore, ok := store.(p2pstorage.ModelProfileStore); ok {
 		service.modelProfiles = profileStore
 	} else if dbStore, ok := store.(*p2pstorage.DatabaseStore); ok {
-		dataDir := strings.TrimSpace(cfg.NativeAgentDataDir)
-		if dataDir == "" {
-			dataDir = strings.TrimSpace(os.Getenv("P2P_NATIVE_AGENT_DATA_DIR"))
-		}
-		if dataDir == "" {
-			dataDir = "/var/dirextalk-message-server/agent"
-		}
 		keyringFile := strings.TrimSpace(cfg.AgentSecretKeyringFile)
 		if keyringFile == "" {
-			keyringFile = filepath.Join(dataDir, "secret-keyring.json")
+			keyringFile = filepath.Join(agentDataDir, "secret-keyring.json")
 		}
 		legacyKeyFile := strings.TrimSpace(cfg.ModelProfileKeyFile)
 		if legacyKeyFile == "" {
-			legacyKeyFile = filepath.Join(dataDir, "model-profile.master.key")
+			legacyKeyFile = filepath.Join(agentDataDir, "model-profile.master.key")
 		}
 		service.agentSecretKeyringFile = keyringFile
 		// Initialize an absent keyring only after the database migrations have
@@ -1015,11 +1030,8 @@ func newService(cfg Config, store Store, transport Transport, state portalState,
 			executionV2Config.Secrets = secretStore
 			executionV2Config.SecretsReady = secretStore.Ready
 		}
-		artifactDir := strings.TrimSpace(cfg.AgentArtifactDir)
-		if artifactDir == "" {
-			artifactDir = strings.TrimSpace(os.Getenv("P2P_AGENT_ARTIFACT_DIR"))
-		}
-		if artifactDir != "" && service.agentSecretEnveloper != nil {
+		artifactDir := agentArtifactDir(cfg.AgentArtifactDir, agentDataDir)
+		if service.agentSecretEnveloper != nil {
 			service.executionV2Runtime, service.executionV2RuntimeInitErr = NewExecutionV2Runtime(ExecutionV2RuntimeConfig{
 				Store:           dbStore,
 				OwnerID:         strings.TrimSpace(service.OwnerMXID()),
