@@ -118,6 +118,7 @@ var actionSpecs = []ActionSpec{
 	{Name: "agent.core.aws.credentials.test", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: coreAWSCredentialTestSchema()},
 	{Name: "agent.chat", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: nativeAgentChatSchema()},
 	{Name: "agent.chat.stream", Auth: ActionAuthOwner, Transport: ActionTransportWSStreamOnly, Schema: nativeAgentChatSchema()},
+	{Name: "agent.web_search.test", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: webSearchTestSchema()},
 	{Name: "agent.chat.turn.stop", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
 	{Name: "agent.chat.turns.list", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
 	{Name: "agent.voice.session.create", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: voiceSessionCreateSchema()},

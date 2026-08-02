@@ -21,6 +21,7 @@ func TestManagedKnowledgeActionSpecsHaveRuntimeHandlers(t *testing.T) {
 		specs[spec.Name] = true
 	}
 	for _, action := range []string{
+		"agent.web_search.test",
 		"agent.knowledge.memories.list",
 		"agent.knowledge.memories.update",
 		"agent.knowledge.memories.delete",

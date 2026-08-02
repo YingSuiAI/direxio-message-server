@@ -207,6 +207,39 @@ func TestCoordinatorRestartInterruptsUnsafeTurns(t *testing.T) {
 	}
 }
 
+func TestDurableTurnDigestsAndEventsDropRequestScopedToolCredentials(t *testing.T) {
+	withCredential, err := agentturns.RequestDigest("agent.chat.stream", map[string]any{
+		"turn_id": "turn", "conversation_id": "conversation", "prompt": "search",
+		"tool_credentials": map[string]any{
+			"web_search": map[string]any{"enabled": true, "provider": "tavily", "api_key": "tvly-secret"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	withoutCredential, err := agentturns.RequestDigest("agent.chat.stream", map[string]any{
+		"turn_id": "turn", "conversation_id": "conversation", "prompt": "search",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if withCredential != withoutCredential {
+		t.Fatal("request-scoped tool credentials changed the durable turn digest")
+	}
+	clean := agentturns.SanitizeData(map[string]any{
+		"tool_credentials": map[string]any{
+			"web_search": map[string]any{"api_key": "tvly-secret"},
+		},
+		"result": "safe",
+	})
+	if _, exists := clean["tool_credentials"]; exists {
+		t.Fatalf("durable event retained request-scoped credentials: %#v", clean)
+	}
+	if clean["result"] != "safe" {
+		t.Fatalf("durable event sanitizer removed unrelated result: %#v", clean)
+	}
+}
+
 func request(owner, turn, conversation, prompt string) agentturns.Request {
 	params := map[string]any{"turn_id": turn, "conversation_id": conversation, "prompt": prompt, "model_profile": map[string]any{"api_key": "not-persisted"}}
 	digest, err := agentturns.RequestDigest("agent.chat.stream", params)

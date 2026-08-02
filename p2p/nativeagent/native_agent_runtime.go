@@ -34,10 +34,14 @@ const (
 )
 
 type Config struct {
-	DataDir               string
-	Store                 ConfigStore
-	Tools                 []Tool
-	HTTPClient            *http.Client
+	DataDir    string
+	Store      ConfigStore
+	Tools      []Tool
+	HTTPClient *http.Client
+	// WebSearchEndpoint is an injectable endpoint for the bounded Tavily
+	// adapter. Production uses the HTTPS Tavily endpoint; tests may provide a
+	// local endpoint without changing request-scoped credential semantics.
+	WebSearchEndpoint     string
 	ModelProfiles         ModelProfileResolver
 	OwnerID               func() string
 	Memory                ConversationMemoryStore
@@ -86,6 +90,7 @@ type Runtime struct {
 	store                 ConfigStore
 	dataDir               string
 	client                *http.Client
+	webSearchEndpoint     string
 	tools                 []Tool
 	modelProfiles         ModelProfileResolver
 	ownerID               func() string
@@ -144,6 +149,7 @@ func New(config Config) *Runtime {
 		store:                 config.Store,
 		dataDir:               filepath.Clean(dataDir),
 		client:                client,
+		webSearchEndpoint:     strings.TrimSpace(config.WebSearchEndpoint),
 		tools:                 append([]Tool{}, config.Tools...),
 		modelProfiles:         config.ModelProfiles,
 		ownerID:               config.OwnerID,
@@ -238,6 +244,8 @@ func (r *Runtime) Invoke(ctx context.Context, action string, params map[string]a
 		return r.chat(ctx, params)
 	case "agent.models.list":
 		return r.modelsList(ctx, params)
+	case "agent.web_search.test":
+		return r.testWebSearch(ctx, params)
 	case "agent.runtime.inspect":
 		return r.runtimeInspect(ctx)
 	case "agent.runtime.install":
@@ -352,19 +360,19 @@ func (r *Runtime) Stream(ctx context.Context, action string, params map[string]a
 	}
 	run, err := r.prepareEinoRun(ctx, config, params, profile)
 	if err != nil {
-		return emitNativeAgentStreamFailure(emit, err, profile.APIKey)
+		return emitNativeAgentStreamFailure(emit, err, profile.APIKey, toolCredentialsFromParams(params).APIKey)
 	}
 	tools, cleanup, err := r.enabledEinoTools(ctx, config, params)
 	if err != nil {
-		return emitNativeAgentStreamFailure(emit, err, profile.APIKey)
+		return emitNativeAgentStreamFailure(emit, err, profile.APIKey, toolCredentialsFromParams(params).APIKey)
 	}
 	defer cleanup()
 	text, reasoning, toolCalls, produced, err := r.streamEinoAgent(ctx, profile, run.inputMessages, run.session, tools, emit, run.maxSteps)
 	if err != nil {
-		return emitNativeAgentStreamFailure(emit, err, profile.APIKey)
+		return emitNativeAgentStreamFailure(emit, err, profile.APIKey, toolCredentialsFromParams(params).APIKey)
 	}
 	if err := r.rememberEinoMessages(ctx, config, params, profile, run, produced); err != nil {
-		return emitNativeAgentStreamFailure(emit, err, profile.APIKey)
+		return emitNativeAgentStreamFailure(emit, err, profile.APIKey, toolCredentialsFromParams(params).APIKey)
 	}
 	trace := buildAgentTrace(run, produced, toolCalls, text)
 	if err := emit(Event{Event: "trace", Data: trace}); err != nil {

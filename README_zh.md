@@ -4,7 +4,21 @@ Dirextalk Message Server 是 Dirextalk 后端服务，将 Matrix 兼容 homeserv
 
 本仓库基于 Element Dendrite，但维护目标是 Dirextalk 产品服务，而不是通用 Matrix homeserver 发行版。
 
+![Dirextalk Message Server 架构概览](docs/images/dirextalk-message-server-overview.png)
+
 [English README](README.md)
+
+每个个人节点在 Matrix、ProductCore 和 Native Agent 之间保持统一合约边界：
+
+- Matrix 是房间、成员关系、普通消息、媒体、历史、搜索、未读状态和
+  redaction 的事实源。
+- ProductCore action 是经过鉴权的产品 facade，负责参数校验、远端转发、
+  Matrix 写入编排和 projection 读取。
+- PostgreSQL-backed P2P 表默认是 projection/read model，只有当前合约明确
+  声明时才作为权威记录。
+- Native Agent 和 `POST /mcp` 是后端拥有的能力，不通过 plugin 生命周期安装、
+  配置或调用。BYOK web search 只在请求级
+  `tool_credentials.web_search` 中接收 Tavily key，绝不持久化。
 
 ## 运行时
 
@@ -32,6 +46,13 @@ Dirextalk 产品 API 使用 body-action 入口：
 - `POST /_p2p/command`
 - `GET /_p2p/ws`
 - `GET /.well-known/portal/owner.json`
+
+生成后的 ProductCore action 元数据位于
+[docs/product-action-contract.json](docs/product-action-contract.json)，它是
+可检查的 action 列表，能力增加时会随源码变化。Owner 客户端优先在 realtime
+WebSocket 上使用 `client.request`/`server.response`，realtime 未 ready 时回退
+到 HTTP query/command；外部 MCP 客户端在 `POST /mcp` 上使用带 `agent_token`
+的 JSON-RPC。
 
 请求 envelope：
 

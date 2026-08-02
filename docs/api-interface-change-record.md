@@ -1,5 +1,26 @@
 # API Interface Change Record
 
+## 2026-08-02 Native Agent request-scoped BYOK web search
+
+Added owner action `agent.web_search.test` over HTTP and owner WebSocket. The
+request shape is `tool_credentials.web_search` with `enabled`, optional
+`provider` (default `tavily`), and write-only `api_key`. The key is accepted
+only for that request; it is never copied into Agent config, model profiles,
+durable turn records, conversation memory, logs, errors, or result payloads.
+
+When a chat/stream request carries the same valid Tavily credential, the
+compiled Native Agent `web_search` tool is available for that turn. It is
+absent for missing, disabled, or unsupported credentials. The adapter sends a
+bounded HTTPS Tavily request that rejects redirects, with a 1,000-character
+query limit, a server-enforced 1–10 result bound, 2 MiB response cap, and
+15-second timeout. Results and provider errors
+are reduced to safe summaries; provider response bodies and API keys are never
+returned.
+
+Durable turn request digests and runtime events remain secret-free. Reconnect
+and resume attach to an existing turn without persisting or rehydrating
+`tool_credentials`; only the original in-memory request may use its key.
+
 ## 2026-08-01 Native Agent new-target planning and built-in Skills
 
 An empty `agent.execution.v2.targets.list` result is an inventory state, not a

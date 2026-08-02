@@ -301,7 +301,7 @@ func secretFreeJSONText(value any) any {
 
 func secretKey(key string) bool {
 	key = strings.ToLower(strings.TrimSpace(key))
-	if key == "authorization" || key == "cookie" || key == "headers" || key == "token" || key == "credential" || key == "credentials" {
+	if key == "authorization" || key == "cookie" || key == "headers" || key == "token" || key == "credential" || key == "credentials" || key == "tool_credentials" || key == "web_search_credentials" {
 		return true
 	}
 	for _, marker := range []string{"api_key", "access_token", "bearer", "password", "secret", "private_key"} {

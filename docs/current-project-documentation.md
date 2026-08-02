@@ -68,6 +68,16 @@ Plugin management is deprecated/inactive for the current product surface. The se
 
 
 Native Agent model-profile contract: the server persists encrypted owner profiles and default roles. Chat, stream, and compression omit model fields and resolve the owner default conversation profile; inline profile/key input is legacy compatibility only. `agent.models.list` remains an explicit request-scoped lookup and does not persist profiles.
+
+Native Agent BYOK web search is a separate request-scoped capability. Owner
+clients call `agent.web_search.test` or include
+`tool_credentials.web_search` in a chat/stream request; `enabled=true` and a
+Tavily `api_key` add the compiled `web_search` tool for that turn. The Tavily
+key is write-only and is never persisted in Agent config, model profiles,
+durable turns, conversation memory, logs, errors, or results. Search requests
+reject redirects and are bounded to a 1,000-character query, at most 10
+server-enforced results, a 2 MiB provider body, and a 15-second timeout;
+reconnect/resume never rehydrates the key.
 当前 x1 本机部署固定使用单节点 `docker-compose.p2p.yml` 的 `message-server` 容器。非 Agent plugin 功能当前废弃/暂停维护，不作为当前部署验收项；仓库不再保留独立 Agent/plugin compose overlay，后续如重新启用非 Agent Docker plugin runner，应从单节点 `docker-compose.p2p.yml` 的当前配置重新验收。`dendrite-a`、`dendrite-b`、`dendrite-c` 只属于三节点回归环境，不作为 x1 实际服务入口，也不安装或承载插件。
 
 Current model-profile contract: the server persists encrypted owner model profiles and default roles. Native Agent chat, stream, and compression omit model fields and resolve the owner default conversation profile; inline profile/key input is legacy compatibility only. `agent.models.list` remains an explicit request-scoped lookup and does not persist profiles.

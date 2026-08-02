@@ -20,8 +20,12 @@ func (r *Runtime) enabledEinoTools(ctx context.Context, config map[string]any, p
 
 func (r *Runtime) enabledNativeEinoTools(ctx context.Context, config map[string]any, params map[string]any) ([]einotool.BaseTool, func(), error) {
 	tools := make([]einotool.BaseTool, 0)
-	for _, nativeTool := range r.enabledTools(ctx, config, params) {
-		if !embeddedDirextalkTool(nativeTool.Name) {
+	nativeTools := append([]Tool{}, r.enabledTools(ctx, config, params)...)
+	// web_search is compiled into the runtime but exists only for this request
+	// when the caller supplied a valid request-scoped Tavily credential.
+	nativeTools = append(nativeTools, r.requestScopedWebSearchTool(params)...)
+	for _, nativeTool := range nativeTools {
+		if !embeddedDirextalkTool(nativeTool.Name) && nativeTool.Name != "web_search" {
 			continue
 		}
 		info, err := nativeToolInfo(nativeTool)

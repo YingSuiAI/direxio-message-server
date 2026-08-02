@@ -8,6 +8,20 @@ It is based on Element Dendrite, but this repository is maintained as a Dirextal
 
 [中文说明](README_zh.md)
 
+Each personal node keeps one contract boundary for Matrix, ProductCore, and
+Native Agent:
+
+- Matrix is the source of truth for rooms, membership, ordinary messages,
+  media, history, search, unread state, and redaction.
+- ProductCore actions provide the authenticated product facade for validation,
+  remote forwarding, Matrix write orchestration, and projection reads.
+- PostgreSQL-backed P2P tables are projection/read models unless a current
+  contract explicitly makes a record authoritative.
+- Native Agent and `POST /mcp` are backend-owned capabilities. They are not
+  installed, configured, or invoked through the plugin lifecycle. BYOK web
+  search accepts a Tavily key only in the request-scoped
+  `tool_credentials.web_search` object and never persists it.
+
 ## Runtime
 
 - Production entry point: `cmd/dirextalk-message-server`
@@ -34,6 +48,13 @@ Dirextalk product APIs use the body-action surface:
 - `POST /_p2p/command`
 - `GET /_p2p/ws`
 - `GET /.well-known/portal/owner.json`
+
+The generated ProductCore action metadata is
+[docs/product-action-contract.json](docs/product-action-contract.json); it is
+the checkable action list and may change as capabilities are added. Owner
+clients prefer `client.request`/`server.response` over the realtime WebSocket
+and use HTTP query/command fallback when realtime is not ready. External MCP
+clients use JSON-RPC over `POST /mcp` with an `agent_token`.
 
 Product requests use this envelope:
 

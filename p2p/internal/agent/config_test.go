@@ -75,6 +75,29 @@ func TestSanitizeNativeConfigStripsSecretsWithoutMutatingInput(t *testing.T) {
 	}
 }
 
+func TestSanitizeNativeConfigDropsRequestScopedToolCredentials(t *testing.T) {
+	input := map[string]any{
+		"tool_credentials": map[string]any{
+			"web_search": map[string]any{
+				"enabled":  true,
+				"provider": "tavily",
+				"api_key":  "tvly-request-only",
+			},
+		},
+		"model_profiles": []any{map[string]any{"model": "gpt", "api_key": "model-secret"}},
+	}
+	sanitized := SanitizeNativeConfigMap(input)
+	if _, exists := sanitized["tool_credentials"]; exists {
+		t.Fatalf("request-scoped tool credentials were retained: %#v", sanitized)
+	}
+	if hasNestedKey(sanitized, "api_key") {
+		t.Fatalf("sanitized config retained an api_key: %#v", sanitized)
+	}
+	if input["tool_credentials"].(map[string]any)["web_search"].(map[string]any)["api_key"] != "tvly-request-only" {
+		t.Fatal("sanitizer mutated caller input")
+	}
+}
+
 func TestMigrateLegacyPluginConfigFillsMissingFieldsOnce(t *testing.T) {
 	state := dirextalkdomain.PortalState{AgentConfig: dirextalkdomain.AgentConfig{
 		SystemPrompt: "current prompt",

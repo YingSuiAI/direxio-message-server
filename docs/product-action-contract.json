@@ -5109,6 +5109,34 @@
           "prompt": {
             "type": "string"
           },
+          "tool_credentials": {
+            "type": "object",
+            "write_only": true,
+            "properties": {
+              "web_search": {
+                "type": "object",
+                "required": true,
+                "write_only": true,
+                "properties": {
+                  "api_key": {
+                    "type": "string",
+                    "required": true,
+                    "write_only": true
+                  },
+                  "enabled": {
+                    "type": "boolean",
+                    "required": true
+                  },
+                  "provider": {
+                    "type": "string",
+                    "presence": {
+                      "omitted": "tavily"
+                    }
+                  }
+                }
+              }
+            }
+          },
           "turn_id": {
             "type": "string"
           }
@@ -5208,6 +5236,34 @@
           "prompt": {
             "type": "string"
           },
+          "tool_credentials": {
+            "type": "object",
+            "write_only": true,
+            "properties": {
+              "web_search": {
+                "type": "object",
+                "required": true,
+                "write_only": true,
+                "properties": {
+                  "api_key": {
+                    "type": "string",
+                    "required": true,
+                    "write_only": true
+                  },
+                  "enabled": {
+                    "type": "boolean",
+                    "required": true
+                  },
+                  "provider": {
+                    "type": "string",
+                    "presence": {
+                      "omitted": "tavily"
+                    }
+                  }
+                }
+              }
+            }
+          },
           "turn_id": {
             "type": "string"
           }
@@ -5253,6 +5309,58 @@
           },
           "tool_calls": {
             "type": "array"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.web_search.test",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "tool_credentials": {
+            "type": "object",
+            "required": true,
+            "write_only": true,
+            "properties": {
+              "web_search": {
+                "type": "object",
+                "required": true,
+                "write_only": true,
+                "properties": {
+                  "api_key": {
+                    "type": "string",
+                    "required": true,
+                    "write_only": true
+                  },
+                  "enabled": {
+                    "type": "boolean",
+                    "required": true
+                  },
+                  "provider": {
+                    "type": "string",
+                    "presence": {
+                      "omitted": "tavily"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "response": {
+          "ok": {
+            "type": "boolean",
+            "required": true
+          },
+          "provider": {
+            "type": "string",
+            "required": true
+          },
+          "result_count": {
+            "type": "integer",
+            "required": true
           }
         }
       }

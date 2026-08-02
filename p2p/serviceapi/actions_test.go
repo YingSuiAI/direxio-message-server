@@ -200,3 +200,34 @@ func TestNativeAgentReferenceSchemaMatchesStrictProducerShape(t *testing.T) {
 		}
 	}
 }
+
+func TestNativeAgentWebSearchSchemaKeepsCredentialWriteOnly(t *testing.T) {
+	testSpec, ok := ActionSpecFor("agent.web_search.test")
+	if !ok || testSpec.Schema == nil {
+		t.Fatal("agent.web_search.test must publish a schema")
+	}
+	credentials := testSpec.Schema.Request["tool_credentials"]
+	if !credentials.Required || !credentials.WriteOnly || credentials.Type != "object" {
+		t.Fatalf("web search credentials field = %#v", credentials)
+	}
+	webSearch := credentials.Properties["web_search"]
+	apiKey := webSearch.Properties["api_key"]
+	if !webSearch.Required || !webSearch.WriteOnly ||
+		!webSearch.Properties["enabled"].Required ||
+		!apiKey.Required || !apiKey.WriteOnly {
+		t.Fatalf("web search API key must be nested and write-only: %#v", credentials)
+	}
+	if _, exposed := testSpec.Schema.Response["api_key"]; exposed {
+		t.Fatal("web search response must not publish an API key")
+	}
+	for _, action := range []string{"agent.chat", "agent.chat.stream"} {
+		spec, ok := ActionSpecFor(action)
+		if !ok || spec.Schema == nil {
+			t.Fatalf("%s must publish a schema", action)
+		}
+		field := spec.Schema.Request["tool_credentials"]
+		if field.Type != "object" || !field.WriteOnly || !field.Properties["web_search"].Properties["api_key"].WriteOnly {
+			t.Fatalf("%s tool credentials schema = %#v", action, field)
+		}
+	}
+}
