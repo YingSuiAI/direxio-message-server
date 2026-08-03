@@ -46,6 +46,7 @@ type AccountPort interface {
 	CreateMatrixSession(context.Context, map[string]any) (MatrixSession, *actionbase.Error)
 	Config() dirextalkdomain.AgentConfig
 	UpdateConfig(context.Context, func(dirextalkdomain.AgentConfig) dirextalkdomain.AgentConfig) (dirextalkdomain.AgentConfig, *actionbase.Error)
+	SyncOnlineIdentity(context.Context, dirextalkdomain.AgentIdentityConfig) *actionbase.Error
 	PublishOffline(context.Context) *actionbase.Error
 }
 
@@ -83,38 +84,24 @@ func (m *Module) updateConfig(ctx context.Context, params map[string]any) (any, 
 		return nil, err
 	}
 
-	values := actionbase.Params(params)
 	disableAgent := false
 	config, actionErr := account.UpdateConfig(ctx, func(current dirextalkdomain.AgentConfig) dirextalkdomain.AgentConfig {
-		if displayName := values.String("display_name"); displayName != "" {
-			current.DisplayName = displayName
-		}
-		if _, ok := params["avatar_url"]; ok {
-			current.AvatarURL = values.String("avatar_url")
-		}
-		if contextWindow := values.Int64("context_window"); contextWindow > 0 {
-			current.ContextWindow = contextWindow
-		}
+		next := ApplyConfigUpdate(current, params)
 		if _, ok := params["enabled"]; ok {
-			current.Enabled = values.Bool("enabled")
-			disableAgent = !current.Enabled
+			disableAgent = !next.Enabled
 		}
-		if model := values.String("model"); model != "" {
-			current.Model = model
-		}
-		if systemPrompt := values.String("system_prompt"); systemPrompt != "" {
-			current.SystemPrompt = systemPrompt
-		}
-		if _, ok := params["mcp_blocked_room_ids"]; ok {
-			current.MCPBlockedRoomIDs = values.Strings("mcp_blocked_room_ids")
-		}
-		return NormalizeConfig(current)
+		return next
 	})
 	if actionErr != nil {
 		return nil, actionErr
 	}
 	if disableAgent {
 		if actionErr := account.PublishOffline(ctx); actionErr != nil {
+			return nil, actionErr
+		}
+	}
+	if OnlineIdentityUpdateRequested(params) {
+		if actionErr := account.SyncOnlineIdentity(ctx, OnlineAgentIdentity(config)); actionErr != nil {
 			return nil, actionErr
 		}
 	}
@@ -129,9 +116,18 @@ func (m *Module) accountPort() (AccountPort, *actionbase.Error) {
 }
 
 func configResponse(config dirextalkdomain.AgentConfig) map[string]any {
+	config = NormalizeConfig(config)
 	return map[string]any{
-		"display_name":         config.DisplayName,
-		"avatar_url":           config.AvatarURL,
+		"display_name": config.DisplayName,
+		"avatar_url":   config.AvatarURL,
+		"native_agent_identity": map[string]any{
+			"display_name": config.NativeAgentIdentity.DisplayName,
+			"avatar_url":   config.NativeAgentIdentity.AvatarURL,
+		},
+		"online_agent_identity": map[string]any{
+			"display_name": config.OnlineAgentIdentity.DisplayName,
+			"avatar_url":   config.OnlineAgentIdentity.AvatarURL,
+		},
 		"context_window":       config.ContextWindow,
 		"enabled":              config.Enabled,
 		"model":                config.Model,
