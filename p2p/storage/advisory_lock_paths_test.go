@@ -71,33 +71,3 @@ func TestConfirmationReplayLockUsesCanonicalIdentityAndStopsOnError(t *testing.T
 		t.Fatal(err)
 	}
 }
-
-func TestScheduleConfirmationLockUsesCanonicalIdentityAndStopsBeforeMutation(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-
-	const (
-		owner        = "@owner:example.test"
-		conversation = "!conversation:example.test"
-	)
-	lockErr := errors.New("schedule confirmation advisory lock failed")
-	mock.ExpectBegin()
-	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")).
-		WithArgs(canonicalAdvisoryLockIdentity("schedule-confirmation", owner, conversation)).
-		WillReturnError(lockErr)
-	mock.ExpectRollback()
-	store := NewUnmigratedDatabaseStore(db, nil)
-	_, _, err = store.ReserveScheduleConfirmation(t.Context(), ScheduleConfirmation{
-		OwnerID:        owner,
-		ConversationID: conversation,
-	})
-	if !errors.Is(err, lockErr) {
-		t.Fatalf("error = %v, want advisory lock error", err)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
-	}
-}

@@ -264,7 +264,6 @@ func TestGenericContainerServiceFirstLoopPostgres(t *testing.T) {
 	runner, err := executionrunner.NewRunner(executionrunner.Config{
 		Store: stageStore, Resolver: stepResolver, Transport: transport,
 		Holder: "service-loop-runner", LeaseTTL: time.Minute, PollInterval: time.Millisecond,
-		Now: func() time.Time { return now }, ReceiptResolver: receiptResolver,
 	})
 	if err != nil {
 		t.Fatal(err)

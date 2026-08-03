@@ -304,11 +304,12 @@ func (m *Module) startNativeAgentStream(ctx context.Context, client *connection,
 		go func() {
 			defer client.finishStream(id)
 			err := durable.DurableStream(streamCtx, client.record.UserID, runnerAction, params, func(event agentturns.StreamEvent) error {
+				wireAction := nativeAgentStreamAction(runnerAction)
 				switch event.Kind {
 				case agentturns.EventAccepted:
 					return client.sendBlocking(streamCtx, map[string]any{
 						"type": "server.native_agent_stream.accepted", "id": id,
-						"action": strings.TrimSuffix(action, ".stream"), "turn_id": event.TurnID,
+						"action": wireAction, "turn_id": event.TurnID,
 						"conversation_id": event.ConversationID, "state": string(event.Turn.State),
 					})
 				case agentturns.EventError:
@@ -324,14 +325,14 @@ func (m *Module) startNativeAgentStream(ctx context.Context, client *connection,
 					}
 					return client.sendBlocking(streamCtx, map[string]any{
 						"type": "server.native_agent_stream.error", "id": id,
-						"action": strings.TrimSuffix(action, ".stream"), "ok": false, "status": status,
+						"action": wireAction, "ok": false, "status": status,
 						"error": message, "event": event.Event, "turn_id": event.TurnID,
 						"conversation_id": event.ConversationID, "seq": event.Seq, "data": event.Data,
 					})
 				default:
 					return client.sendBlocking(streamCtx, map[string]any{
 						"type": "server.native_agent_stream.event", "id": id,
-						"action": strings.TrimSuffix(action, ".stream"), "event": event.Event,
+						"action": wireAction, "event": event.Event,
 						"data": event.Data, "turn_id": event.TurnID,
 						"conversation_id": event.ConversationID, "seq": event.Seq,
 					})
@@ -362,6 +363,7 @@ func (m *Module) startNativeAgentStream(ctx context.Context, client *connection,
 	}
 	go func() {
 		defer client.finishStream(id)
+		wireAction := nativeAgentStreamAction(runnerAction)
 		doneSent := false
 		err := m.agent.Stream(streamCtx, runnerAction, params, func(event nativeagent.Event) error {
 			eventName := strings.TrimSpace(event.Event)
@@ -378,7 +380,7 @@ func (m *Module) startNativeAgentStream(ctx context.Context, client *connection,
 			return client.sendBlocking(streamCtx, map[string]any{
 				"type":   "server.native_agent_stream.event",
 				"id":     id,
-				"action": strings.TrimSuffix(action, ".stream"),
+				"action": wireAction,
 				"event":  eventName,
 				"data":   data,
 			})
@@ -394,12 +396,19 @@ func (m *Module) startNativeAgentStream(ctx context.Context, client *connection,
 			_ = client.sendBlocking(ctx, map[string]any{
 				"type":   "server.native_agent_stream.event",
 				"id":     id,
-				"action": strings.TrimSuffix(action, ".stream"),
+				"action": wireAction,
 				"event":  "done",
 				"data":   map[string]any{},
 			})
 		}
 	}()
+}
+
+func nativeAgentStreamAction(action string) string {
+	if action == "agent.voice.session.stream" {
+		return action
+	}
+	return strings.TrimSuffix(action, ".stream")
 }
 
 func durableStreamConversationID(params map[string]any) string {

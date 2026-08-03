@@ -132,6 +132,17 @@ base64 且每片不超过 256 KiB。上传阶段返回按字节计算的 `progre
 使用 owner 范围、revision 前置条件和幂等键。所有 action 的可校验元数据以
 `docs/product-action-contract.json` 为准。
 
+Execution V2 的最终 PostgreSQL schema 已由 direct-final v78 migration
+registered；schema、类型和 action registration 不是 runtime capability。每个
+`execution.v2.*` 能力仍由已接线路由、executor/transport、持久化和显式
+readiness gate 独立控制，未通过 gate 时 discovery 与 action 必须保持关闭。
+
+Native Agent schedule chat tools 只保留只读的 schedule/run 查询；旧的写入
+proposal/confirmation flow 与 schedule-confirmation runtime/store 已移除。调度
+CRUD、runtime 和 materializer 仍由 ProductCore `agent.schedules.*` actions
+提供；历史 `p2p_agent_schedule_confirmations` migration/table DDL 仅为升级兼容
+保留，当前 runtime 不读写该表。
+
 官方 Ops 插件 `io.dirextalk.ops` 面向单机私有部署运维，动作包括 `ops.status.get`、`ops.containers.list`、`ops.logs.tail`、`ops.backups.list`、`ops.backup.create`、`ops.backup.status`、`ops.backup.download_chunk`、`ops.backup.delete`、`ops.cleanup.plan`、`ops.cleanup.run`、`ops.rooms.cleanup.plan`、`ops.rooms.cleanup.run`、`ops.media.orphans.plan`、`ops.migration.export`、`ops.restore.plan`、`ops.restore.run`。Ops 是唯一允许由 Docker runner 挂载 Docker socket 和专用备份 volume 的官方插件；启用时注入 `OPS_BACKUP_ROOT`、`OPS_MAX_BACKUPS`、`OPS_MESSAGE_SERVER_CONTAINER`、`OPS_POSTGRES_CONTAINER`、`OPS_POSTGRES_USER`、`OPS_POSTGRES_PASSWORD`。备份创建可异步返回任务并通过 `ops.backup.status` 轮询进度；备份下载通过 `ops.backup.download_chunk` 分片返回，客户端本地保存文件。`ops.restore.run` 必须显式传入 `confirm="restore_backup"`，用于从已有备份包恢复 Postgres dump。第一版清理必须先 plan 后 confirm：聊天记录清理只做本地缓存、隐藏/归档计划和受控安全操作，不允许 Ops 插件直接 SQL 删除 Matrix 事件表；媒体清理默认只清缓存或明确孤儿文件，仍被消息/频道引用的媒体不删除。
 
 ## 3. 运行时结构
@@ -160,9 +171,11 @@ base64 且每片不超过 256 KiB。上传阶段返回按字节计算的 `progre
   V2 Project/Analysis/Target/Plan/Run/Receipt/ServiceBinding 控制面。首个远程
   Transport 是受控 AWS SSM；Message Server 不在本机执行第三方 Skill、项目
   代码或 shell，也不暴露原始 SSM/SSH/AWS passthrough。
-- `p2p/internal/legacygateway`：历史 Release Gate M 兼容代码；它只保留
-  内部解析/存储兼容，不再包含外部 gRPC Agent 客户端，也不属于
-  embedded Agent control 的运行路径，更不参与生产单镜像 Agent 能力发布。
+- Release Gate M Legacy Matrix Gateway 的内部模块、公开 facade、consumer
+  与运行时/存储实现已移除；生产 monolith 不再包含该 capability，
+  也不暴露旧的 `dirextalk.agent_gateway.v1` 或
+  `io.dirextalk.agent.invoke.v1` 路径。历史 v38 migration/table DDL 仍保留，
+  仅用于升级数据库兼容，当前 runtime 不读写该表。
 - `p2p/consumer.go`：保留订阅 consumer 的公开 facade，实现在 `p2p/internal/projector`。
 - `internal/productpolicy`：Matrix Client-Server 写入前的 Dirextalk 产品策略校验。
 
@@ -191,7 +204,7 @@ base64 且每片不超过 256 KiB。上传阶段返回按字节计算的 `progre
 - `io.dirextalk.member.policy` 投影成员角色与禁言。
 - `io.dirextalk.join_request` 投影申请审批状态。
 - Matrix `m.room.member membership=join` 是最终 joined 事实。
-- 普通 Matrix timeline 不复制到 P2P 普通消息表；普通消息读写走 Matrix Client-Server API。配置的 agents room 也保持 Matrix-native：现有本地 bridge 使用 `@agent:<server>` Matrix session 处理旧文本消息并通过 Matrix send/edit 写入预览和最终回复，不投影为 `agent_room.message`，也不使用 `client.agent_stream` 或 `server.agent_stream`。Release Gate M 的服务端 Legacy Gateway 基础模块只处理 owner 在该房间发送的 `io.dirextalk.agent.invoke.v1` 结构化事件，以独立 JetStream durable 和 PostgreSQL v38 reservation 向 vNext Agent Control 创建 Run；它不会把普通 timeline 或 prompt 复制到新消息表。生产 monolith 暂不开放该 consumer，必须先完成旧 Connect consumer 的可验证互斥切换，避免同一输入双重执行。
+- 普通 Matrix timeline 不复制到 P2P 普通消息表；普通消息读写走 Matrix Client-Server API。配置的 agents room 也保持 Matrix-native：现有本地 bridge 使用 `@agent:<server>` Matrix session 处理旧文本消息并通过 Matrix send/edit 写入预览和最终回复，不投影为 `agent_room.message`，也不使用 `client.agent_stream` 或 `server.agent_stream`。Release Gate M 的 Legacy Matrix Gateway 已从 runtime 移除；历史 v38 reservation migration/table DDL 仅为升级兼容保留，当前服务不处理 `io.dirextalk.agent.invoke.v1`，也不会把普通 timeline 或 prompt 复制到新消息表。
 
 ## 5. 用户请求生命周期
 
@@ -335,7 +348,7 @@ Agent/API：
 
 - Agent token 不再有动态权限表，只能通过 product body-action 访问 `agent.matrix_session.create`，并可访问标准 `POST /mcp` MCP endpoint，不能调用 `realtime.ws_ticket.create` 创建 WS ticket；其他 protected action 只认 owner `access_token`。本地 bridge 使用 `agent.matrix_session.create` 得到的 Matrix session 监听 agents room 并回写消息。
 - MCP capability 是 owner-scoped 代理能力：`agent_token` 只负责授权标准 MCP endpoint，联系人、房间、成员、消息和频道内容工具按 portal owner 视角执行，并在 Matrix 读写前校验 joined membership。标准 `POST /mcp` 使用 MCP Streamable HTTP JSON-RPC，支持 `initialize`、`tools/list`、`tools/call`，只接受 `Authorization: Bearer <agent_token>`，拒绝 query-string token，校验 `Origin`，并且不会把入站 bearer token 传给下游 capability。Native Agent 内置 Dirextalk tools 与标准 `POST /mcp` 共用 `internal/dirextalkmcp` registry/service；固定 `mcp.*` body action 已删除。详见 [当前 Agent 和 MCP 合约](agent-mcp-current-contract.md)。
-- Native Agent 对话是独立于 Online Agent Matrix room 的 server-backed `agent.*` 业务；普通调用走 owner-protected action，流式调用走 `client.native_agent_stream` / `server.native_agent_stream.*`。服务端只发布已通过依赖与 readiness 检查的能力；本机 runtime CLI、可变第三方 Skill 安装/执行、MCP server 安装/执行和任意 shell/code passthrough 均不可用。模型 profile、持久化对话/知识记忆和内置工具遵循 [当前 Agent 和 MCP 合约](agent-mcp-current-contract.md)；Execution V2 仅按 [Agent 与 Execution V2 合约](agent-core-integration-development-contract.md) 与 [ADR](adr/2026-07-31-execution-orchestration-v2.md) 的 readiness gate 发布。
+- Native Agent 对话是独立于 Online Agent Matrix room 的 server-backed `agent.*` 业务；普通调用走 owner-protected action，流式调用走 `client.native_agent_stream` / `server.native_agent_stream.*`。服务端只发布已通过依赖与 readiness 检查的能力；本机 runtime CLI、可变第三方 Skill 安装/执行、MCP server 安装/执行和任意 shell/code passthrough 均不可用。模型 profile、持久化对话/知识记忆和内置工具遵循 [当前 Agent 和 MCP 合约](agent-mcp-current-contract.md)；Execution V2 的 v78 schema 已注册，但 runtime capability/readiness 仍独立 gated，只有通过 [Agent 与 Execution V2 合约](agent-core-integration-development-contract.md) 与 [ADR](adr/2026-07-31-execution-orchestration-v2.md) 的 readiness gate 才发布。
 - `agent.matrix_session.create` 使用 owner `access_token` 或 `agent_token` 调用，用于本地 cc-connect/gateway 获取 `@agent:<server>` 的 Matrix Client-Server session；它不返回 owner Matrix session，也不回显 `agent_token` 或 portal password。
 - Agent 在线状态对 owner 客户端只暴露一个 Matrix 房间状态字段：真实 `agent_room_id` 内的 `io.dirextalk.agent.status`，state key 为 `@agent:<server>`，content 只含 `online`。运行中的本地 bridge 通过 `@agent:<server>` Matrix session 发布 `online=true/false`；服务端不能从 Agent 配置、`/sync` 或 WS session 推断在线，只在启动/修复 agents room 或禁用 Agent 配置时写 `online=false` 兜底。`sync.bootstrap` 只返回 `agent_room_id` 供客户端定位房间，不再返回 `agent_online`；WS `server.event` 不发送 `agent.presence`。`agent.status`/`agents.status` 已删除，客户端不得再调用。
 - Agent 预览和最终可恢复正文都通过 Matrix 消息/编辑回写；客户端展示 Matrix timeline 的聚合编辑结果，不消费 `server.agent_stream`。
@@ -359,8 +372,30 @@ Multi-node：
 单节点 Docker：
 
 ```bash
-docker compose -f docker-compose.p2p.yml up --build
+unset MESSAGE_SERVER_IMAGE
+docker compose -f docker-compose.p2p.yml up -d --build message-server
 docker compose -f docker-compose.p2p.yml exec message-server cat /var/dirextalk-message-server/p2p/bootstrap.json
+```
+
+部署已发布镜像时必须把 `MESSAGE_SERVER_IMAGE` 设为完整的不可变
+`repo@sha256:<64-hex-digest>`，先显式 pull，再用 `--no-build` 启动；digest
+路径不得使用 `--build`：
+
+```bash
+export MESSAGE_SERVER_IMAGE=dirextalk/message-server@sha256:<64-hex-digest>
+docker compose -f docker-compose.p2p.yml pull message-server-init message-server
+docker compose -f docker-compose.p2p.yml up -d --no-build message-server
+```
+
+三节点回归 compose 也读取同一个 `MESSAGE_SERVER_IMAGE`。固定 digest 时，
+先 pull 三个 init 和三个 serving service，再用 `--no-build` 启动；本地源代码
+验证才保留 `--build`：
+
+```bash
+export MESSAGE_SERVER_IMAGE=dirextalk/message-server@sha256:<64-hex-digest>
+docker compose -f docker-compose.p2p-dual.yml pull \
+  dendrite-a-init dendrite-b-init dendrite-c-init dendrite-a dendrite-b dendrite-c
+docker compose -f docker-compose.p2p-dual.yml up -d --no-build dendrite-a dendrite-b dendrite-c
 ```
 
 多节点 regression。

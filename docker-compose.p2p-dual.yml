@@ -13,7 +13,10 @@ name: dirextalk-p2p-dual
 # P2P_DUAL_C_CLIENT_BASE_URL when those domain names are served behind a proxy.
 
 x-message-server-local: &message-server-local
-  image: dirextalk/message-server:latest
+  # Set MESSAGE_SERVER_IMAGE to an immutable registry digest for deployment;
+  # pull it first and start with --no-build. Leave it unset for local source
+  # builds, which may use --build.
+  image: ${MESSAGE_SERVER_IMAGE:-dirextalk/message-server:latest}
   build:
     context: .
     dockerfile: Dockerfile

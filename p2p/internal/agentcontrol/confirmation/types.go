@@ -105,20 +105,23 @@ type Binding struct {
 	Digest string `json:"digest,omitempty"`
 	// OwnerID identifies the single Agent owner/instance that authorized this
 	// operation. It is a stable identity descriptor, never a secret.
-	OwnerID           string
-	OperationDomain   string
-	TargetID          string
-	TargetRevision    int64
-	TargetKind        string
-	SourceVersion     string
-	SourceCommit      string
-	ContentDigest     Digest
-	ManifestDigest    Digest
-	ExecutionDigest   Digest
-	PermissionDigest  Digest
-	ParameterDigest   Digest
-	NetworkDigest     Digest
-	SecretGrantDigest Digest
+	OwnerID         string
+	OperationDomain string
+	TargetID        string
+	TargetRevision  int64
+	TargetKind      string
+	// ExtensionVersionID binds extension confirmations to the exact immutable
+	// version snapshot without overloading the product-facing TargetKind.
+	ExtensionVersionID string
+	SourceVersion      string
+	SourceCommit       string
+	ContentDigest      Digest
+	ManifestDigest     Digest
+	ExecutionDigest    Digest
+	PermissionDigest   Digest
+	ParameterDigest    Digest
+	NetworkDigest      Digest
+	SecretGrantDigest  Digest
 	// Execution V2 binds a user decision to one immutable plan/run/stage and
 	// target snapshot. These fields remain empty for legacy confirmation
 	// domains and are mandatory for operation domains prefixed execution:v2.
@@ -152,7 +155,7 @@ type Binding struct {
 // comparison at a persistence or confirmation boundary.
 func (b Binding) IsZero() bool {
 	return b.Digest == "" && b.OwnerID == "" && b.OperationDomain == "" && b.TargetID == "" &&
-		b.TargetRevision == 0 && b.TargetKind == "" && b.SourceVersion == "" && b.SourceCommit == "" &&
+		b.TargetRevision == 0 && b.TargetKind == "" && b.ExtensionVersionID == "" && b.SourceVersion == "" && b.SourceCommit == "" &&
 		b.ContentDigest == "" && b.ManifestDigest == "" && b.ExecutionDigest == "" && b.PermissionDigest == "" &&
 		b.ParameterDigest == "" && b.NetworkDigest == "" && b.SecretGrantDigest == "" &&
 		b.PlanID == "" && b.PlanRevision == 0 && b.PlanDigest == "" && b.DeploymentID == "" &&
@@ -190,6 +193,7 @@ func (b Binding) normalized() (Binding, error) {
 	b.OwnerID = strings.TrimSpace(b.OwnerID)
 	b.OperationDomain = strings.TrimSpace(b.OperationDomain)
 	b.TargetID = strings.TrimSpace(b.TargetID)
+	b.ExtensionVersionID = strings.TrimSpace(b.ExtensionVersionID)
 	b.SourceVersion = strings.TrimSpace(b.SourceVersion)
 	b.SourceCommit = strings.TrimSpace(b.SourceCommit)
 	b.TargetKind = strings.TrimSpace(b.TargetKind)
@@ -207,6 +211,14 @@ func (b Binding) normalized() (Binding, error) {
 	}
 	if b.OperationDomain == "" || b.TargetID == "" || b.TargetRevision < 1 ||
 		(!executionV2 && b.SourceVersion == "" && b.SourceCommit == "") {
+		return Binding{}, ErrInvalid
+	}
+	extensionDomain := strings.HasPrefix(b.OperationDomain, "extension.")
+	if extensionDomain {
+		if !validateUUID(b.ExtensionVersionID) || b.TargetKind != "mcp" {
+			return Binding{}, ErrInvalid
+		}
+	} else if b.ExtensionVersionID != "" {
 		return Binding{}, ErrInvalid
 	}
 	for _, d := range []Digest{b.ContentDigest, b.ParameterDigest, b.NetworkDigest, b.SecretGrantDigest} {
@@ -244,7 +256,7 @@ func (b Binding) normalized() (Binding, error) {
 		}
 		if strings.TrimPrefix(b.OperationDomain, "execution:v2:") != b.GateType ||
 			b.SourceVersion != "" || b.SourceCommit != "" ||
-			b.ManifestDigest != "" || b.PermissionDigest != "" {
+			b.ManifestDigest != "" || b.PermissionDigest != "" || b.ExtensionVersionID != "" {
 			return Binding{}, ErrInvalid
 		}
 		if b.SelectedTool != "" || len(b.SelectedCommand) != 0 ||
@@ -421,7 +433,7 @@ func (b Binding) Equal(other Binding) bool {
 		return false
 	}
 	return a.Digest == c.Digest &&
-		a.OwnerID == c.OwnerID && a.OperationDomain == c.OperationDomain && a.TargetID == c.TargetID && a.TargetRevision == c.TargetRevision && a.TargetKind == c.TargetKind &&
+		a.OwnerID == c.OwnerID && a.OperationDomain == c.OperationDomain && a.TargetID == c.TargetID && a.TargetRevision == c.TargetRevision && a.TargetKind == c.TargetKind && a.ExtensionVersionID == c.ExtensionVersionID &&
 		a.SourceVersion == c.SourceVersion && a.SourceCommit == c.SourceCommit && a.ContentDigest == c.ContentDigest &&
 		a.ManifestDigest == c.ManifestDigest && a.ExecutionDigest == c.ExecutionDigest && a.PermissionDigest == c.PermissionDigest &&
 		a.ParameterDigest == c.ParameterDigest && a.NetworkDigest == c.NetworkDigest && a.SecretGrantDigest == c.SecretGrantDigest &&

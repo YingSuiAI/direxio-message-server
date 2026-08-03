@@ -80,37 +80,6 @@ type ScheduleRunPage struct {
 	NextCursor string
 }
 
-// ScheduleConfirmation is a durable owner/conversation-scoped approval for a
-// mutating embedded schedule action. ParamsJSON and ResultJSON are always
-// secret-free, bounded JSON projections.
-type ScheduleConfirmation struct {
-	ConfirmationID string
-	OwnerID        string
-	ConversationID string
-	Action         string
-	ParamsJSON     []byte
-	RequestDigest  [32]byte
-	IdempotencyKey string
-	Summary        string
-	ApprovalCode   string
-	Status         string
-	Revision       int64
-	ExpiresAt      time.Time
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
-	ResultJSON     []byte
-	Error          string
-}
-
-var ErrScheduleConfirmationNotFound = errors.New("schedule confirmation not found")
-var ErrScheduleConfirmationConflict = errors.New("schedule confirmation conflict")
-
-type ScheduleConfirmationStore interface {
-	ReserveScheduleConfirmation(context.Context, ScheduleConfirmation) (ScheduleConfirmation, bool, error)
-	GetScheduleConfirmation(context.Context, string, string, string) (ScheduleConfirmation, bool, error)
-	ClaimScheduleConfirmation(context.Context, string, string, string, int64, time.Time) (ScheduleConfirmation, error)
-	CompleteScheduleConfirmation(context.Context, string, string, string, int64, string, []byte, string) error
-}
 type ScheduleStore interface {
 	CreateSchedule(context.Context, Schedule, string) (Schedule, error)
 	GetSchedule(context.Context, string, string) (Schedule, bool, error)
@@ -196,9 +165,6 @@ func (s *MemoryStore) ensureSchedules() {
 	}
 	if s.scheduleMutations == nil {
 		s.scheduleMutations = make(map[string]memoryScheduleMutation)
-	}
-	if s.scheduleConfirmations == nil {
-		s.scheduleConfirmations = make(map[string]ScheduleConfirmation)
 	}
 }
 func cloneSchedule(v Schedule) Schedule {
@@ -435,100 +401,6 @@ func (s *MemoryStore) SetScheduleStatusCAS(_ context.Context, o, id string, expe
 
 func scheduleMutationKey(owner, action, key string) string {
 	return owner + "\x00" + action + "\x00" + key
-}
-func confirmationKey(owner, conversation, id string) string {
-	return owner + "\x00" + conversation + "\x00" + id
-}
-func cloneScheduleConfirmation(v ScheduleConfirmation) ScheduleConfirmation {
-	v.ParamsJSON = append([]byte(nil), v.ParamsJSON...)
-	v.ResultJSON = append([]byte(nil), v.ResultJSON...)
-	return v
-}
-func (s *MemoryStore) ReserveScheduleConfirmation(_ context.Context, v ScheduleConfirmation) (ScheduleConfirmation, bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.ensureSchedules()
-	for k, old := range s.scheduleConfirmations {
-		if old.OwnerID == v.OwnerID && old.ConversationID == v.ConversationID && old.Status == "executing" {
-			return ScheduleConfirmation{}, false, ErrScheduleConfirmationConflict
-		}
-		if old.OwnerID == v.OwnerID && old.ConversationID == v.ConversationID && old.Status == "pending" {
-			if old.Action == v.Action && old.RequestDigest == v.RequestDigest && old.ExpiresAt.After(time.Now().UTC()) {
-				return cloneScheduleConfirmation(old), false, nil
-			}
-			old.Status = "replaced"
-			old.Revision++
-			old.UpdatedAt = time.Now().UTC()
-			s.scheduleConfirmations[k] = old
-		}
-	}
-	if v.Revision <= 0 {
-		v.Revision = 1
-	}
-	now := time.Now().UTC()
-	if v.CreatedAt.IsZero() {
-		v.CreatedAt = now
-	}
-	v.UpdatedAt = now
-	s.scheduleConfirmations[confirmationKey(v.OwnerID, v.ConversationID, v.ConfirmationID)] = cloneScheduleConfirmation(v)
-	return cloneScheduleConfirmation(v), true, nil
-}
-func (s *MemoryStore) GetScheduleConfirmation(_ context.Context, owner, conversation, id string) (ScheduleConfirmation, bool, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	v, ok := s.scheduleConfirmations[confirmationKey(owner, conversation, id)]
-	if !ok {
-		return ScheduleConfirmation{}, false, nil
-	}
-	return cloneScheduleConfirmation(v), true, nil
-}
-func (s *MemoryStore) ClaimScheduleConfirmation(_ context.Context, owner, conversation, id string, revision int64, now time.Time) (ScheduleConfirmation, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	v, ok := s.scheduleConfirmations[confirmationKey(owner, conversation, id)]
-	if !ok {
-		return ScheduleConfirmation{}, ErrScheduleConfirmationNotFound
-	}
-	if v.Status != "pending" || v.Revision != revision {
-		if v.Status == "completed" || v.Status == "failed" {
-			return cloneScheduleConfirmation(v), nil
-		}
-		return ScheduleConfirmation{}, ErrScheduleConfirmationConflict
-	}
-	if !v.ExpiresAt.After(now) {
-		v.Status = "expired"
-		v.Revision++
-		v.UpdatedAt = now
-		s.scheduleConfirmations[confirmationKey(owner, conversation, id)] = v
-		return ScheduleConfirmation{}, ErrScheduleConfirmationConflict
-	}
-	v.Status = "executing"
-	v.Revision++
-	v.UpdatedAt = now
-	s.scheduleConfirmations[confirmationKey(owner, conversation, id)] = v
-	return cloneScheduleConfirmation(v), nil
-}
-func (s *MemoryStore) CompleteScheduleConfirmation(_ context.Context, owner, conversation, id string, revision int64, status string, result []byte, errText string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	k := confirmationKey(owner, conversation, id)
-	v, ok := s.scheduleConfirmations[k]
-	if !ok {
-		return ErrScheduleConfirmationNotFound
-	}
-	if v.Status != "executing" || v.Revision != revision {
-		return ErrScheduleConfirmationConflict
-	}
-	if status != "completed" {
-		status = "failed"
-	}
-	v.Status = status
-	v.Revision++
-	v.ResultJSON = append([]byte(nil), result...)
-	v.Error = errText
-	v.UpdatedAt = time.Now().UTC()
-	s.scheduleConfirmations[k] = v
-	return nil
 }
 func (s *MemoryStore) GetScheduleMutation(_ context.Context, owner, action, key string) ([32]byte, []byte, bool, error) {
 	s.mu.RLock()
@@ -1010,111 +882,6 @@ func (s *DatabaseStore) PutScheduleMutation(ctx context.Context, owner, action, 
 		return ErrScheduleIdempotency
 	}
 	return err
-}
-func scanScheduleConfirmation(row interface{ Scan(...any) error }) (ScheduleConfirmation, error) {
-	var v ScheduleConfirmation
-	var raw []byte
-	err := row.Scan(&v.ConfirmationID, &v.OwnerID, &v.ConversationID, &v.Action, &v.ParamsJSON, &raw, &v.IdempotencyKey, &v.Summary, &v.ApprovalCode, &v.Status, &v.Revision, &v.ExpiresAt, &v.CreatedAt, &v.UpdatedAt, &v.ResultJSON, &v.Error)
-	copy(v.RequestDigest[:], raw)
-	return v, err
-}
-func (s *DatabaseStore) GetScheduleConfirmation(ctx context.Context, owner, conversation, id string) (ScheduleConfirmation, bool, error) {
-	v, e := scanScheduleConfirmation(s.db.QueryRowContext(ctx, `SELECT confirmation_id,owner_id,conversation_id,action,params_json,request_digest,idempotency_key,summary,approval_code,status,revision,expires_at,created_at,updated_at,result_json,error_text FROM p2p_agent_schedule_confirmations WHERE owner_id=$1 AND conversation_id=$2 AND confirmation_id=$3`, owner, conversation, id))
-	if errors.Is(e, sql.ErrNoRows) {
-		return ScheduleConfirmation{}, false, nil
-	}
-	return v, e == nil, e
-}
-func (s *DatabaseStore) ReserveScheduleConfirmation(ctx context.Context, v ScheduleConfirmation) (ScheduleConfirmation, bool, error) {
-	if v.Revision <= 0 {
-		v.Revision = 1
-	}
-	now := time.Now().UTC()
-	if v.CreatedAt.IsZero() {
-		v.CreatedAt = now
-	}
-	if v.UpdatedAt.IsZero() {
-		v.UpdatedAt = now
-	}
-	tx, e := s.db.BeginTx(ctx, nil)
-	if e != nil {
-		return ScheduleConfirmation{}, false, e
-	}
-	defer tx.Rollback()
-	if _, e = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, canonicalAdvisoryLockIdentity("schedule-confirmation", v.OwnerID, v.ConversationID)); e != nil {
-		return ScheduleConfirmation{}, false, e
-	}
-	var active ScheduleConfirmation
-	var raw []byte
-	q := tx.QueryRowContext(ctx, `SELECT confirmation_id,owner_id,conversation_id,action,params_json,request_digest,idempotency_key,summary,approval_code,status,revision,expires_at,created_at,updated_at,result_json,error_text FROM p2p_agent_schedule_confirmations WHERE owner_id=$1 AND conversation_id=$2 AND status IN ('pending','executing') ORDER BY updated_at DESC LIMIT 1`, v.OwnerID, v.ConversationID)
-	se := q.Scan(&active.ConfirmationID, &active.OwnerID, &active.ConversationID, &active.Action, &active.ParamsJSON, &raw, &active.IdempotencyKey, &active.Summary, &active.ApprovalCode, &active.Status, &active.Revision, &active.ExpiresAt, &active.CreatedAt, &active.UpdatedAt, &active.ResultJSON, &active.Error)
-	copy(active.RequestDigest[:], raw)
-	if se == nil {
-		if active.Action == v.Action && active.RequestDigest == v.RequestDigest && active.Status == "pending" && active.ExpiresAt.After(now) {
-			return txCommitConfirmation(tx, active)
-		}
-		if active.Status == "executing" {
-			return ScheduleConfirmation{}, false, ErrScheduleConfirmationConflict
-		}
-		if _, e = tx.ExecContext(ctx, `UPDATE p2p_agent_schedule_confirmations SET status='replaced',revision=revision+1,updated_at=$1 WHERE owner_id=$2 AND conversation_id=$3 AND confirmation_id=$4`, now, v.OwnerID, v.ConversationID, active.ConfirmationID); e != nil {
-			return ScheduleConfirmation{}, false, e
-		}
-	}
-	e = tx.QueryRowContext(ctx, `INSERT INTO p2p_agent_schedule_confirmations(confirmation_id,owner_id,conversation_id,action,params_json,request_digest,idempotency_key,summary,approval_code,status,revision,expires_at,created_at,updated_at,result_json,error_text) VALUES($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,'pending',$10,$11,$12,$13,'{}'::jsonb,'') RETURNING confirmation_id`, v.ConfirmationID, v.OwnerID, v.ConversationID, v.Action, string(v.ParamsJSON), v.RequestDigest[:], v.IdempotencyKey, v.Summary, v.ApprovalCode, v.Revision, v.ExpiresAt, v.CreatedAt, v.UpdatedAt).Scan(new(string))
-	if e == nil {
-		if e = tx.Commit(); e != nil {
-			return ScheduleConfirmation{}, false, e
-		}
-		return v, true, nil
-	}
-	if !errors.Is(e, sql.ErrNoRows) {
-		return ScheduleConfirmation{}, false, e
-	}
-	old, ok, e := s.GetScheduleConfirmation(ctx, v.OwnerID, v.ConversationID, v.ConfirmationID)
-	return old, !ok && e == nil, e
-}
-func txCommitConfirmation(tx *sql.Tx, v ScheduleConfirmation) (ScheduleConfirmation, bool, error) {
-	if e := tx.Commit(); e != nil {
-		return ScheduleConfirmation{}, false, e
-	}
-	return v, false, nil
-}
-func (s *DatabaseStore) ClaimScheduleConfirmation(ctx context.Context, owner, conversation, id string, revision int64, now time.Time) (ScheduleConfirmation, error) {
-	var v ScheduleConfirmation
-	var raw []byte
-	e := s.db.QueryRowContext(ctx, `UPDATE p2p_agent_schedule_confirmations SET status='executing',revision=revision+1,updated_at=$5 WHERE owner_id=$1 AND conversation_id=$2 AND confirmation_id=$3 AND status='pending' AND revision=$4 AND expires_at>$5 RETURNING confirmation_id,owner_id,conversation_id,action,params_json,request_digest,idempotency_key,summary,approval_code,status,revision,expires_at,created_at,updated_at,result_json,error_text`, owner, conversation, id, revision, now).Scan(&v.ConfirmationID, &v.OwnerID, &v.ConversationID, &v.Action, &v.ParamsJSON, &raw, &v.IdempotencyKey, &v.Summary, &v.ApprovalCode, &v.Status, &v.Revision, &v.ExpiresAt, &v.CreatedAt, &v.UpdatedAt, &v.ResultJSON, &v.Error)
-	copy(v.RequestDigest[:], raw)
-	if e == nil {
-		return v, nil
-	}
-	if !errors.Is(e, sql.ErrNoRows) {
-		return v, e
-	}
-	terminal, ok, ge := s.GetScheduleConfirmation(ctx, owner, conversation, id)
-	if ge != nil {
-		return v, ge
-	}
-	if !ok {
-		return v, ErrScheduleConfirmationNotFound
-	}
-	if terminal.Status == "completed" || terminal.Status == "failed" {
-		return terminal, nil
-	}
-	return v, ErrScheduleConfirmationConflict
-}
-func (s *DatabaseStore) CompleteScheduleConfirmation(ctx context.Context, owner, conversation, id string, revision int64, status string, result []byte, errText string) error {
-	if status != "completed" {
-		status = "failed"
-	}
-	r, e := s.db.ExecContext(ctx, `UPDATE p2p_agent_schedule_confirmations SET status=$1,revision=revision+1,result_json=$2::jsonb,error_text=$3,updated_at=NOW() WHERE owner_id=$4 AND conversation_id=$5 AND confirmation_id=$6 AND status='executing' AND revision=$7`, status, string(result), errText, owner, conversation, id, revision)
-	if e != nil {
-		return e
-	}
-	n, _ := r.RowsAffected()
-	if n == 0 {
-		return ErrScheduleConfirmationConflict
-	}
-	return nil
 }
 func (s *DatabaseStore) ListScheduleRuns(ctx context.Context, o, id string, limit int, cursor string) (ScheduleRunPage, error) {
 	if limit <= 0 || limit > 100 {

@@ -16,6 +16,11 @@ This ADR is authoritative for the V2 orchestration boundary. It does not make
 any V2 route, storage, executor, capability, or action live by documentation
 alone.
 
+The direct-final v78 migration registers the final V2 schema. Runtime
+capability/readiness remains a separate gate; schema registration, action
+registration, and documentation never publish an execution capability by
+themselves.
+
 ## Decision
 
 ### 1. Planning is declarative and side-effect free

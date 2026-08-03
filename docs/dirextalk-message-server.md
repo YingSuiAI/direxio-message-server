@@ -32,11 +32,33 @@ GitHub Release, and only then update `latest`. They do not publish updater
 metadata assets or constrain which older server version may install the
 centrally authorized target.
 
-For a local-only rebuild, the compose files still tag the backend service as
-`dirextalk/message-server:latest`:
+For a local-only source rebuild, leave `MESSAGE_SERVER_IMAGE` unset. The
+Compose files keep the backend service tagged as `dirextalk/message-server:latest`
+and may build it from the checked-out source:
 
 ```bash
-docker compose -f docker-compose.p2p.yml build message-server
+unset MESSAGE_SERVER_IMAGE
+docker compose -f docker-compose.p2p.yml up -d --build message-server
+```
+
+For a deployed image, set `MESSAGE_SERVER_IMAGE` to the complete immutable
+registry digest. Pull the digest explicitly, then use `--no-build`; never use
+`--build` on this path:
+
+```bash
+export MESSAGE_SERVER_IMAGE=dirextalk/message-server@sha256:<64-hex-digest>
+docker compose -f docker-compose.p2p.yml pull message-server-init message-server
+docker compose -f docker-compose.p2p.yml up -d --no-build message-server
+```
+
+The dual-node regression stack uses the same image selector. Pull all six
+Message Server services before starting the three nodes without a build:
+
+```bash
+export MESSAGE_SERVER_IMAGE=dirextalk/message-server@sha256:<64-hex-digest>
+docker compose -f docker-compose.p2p-dual.yml pull \
+  dendrite-a-init dendrite-b-init dendrite-c-init dendrite-a dendrite-b dendrite-c
+docker compose -f docker-compose.p2p-dual.yml up -d --no-build dendrite-a dendrite-b dendrite-c
 ```
 
 Before pushing a new `latest`, run the multi-node regression against the rebuilt image.

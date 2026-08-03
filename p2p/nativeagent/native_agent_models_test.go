@@ -1,8 +1,10 @@
 package nativeagent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -670,5 +672,73 @@ func TestModelsListWithoutProviderReturnsMetadataOnly(t *testing.T) {
 		if provider["provider"] == "litellm" || provider["provider"] == "vertex" {
 			t.Fatalf("removed provider leaked through metadata: %#v", provider)
 		}
+	}
+}
+
+func TestModelsListRejectsOversizedProviderEnvelopes(t *testing.T) {
+	for _, testCase := range []struct {
+		name   string
+		params map[string]any
+	}{
+		{name: "anthropic", params: map[string]any{"provider": "anthropic"}},
+		{name: "gemini", params: map[string]any{"provider": "gemini"}},
+		{name: "openai compatible", params: map[string]any{"provider": "openai_compatible"}},
+		{name: "openrouter embedding", params: map[string]any{"provider": "openrouter", "model_kind": "embedding"}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write(bytes.Repeat([]byte("x"), modelListResponseLimit+1))
+			}))
+			defer server.Close()
+			params := cloneAnyMap(testCase.params)
+			params["base_url"], params["api_key"] = server.URL, "test-key"
+			_, err := New(Config{}).Invoke(context.Background(), "agent.models.list", params)
+			if err == nil || !strings.Contains(err.Error(), "response exceeds") {
+				t.Fatalf("oversized response error = %v", err)
+			}
+		})
+	}
+}
+
+func TestModelsListRejectsTooManyNormalizedModelsForEveryEnvelope(t *testing.T) {
+	rawModels := make([]map[string]any, modelListMaxCount+1)
+	for i := range rawModels {
+		rawModels[i] = map[string]any{"id": fmt.Sprintf("model-%04d", i)}
+	}
+	for _, testCase := range []struct {
+		name      string
+		provider  string
+		modelKind string
+		field     string
+	}{
+		{name: "anthropic data", provider: "anthropic", field: "data"},
+		{name: "gemini models", provider: "gemini", field: "models"},
+		{name: "openai data", provider: "openai", field: "data"},
+		{name: "openrouter data", provider: "openrouter", field: "data"},
+		{name: "openrouter embedding data", provider: "openrouter", modelKind: "embedding", field: "data"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				payload, err := json.Marshal(map[string]any{testCase.field: rawModels})
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				_, _ = w.Write(payload)
+			}))
+			defer server.Close()
+			params := map[string]any{
+				"provider":   testCase.provider,
+				"base_url":   server.URL,
+				"api_key":    "test-key",
+				"model_kind": testCase.modelKind,
+			}
+			_, err := New(Config{}).Invoke(context.Background(), "agent.models.list", params)
+			if err == nil || !strings.Contains(err.Error(), "too many normalized models") {
+				t.Fatalf("model count error = %v", err)
+			}
+		})
 	}
 }

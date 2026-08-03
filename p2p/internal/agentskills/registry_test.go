@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/agentrecipes"
+	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/registryjson"
 )
 
 func TestBuiltinManifestsAndExactDigestPins(t *testing.T) {
@@ -215,11 +216,8 @@ func TestCoreSourceHasNoGeoLibreBranch(t *testing.T) {
 }
 
 func TestContentDigestCanonicalizesManifest(t *testing.T) {
-	var value map[string]interface{}
-	if err := json.Unmarshal([]byte(`{"id":"x","content_digest":"ignored","version":"1.0.0"}`), &value); err != nil {
-		t.Fatal(err)
-	}
-	if got := ContentDigest([]byte(`{"id":"x","content_digest":"ignored","version":"1.0.0"}`)); got == "" {
+	content := []byte(`{"id":"x","content_digest":"ignored","version":"1.0.0"}`)
+	if got, want := ContentDigest(content), registryjson.ContentDigest(content); got == "" || got != want {
 		t.Fatal("empty digest")
 	}
 }

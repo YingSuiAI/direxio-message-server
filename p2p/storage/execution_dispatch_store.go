@@ -41,19 +41,6 @@ type ExecutionDispatchIntent struct {
 	SecretProvision *coreaws.SecretParameterProvisionRequest
 }
 
-// ExecutionDispatchFence is the typed, immutable resolver key. A bare UUID
-// is intentionally insufficient: attempt identity alone must not authorize a
-// receipt read or provider reconciliation.
-type ExecutionDispatchFence struct {
-	OwnerID     string
-	RunID       string
-	StageID     string
-	AttemptID   string
-	LeaseID     string
-	LeaseEpoch  uint64
-	FenceDigest coreexecution.Digest
-}
-
 // ExecutionStageLeaseClaim is the authoritative agent_tasks lease fence used
 // to claim a queued execution stage. The expected task revision is checked
 // under the same row lock as the stage and target lease.
@@ -132,110 +119,6 @@ func (s *DatabaseExecutionStore) RenewExecutionStageLease(ctx context.Context, c
 		return coreexecution.ErrConflict
 	}
 	return tx.Commit()
-}
-
-// ClaimQueuedStageWithTaskLease is the strict production claim path. It
-// requires the authoritative agent_tasks lease to be running under the exact
-// holder/attempt/epoch/revision fence before installing the target lease.
-func (s *DatabaseExecutionStore) ClaimQueuedStageWithTaskLease(ctx context.Context, c ExecutionStageLeaseClaim) (bool, error) {
-	if s == nil || s.db == nil {
-		return false, ErrExecutionStoreInvalid
-	}
-	now := s.now().UTC().Truncate(time.Microsecond)
-	if strings.TrimSpace(c.OwnerID) == "" || !coreexecution.ValidateUUID(c.RunID) || !coreexecution.ValidateUUID(c.StageID) || !coreexecution.ValidateUUID(c.TaskID) || strings.TrimSpace(c.Holder) == "" || c.Attempt == 0 || c.LeaseEpoch == 0 || c.ExpectedTaskRevision == 0 || !coreexecution.ValidateUUID(c.LeaseID) || !coreexecution.ValidateUUID(c.LeaseToken) || !c.ExpiresAt.After(now) {
-		return false, ErrExecutionStoreInvalid
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return false, err
-	}
-	defer tx.Rollback()
-	var taskOwner, taskStatus, taskHolder string
-	var taskAttempt, taskEpoch, taskRevision uint64
-	var taskExpiry sql.NullTime
-	if err = tx.QueryRowContext(ctx, `SELECT owner_id,status,lease_holder,attempt,lease_epoch,revision,lease_expires_at FROM agent_tasks WHERE owner_id=$1 AND task_id=$2 FOR UPDATE`, c.OwnerID, c.TaskID).Scan(&taskOwner, &taskStatus, &taskHolder, &taskAttempt, &taskEpoch, &taskRevision, &taskExpiry); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return false, coreexecution.ErrNotFound
-		}
-		return false, err
-	}
-	if taskOwner != c.OwnerID || taskStatus != "running" || taskHolder != c.Holder || taskAttempt != uint64(c.Attempt) || taskEpoch != c.LeaseEpoch || taskRevision != c.ExpectedTaskRevision || !taskExpiry.Valid || !taskExpiry.Time.After(now) {
-		return false, coreexecution.ErrConflict
-	}
-	var targetID string
-	var targetRevision uint64
-	var targetDigest string
-	var stageSnapshot []byte
-	var existingLeaseID, existingStatus string
-	var existingEpoch uint64
-	var existingExpiry sql.NullTime
-	if err = tx.QueryRowContext(ctx, `SELECT target_id::text,target_revision,target_digest,snapshot_json FROM core_execution_run_stages WHERE owner_id=$1 AND run_id=$2 AND stage_id=$3 AND task_id=$4 AND status='queued' FOR UPDATE`, c.OwnerID, c.RunID, c.StageID, c.TaskID).Scan(&targetID, &targetRevision, &targetDigest, &stageSnapshot); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return false, nil
-		}
-		return false, err
-	}
-	err = tx.QueryRowContext(ctx, `SELECT lease_id::text,status,epoch,expires_at FROM core_execution_target_mutation_leases WHERE owner_id=$1 AND target_id=$2 AND target_revision=$3 FOR UPDATE`, c.OwnerID, targetID, targetRevision).Scan(&existingLeaseID, &existingStatus, &existingEpoch, &existingExpiry)
-	if err == nil {
-		if existingStatus == "uncertain" {
-			return false, coreexecution.ErrConflict
-		}
-		if existingStatus == "active" && existingExpiry.Valid && existingExpiry.Time.After(now) {
-			return false, nil
-		}
-		// lease_id is the stable identity of the target mutation slot. Durable
-		// dispatch intents retain an FK to it; each acquisition is separated by
-		// token+epoch and must never rewrite that historical identity.
-		if c.LeaseID != existingLeaseID || c.LeaseEpoch != existingEpoch+1 {
-			return false, coreexecution.ErrConflict
-		}
-		res, e := tx.ExecContext(ctx, `UPDATE core_execution_target_mutation_leases SET run_id=$5,stage_id=$6,token=$7,epoch=$8,expires_at=$9,provider_operation_id=CASE WHEN status='released' THEN '' ELSE provider_operation_id END,receipt_id=CASE WHEN status='released' THEN NULL ELSE receipt_id END,revision=revision+1,status='active',updated_at=$10 WHERE owner_id=$1 AND target_id=$2 AND target_revision=$3 AND lease_id=$4 AND status<>'uncertain'`, c.OwnerID, targetID, targetRevision, c.LeaseID, c.RunID, c.StageID, c.LeaseToken, c.LeaseEpoch, c.ExpiresAt.UTC(), now)
-		if e != nil {
-			return false, e
-		}
-		if n, e := res.RowsAffected(); e != nil || n != 1 {
-			if e != nil {
-				return false, e
-			}
-			return false, coreexecution.ErrConflict
-		}
-	} else if errors.Is(err, sql.ErrNoRows) {
-		if c.LeaseEpoch != 1 {
-			return false, coreexecution.ErrConflict
-		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO core_execution_target_mutation_leases(owner_id,target_id,target_revision,lease_id,run_id,stage_id,token,epoch,expires_at,revision,status,schema_version,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,1,'active','execution-target-lease/v2',$10)`, c.OwnerID, targetID, targetRevision, c.LeaseID, c.RunID, c.StageID, c.LeaseToken, c.LeaseEpoch, c.ExpiresAt.UTC(), now); err != nil {
-			return false, err
-		}
-	} else {
-		return false, err
-	}
-	var currentStageRevision uint64
-	if err = tx.QueryRowContext(ctx, `SELECT revision FROM core_execution_run_stages WHERE owner_id=$1 AND run_id=$2 AND stage_id=$3 FOR UPDATE`, c.OwnerID, c.RunID, c.StageID).Scan(&currentStageRevision); err != nil {
-		return false, err
-	}
-	stageSnapshot, err = successorStageSnapshot(stageSnapshot, coreexecution.StageRunning, now)
-	if err != nil {
-		return false, err
-	}
-	res, err := tx.ExecContext(ctx, `UPDATE core_execution_run_stages SET status='running',revision=$1,started_at=COALESCE(started_at,$2),snapshot_json=$3,updated_at=$2 WHERE owner_id=$4 AND run_id=$5 AND stage_id=$6 AND task_id=$7 AND status='queued'`, currentStageRevision+1, now, stageSnapshot, c.OwnerID, c.RunID, c.StageID, c.TaskID)
-	if err != nil {
-		return false, err
-	}
-	if n, e := res.RowsAffected(); e != nil || n != 1 {
-		if e != nil {
-			return false, e
-		}
-		return false, coreexecution.ErrConflict
-	}
-	if err = promoteExecutionRunForStageTx(ctx, tx, c.OwnerID, c.RunID, c.StageID, now); err != nil {
-		return false, err
-	}
-	if err = tx.Commit(); err != nil {
-		return false, err
-	}
-	_ = existingLeaseID
-	_ = targetDigest
-	return true, nil
 }
 
 func successorStageSnapshot(raw []byte, status coreexecution.StageStatus, at time.Time) ([]byte, error) {
@@ -335,7 +218,7 @@ func (s *DatabaseExecutionStore) ClaimQueuedExecutionStage(ctx context.Context, 
 	var stageSnapshot []byte
 	executors := s.executors
 	filterExecutors := s.executorsAuthoritative
-	err = tx.QueryRowContext(ctx, `SELECT t.task_id::text,s.run_id::text,s.stage_id::text,s.target_id::text,s.target_revision,s.target_digest,s.plan_stage_digest,s.stage_revision,t.revision,t.lease_epoch,t.attempt,s.snapshot_json,COALESCE(s.confirmation_id::text,'') FROM agent_tasks t JOIN core_execution_run_stages s ON s.owner_id=t.owner_id AND s.task_id=t.task_id JOIN core_execution_runs r ON r.owner_id=s.owner_id AND r.run_id=s.run_id AND r.status IN ('queued','running') WHERE t.owner_id=$1 AND t.status='queued' AND t.available_at<=$2 AND t.deleted_at IS NULL AND t.spec_json->>'kind'='execution_stage' AND s.status='queued' AND (NOT $3::boolean OR NOT EXISTS (SELECT 1 FROM core_execution_plan_steps ps WHERE ps.owner_id=s.owner_id AND ps.plan_id=s.plan_id AND ps.plan_revision=s.plan_revision AND ps.stage_key=s.plan_stage_key AND ps.step_set=CASE WHEN r.operation='rollback' THEN 'rollback' ELSE 'forward' END AND ((ps.snapshot_json->'step'->>'kind'='compute.provision' AND NOT $4::boolean) OR (ps.snapshot_json->'step'->>'kind'<>'compute.provision' AND NOT $5::boolean)))) ORDER BY t.available_at,t.created_at,t.task_id FOR UPDATE OF t,s SKIP LOCKED LIMIT 1`, owner, now, filterExecutors, executors.ComputeProvision, executors.AWSSSM).Scan(&taskID, &runID, &stageID, &targetID, &targetRevision, &targetDigest, &stageDigest, &stageRevision, &taskRevision, &taskEpoch, &taskAttempt, &stageSnapshot, &confirmationID)
+	err = tx.QueryRowContext(ctx, `SELECT t.task_id::text,s.run_id::text,s.stage_id::text,s.target_id::text,s.target_revision,s.target_digest,s.plan_stage_digest,s.revision,t.revision,t.lease_epoch,t.attempt,s.snapshot_json,COALESCE(s.confirmation_id::text,'') FROM agent_tasks t JOIN core_execution_run_stages s ON s.owner_id=t.owner_id AND s.task_id=t.task_id JOIN core_execution_runs r ON r.owner_id=s.owner_id AND r.run_id=s.run_id AND r.status IN ('queued','running') WHERE t.owner_id=$1 AND t.status='queued' AND t.available_at<=$2 AND t.deleted_at IS NULL AND t.spec_json->>'kind'='execution_stage' AND s.status='queued' AND (NOT $3::boolean OR NOT EXISTS (SELECT 1 FROM core_execution_plan_steps ps WHERE ps.owner_id=s.owner_id AND ps.plan_id=s.plan_id AND ps.plan_revision=s.plan_revision AND ps.stage_key=s.plan_stage_key AND ps.step_set=CASE WHEN r.operation='rollback' THEN 'rollback' ELSE 'forward' END AND ((ps.snapshot_json->'step'->>'kind'='compute.provision' AND NOT $4::boolean) OR (ps.snapshot_json->'step'->>'kind'<>'compute.provision' AND NOT $5::boolean)))) ORDER BY t.available_at,t.created_at,t.task_id FOR UPDATE OF t,s SKIP LOCKED LIMIT 1`, owner, now, filterExecutors, executors.ComputeProvision, executors.AWSSSM).Scan(&taskID, &runID, &stageID, &targetID, &targetRevision, &targetDigest, &stageDigest, &stageRevision, &taskRevision, &taskEpoch, &taskAttempt, &stageSnapshot, &confirmationID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return out, coreexecution.ErrNotFound
 	}
@@ -452,9 +335,10 @@ func (s *DatabaseExecutionStore) ClaimNextExecutionStage(ctx context.Context, ho
 		return ExecutionStageLeaseClaim{}, err
 	}
 	// Recover only a stage for which the durable receipt contains an exact SSM
-	// command id or the deterministic CloudFormation stack key. The resolver
-	// rehydrates that frozen intent and the runner performs readback only; it
-	// never dispatches a second provider mutation on a reclaimed stage.
+	// command id, a deterministic CloudFormation stack key, or a durable SSM
+	// frozen snapshot. The latter has no provider readback key; the resolver
+	// marks it reconcile-only and the runner permanently quarantines it without
+	// issuing a second provider mutation.
 	if reclaimed, err := s.claimExpiredKnownDispatch(ctx, holder, ttl); err == nil {
 		return reclaimed, nil
 	} else if !errors.Is(err, coreexecution.ErrNotFound) {
@@ -524,7 +408,7 @@ func (s *DatabaseExecutionStore) claimExpiredKnownDispatch(ctx context.Context, 
 	defer tx.Rollback()
 	var owner, taskID, runID, stageID, targetID, leaseID string
 	var targetRevision, taskAttempt, taskEpoch, taskRevision, targetEpoch uint64
-	err = tx.QueryRowContext(ctx, `SELECT t.owner_id,t.task_id::text,s.run_id::text,s.stage_id::text,s.target_id::text,s.target_revision,t.attempt,t.lease_epoch,t.revision,l.lease_id::text,l.epoch FROM agent_tasks t JOIN core_execution_run_stages s ON s.owner_id=t.owner_id AND s.task_id=t.task_id JOIN core_execution_target_mutation_leases l ON l.owner_id=s.owner_id AND l.target_id=s.target_id AND l.target_revision=s.target_revision JOIN core_execution_receipts r ON r.owner_id=s.owner_id AND r.run_id=s.run_id JOIN core_execution_step_attempts a ON a.owner_id=r.owner_id AND a.attempt_id=r.attempt_id AND a.stage_id=s.stage_id WHERE t.status='running' AND t.lease_expires_at<=$1 AND s.status='running' AND l.status='active' AND l.expires_at<=$1 AND r.status IN ('accepted','running') AND (r.command_id<>'' OR r.provider_operation_id<>'') AND a.status='running' ORDER BY t.lease_expires_at,t.task_id FOR UPDATE OF t,s,l,r,a SKIP LOCKED LIMIT 1`, now).Scan(&owner, &taskID, &runID, &stageID, &targetID, &targetRevision, &taskAttempt, &taskEpoch, &taskRevision, &leaseID, &targetEpoch)
+	err = tx.QueryRowContext(ctx, `SELECT t.owner_id,t.task_id::text,s.run_id::text,s.stage_id::text,s.target_id::text,s.target_revision,t.attempt,t.lease_epoch,t.revision,l.lease_id::text,l.epoch FROM agent_tasks t JOIN core_execution_run_stages s ON s.owner_id=t.owner_id AND s.task_id=t.task_id JOIN core_execution_target_mutation_leases l ON l.owner_id=s.owner_id AND l.target_id=s.target_id AND l.target_revision=s.target_revision JOIN core_execution_receipts r ON r.owner_id=s.owner_id AND r.run_id=s.run_id JOIN core_execution_step_attempts a ON a.owner_id=r.owner_id AND a.attempt_id=r.attempt_id AND a.stage_id=s.stage_id LEFT JOIN core_execution_dispatch_intents i ON i.owner_id=r.owner_id AND i.receipt_id=r.receipt_id AND i.attempt_id=r.attempt_id WHERE t.status='running' AND t.lease_expires_at<=$1 AND s.status='running' AND l.status='active' AND l.expires_at<=$1 AND r.status IN ('accepted','running') AND (r.command_id<>'' OR r.provider_operation_id<>'' OR i.snapshot_json ? 'frozen_request_snapshot') AND a.status='running' ORDER BY t.lease_expires_at,t.task_id FOR UPDATE OF t,s,l,r,a SKIP LOCKED LIMIT 1`, now).Scan(&owner, &taskID, &runID, &stageID, &targetID, &targetRevision, &taskAttempt, &taskEpoch, &taskRevision, &leaseID, &targetEpoch)
 	if errors.Is(err, sql.ErrNoRows) {
 		return out, coreexecution.ErrNotFound
 	}
@@ -784,17 +668,7 @@ func (s *DatabaseExecutionStore) markDispatchUncertain(ctx context.Context, owne
 		return coreexecution.ErrConflict
 	}
 	if taskID.Valid {
-		res, e = tx.ExecContext(ctx, `UPDATE agent_tasks SET status='failed',failure_code='execution_outcome_uncertain',failure_summary='external dispatch outcome uncertain',lease_holder='',lease_expires_at=NULL,revision=revision+1,progress_sequence=progress_sequence+1,updated_at=$1 WHERE owner_id=$2 AND task_id=$3 AND status='running'`, s.now().UTC().Truncate(time.Microsecond), owner, taskID.String)
-		if e != nil {
-			return e
-		}
-		if n, e := res.RowsAffected(); e != nil || n != 1 {
-			if e != nil {
-				return e
-			}
-			return coreexecution.ErrConflict
-		}
-		if _, e = tx.ExecContext(ctx, `UPDATE agent_task_runtime_concurrency SET running_count=GREATEST(0,running_count-1),revision=revision+1,updated_at=$1 WHERE singleton=true`, s.now().UTC().Truncate(time.Microsecond)); e != nil {
+		if e = terminalizeExecutionTaskTx(ctx, tx, owner, taskID.String, "failed", "execution_outcome_uncertain", "external dispatch outcome uncertain", s.now()); e != nil {
 			return e
 		}
 	}
@@ -1008,26 +882,19 @@ func (s *DatabaseExecutionStore) FinalizeDispatchReceipt(ctx context.Context, ow
 	}
 	if taskID.Valid {
 		taskStatus := "succeeded"
+		taskCode, taskSummary := "", ""
 		if status == coreexecution.ReceiptFailed {
 			taskStatus = "failed"
+			taskCode, taskSummary = "execution_failed", "execution provider outcome failed"
 		}
 		if status == coreexecution.ReceiptUncertain {
-			taskStatus = "running"
+			taskStatus = "failed"
+			taskCode, taskSummary = "execution_outcome_uncertain", "external dispatch outcome uncertain"
 		}
-		res, err = tx.ExecContext(ctx, `UPDATE agent_tasks SET status=$1,lease_holder='',lease_expires_at=NULL,revision=revision+1,updated_at=$2 WHERE owner_id=$3 AND task_id=$4 AND status='running'`, taskStatus, s.now().UTC().Truncate(time.Microsecond), owner, taskID.String)
-		if err != nil {
+		if err = terminalizeExecutionTaskTx(ctx, tx, owner, taskID.String, taskStatus, taskCode, taskSummary, terminalAt); err != nil {
 			return err
 		}
-		if n, e := res.RowsAffected(); e != nil || n > 1 {
-			if e != nil {
-				return e
-			}
-			return coreexecution.ErrConflict
-		}
 		if status != coreexecution.ReceiptUncertain {
-			if _, err = tx.ExecContext(ctx, `UPDATE agent_task_runtime_concurrency SET running_count=GREATEST(0,running_count-1),revision=revision+1,updated_at=$1 WHERE singleton=true`, terminalAt); err != nil {
-				return err
-			}
 			// A consumed confirmation reserves its target only while the task is
 			// live. Once this terminal receipt is committed, release that durable
 			// reservation in the same transaction so a dependency child can take
@@ -1121,45 +988,4 @@ func (s *DatabaseExecutionStore) materializeNewlyUnblockedStages(ctx context.Con
 		}
 	}
 	return nil
-}
-
-// ResolveDispatchReceipt is the restart-safe read keyed only by the explicit
-// owner-scoped 64-hex fence digest. UUIDs are deliberately not accepted as a
-// provider reconciliation fence.
-func (s *DatabaseExecutionStore) ResolveDispatchReceipt(ctx context.Context, owner string, fence coreexecution.Digest) (coreexecution.Receipt, error) {
-	var out coreexecution.Receipt
-	if s == nil || s.db == nil || strings.TrimSpace(owner) == "" || !fence.Valid() {
-		return out, ErrExecutionStoreInvalid
-	}
-	var raw []byte
-	err := s.db.QueryRowContext(ctx, `SELECT snapshot_json FROM core_execution_receipts WHERE owner_id=$1 AND fence_digest=$2`, owner, fence).Scan(&raw)
-	if errors.Is(err, sql.ErrNoRows) {
-		return out, coreexecution.ErrNotFound
-	}
-	if err != nil {
-		return out, err
-	}
-	if strictJSON(raw, &out) != nil || out.OwnerID != owner || out.FenceDigest != fence || !out.RequestDigest.Valid() {
-		return coreexecution.Receipt{}, ErrExecutionStoreDrift
-	}
-	return out, nil
-}
-
-func (s *DatabaseExecutionStore) ResolveDispatchReceiptByFence(ctx context.Context, fence ExecutionDispatchFence) (coreexecution.Receipt, error) {
-	var out coreexecution.Receipt
-	if s == nil || s.db == nil || strings.TrimSpace(fence.OwnerID) == "" || !coreexecution.ValidateUUID(fence.RunID) || !coreexecution.ValidateUUID(fence.StageID) || !coreexecution.ValidateUUID(fence.AttemptID) || !coreexecution.ValidateUUID(fence.LeaseID) || fence.LeaseEpoch == 0 || !fence.FenceDigest.Valid() {
-		return out, ErrExecutionStoreInvalid
-	}
-	var raw []byte
-	err := s.db.QueryRowContext(ctx, `SELECT r.snapshot_json FROM core_execution_receipts r JOIN core_execution_step_attempts a ON a.owner_id=r.owner_id AND a.attempt_id=r.attempt_id JOIN core_execution_target_mutation_leases l ON l.owner_id=a.owner_id AND l.run_id=a.run_id AND l.stage_id=a.stage_id WHERE r.owner_id=$1 AND r.run_id=$2 AND r.attempt_id=$3 AND a.stage_id=$4 AND l.lease_id=$5 AND l.epoch=$6 AND r.fence_digest=$7`, fence.OwnerID, fence.RunID, fence.AttemptID, fence.StageID, fence.LeaseID, fence.LeaseEpoch, fence.FenceDigest).Scan(&raw)
-	if errors.Is(err, sql.ErrNoRows) {
-		return out, coreexecution.ErrNotFound
-	}
-	if err != nil {
-		return out, err
-	}
-	if strictJSON(raw, &out) != nil || out.OwnerID != fence.OwnerID || out.AttemptID != fence.AttemptID || out.FenceDigest != fence.FenceDigest || !out.RequestDigest.Valid() {
-		return coreexecution.Receipt{}, ErrExecutionStoreDrift
-	}
-	return out, nil
 }

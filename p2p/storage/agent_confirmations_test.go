@@ -25,17 +25,18 @@ func testConfirmationBinding(t *testing.T) confirmation.Binding {
 	t.Helper()
 	digest := confirmation.Digest(strings.Repeat("a", 64))
 	binding, err := (confirmation.Binding{
-		Digest:            string(digest),
-		OwnerID:           testConfirmationOwner,
-		OperationDomain:   "extension.execute",
-		TargetID:          testConfirmationTarget,
-		TargetRevision:    3,
-		TargetKind:        "mcp",
-		SourceVersion:     "1.0.0",
-		ContentDigest:     digest,
-		ParameterDigest:   digest,
-		NetworkDigest:     digest,
-		SecretGrantDigest: digest,
+		Digest:             string(digest),
+		OwnerID:            testConfirmationOwner,
+		OperationDomain:    "extension.execute",
+		TargetID:           testConfirmationTarget,
+		TargetRevision:     3,
+		TargetKind:         "mcp",
+		ExtensionVersionID: "44444444-4444-4444-8444-444444444444",
+		SourceVersion:      "1.0.0",
+		ContentDigest:      digest,
+		ParameterDigest:    digest,
+		NetworkDigest:      digest,
+		SecretGrantDigest:  digest,
 	}).Normalize()
 	if err != nil {
 		t.Fatal(err)

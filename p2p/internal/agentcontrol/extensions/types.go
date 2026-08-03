@@ -241,6 +241,35 @@ type ConfirmationBinding struct {
 	NetworkGrants                                                                                []string
 	SecretGrants                                                                                 []SecretGrant
 }
+
+// Equal reports whether two extension confirmation bindings cover the same
+// immutable operation snapshot. Keep this comparison at the extension
+// boundary so adapters and workers cannot accidentally omit a newly-added
+// digest (in particular the input and tool-schema digests).
+func (b ConfirmationBinding) Equal(other ConfirmationBinding) bool {
+	if b.OwnerID != other.OwnerID || b.Operation != other.Operation || b.TargetID != other.TargetID ||
+		b.VersionID != other.VersionID || b.ToolName != other.ToolName || b.ToolSchemaDigest != other.ToolSchemaDigest ||
+		b.SourceVersion != other.SourceVersion || b.SourceCommit != other.SourceCommit || b.TargetRevision != other.TargetRevision ||
+		b.ParameterDigest != other.ParameterDigest || b.ContentDigest != other.ContentDigest || b.ManifestDigest != other.ManifestDigest ||
+		b.ExecutionDigest != other.ExecutionDigest || b.NetworkDigest != other.NetworkDigest || b.SecretDigest != other.SecretDigest {
+		return false
+	}
+	if len(b.NetworkGrants) != len(other.NetworkGrants) || len(b.SecretGrants) != len(other.SecretGrants) {
+		return false
+	}
+	for n := range b.NetworkGrants {
+		if b.NetworkGrants[n] != other.NetworkGrants[n] {
+			return false
+		}
+	}
+	for n := range b.SecretGrants {
+		if b.SecretGrants[n] != other.SecretGrants[n] {
+			return false
+		}
+	}
+	return true
+}
+
 type ConfirmationRequest struct {
 	OwnerID, IdempotencyKey, TaskID string
 	Binding                         ConfirmationBinding

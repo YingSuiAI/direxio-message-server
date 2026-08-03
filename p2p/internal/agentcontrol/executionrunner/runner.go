@@ -149,10 +149,6 @@ func validPreDispatchFailure(f PreDispatchFailure) bool {
 		f.Step.StepDigest.Valid()
 }
 
-type DispatchReceiptResolver interface {
-	ResolveDispatchReceipt(context.Context, string, coreexecution.Digest) (coreaws.DispatchReceipt, error)
-}
-
 type DispatchIntent struct {
 	Attempt                      coreexecution.StepAttempt
 	Receipt                      coreexecution.Receipt
@@ -198,8 +194,6 @@ type Config struct {
 	Holder            string
 	LeaseTTL          time.Duration
 	PollInterval      time.Duration
-	Now               func() time.Time
-	ReceiptResolver   coreaws.DispatchReceiptResolver
 }
 
 type Runner struct {
@@ -210,8 +204,6 @@ type Runner struct {
 	secretProvisioner      TypedSecretProvisioner
 	holder                 string
 	leaseTTL, pollInterval time.Duration
-	now                    func() time.Time
-	receipts               coreaws.DispatchReceiptResolver
 	uncertainMu            sync.Mutex
 	uncertainReceipts      map[string]struct{}
 }
@@ -226,10 +218,7 @@ func NewRunner(c Config) (*Runner, error) {
 	if c.PollInterval <= 0 {
 		c.PollInterval = time.Second
 	}
-	if c.Now == nil {
-		c.Now = time.Now
-	}
-	return &Runner{store: c.Store, resolver: c.Resolver, transport: c.Transport, ec2Provisioner: c.EC2Provisioner, secretProvisioner: c.SecretProvisioner, holder: c.Holder, leaseTTL: c.LeaseTTL, pollInterval: c.PollInterval, now: c.Now, receipts: c.ReceiptResolver, uncertainReceipts: make(map[string]struct{})}, nil
+	return &Runner{store: c.Store, resolver: c.Resolver, transport: c.Transport, ec2Provisioner: c.EC2Provisioner, secretProvisioner: c.SecretProvisioner, holder: c.Holder, leaseTTL: c.LeaseTTL, pollInterval: c.PollInterval, uncertainReceipts: make(map[string]struct{})}, nil
 }
 
 // RunOnce claims exactly one execution stage and drives it to a durable
@@ -259,28 +248,35 @@ func (r *Runner) Run(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			if errors.Is(err, coreexecution.ErrNotFound) {
+			if errors.Is(err, coreexecution.ErrNotFound) || errors.Is(err, ErrRunnerUncertain) {
 				// An empty queue is a normal steady state for the dedicated
-				// execution.v2 worker.  Keep the component alive and poll again;
+				// execution.v2 worker. Keep the component alive and poll again;
 				// returning here would make a production runner silently exit
-				// before a later confirmation queues a stage.
-				wait := r.pollInterval
-				if wait <= 0 {
-					wait = time.Second
+				// before a later confirmation queues a stage. An uncertain claim
+				// is already durably fenced by RunClaimed; the same delay also
+				// prevents a lost provider response from creating a busy loop.
+				if err := r.waitForNextPoll(ctx); err != nil {
+					return err
 				}
-				timer := time.NewTimer(wait)
-				select {
-				case <-timer.C:
-					continue
-				case <-ctx.Done():
-					if !timer.Stop() {
-						<-timer.C
-					}
-					return ctx.Err()
-				}
+				continue
 			}
 			return err
 		}
+	}
+}
+
+func (r *Runner) waitForNextPoll(ctx context.Context) error {
+	wait := r.pollInterval
+	if wait <= 0 {
+		wait = time.Second
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
@@ -500,15 +496,15 @@ func (r *Runner) dispatchStep(ctx context.Context, claim StageLease, next NextSt
 		return r.dispatchEC2Provision(ctx, claim, next, p)
 	}
 	in := DispatchIntent{Attempt: p.Attempt, Receipt: p.Receipt, TaskID: claim.TaskID, TaskHolder: claim.Holder, TaskAttempt: claim.Attempt, TaskRevision: claim.ExpectedTaskRevision, TaskLeaseEpoch: claim.TaskLeaseEpoch, TargetID: p.Frozen.TargetID, TargetRevision: p.Frozen.TargetRevision, TargetDigest: p.Frozen.TargetDigest, LeaseID: claim.LeaseID, LeaseToken: claim.LeaseToken, LeaseEpoch: claim.LeaseEpoch, StepSet: next.StepSet, RequestDigest: p.Frozen.RequestDigest, FenceDigest: p.Frozen.FenceDigest, Snapshot: coreaws.SnapshotFromFrozen(p.Frozen)}
-	// A storage resolver may return an accepted durable receipt after a lease
-	// takeover. That is a poll-only recovery path: never record a new intent or
-	// invoke Dispatch for the same immutable provider fence.
 	commandID := p.Receipt.SSMCommandID
-	if r.receipts != nil {
-		if receipt, e := r.receipts.ResolveDispatchReceipt(ctx, claim.OwnerID, p.Frozen.FenceDigest); e == nil && receipt.CommandID != "" && receipt.Frozen.RequestDigest == p.Frozen.RequestDigest {
-			p.Frozen = receipt.Frozen
-			commandID = receipt.CommandID
-		}
+	// A reclaimed durable intent without a provider command id has no safe
+	// readback key. It is permanently uncertain: never rewrite the intent or
+	// issue a second provider mutation. The production resolver marks reclaimed
+	// intents as readback-only; this guard also protects test/custom resolvers
+	// that surface the same immutable fact.
+	if p.ReconcileOnly && commandID == "" {
+		r.uncertain(context.Background(), &p, nil)
+		return ErrRunnerUncertain
 	}
 	if commandID == "" {
 		if err := r.store.RecordDispatchIntent(ctx, in); err != nil {

@@ -170,7 +170,7 @@ func TestExecutionReconcileCanceledMultiRootCommitsResolutionWithoutRedispatch(t
 	receiptResolver := NewDatabaseDispatchReceiptResolver(executionStore, credentials)
 	transport := &reconcileCanceledSSM{}
 	stageStore := NewExecutionStageStoreAdapter(executionStore)
-	runner, err := executionrunner.NewRunner(executionrunner.Config{Store: stageStore, Resolver: stepResolver, Transport: transport, Holder: "reconcile-canceled-runner", LeaseTTL: time.Minute, PollInterval: time.Millisecond, Now: func() time.Time { return now }, ReceiptResolver: receiptResolver})
+	runner, err := executionrunner.NewRunner(executionrunner.Config{Store: stageStore, Resolver: stepResolver, Transport: transport, Holder: "reconcile-canceled-runner", LeaseTTL: time.Minute, PollInterval: time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,9 +208,71 @@ func TestExecutionReconcileCanceledMultiRootCommitsResolutionWithoutRedispatch(t
 	if outcome != string(coreaws.PollCanceled) || leaseStatus != "released" {
 		t.Fatalf("resolution outcome=%q lease=%q", outcome, leaseStatus)
 	}
+	var taskStatus string
+	var runningCount int
+	if err = store.DB().QueryRowContext(ctx, `SELECT t.status FROM agent_tasks t JOIN core_execution_run_stages s ON s.owner_id=t.owner_id AND s.task_id=t.task_id WHERE s.owner_id=$1 AND s.run_id=$2 AND s.stage_id=$3`, owner, lost.Run.RunID, lost.Stages[0].StageID).Scan(&taskStatus); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.DB().QueryRowContext(ctx, `SELECT running_count FROM agent_task_runtime_concurrency WHERE singleton=true`).Scan(&runningCount); err != nil {
+		t.Fatal(err)
+	}
+	if taskStatus != "canceled" || runningCount != 0 {
+		t.Fatalf("reconciled task status=%q running_count=%d, want canceled/0", taskStatus, runningCount)
+	}
 	replayed, err := reconciler.Reconcile(ctx, command)
 	if err != nil || replayed.RunID != resolved.RunID || replayed.Revision != resolved.Revision || transport.reconcile != 1 || transport.dispatch != 1 {
 		t.Fatalf("replay=%#v reconcile_calls=%d dispatches=%d err=%v", replayed, transport.reconcile, transport.dispatch, err)
+	}
+
+	// A crash after the durable SSM intent commit but before SendCommand can
+	// leave an accepted receipt with no provider command id. A lease takeover
+	// must rehydrate that exact intent as reconcile-only and permanently mark it
+	// uncertain; it must never call the transport again.
+	if _, err = store.DB().ExecContext(ctx, `UPDATE agent_tasks SET available_at=$1 WHERE owner_id=$2 AND task_id=$3 AND status='queued'`, now, owner, queuedTaskID); err != nil {
+		t.Fatal(err)
+	}
+	claim2, err := executionStore.ClaimQueuedExecutionStage(ctx, owner, "reconcile-canceled-runner-2", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next2, err := executionStore.NextExecutableStep(ctx, claim2.OwnerID, claim2.RunID, claim2.StageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, err := stepResolver.ResolveStep(ctx, executionrunner.StageLease{OwnerID: claim2.OwnerID, RunID: claim2.RunID, StageID: claim2.StageID, TaskID: claim2.TaskID, Holder: claim2.Holder, Attempt: claim2.Attempt, LeaseEpoch: claim2.LeaseEpoch, TaskLeaseEpoch: claim2.TaskLeaseEpoch, ExpectedTaskRevision: claim2.ExpectedTaskRevision, LeaseID: claim2.LeaseID, LeaseToken: claim2.LeaseToken, ExpiresAt: claim2.ExpiresAt}, executionrunner.NextStep{OwnerID: next2.OwnerID, RunID: next2.RunID, StageID: next2.StageID, StepKey: next2.StepKey, StepSet: next2.StepSet, StepRevision: next2.StepRevision, StepDigest: next2.StepDigest})
+	if err != nil || initial.Frozen.RequestDigest == "" || initial.Receipt.SSMCommandID != "" {
+		t.Fatalf("initial=%+v err=%v", initial, err)
+	}
+	if err = executionStore.RecordDispatchIntent(ctx, ExecutionDispatchIntent{Attempt: initial.Attempt, Receipt: initial.Receipt, TaskID: claim2.TaskID, TaskHolder: claim2.Holder, TaskAttempt: claim2.Attempt, TaskRevision: claim2.ExpectedTaskRevision, TaskLeaseEpoch: claim2.TaskLeaseEpoch, TargetID: initial.Frozen.TargetID, TargetRevision: initial.Frozen.TargetRevision, TargetDigest: initial.Frozen.TargetDigest, LeaseID: claim2.LeaseID, LeaseToken: claim2.LeaseToken, LeaseEpoch: claim2.LeaseEpoch, StepSet: next2.StepSet, RequestDigest: initial.Frozen.RequestDigest, FenceDigest: initial.Frozen.FenceDigest, Snapshot: coreaws.SnapshotFromFrozen(initial.Frozen)}); err != nil {
+		t.Fatal(err)
+	}
+	// The takeover store observes the expired original task/target leases. Its
+	// claim path includes the durable frozen SSM intent even though command_id
+	// is empty, then hands the same stage to the resolver under a new lease.
+	takeoverStore := NewDatabaseExecutionStore(store.DB(), func() time.Time { return now.Add(2 * time.Minute) })
+	takeoverClaim, err := takeoverStore.ClaimNextExecutionStage(ctx, "reconcile-canceled-takeover", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	takeoverNext, err := takeoverStore.NextExecutableStep(ctx, takeoverClaim.OwnerID, takeoverClaim.RunID, takeoverClaim.StageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	takeoverPrepared, err := NewExecutionStepResolver(takeoverStore, credentials, nil).ResolveStep(ctx, executionrunner.StageLease{OwnerID: takeoverClaim.OwnerID, RunID: takeoverClaim.RunID, StageID: takeoverClaim.StageID, TaskID: takeoverClaim.TaskID, Holder: takeoverClaim.Holder, Attempt: takeoverClaim.Attempt, LeaseEpoch: takeoverClaim.LeaseEpoch, TaskLeaseEpoch: takeoverClaim.TaskLeaseEpoch, ExpectedTaskRevision: takeoverClaim.ExpectedTaskRevision, LeaseID: takeoverClaim.LeaseID, LeaseToken: takeoverClaim.LeaseToken, ExpiresAt: takeoverClaim.ExpiresAt}, executionrunner.NextStep{OwnerID: takeoverNext.OwnerID, RunID: takeoverNext.RunID, StageID: takeoverNext.StageID, StepKey: takeoverNext.StepKey, StepSet: takeoverNext.StepSet, StepRevision: takeoverNext.StepRevision, StepDigest: takeoverNext.StepDigest})
+	if err != nil || !takeoverPrepared.ReconcileOnly || takeoverPrepared.Receipt.SSMCommandID != "" || takeoverPrepared.Attempt.AttemptID != initial.Attempt.AttemptID || takeoverPrepared.Frozen.RequestDigest != initial.Frozen.RequestDigest || takeoverPrepared.Frozen.FenceDigest != initial.Frozen.FenceDigest || takeoverPrepared.Frozen.StepDigest != initial.Frozen.StepDigest || takeoverPrepared.Frozen.TargetDigest != initial.Frozen.TargetDigest {
+		t.Fatalf("takeover prepared=%+v initial=%+v err=%v", takeoverPrepared, initial, err)
+	}
+	takeoverTransport := &reconcileCanceledSSM{}
+	takeoverRunner, err := executionrunner.NewRunner(executionrunner.Config{Store: NewExecutionStageStoreAdapter(takeoverStore), Resolver: NewExecutionStepResolver(takeoverStore, credentials, nil), Transport: takeoverTransport, Holder: "reconcile-canceled-takeover", LeaseTTL: time.Minute, PollInterval: time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	takeoverLease := executionrunner.StageLease{OwnerID: takeoverClaim.OwnerID, RunID: takeoverClaim.RunID, StageID: takeoverClaim.StageID, TaskID: takeoverClaim.TaskID, Holder: takeoverClaim.Holder, Attempt: takeoverClaim.Attempt, LeaseEpoch: takeoverClaim.LeaseEpoch, TaskLeaseEpoch: takeoverClaim.TaskLeaseEpoch, ExpectedTaskRevision: takeoverClaim.ExpectedTaskRevision, LeaseID: takeoverClaim.LeaseID, LeaseToken: takeoverClaim.LeaseToken, ExpiresAt: takeoverClaim.ExpiresAt}
+	if err = takeoverRunner.RunClaimed(ctx, takeoverLease); !errors.Is(err, executionrunner.ErrRunnerUncertain) {
+		t.Fatalf("takeover runner error=%v, want permanent uncertainty", err)
+	}
+	if takeoverTransport.dispatch != 0 || takeoverTransport.reconcile != 0 {
+		t.Fatalf("takeover dispatch=%d reconcile=%d, empty-command intent was sent/read back", takeoverTransport.dispatch, takeoverTransport.reconcile)
 	}
 }
 

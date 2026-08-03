@@ -247,8 +247,7 @@ func TestLiveAWSGenericContainerServices(t *testing.T) {
 	runner, err := executionrunner.NewRunner(executionrunner.Config{
 		Store: stageStore, Resolver: storage.NewExecutionStepResolver(store, credentialRepo, artifactResolver),
 		Transport: transport, EC2Provisioner: provisioner, Holder: "execution-v2-live",
-		LeaseTTL: 10 * time.Minute, PollInterval: 5 * time.Second, Now: time.Now,
-		ReceiptResolver: receiptResolver, SecretProvisioner: secretExecutor,
+		LeaseTTL: 10 * time.Minute, PollInterval: 5 * time.Second, SecretProvisioner: secretExecutor,
 	})
 	if err != nil {
 		t.Fatal(err)

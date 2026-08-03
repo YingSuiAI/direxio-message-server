@@ -174,7 +174,6 @@ func newEmbeddedControlRuntime(db *p2pstorage.DatabaseStore, tasks *p2pstorage.D
 		if out.mcpPort != nil {
 			out.mcp = &agentembedded.PinnedMCPWorkerCoordinator{
 				Extensions: extensionStore,
-				Tasks:      tasks,
 				Confirmations: agentembedded.ConfirmationAdapter{
 					Repository: confirmations,
 				},

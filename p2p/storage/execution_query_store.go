@@ -227,7 +227,7 @@ func (s *DatabaseExecutionStore) GetExecutionRun(ctx context.Context, owner, run
 	if s == nil || s.db == nil || strings.TrimSpace(owner) == "" || !validUUID(runID) {
 		return ExecutionRunView{}, ErrExecutionStoreInvalid
 	}
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
 	if err != nil {
 		return ExecutionRunView{}, err
 	}

@@ -10,14 +10,7 @@ import (
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/storage"
 )
 
-type replayRecordingRunner struct{ calls int }
-
-func (r *replayRecordingRunner) ExecuteScheduled(context.Context, string, storage.ModelProfile, []string) (string, error) {
-	r.calls++
-	return "unexpected", nil
-}
-
-func runNowReplayFixture(t *testing.T, lease time.Duration) (*storage.MemoryStore, *Module, storage.Schedule, storage.ScheduleRun, *replayRecordingRunner) {
+func runNowReplayFixture(t *testing.T, lease time.Duration) (*storage.MemoryStore, *Module, storage.Schedule, storage.ScheduleRun) {
 	t.Helper()
 	ctx := context.Background()
 	store := storage.NewMemoryStore()
@@ -33,8 +26,7 @@ func runNowReplayFixture(t *testing.T, lease time.Duration) (*storage.MemoryStor
 	if _, created, err := store.CreateScheduleRun(ctx, run, sch.LeaseOwner, sch.Revision, sch.LeaseEpoch); err != nil || !created {
 		t.Fatalf("create run=%v created=%v", err, created)
 	}
-	runner := &replayRecordingRunner{}
-	return store, New(Config{Store: store, Runner: runner, OwnerID: func() string { return "owner" }}), sch, run, runner
+	return store, New(Config{Store: store, OwnerID: func() string { return "owner" }}), sch, run
 }
 
 func TestCreateRejectsInvalidTriggerAndMissingTimezone(t *testing.T) {
@@ -61,6 +53,15 @@ func TestPinnedCredentialAndSecretFreeReadback(t *testing.T) {
 	}
 }
 func TestReadOnlyAllowlistRejectsMutation(t *testing.T) {
+	tools := New(Config{}).Tools()
+	if len(tools) != 4 {
+		t.Fatalf("Native Agent schedule tools = %d, want 4 read tools", len(tools))
+	}
+	for _, tool := range tools {
+		if tool.Write {
+			t.Fatalf("Native Agent schedule tool %q is writable", tool.Name)
+		}
+	}
 	for _, x := range []string{"agent.messages.send", "agent.runtime.run"} {
 		for _, a := range nativeagent.EmbeddedAllowedTools() {
 			if x == a {
@@ -153,10 +154,10 @@ func TestExpectedRevisionUseNumberStrict(t *testing.T) {
 }
 
 func TestActiveSameKeyReplayReturnsInProgressWithoutRunnerCall(t *testing.T) {
-	store, module, sch, run, runner := runNowReplayFixture(t, time.Minute)
+	store, module, sch, run := runNowReplayFixture(t, time.Minute)
 	out, terminal, handled := module.reconcileRunNowReplay(context.Background(), sch.ScheduleID, run.RunID)
-	if !handled || terminal || runner.calls != 0 {
-		t.Fatalf("handled=%v terminal=%v calls=%d out=%#v", handled, terminal, runner.calls, out)
+	if !handled || terminal {
+		t.Fatalf("handled=%v terminal=%v out=%#v", handled, terminal, out)
 	}
 	got, ok, err := store.GetScheduleRun(context.Background(), "owner", sch.ScheduleID, run.RunID)
 	if err != nil || !ok || got.Status != "running" {
@@ -165,11 +166,11 @@ func TestActiveSameKeyReplayReturnsInProgressWithoutRunnerCall(t *testing.T) {
 }
 
 func TestExpiredSameKeyReplayFailsWithoutExtraRunnerCall(t *testing.T) {
-	store, module, sch, run, runner := runNowReplayFixture(t, time.Millisecond)
+	store, module, sch, run := runNowReplayFixture(t, time.Millisecond)
 	time.Sleep(3 * time.Millisecond)
 	_, terminal, handled := module.reconcileRunNowReplay(context.Background(), sch.ScheduleID, run.RunID)
-	if !handled || !terminal || runner.calls != 0 {
-		t.Fatalf("handled=%v terminal=%v calls=%d", handled, terminal, runner.calls)
+	if !handled || !terminal {
+		t.Fatalf("handled=%v terminal=%v", handled, terminal)
 	}
 	got, ok, err := store.GetScheduleRun(context.Background(), "owner", sch.ScheduleID, run.RunID)
 	if err != nil || !ok || got.Status != "failed" || got.FinishedAt == nil {
@@ -182,13 +183,13 @@ func TestExpiredSameKeyReplayFailsWithoutExtraRunnerCall(t *testing.T) {
 }
 
 func TestTerminalFinishBeforeAdvanceReplayAdvancesOnly(t *testing.T) {
-	store, module, sch, run, runner := runNowReplayFixture(t, time.Minute)
+	store, module, sch, run := runNowReplayFixture(t, time.Minute)
 	if err := store.FinishScheduleRun(context.Background(), "owner", run.RunID, sch.LeaseOwner, sch.LeaseEpoch, "done", "", time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
 	_, terminal, handled := module.reconcileRunNowReplay(context.Background(), sch.ScheduleID, run.RunID)
-	if !handled || !terminal || runner.calls != 0 {
-		t.Fatalf("handled=%v terminal=%v calls=%d", handled, terminal, runner.calls)
+	if !handled || !terminal {
+		t.Fatalf("handled=%v terminal=%v", handled, terminal)
 	}
 	got, ok, err := store.GetScheduleRun(context.Background(), "owner", sch.ScheduleID, run.RunID)
 	if err != nil || !ok || got.Status != "succeeded" || got.Result != "done" {

@@ -12,7 +12,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/YingSuiAI/dirextalk-message-server/cmd/dendrite-demo-yggdrasil/signing"
 	fedAPI "github.com/YingSuiAI/dirextalk-message-server/federationapi"
 	"github.com/YingSuiAI/dirextalk-message-server/federationapi/routing"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/caching"
@@ -20,6 +19,7 @@ import (
 	"github.com/YingSuiAI/dirextalk-message-server/internal/sqlutil"
 	"github.com/YingSuiAI/dirextalk-message-server/setup/jetstream"
 	"github.com/YingSuiAI/dirextalk-message-server/test"
+	"github.com/YingSuiAI/dirextalk-message-server/test/signing"
 	"github.com/YingSuiAI/dirextalk-message-server/test/testrig"
 	"github.com/gorilla/mux"
 	"github.com/matrix-org/gomatrixserverlib"

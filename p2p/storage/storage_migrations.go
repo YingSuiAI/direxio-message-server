@@ -840,6 +840,16 @@ func (s *DatabaseStore) migrate(ctx context.Context) error {
 		Version: "p2p: agent and execution v2 fresh schema v78",
 		Up:      agentAndExecutionV2FreshSchema,
 	})
+	m.AddMigrations(sqlutil.Migration{
+		Version: "p2p: execution run stage terminal immutability v79",
+		Up: func(ctx context.Context, txn *sql.Tx) error {
+			return execMigrationStatements(ctx, txn, []string{
+				`CREATE OR REPLACE FUNCTION core_execution_run_stage_immutable() RETURNS trigger LANGUAGE plpgsql AS $$ DECLARE reconciled BOOLEAN; BEGIN IF TG_OP='DELETE' THEN RAISE EXCEPTION 'execution run stage identity/state is immutable'; END IF; SELECT EXISTS(SELECT 1 FROM core_execution_reconciliation_resolutions r WHERE r.owner_id=OLD.owner_id AND r.run_id=OLD.run_id AND r.stage_id=OLD.stage_id AND r.outcome=NEW.status) INTO reconciled; IF NEW.owner_id IS DISTINCT FROM OLD.owner_id OR NEW.run_id IS DISTINCT FROM OLD.run_id OR NEW.stage_id IS DISTINCT FROM OLD.stage_id OR NEW.project_id IS DISTINCT FROM OLD.project_id OR NEW.plan_id IS DISTINCT FROM OLD.plan_id OR NEW.plan_revision IS DISTINCT FROM OLD.plan_revision OR NEW.plan_digest IS DISTINCT FROM OLD.plan_digest OR NEW.run_revision IS DISTINCT FROM OLD.run_revision OR NEW.plan_stage_key IS DISTINCT FROM OLD.plan_stage_key OR NEW.stage_revision IS DISTINCT FROM OLD.stage_revision OR NEW.plan_stage_digest IS DISTINCT FROM OLD.plan_stage_digest OR NEW.target_id IS DISTINCT FROM OLD.target_id OR NEW.target_revision IS DISTINCT FROM OLD.target_revision OR NEW.target_digest IS DISTINCT FROM OLD.target_digest OR NEW.created_at IS DISTINCT FROM OLD.created_at OR NEW.revision IS DISTINCT FROM OLD.revision+1 OR (OLD.status <> 'blocked' AND (NEW.task_id IS DISTINCT FROM OLD.task_id OR NEW.confirmation_id IS DISTINCT FROM OLD.confirmation_id)) OR (OLD.started_at IS NOT NULL AND NEW.started_at IS DISTINCT FROM OLD.started_at) OR (OLD.completed_at IS NOT NULL AND NEW.completed_at IS DISTINCT FROM OLD.completed_at) OR OLD.status IN ('succeeded','failed','skipped','canceled','rejected','expired') OR (OLD.status IN ('running','succeeded','failed','uncertain','skipped','canceled','rejected','expired') AND NEW.status IN ('blocked','waiting_user','queued')) OR (OLD.status='uncertain' AND (NOT reconciled OR NEW.status NOT IN ('succeeded','failed','canceled'))) THEN RAISE EXCEPTION 'execution run stage identity/state is immutable'; END IF; RETURN NEW; END $$`,
+				`DROP TRIGGER IF EXISTS core_execution_run_stages_immutable ON core_execution_run_stages`,
+				`CREATE TRIGGER core_execution_run_stages_immutable BEFORE UPDATE OR DELETE ON core_execution_run_stages FOR EACH ROW EXECUTE FUNCTION core_execution_run_stage_immutable()`,
+			})
+		},
+	})
 	return m.Up(ctx)
 }
 

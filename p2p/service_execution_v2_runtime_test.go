@@ -1,8 +1,12 @@
 package p2p
 
 import (
+	"context"
+	"errors"
 	"path/filepath"
 	"testing"
+
+	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcontrol/executionrunner"
 )
 
 func TestAgentRuntimePathsDefaultToMessageDataVolume(t *testing.T) {
@@ -52,5 +56,17 @@ func TestExecutionV2RuntimeStartRejectsNilProcessOrWorkerMismatch(t *testing.T) 
 	var runtime *ExecutionV2Runtime
 	if runtime.StartExecutionV2Runner(nil, "worker") {
 		t.Fatal("nil runtime must not start")
+	}
+}
+
+func TestExecutionV2RuntimeDoesNotFailOnDurableRunnerUncertainty(t *testing.T) {
+	if executionV2RunnerFailure(executionrunner.ErrRunnerUncertain) {
+		t.Fatal("durable runner uncertainty must not fail or disable the runtime")
+	}
+	if executionV2RunnerFailure(context.Canceled) || executionV2RunnerFailure(context.DeadlineExceeded) {
+		t.Fatal("normal process shutdown must not fail the runtime")
+	}
+	if !executionV2RunnerFailure(errors.New("runner infrastructure failure")) {
+		t.Fatal("unexpected runner error must fail the runtime")
 	}
 }

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/registryjson"
 )
 
 // Fixture manifests are compiled only into tests; production code has no
@@ -31,7 +33,7 @@ func TestBuiltinRecipesIncludeOnlyGenericRecipes(t *testing.T) {
 		if err := json.Unmarshal(raw, &manifest); err != nil {
 			t.Fatal(err)
 		}
-		if got := ContentDigest(raw); got != manifest.ContentDigest {
+		if got, want := ContentDigest(raw), registryjson.ContentDigest(raw); got != manifest.ContentDigest || got != want {
 			t.Fatalf("%s content_digest=%s want=%s", name, manifest.ContentDigest, got)
 		}
 	}

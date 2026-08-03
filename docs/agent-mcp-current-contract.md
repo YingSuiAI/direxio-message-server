@@ -77,10 +77,9 @@ capability live.
 
 ### Embedded Native Agent schedule chat tools
 
-- Interactive Native Agent turns expose bounded `native_agent_schedules_*` and `native_agent_schedule_runs_*` tools. List/get and run-list/run-get are read-only; `native_agent_schedules_disable` executes directly through the existing Embedded schedule action.
-- Create, update, enable, delete, and run-now are proposal-only on the first model tool call. The server stores a durable, owner- and Native `conversation_id`-scoped confirmation containing canonical secret-free parameters, digest, deterministic Stage A idempotency key, bounded summary, expiry, revision, and short approval code. No API key or token is stored or returned.
-- `native_agent_schedules_confirm` can execute only on a later owner-authored turn in the same conversation whose current user text exactly normalizes to `确认执行 <code>`. Model arguments, previous-turn text, `dangerous_tools_confirm`, another owner, or another conversation cannot approve it. Completed/failed confirmations replay the authoritative terminal result; restart and concurrent retries are receipt-fenced and do not execute the Stage A mutation twice.
-- These interactive tools are separate from the restricted scheduled runner allowlist and from the Online Agent Matrix room/timeline. The scheduled runner cannot call mutation tools, and Flutter must present the proposal phrase then wait for a new Native turn.
+- Interactive Native Agent turns expose only bounded read-only `native_agent_schedules_list`, `native_agent_schedules_get`, `native_agent_schedule_runs_list`, and `native_agent_schedule_runs_get` tools. ProductCore `agent.schedules.*` actions remain the owner-authenticated CRUD/runtime surface.
+- The former Native Agent schedule write proposal/confirmation flow (`native_agent_schedules_confirm` and its durable schedule-confirmation store) has been retired and removed. Native Agent no longer stages or confirms create, update, enable, delete, or run-now mutations, and no dormant compatibility path remains.
+- These read-only tools are separate from the restricted scheduled runner allowlist and from the Online Agent Matrix room/timeline. The scheduled runner cannot call mutation tools.
 
 ## Execution Orchestration V2 (contract and release gate)
 
@@ -96,9 +95,11 @@ expose raw SSM/SSH/AWS passthrough.
 Every `execution.v2.*` capability and ProductCore action is published only
 after its authenticated route, durable PostgreSQL state, typed
 executor/transport, focused tests, and explicit readiness/enablement all pass.
-Action registration, schemas, and docs alone are not live. AWS SSM is the
-first production slice; SSH, generic HTTP, DNS, TLS, and Coding Worker remain
-deferred and must not be advertised.
+The final Execution V2 schema is registered by direct-final v78, but runtime
+capability/readiness remains separately gated; action registration, schemas,
+and docs alone are not live. AWS SSM is the first production slice; SSH,
+generic HTTP, DNS, TLS, and Coding Worker remain deferred and must not be
+advertised.
 
 ## Consumer Boundaries
 
@@ -107,11 +108,7 @@ deferred and must not be advertised.
 - Neither consumer owns MCP business logic. They must not recreate a local MCP CLI, daemon, proxy, stdio bridge, listening port, fixed `mcp.*` product action path, or alternate endpoint.
 - Flutter reads Online Agent availability from Matrix state in `agent_room_id` and uses backend-owned `agent.*` actions and native stream frames for Native Agent. It does not call fixed `mcp.*` product actions.
 
-## vNext Legacy Matrix Gateway Foundation (Release Gate M)
+## Retired Legacy Matrix Gateway (Release Gate M history)
 
-- The internal Gateway adapter accepts only owner-authored `io.dirextalk.agent.invoke.v1` timeline events from the configured real `agent_room_id`. Its consumer uses an independent JetStream durable, so an Agent Control outage cannot block normal ProductCore projections. The old external Agent Run gRPC ingress is retired and unavailable; this adapter is the only live legacy gateway surface.
-- Invoke content is capped at 16 KiB and strictly contains `request_id`, `installation_id`, optional `preferred_connector_id`, `dispatch_mode`, `grant_version`, `input_event_id`, `required_capabilities`, and `idempotency_key`. UUIDs are canonical UUIDv7; capabilities are bounded, lowercase, unique, and sorted. Unknown/duplicate fields, trailing JSON, unsafe grant versions, the wrong room, and non-owner senders are ignored without creating a Run.
-- PostgreSQL migration v38 stores one reservation per `(matrix_room_id, request_id)`, with unique source event and tenant/room/idempotency digest constraints. It stores the local Matrix input reference and normalized routing facts, but never the prompt body or raw idempotency key. Crash replay returns the first generated opaque request event and request digest; accepted/rejected terminal facts are source-digest fenced and immutable.
-- The frozen `dirextalk.agent_gateway.v1.AgentRunIngress/CreateAgentRun` contract is historical only and no longer has a live client implementation in Message Server. TLS 1.3, HTTP/2, explicit server roots, clientAuth-only certificates, 64 KiB message limits, and the LP/COMMIT transcript remain documented for archived compatibility review, but the production monolith does not use or expose that gRPC path.
-- The production monolith does not expose a startup switch for this adapter yet. Activation remains deliberately unavailable until deployment can prove the old Connect room consumer is stopped and fenced; otherwise one Matrix input could execute through both paths.
-- This foundation durably creates or replays an Agent Run. Exclusive-consumer cutover, Run completion/evidence ingress, `io.dirextalk.agent.result.v1` / `io.dirextalk.agent.error.v1` projection, and restricted plain-text fallback remain later Release Gate M work; the server must not fabricate completion or evidence from an admission receipt.
+- The Release Gate M Legacy Matrix Gateway adapter, public facade, runtime consumer, and reservation storage implementation have been removed. No startup switch, client path, or dormant runtime module remains in Message Server; the historical `dirextalk.agent_gateway.v1`/`io.dirextalk.agent.invoke.v1` contract is not exposed.
+- PostgreSQL migration v38 and its `p2p_legacy_agent_invocations` table DDL remain registered solely so upgraded databases can open and retain historical schema. No current runtime reads or writes that table.

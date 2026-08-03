@@ -453,6 +453,9 @@ func TestMemoryCoordinatorReconcileTypedOutcomesAndUnresolvedReadback(t *testing
 				if getErr != nil || run.Status != tc.wantRun {
 					t.Fatalf("run=%#v err=%v", run, getErr)
 				}
+				if err := run.Validate(); err != nil {
+					t.Fatalf("terminal run failed validation: status=%s finished_at=%v err=%v", run.Status, run.FinishedAt, err)
+				}
 				if len(c.store.resolutions[m.Run.RunID]) != 1 || c.store.resolutions[m.Run.RunID][0].Outcome != tc.wantStage {
 					t.Fatalf("resolution=%#v", c.store.resolutions[m.Run.RunID])
 				}

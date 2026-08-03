@@ -16,34 +16,24 @@ import (
 	"github.com/google/uuid"
 )
 
-type ScheduledRunner interface {
-	ExecuteScheduled(context.Context, string, storage.ModelProfile, []string) (string, error)
-}
 type Config struct {
-	Store        storage.ScheduleStore
-	Profiles     storage.ModelProfileStore
-	Materializer OccurrenceMaterializer
-	// Runner is retained only as a source-compatible field for older wiring.
-	// Scheduled execution no longer calls it; tasks are handed to the generic
-	// runtime through Materializer.
-	Runner         ScheduledRunner
+	Store          storage.ScheduleStore
+	Profiles       storage.ModelProfileStore
+	Materializer   OccurrenceMaterializer
 	OwnerID        func() string
 	SchedulerReady func() bool
-	Confirmations  storage.ScheduleConfirmationStore
 }
 type Module struct {
 	store          storage.ScheduleStore
 	profiles       storage.ModelProfileStore
 	materializer   OccurrenceMaterializer
-	runner         ScheduledRunner
 	ownerID        func() string
 	schedulerReady func() bool
-	confirmations  storage.ScheduleConfirmationStore
 	mutationMu     sync.Mutex
 }
 
 func New(c Config) *Module {
-	return &Module{store: c.Store, profiles: c.Profiles, materializer: c.Materializer, runner: c.Runner, ownerID: c.OwnerID, schedulerReady: c.SchedulerReady, confirmations: c.Confirmations}
+	return &Module{store: c.Store, profiles: c.Profiles, materializer: c.Materializer, ownerID: c.OwnerID, schedulerReady: c.SchedulerReady}
 }
 func (m *Module) schedulerRunning() bool {
 	return m != nil && m.materializer != nil && (m.schedulerReady == nil || m.schedulerReady())
@@ -52,9 +42,6 @@ func (m *Module) Ready() bool {
 	return m != nil && m.store != nil && m.materializer != nil && (m.profiles == nil || m.profiles.ModelProfileStoreReady())
 }
 
-func (m *Module) Worker(ownerID, workerID string) Worker {
-	return Worker{Store: m.store, Materializer: m.materializer, OwnerID: ownerID, WorkerID: workerID}
-}
 func (m *Module) owner() string {
 	if m != nil && m.ownerID != nil {
 		return strings.TrimSpace(m.ownerID())

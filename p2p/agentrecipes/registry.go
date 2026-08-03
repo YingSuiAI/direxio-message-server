@@ -3,8 +3,6 @@ package agentrecipes
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +11,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/registryjson"
 )
 
 var idPattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
@@ -38,8 +38,6 @@ const (
 )
 
 const maxRecipeBytes = 1 << 20
-const maxRecipeDepth = 32
-const maxRecipeNodes = 4096
 
 const (
 	maxRecipeStages  = 64
@@ -265,7 +263,7 @@ func Parse(content []byte) (RecipeManifest, error) {
 	if e := rejectUnsafe(raw, ""); e != nil {
 		return RecipeManifest{}, e
 	}
-	if _, e := canonicalValue(content); e != nil {
+	if _, e := registryjson.CanonicalValue(content); e != nil {
 		return RecipeManifest{}, fmt.Errorf("recipe canonical JSON: %w", e)
 	}
 	var m RecipeManifest
@@ -953,111 +951,9 @@ func equalStringSets(a, b []string) bool {
 	return true
 }
 func ContentDigest(content []byte) string {
-	value, err := canonicalValue(content)
-	if err != nil {
-		return ""
-	}
-	raw, ok := value.(map[string]interface{})
-	if !ok {
-		return ""
-	}
-	delete(raw, "content_digest")
-	b, e := json.Marshal(raw)
-	if e != nil {
-		return ""
-	}
-	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:])
+	return registryjson.ContentDigest(content)
 }
 
-func canonicalValue(content []byte) (interface{}, error) {
-	dec := json.NewDecoder(bytes.NewReader(content))
-	dec.UseNumber()
-	v, err := readCanonicalValue(dec)
-	if err != nil {
-		return nil, err
-	}
-	if err := checkJSONLimits(v, 0, new(int)); err != nil {
-		return nil, err
-	}
-	var trailing interface{}
-	if err := dec.Decode(&trailing); err != io.EOF {
-		if err == nil {
-			return nil, errors.New("trailing JSON")
-		}
-		return nil, err
-	}
-	return v, nil
-}
-func checkJSONLimits(value interface{}, depth int, nodes *int) error {
-	if depth > maxRecipeDepth {
-		return errors.New("JSON depth cap exceeded")
-	}
-	*nodes = *nodes + 1
-	if *nodes > maxRecipeNodes {
-		return errors.New("JSON node cap exceeded")
-	}
-	switch v := value.(type) {
-	case map[string]interface{}:
-		for _, child := range v {
-			if err := checkJSONLimits(child, depth+1, nodes); err != nil {
-				return err
-			}
-		}
-	case []interface{}:
-		for _, child := range v {
-			if err := checkJSONLimits(child, depth+1, nodes); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-func readCanonicalValue(dec *json.Decoder) (interface{}, error) {
-	tok, err := dec.Token()
-	if err != nil {
-		return nil, err
-	}
-	if d, ok := tok.(json.Delim); ok {
-		switch d {
-		case '{':
-			m := map[string]interface{}{}
-			for dec.More() {
-				kt, err := dec.Token()
-				if err != nil {
-					return nil, err
-				}
-				key := kt.(string)
-				if _, exists := m[key]; exists {
-					return nil, fmt.Errorf("duplicate key %q", key)
-				}
-				value, err := readCanonicalValue(dec)
-				if err != nil {
-					return nil, err
-				}
-				m[key] = value
-			}
-			if _, err := dec.Token(); err != nil {
-				return nil, err
-			}
-			return m, nil
-		case '[':
-			a := []interface{}{}
-			for dec.More() {
-				value, err := readCanonicalValue(dec)
-				if err != nil {
-					return nil, err
-				}
-				a = append(a, value)
-			}
-			if _, err := dec.Token(); err != nil {
-				return nil, err
-			}
-			return a, nil
-		}
-	}
-	return tok, nil
-}
 func clone(m RecipeManifest) RecipeManifest {
 	b, _ := json.Marshal(m)
 	var c RecipeManifest
@@ -1264,7 +1160,7 @@ func resolveSchemaRef(root map[string]interface{}, ref string) (map[string]inter
 	result, ok := current.(map[string]interface{})
 	return result, ok
 }
-func sortedUnique(v []string) bool { return sort.StringsAreSorted(v) && len(unique(v)) == len(v) }
+func sortedUnique(v []string) bool { return registryjson.SortedUnique(v) }
 func sortedUniqueInts(v []int) bool {
 	for i := 1; i < len(v); i++ {
 		if v[i] <= v[i-1] {

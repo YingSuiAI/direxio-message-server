@@ -18,8 +18,10 @@ import (
 type fakeStore struct {
 	mu                             sync.Mutex
 	claim                          StageLease
+	claims                         []StageLease
 	claimErr                       error
 	claimCalls                     int
+	claimTimes                     []time.Time
 	steps                          []NextStep
 	intents                        []DispatchIntent
 	preDispatchFailures            []PreDispatchFailure
@@ -30,12 +32,21 @@ type fakeStore struct {
 func (s *fakeStore) ClaimNextExecutionStage(context.Context, string, time.Duration) (StageLease, error) {
 	s.mu.Lock()
 	s.claimCalls++
+	s.claimTimes = append(s.claimTimes, time.Now())
 	err := s.claimErr
+	claim := s.claim
+	if len(s.claims) > 0 {
+		idx := s.claimCalls - 1
+		if idx >= len(s.claims) {
+			idx = len(s.claims) - 1
+		}
+		claim = s.claims[idx]
+	}
 	s.mu.Unlock()
 	if err != nil {
 		return StageLease{}, err
 	}
-	return s.claim, nil
+	return claim, nil
 }
 func (s *fakeStore) NextExecutableStep(context.Context, string, string, string) (NextStep, error) {
 	s.mu.Lock()
@@ -97,6 +108,12 @@ func (s *fakeStore) FinalizeDispatchReceipt(context.Context, string, string, str
 }
 
 type fakeResolver struct{}
+
+type StepResolverFunc func(context.Context, StageLease, NextStep) (PreparedStep, error)
+
+func (f StepResolverFunc) ResolveStep(ctx context.Context, claim StageLease, next NextStep) (PreparedStep, error) {
+	return f(ctx, claim, next)
+}
 
 func (fakeResolver) ResolveStep(_ context.Context, c StageLease, n NextStep) (PreparedStep, error) {
 	attemptID, receiptID := "00000000-0000-4000-8000-000000000011", "00000000-0000-4000-8000-000000000012"
@@ -173,12 +190,14 @@ func (invalidPreparedResolver) ResolveStep(context.Context, StageLease, NextStep
 }
 
 type fakeTransport struct {
-	dispatch    int
-	poll        int
-	dispatchErr error
-	pollErr     error
-	status      coreaws.PollStatus
-	pollDelay   time.Duration
+	mu           sync.Mutex
+	dispatch     int
+	dispatchErrs []error
+	poll         int
+	dispatchErr  error
+	pollErr      error
+	status       coreaws.PollStatus
+	pollDelay    time.Duration
 }
 
 type capabilityTransport struct {
@@ -189,14 +208,30 @@ type capabilityTransport struct {
 func (t *capabilityTransport) CanExecuteStep(coreexecution.ExecutionStep) bool { return t.supported }
 
 func (t *fakeTransport) Dispatch(context.Context, coreaws.FrozenRequest) (coreaws.DispatchResult, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.dispatch++
+	if len(t.dispatchErrs) > 0 {
+		err := t.dispatchErrs[0]
+		t.dispatchErrs = t.dispatchErrs[1:]
+		if err != nil {
+			return coreaws.DispatchResult{}, err
+		}
+	}
 	if t.dispatchErr != nil {
 		return coreaws.DispatchResult{}, t.dispatchErr
 	}
 	return coreaws.DispatchResult{Status: coreaws.DispatchAccepted, CommandID: "cmd"}, nil
 }
+func (t *fakeTransport) dispatchCount() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.dispatch
+}
 func (t *fakeTransport) Poll(ctx context.Context, _ coreaws.PollRequest) (coreaws.CommandResult, error) {
+	t.mu.Lock()
 	t.poll++
+	t.mu.Unlock()
 	if t.pollDelay > 0 {
 		select {
 		case <-time.After(t.pollDelay):
@@ -460,6 +495,85 @@ func TestRunnerLostDispatchResponseIsUncertainAndNeverResent(t *testing.T) {
 	}
 	if tr.dispatch != 1 || s.uncertain != 1 {
 		t.Fatalf("dispatch=%d uncertain=%d", tr.dispatch, s.uncertain)
+	}
+}
+
+func TestRunnerTakeoverWithoutProviderCommandIsPermanentlyUncertain(t *testing.T) {
+	s := fixtureStore()
+	s.steps = s.steps[:1]
+	tr := &fakeTransport{status: coreaws.PollSucceeded}
+	resolver := StepResolverFunc(func(_ context.Context, c StageLease, n NextStep) (PreparedStep, error) {
+		prepared, err := (fakeResolver{}).ResolveStep(context.Background(), c, n)
+		prepared.ReconcileOnly = true
+		return prepared, err
+	})
+	r, err := NewRunner(Config{Store: s, Resolver: resolver, Transport: tr, Holder: "worker"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.RunOnce(context.Background()); !errors.Is(err, ErrRunnerUncertain) {
+		t.Fatalf("RunOnce error = %v, want durable uncertainty", err)
+	}
+	if tr.dispatch != 0 || len(s.intents) != 0 || s.uncertain != 1 {
+		t.Fatalf("dispatch=%d intents=%d uncertain=%d, takeover without command was redispatched", tr.dispatch, len(s.intents), s.uncertain)
+	}
+}
+
+func TestRunnerContinuesAfterDurableUncertaintyWithoutBusyLoop(t *testing.T) {
+	s := fixtureStore()
+	secondClaim := s.claim
+	secondClaim.RunID = "00000000-0000-4000-8000-000000000102"
+	secondClaim.StageID = "00000000-0000-4000-8000-000000000103"
+	secondClaim.TaskID = "00000000-0000-4000-8000-000000000104"
+	secondClaim.LeaseID = "00000000-0000-4000-8000-000000000105"
+	secondClaim.LeaseToken = "00000000-0000-4000-8000-000000000106"
+	s.claims = []StageLease{s.claim, secondClaim}
+	s.steps = []NextStep{
+		{OwnerID: s.claim.OwnerID, RunID: s.claim.RunID, StageID: s.claim.StageID, StepKey: "one", StepSet: coreexecution.StepSetForward, StepRevision: 1, StepDigest: digest("one")},
+		{OwnerID: secondClaim.OwnerID, RunID: secondClaim.RunID, StageID: secondClaim.StageID, StepKey: "two", StepSet: coreexecution.StepSetForward, StepRevision: 1, StepDigest: digest("two")},
+	}
+	tr := &fakeTransport{status: coreaws.PollSucceeded, dispatchErrs: []error{errors.New("lost response")}}
+	pollInterval := 25 * time.Millisecond
+	r, err := NewRunner(Config{Store: s, Resolver: fakeResolver{}, Transport: tr, Holder: "worker", PollInterval: pollInterval})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- r.Run(ctx) }()
+	deadline := time.After(2 * time.Second)
+	for {
+		if tr.dispatchCount() >= 2 {
+			break
+		}
+		select {
+		case <-deadline:
+			cancel()
+			s.mu.Lock()
+			claims := s.claimCalls
+			s.mu.Unlock()
+			t.Fatalf("runner did not continue to unrelated step: dispatch=%d claims=%d", tr.dispatchCount(), claims)
+		case <-time.After(time.Millisecond):
+		}
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run returned %v, want cancellation after continued work", err)
+	}
+	if s.uncertain != 1 || tr.dispatchCount() != 2 {
+		t.Fatalf("uncertain=%d dispatch=%d, want one settled claim and one unrelated dispatch", s.uncertain, tr.dispatchCount())
+	}
+	s.mu.Lock()
+	if len(s.intents) != 2 || s.intents[1].Attempt.RunID != secondClaim.RunID {
+		s.mu.Unlock()
+		t.Fatalf("second intent=%#v, want unrelated run %s", s.intents, secondClaim.RunID)
+	}
+	s.mu.Unlock()
+	s.mu.Lock()
+	claimTimes := append([]time.Time(nil), s.claimTimes...)
+	s.mu.Unlock()
+	if len(claimTimes) < 2 || claimTimes[1].Sub(claimTimes[0]) < pollInterval/2 {
+		t.Fatalf("uncertain retry was a busy loop: claim times=%v", claimTimes)
 	}
 }
 func TestRunnerPollFailureAfterIntentIsUncertain(t *testing.T) {

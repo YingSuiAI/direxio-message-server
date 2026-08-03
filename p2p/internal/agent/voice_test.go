@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"sync"
 	"testing"
 	"time"
@@ -203,9 +204,12 @@ func TestVoiceAbortPropagatesProviderResolutionFailure(t *testing.T) {
 
 func TestVoiceEndRetriesDurableStopWithoutSecondProviderStop(t *testing.T) {
 	client, attempts := &testVoiceClient{}, 0
-	v := &voiceCoordinator{sessions: map[string]*voiceSession{}, streams: map[string]map[chan nativeagent.Event]struct{}{}, active: func(string) bool { return true }}
+	v := &voiceCoordinator{cfg: voiceRuntimeConfig{WebhookSecret: "callback-secret"}, sessions: map[string]*voiceSession{}, streams: map[string]map[chan nativeagent.Event]struct{}{}, active: func(string) bool { return true }}
 	s := &voiceSession{SessionID: "voice-1", OwnerID: "owner", ExpiresAt: time.Now().Add(time.Minute), State: "started", ActiveTurnID: "turn-1", op: &sync.Mutex{}}
 	v.sessions[s.SessionID] = s
+	stream := make(chan nativeagent.Event, 1)
+	v.streams[s.SessionID] = map[chan nativeagent.Event]struct{}{stream: {}}
+	callbackToken := v.callbackToken(s.SessionID, s.ExpiresAt)
 	v.client = func(context.Context, string, *voiceSession) (voiceChatClient, *actionbase.Error) { return client, nil }
 	v.stop = func(context.Context, string, string) error {
 		attempts++
@@ -217,8 +221,21 @@ func TestVoiceEndRetriesDurableStopWithoutSecondProviderStop(t *testing.T) {
 	if _, err := v.end(context.Background(), "owner", map[string]any{"session_id": s.SessionID}); err == nil {
 		t.Fatal("first durable stop failure accepted")
 	}
-	if s.PendingStopID != "turn-1" || s.State != "stopping" {
-		t.Fatalf("state=%s pending=%s", s.State, s.PendingStopID)
+	if !s.Ended || s.PendingStopID != "turn-1" || s.State != "stopping" {
+		t.Fatalf("ended=%v state=%s pending=%s", s.Ended, s.State, s.PendingStopID)
+	}
+	if _, ok := v.streams[s.SessionID]; ok {
+		t.Fatal("stream remained attached while durable stop was pending")
+	}
+	m := &Module{voice: v}
+	if err := m.AuthorizeVoiceCallback(s.SessionID, callbackToken); err == nil {
+		t.Fatal("callback accepted while durable stop was pending")
+	}
+	if err := m.ValidateVoiceProviderPayload(s.SessionID, map[string]any{"session_id": s.SessionID}); err == nil {
+		t.Fatal("provider payload accepted while durable stop was pending")
+	}
+	if _, err := m.RunVoiceCustomLLM(context.Background(), s.SessionID, callbackToken, "hello"); err == nil {
+		t.Fatal("custom LLM accepted while durable stop was pending")
 	}
 	if _, err := v.end(context.Background(), "owner", map[string]any{"session_id": s.SessionID}); err != nil {
 		t.Fatal(err)
@@ -232,6 +249,138 @@ func TestVoiceEndRetriesDurableStopWithoutSecondProviderStop(t *testing.T) {
 	v.cleanupExpired(context.Background())
 	if client.stops != 1 || attempts != 2 {
 		t.Fatal("terminal session repeated stop")
+	}
+}
+
+func TestVoiceEndCompactsTerminalSessionAndEvictsExpiredTombstone(t *testing.T) {
+	client := &testVoiceClient{}
+	v := &voiceCoordinator{cfg: voiceRuntimeConfig{WebhookSecret: "callback-secret"}, sessions: map[string]*voiceSession{}, streams: map[string]map[chan nativeagent.Event]struct{}{}, client: func(context.Context, string, *voiceSession) (voiceChatClient, *actionbase.Error) {
+		return client, nil
+	}}
+	s := &voiceSession{SessionID: "voice-compact", OwnerID: "owner", ExpiresAt: time.Now().Add(time.Minute), Token: "rtc-token", CallbackToken: "callback-token", VoiceChatAppID: "app", RoomID: "room", UserID: "user", SpeechProfileID: "speech-profile", SpeechRevision: 3, SpeechCredential: 4, SpeechProviderConfig: map[string]any{"secret": "should-clear"}, op: &sync.Mutex{}}
+	v.sessions[s.SessionID] = s
+	callbackToken := v.callbackToken(s.SessionID, s.ExpiresAt)
+	if _, err := v.end(context.Background(), "owner", map[string]any{"session_id": s.SessionID}); err != nil {
+		t.Fatal(err)
+	}
+	if !s.Ended || s.Token != "" || s.CallbackToken != "" || s.SpeechProviderConfig != nil || s.VoiceChatAppID != "" || s.RoomID != "" || s.SpeechProfileID != "" {
+		t.Fatalf("terminal session was not compacted: %#v", s)
+	}
+	if client.stops != 1 {
+		t.Fatalf("provider stops=%d", client.stops)
+	}
+	second, err := v.end(context.Background(), "owner", map[string]any{"session_id": s.SessionID})
+	if err != nil || !actionbase.Bool(second.(map[string]any)["already_ended"]) || client.stops != 1 {
+		t.Fatalf("repeated end was not idempotent: response=%#v err=%v stops=%d", second, err, client.stops)
+	}
+	m := &Module{voice: v}
+	if err := m.AuthorizeVoiceCallback(s.SessionID, callbackToken); err == nil {
+		t.Fatal("terminal callback was accepted")
+	}
+	if err := m.ValidateVoiceProviderPayload(s.SessionID, map[string]any{"session_id": s.SessionID}); err == nil {
+		t.Fatal("terminal provider payload was accepted")
+	}
+	v.mu.Lock()
+	s.TombstoneExpiresAt = time.Now().Add(-time.Second)
+	v.mu.Unlock()
+	v.cleanupExpired(context.Background())
+	if _, ok := v.sessions[s.SessionID]; ok {
+		t.Fatal("expired tombstone was not evicted")
+	}
+}
+
+func TestVoiceDurableRetryTombstoneRejectsTranscript(t *testing.T) {
+	v := &voiceCoordinator{cfg: voiceRuntimeConfig{ClientTranscriptSubmit: true}, sessions: map[string]*voiceSession{}, streams: map[string]map[chan nativeagent.Event]struct{}{}}
+	s := &voiceSession{SessionID: "voice-transcript-retry", OwnerID: "owner", Ended: true, State: "stopping", PendingStopID: "turn-1", ProviderStopped: true, EndedAt: time.Now(), TombstoneExpiresAt: time.Now().Add(time.Hour)}
+	v.sessions[s.SessionID] = s
+	v.stop = func(context.Context, string, string) error { return fmt.Errorf("temporary") }
+	if _, err := v.transcript(context.Background(), "owner", map[string]any{"session_id": s.SessionID, "transcript_final": "hello"}); err == nil || err.Status != http.StatusNotFound {
+		t.Fatalf("transcript accepted during durable retry: %#v", err)
+	}
+}
+
+func TestVoicePendingProviderStopRetainsRetryTombstone(t *testing.T) {
+	attempts := 0
+	client := &testVoiceClient{}
+	v := &voiceCoordinator{sessions: map[string]*voiceSession{}, streams: map[string]map[chan nativeagent.Event]struct{}{}, client: func(context.Context, string, *voiceSession) (voiceChatClient, *actionbase.Error) {
+		attempts++
+		if attempts == 1 {
+			return nil, actionbase.StatusError(http.StatusServiceUnavailable, "provider unavailable")
+		}
+		return client, nil
+	}}
+	s := &voiceSession{SessionID: "voice-provider-retry", OwnerID: "owner", ExpiresAt: time.Now().Add(-time.Minute), Token: "rtc-token", CallbackToken: "callback-token", VoiceChatAppID: "app", RoomID: "room", SpeechProfileID: "speech-profile", SpeechRevision: 1, SpeechCredential: 2, SpeechProviderConfig: map[string]any{"secret": "should-clear"}, op: &sync.Mutex{}}
+	v.sessions[s.SessionID] = s
+	v.cleanupExpired(context.Background())
+	if !s.Ended || !s.ProviderStopPending || s.Token != "" || s.CallbackToken != "" || s.SpeechProviderConfig != nil || s.VoiceChatAppID != "app" || s.SpeechProfileID != "speech-profile" {
+		t.Fatalf("pending retry state=%#v", s)
+	}
+	v.cleanupExpired(context.Background())
+	if s.ProviderStopPending || client.stops != 1 || attempts != 2 || s.TombstoneExpiresAt.IsZero() {
+		t.Fatalf("retry state pending=%v stops=%d attempts=%d", s.ProviderStopPending, client.stops, attempts)
+	}
+	if s.VoiceChatAppID != "" || s.RoomID != "" || s.SpeechProfileID != "" {
+		t.Fatalf("provider retry material retained after success: %#v", s)
+	}
+}
+func TestVoiceSessionTombstonesHaveHardCap(t *testing.T) {
+	v := &voiceCoordinator{sessions: map[string]*voiceSession{}, streams: map[string]map[chan nativeagent.Event]struct{}{}}
+	now := time.Now()
+	for i := 0; i < voiceSessionCapacity*2; i++ {
+		id := fmt.Sprintf("voice-tombstone-%d", i)
+		v.sessions[id] = &voiceSession{SessionID: id, OwnerID: "owner", Ended: true, EndedAt: now.Add(-time.Duration(i+1) * time.Second), TombstoneExpiresAt: now.Add(time.Hour), Token: "rtc-token", CallbackToken: "callback-token", SpeechProviderConfig: map[string]any{"profile": "config"}}
+	}
+	v.cleanupExpired(context.Background())
+	if got := len(v.sessions); got > voiceSessionCapacity {
+		t.Fatalf("tombstone cap exceeded: got %d cap %d", got, voiceSessionCapacity)
+	}
+	for id, s := range v.sessions {
+		if s.Token != "" || s.CallbackToken != "" || s.SpeechProviderConfig != nil {
+			t.Fatalf("tombstone %s retained terminal material: %#v", id, s)
+		}
+	}
+}
+
+func TestVoicePendingTombstonesSurviveCapacityPrune(t *testing.T) {
+	v := &voiceCoordinator{sessions: map[string]*voiceSession{}, streams: map[string]map[chan nativeagent.Event]struct{}{}}
+	now := time.Now()
+	pending := voiceSessionCapacity / 2
+	for i := 0; i < pending; i++ {
+		id := fmt.Sprintf("voice-pending-%d", i)
+		v.sessions[id] = &voiceSession{SessionID: id, OwnerID: "owner", Ended: true, PendingStopID: "turn-" + id, ProviderStopPending: true, EndedAt: now.Add(-time.Minute), TombstoneExpiresAt: now.Add(time.Hour)}
+	}
+	for i := 0; i < voiceSessionCapacity-pending+16; i++ {
+		id := fmt.Sprintf("voice-ordinary-%d", i)
+		v.sessions[id] = &voiceSession{SessionID: id, OwnerID: "owner", Ended: true, EndedAt: now.Add(-time.Duration(i+1) * time.Second), TombstoneExpiresAt: now.Add(time.Hour)}
+	}
+	v.mu.Lock()
+	v.pruneVoiceTombstonesLocked(now)
+	v.mu.Unlock()
+	if len(v.sessions) != voiceSessionCapacity {
+		t.Fatalf("capacity=%d want %d", len(v.sessions), voiceSessionCapacity)
+	}
+	for i := 0; i < pending; i++ {
+		if _, ok := v.sessions[fmt.Sprintf("voice-pending-%d", i)]; !ok {
+			t.Fatalf("pending tombstone %d was evicted", i)
+		}
+	}
+}
+
+func TestVoiceCreateBackpressuresWhenAllSlotsPending(t *testing.T) {
+	v := &voiceCoordinator{cfg: voiceRuntimeConfig{WebhookSecret: "secret", WebhookURL: "https://voice.example.test/events", CustomLLMURL: "https://voice.example.test/llm"}, sessions: map[string]*voiceSession{}, streams: map[string]map[chan nativeagent.Event]struct{}{}}
+	now := time.Now()
+	for i := 0; i < voiceSessionCapacity; i++ {
+		id := fmt.Sprintf("voice-pending-%d", i)
+		v.sessions[id] = &voiceSession{SessionID: id, OwnerID: "owner", Ended: true, PendingStopID: "turn-" + id, ProviderStopPending: true, EndedAt: now, TombstoneExpiresAt: now.Add(time.Hour)}
+	}
+	providerCalls := 0
+	v.client = func(context.Context, string, *voiceSession) (voiceChatClient, *actionbase.Error) {
+		providerCalls++
+		return &testVoiceClient{}, nil
+	}
+	_, err := v.create(context.Background(), "owner", map[string]any{"conversation_id": "conv"})
+	if err == nil || err.Status != http.StatusServiceUnavailable || err.Code != "voice_capacity_exhausted" || providerCalls != 0 {
+		t.Fatalf("capacity error=%#v providerCalls=%d", err, providerCalls)
 	}
 }
 

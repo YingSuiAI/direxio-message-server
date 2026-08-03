@@ -1,24 +1,11 @@
 package nativeagent
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 )
-
-func (r *Runtime) runtimeInstall(context.Context, map[string]any) (map[string]any, error) {
-	return nil, embeddedExtensionsForbidden()
-}
-
-func (r *Runtime) runtimeWhich(context.Context, map[string]any) (map[string]any, error) {
-	return nil, embeddedExtensionsForbidden()
-}
-
-func (r *Runtime) runtimeRun(context.Context, map[string]any) (map[string]any, error) {
-	return nil, embeddedExtensionsForbidden()
-}
 
 func runtimePATH(dataDir string) string {
 	binDir := filepath.Join(dataDir, "runtime", "bin")

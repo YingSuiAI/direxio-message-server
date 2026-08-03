@@ -276,8 +276,7 @@ func NewExecutionV2Runtime(cfg ExecutionV2RuntimeConfig) (*ExecutionV2Runtime, e
 		EC2Provisioner:    provisioner,
 		SecretProvisioner: secretExecutor,
 		Holder:            cfg.WorkerID, LeaseTTL: cfg.LeaseTTL,
-		PollInterval: cfg.PollInterval, Now: cfg.Clock,
-		ReceiptResolver: receiptResolver,
+		PollInterval: cfg.PollInterval,
 	})
 	if err != nil {
 		return nil, ErrExecutionV2RuntimeInvalid
@@ -516,17 +515,21 @@ func (r *ExecutionV2Runtime) StartExecutionV2Runner(processCtx *process.ProcessC
 		err := r.runner.Run(runnerCtx)
 		r.mu.Lock()
 		r.stopped = true
-		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+		if executionV2RunnerFailure(err) {
 			r.failed = err
 		}
 		r.mu.Unlock()
-		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+		if executionV2RunnerFailure(err) {
 			processCtx.Degraded(err)
 		}
 		close(r.done)
 	}()
 	go r.sweepExecutionV2Confirmations(runnerCtx, processCtx)
 	return true
+}
+
+func executionV2RunnerFailure(err error) bool {
+	return err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, executionrunner.ErrRunnerUncertain)
 }
 
 func (r *ExecutionV2Runtime) sweepExecutionV2Confirmations(ctx context.Context, processCtx *process.ProcessContext) {

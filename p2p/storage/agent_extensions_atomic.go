@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
+	"strings"
 	"time"
 
 	confirmation "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcontrol/confirmation"
@@ -181,7 +182,14 @@ func toCoreBinding(b ext.ConfirmationBinding) confirmation.Binding {
 	for _, x := range b.SecretGrants {
 		g = append(g, confirmation.SecretGrant{ReferenceID: x.ReferenceID, Purpose: confirmation.SecretPurpose(x.Purpose), BindingDigest: confirmation.Digest(x.BindingDigest)})
 	}
-	core := confirmation.Binding{OwnerID: b.OwnerID, OperationDomain: "extension." + b.Operation, TargetID: b.TargetID, TargetRevision: b.TargetRevision, SourceVersion: b.SourceVersion, SourceCommit: b.SourceCommit, ContentDigest: confirmation.Digest(b.ContentDigest), ManifestDigest: confirmation.Digest(b.ManifestDigest), ExecutionDigest: confirmation.Digest(b.ExecutionDigest), ParameterDigest: confirmation.Digest(b.ParameterDigest), NetworkDigest: confirmation.Digest(b.NetworkDigest), SecretGrantDigest: confirmation.Digest(b.SecretDigest), SelectedTool: b.ToolName, NetworkGrants: b.NetworkGrants, SecretGrants: g}
+	operation := strings.TrimSpace(b.Operation)
+	for strings.HasPrefix(operation, "extension.") {
+		operation = strings.TrimPrefix(operation, "extension.")
+	}
+	core := confirmation.Binding{OwnerID: b.OwnerID, OperationDomain: "extension." + operation, TargetID: b.TargetID, TargetRevision: b.TargetRevision, TargetKind: "mcp", ExtensionVersionID: b.VersionID, SourceVersion: b.SourceVersion, SourceCommit: b.SourceCommit, ContentDigest: confirmation.Digest(b.ContentDigest), ManifestDigest: confirmation.Digest(b.ManifestDigest), ExecutionDigest: confirmation.Digest(b.ExecutionDigest), PermissionDigest: confirmation.Digest(b.ToolSchemaDigest), ParameterDigest: confirmation.Digest(b.ParameterDigest), NetworkDigest: confirmation.Digest(b.NetworkDigest), SecretGrantDigest: confirmation.Digest(b.SecretDigest), SelectedTool: b.ToolName, NetworkGrants: b.NetworkGrants, SecretGrants: g}
+	if normalized, err := core.Normalize(); err == nil {
+		core = normalized
+	}
 	core.Digest = task.Digest(core)
 	return core
 }

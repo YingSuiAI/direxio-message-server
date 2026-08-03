@@ -1,6 +1,7 @@
 package agentembedded
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 
@@ -14,14 +15,13 @@ import (
 // redispatches a call after an ambiguous provider response.
 type PinnedMCPWorkerCoordinator struct {
 	Extensions    ext.Store
-	Tasks         task.Store
 	Confirmations ConfirmationAdapter
 	Finalizer     ext.ExecutionFinalizer
 	Client        func(string, ext.Installation, ext.Version) *ext.MCPClient
 }
 
 func (w *PinnedMCPWorkerCoordinator) RunClaimed(ctx context.Context, owner string, claimed task.Task) error {
-	if w == nil || w.Extensions == nil || w.Tasks == nil || w.Finalizer == nil || w.Client == nil || claimed.Spec.Payload.Extension == nil {
+	if w == nil || w.Extensions == nil || w.Finalizer == nil || w.Client == nil || claimed.Spec.Payload.Extension == nil {
 		return ext.ErrInvalid
 	}
 	p := claimed.Spec.Payload.Extension
@@ -48,10 +48,22 @@ func (w *PinnedMCPWorkerCoordinator) RunClaimed(ctx context.Context, owner strin
 	if p.Operation != task.ExtensionOperationInstall && p.Operation != task.ExtensionOperationUpdate && p.Operation != task.ExtensionOperationUninstall && p.Operation != task.ExtensionOperationExecuteTool {
 		return ext.ErrInvalid
 	}
+	inputJSON := p.CanonicalInputJSON
+	if p.Operation == task.ExtensionOperationExecuteTool {
+		canonical, err := ext.CanonicalizeInput(p.CanonicalInputJSON)
+		if err != nil || !bytes.Equal(canonical, p.CanonicalInputJSON) {
+			return ext.ErrConflict
+		}
+		inputJSON = json.RawMessage(canonical)
+		expected, err := ext.ExecutionBinding(owner, i, v, p.ToolName, canonical)
+		if err != nil || !cv.Binding.Equal(expected) {
+			return ext.ErrConflict
+		}
+	}
 	requestDigest := task.Digest(struct {
 		Owner, Install, Version, Tool string
 		Input                         json.RawMessage
-	}{owner, p.InstallationID, p.Version, p.ToolName, p.CanonicalInputJSON})
+	}{owner, p.InstallationID, p.Version, p.ToolName, inputJSON})
 	holder := ""
 	if claimed.Lease != nil {
 		holder = claimed.Lease.Holder
@@ -125,7 +137,7 @@ func (w *PinnedMCPWorkerCoordinator) RunClaimed(ctx context.Context, owner strin
 		}
 		return ext.ErrConflict
 	}
-	result, e := client.CallTool(ctx, p.ToolName, p.CanonicalInputJSON)
+	result, e := client.CallTool(ctx, p.ToolName, inputJSON)
 	if e != nil {
 		fe := w.Finalizer.FinalizeExecution(ctx, ext.ExecutionFinalizeRequest{OwnerID: owner, TaskID: claimed.ID, ConfirmationID: p.ConfirmationID, InstallationID: p.InstallationID, VersionID: p.Version, RequestDigest: requestDigest, LeaseHolder: holder, ErrorCode: "extension_execution_uncertain", ErrorSummary: "provider outcome is unknown", Attempt: claimed.Attempt, LeaseEpoch: claimed.LeaseEpoch, TaskRevision: claimed.Revision, InstallationRevision: p.ExpectedRevision, Uncertain: true})
 		if fe != nil {
@@ -176,9 +188,4 @@ func pRevision(i ext.Installation) uint64 {
 		return 0
 	}
 	return uint64(i.Revision)
-}
-func decodeExtensionPayload(raw json.RawMessage) (task.ExtensionTaskPayload, error) {
-	var p task.ExtensionTaskPayload
-	err := json.Unmarshal(raw, &p)
-	return p, err
 }

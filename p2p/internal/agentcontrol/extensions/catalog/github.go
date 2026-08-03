@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/url"
 	"sort"
@@ -27,6 +28,8 @@ type githubTree struct {
 	Tree      []githubTreeEntry `json:"tree"`
 	Truncated bool              `json:"truncated"`
 }
+
+const maxGitHubBlobs = 256
 
 func (p *provider) searchGitHub(ctx context.Context, cat *Catalog, query string, pageSize int, cur cursor) ([]extensions.Candidate, string, error) {
 	requestedSize := pageSize
@@ -124,13 +127,32 @@ func (p *provider) inspectRepo(ctx context.Context, repo, commit, description st
 	if decodeStrict(b, &tree) != nil || tree.Truncated || tree.SHA == "" || len(tree.Tree) > 10000 {
 		return repoResult{}, ErrMalformed
 	}
-	files := make([]repoFile, 0, len(tree.Tree))
+	entries := make([]githubTreeEntry, 0, len(tree.Tree))
 	for _, entry := range tree.Tree {
 		if entry.Type == "tree" {
 			continue
 		}
 		if entry.Type != "blob" || entry.Mode == "120000" || entry.Mode == "160000" || !validCommit(entry.SHA) || entry.Path == "" || strings.Contains(entry.Path, "..") {
 			return repoResult{}, ErrUnsupported
+		}
+		if entry.Size < 0 || entry.Size > p.c.max {
+			return repoResult{}, ErrOversize
+		}
+		entries = append(entries, entry)
+		if len(entries) > maxGitHubBlobs {
+			return repoResult{}, ErrOversize
+		}
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Path < entries[j].Path })
+	files := make([]repoFile, 0, len(entries))
+	var declaredContent int64
+	for _, entry := range entries {
+		if declaredContent > p.c.max-entry.Size {
+			return repoResult{}, ErrOversize
+		}
+		declaredContent += entry.Size
+		if manifestSize(files, entry.Path, entry.Size) > p.c.max-declaredContent {
+			return repoResult{}, ErrOversize
 		}
 		data, err := p.fetchBlob(ctx, repo, commit, entry)
 		if err != nil {
@@ -139,9 +161,14 @@ func (p *provider) inspectRepo(ctx context.Context, repo, commit, description st
 		if int64(len(data)) > p.c.max {
 			return repoResult{}, ErrOversize
 		}
+		if entry.Size > 0 && int64(len(data)) != entry.Size {
+			return repoResult{}, ErrMalformed
+		}
 		files = append(files, repoFile{Path: entry.Path, Content: data})
+		if content := decodedContentSize(files); content > p.c.max || manifestSize(files, "", -1) > p.c.max-content {
+			return repoResult{}, ErrOversize
+		}
 	}
-	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	var remote string
 	for _, file := range files {
 		lower := strings.ToLower(file.Path)
@@ -164,7 +191,13 @@ func (p *provider) inspectRepo(ctx context.Context, repo, commit, description st
 	if remote == "" || p.c.validateRemote(ctx, remote) != nil {
 		return repoResult{}, ErrUnsupported
 	}
-	manifestPayload, _ := json.Marshal(files)
+	manifestPayload, err := json.Marshal(files)
+	if err != nil {
+		return repoResult{}, ErrMalformed
+	}
+	if total := decodedContentSize(files); total > p.c.max || int64(len(manifestPayload)) > p.c.max-total {
+		return repoResult{}, ErrOversize
+	}
 	contentDigest := extensions.DigestBytes(manifestPayload)
 	pin := extensions.SourcePin{GitCommit: strings.ToLower(commit), GitSHA256: contentDigest}
 	candidate := extensions.Candidate{ID: repo, Kind: extensions.KindMCP, Source: "github", Name: repo, Description: description, Transport: extensions.TransportRemote, Pin: pin}
@@ -176,15 +209,56 @@ type repoFile struct {
 	Content []byte
 }
 
+// manifestSize computes the exact JSON size produced by json.Marshal for the
+// repository manifest without allocating a placeholder content blob. A
+// negative size asks for the size of the supplied files using their actual
+// decoded content.
+func manifestSize(files []repoFile, nextPath string, nextSize int64) int64 {
+	size := int64(2) // []
+	for index, file := range files {
+		if index > 0 {
+			size++
+		}
+		pathBytes, _ := json.Marshal(file.Path)
+		contentSize := int64(base64.StdEncoding.EncodedLen(len(file.Content)))
+		size += int64(len(`{"Path":`)) + int64(len(pathBytes)) + int64(len(`,"Content":"`)) + contentSize + int64(len(`"}`))
+	}
+	if nextSize >= 0 {
+		if len(files) > 0 {
+			size++
+		}
+		pathBytes, _ := json.Marshal(nextPath)
+		size += int64(len(`{"Path":`)) + int64(len(pathBytes)) + int64(len(`,"Content":"`)) + int64(base64.StdEncoding.EncodedLen(int(nextSize))) + int64(len(`"}`))
+	}
+	return size
+}
+
+func decodedContentSize(files []repoFile) int64 {
+	var total int64
+	for _, file := range files {
+		if int64(len(file.Content)) > (1<<63-1)-total {
+			return 1<<63 - 1
+		}
+		total += int64(len(file.Content))
+	}
+	return total
+}
+
 func (p *provider) fetchBlob(ctx context.Context, repo, commit string, entry githubTreeEntry) ([]byte, error) {
 	b, err := p.c.get(ctx, "/repos/"+repo+"/git/blobs/"+entry.SHA, nil)
+	if errors.Is(err, ErrOversize) {
+		return nil, ErrOversize
+	}
 	if err == nil {
 		var blob struct {
 			Content  string `json:"content"`
 			Encoding string `json:"encoding"`
 		}
 		if parseJSON(b, &blob) == nil && blob.Encoding == "base64" {
-			data, decodeErr := base64.StdEncoding.DecodeString(strings.ReplaceAll(blob.Content, "\n", ""))
+			data, decodeErr := decodeBlobContent(blob.Content, p.c.max)
+			if errors.Is(decodeErr, ErrOversize) {
+				return nil, ErrOversize
+			}
 			if decodeErr == nil && fullBlobSHA(data) == strings.ToLower(entry.SHA) {
 				return data, nil
 			}
@@ -204,9 +278,27 @@ func (p *provider) fetchBlob(ctx context.Context, repo, commit string, entry git
 	if parseJSON(b, &content) != nil || content.Encoding != "base64" {
 		return nil, ErrMalformed
 	}
-	data, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(content.Content, "\n", ""))
+	data, err := decodeBlobContent(content.Content, p.c.max)
+	if errors.Is(err, ErrOversize) {
+		return nil, ErrOversize
+	}
 	if err != nil || fullBlobSHA(data) != strings.ToLower(entry.SHA) {
 		return nil, ErrMalformed
+	}
+	return data, nil
+}
+
+func decodeBlobContent(raw string, max int64) ([]byte, error) {
+	encoded := strings.NewReplacer("\n", "", "\r", "").Replace(raw)
+	if int64(base64.StdEncoding.DecodedLen(len(encoded))) > max {
+		return nil, ErrOversize
+	}
+	data, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > max {
+		return nil, ErrOversize
 	}
 	return data, nil
 }

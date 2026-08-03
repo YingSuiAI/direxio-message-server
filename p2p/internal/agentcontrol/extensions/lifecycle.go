@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	coretask "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcontrol/task"
 	"github.com/google/uuid"
 )
 
@@ -308,7 +309,7 @@ func (s *Service) ConsumeAndRun(ctx context.Context, owner string, c ConsumeRequ
 	if e != nil {
 		return Confirmation{}, e
 	}
-	if got.OwnerID != "" && got.OwnerID != owner || got.Binding.TargetID != c.Binding.TargetID || got.Binding.VersionID != c.Binding.VersionID || got.Binding.ContentDigest != c.Binding.ContentDigest || got.Binding.ManifestDigest != c.Binding.ManifestDigest || got.Binding.ExecutionDigest != c.Binding.ExecutionDigest || got.Binding.NetworkDigest != c.Binding.NetworkDigest || got.Binding.SecretDigest != c.Binding.SecretDigest {
+	if got.OwnerID != "" && got.OwnerID != owner || !got.Binding.Equal(c.Binding) {
 		return Confirmation{}, ErrConflict
 	}
 	t, e := s.Store.Get(ctx, owner, c.Binding.TargetID)
@@ -337,6 +338,10 @@ func (s *Service) RequestExecute(ctx context.Context, r ExecuteRequest) (Execute
 	if s.validate() != nil || strings.TrimSpace(r.OwnerID) == "" || !validUUID(r.IdempotencyKey) || !validUUID(r.InstallationID) || strings.TrimSpace(r.ToolName) == "" {
 		return ExecuteResult{}, ErrInvalid
 	}
+	canonicalInput, err := CanonicalizeInput(r.Input)
+	if err != nil {
+		return ExecuteResult{}, err
+	}
 	i, err := s.Store.Get(ctx, r.OwnerID, r.InstallationID)
 	if err != nil {
 		return ExecuteResult{}, err
@@ -364,14 +369,15 @@ func (s *Service) RequestExecute(ctx context.Context, r ExecuteRequest) (Execute
 	if tool.Name == "" {
 		return ExecuteResult{}, ErrNotFound
 	}
-	binding := makeBinding(r.OwnerID, "execute", i, v)
-	binding.ToolName = r.ToolName
-	binding.ToolSchemaDigest = tool.InputSchemaDigest
+	binding, err := ExecutionBinding(r.OwnerID, i, v, r.ToolName, canonicalInput)
+	if err != nil {
+		return ExecuteResult{}, err
+	}
 	taskID := uuid.NewString()
 	if atomic, ok := s.Store.(AtomicLifecycleStore); ok && atomic.SupportsAtomicLifecycle() {
-		return atomic.CommitExecute(ctx, ExecuteAtomicRequest{OwnerID: r.OwnerID, IdempotencyKey: r.IdempotencyKey, Installation: i, Version: v, Tool: tool, Input: append([]byte(nil), r.Input...), Task: TaskRequest{OwnerID: r.OwnerID, TaskID: taskID, IdempotencyKey: r.IdempotencyKey, Goal: "extension tool " + r.ToolName, Payload: r.Input}, Confirmation: ConfirmationRequest{OwnerID: r.OwnerID, IdempotencyKey: r.IdempotencyKey, TaskID: taskID, Binding: binding, ExpiresAt: s.now().Add(time.Hour)}})
+		return atomic.CommitExecute(ctx, ExecuteAtomicRequest{OwnerID: r.OwnerID, IdempotencyKey: r.IdempotencyKey, Installation: i, Version: v, Tool: tool, Input: append([]byte(nil), canonicalInput...), Task: TaskRequest{OwnerID: r.OwnerID, TaskID: taskID, IdempotencyKey: r.IdempotencyKey, Goal: "extension tool " + r.ToolName, Payload: canonicalInput}, Confirmation: ConfirmationRequest{OwnerID: r.OwnerID, IdempotencyKey: r.IdempotencyKey, TaskID: taskID, Binding: binding, ExpiresAt: s.now().Add(time.Hour)}})
 	}
-	tr, err := s.Tasks.CreateWaitingUser(ctx, TaskRequest{OwnerID: r.OwnerID, TaskID: taskID, IdempotencyKey: r.IdempotencyKey, Goal: "extension tool " + r.ToolName, Payload: mustJSON(struct{ InstallationID, VersionID, ToolName, InputDigest string }{i.ID, v.VersionID, r.ToolName, DigestBytes(r.Input)})})
+	tr, err := s.Tasks.CreateWaitingUser(ctx, TaskRequest{OwnerID: r.OwnerID, TaskID: taskID, IdempotencyKey: r.IdempotencyKey, Goal: "extension tool " + r.ToolName, Payload: mustJSON(struct{ InstallationID, VersionID, ToolName, InputDigest string }{i.ID, v.VersionID, r.ToolName, DigestBytes(canonicalInput)})})
 	if err != nil {
 		return ExecuteResult{}, err
 	}
@@ -391,8 +397,69 @@ func makeBinding(owner, op string, i Installation, v Version) ConfirmationBindin
 		n[x] = fmt.Sprintf("%s://%s:%d%s:%s", g.Scheme, g.Host, g.Port, g.PathPrefix, g.Digest)
 	}
 	sort.Strings(n)
-	return ConfirmationBinding{OwnerID: owner, Operation: op, TargetID: i.ID, VersionID: v.VersionID, SourceVersion: v.Pin.RegistryVersion, SourceCommit: v.Pin.GitCommit, TargetRevision: i.Revision, ParameterDigest: v.ContentDigest, ContentDigest: v.ContentDigest, ManifestDigest: v.ManifestDigest, ExecutionDigest: v.ExecutionDigest, NetworkDigest: v.NetworkDigest, SecretDigest: v.SecretDigest, NetworkGrants: n, SecretGrants: append([]SecretGrant(nil), v.SecretGrants...)}
+	secrets := append([]SecretGrant(nil), v.SecretGrants...)
+	sort.Slice(secrets, func(left, right int) bool {
+		if secrets[left].ReferenceID != secrets[right].ReferenceID {
+			return secrets[left].ReferenceID < secrets[right].ReferenceID
+		}
+		if secrets[left].Purpose != secrets[right].Purpose {
+			return secrets[left].Purpose < secrets[right].Purpose
+		}
+		return secrets[left].BindingDigest < secrets[right].BindingDigest
+	})
+	return ConfirmationBinding{OwnerID: owner, Operation: op, TargetID: i.ID, VersionID: v.VersionID, SourceVersion: v.Pin.RegistryVersion, SourceCommit: v.Pin.GitCommit, TargetRevision: i.Revision, ParameterDigest: v.ContentDigest, ContentDigest: v.ContentDigest, ManifestDigest: v.ManifestDigest, ExecutionDigest: v.ExecutionDigest, NetworkDigest: v.NetworkDigest, SecretDigest: v.SecretDigest, NetworkGrants: n, SecretGrants: secrets}
 }
+
+// CanonicalizeInput applies the same JSON normalization used by durable task
+// payloads. Confirmation must cover this exact byte representation rather
+// than the caller's original whitespace/key ordering.
+func CanonicalizeInput(raw []byte) ([]byte, error) {
+	if len(raw) == 0 || len(raw) > coretask.MaxCanonicalInputBytes || !json.Valid(raw) {
+		return nil, ErrInvalid
+	}
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil, ErrInvalid
+	}
+	canonical, err := json.Marshal(value)
+	if err != nil {
+		return nil, ErrInvalid
+	}
+	return canonical, nil
+}
+
+// ExecutionBinding derives the immutable confirmation facts for one tool
+// call. ParameterDigest covers canonical input and ToolSchemaDigest covers
+// the exact pinned schema selected from the immutable version.
+func ExecutionBinding(owner string, i Installation, v Version, toolName string, input []byte) (ConfirmationBinding, error) {
+	toolName = strings.TrimSpace(toolName)
+	if toolName == "" {
+		return ConfirmationBinding{}, ErrInvalid
+	}
+	canonical, err := CanonicalizeInput(input)
+	if err != nil {
+		return ConfirmationBinding{}, err
+	}
+	if ValidatePinnedTools(v.Tools) != nil {
+		return ConfirmationBinding{}, ErrInvalid
+	}
+	var tool Tool
+	for _, candidate := range v.Tools {
+		if candidate.Name == toolName {
+			tool = candidate
+			break
+		}
+	}
+	if tool.Name == "" || !validDigest(tool.InputSchemaDigest) {
+		return ConfirmationBinding{}, ErrInvalid
+	}
+	binding := makeBinding(owner, "execute", i, v)
+	binding.ToolName = tool.Name
+	binding.ToolSchemaDigest = tool.InputSchemaDigest
+	binding.ParameterDigest = DigestBytes(canonical)
+	return binding, nil
+}
+
 func mutationDigest(m Mutation, op string) string {
 	return DigestBytes(mustJSON(struct {
 		Owner, Key, ID, Op string

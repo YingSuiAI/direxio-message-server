@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -133,5 +135,47 @@ func TestInspectionAllowsUnconfiguredDescriptorAndLifecycleBindsSecret(t *testin
 	grant := m.Inspection.SecretGrants[0]
 	if !grant.Configured || grant.BindingDigest != DigestBytes([]byte("secret")) {
 		t.Fatalf("secret grant was not bound: %#v", grant)
+	}
+}
+
+func TestExecutionBindingUsesCanonicalInputAndPinnedToolSchema(t *testing.T) {
+	i := inspection()
+	versionID := "11111111-1111-4111-8111-111111111111"
+	installationID := "22222222-2222-4222-8222-222222222222"
+	schema := json.RawMessage(`{"type":"object","properties":{"value":{"type":"string"}}}`)
+	schemaDigest := DigestBytes(schema)
+	version := Version{VersionID: versionID, Pin: i.Candidate.Pin, ContentDigest: i.ContentDigest, ManifestDigest: i.ManifestDigest, ExecutionDigest: i.ExecutionDigest, NetworkDigest: i.NetworkDigest, SecretDigest: i.SecretDigest, SecretGrants: []SecretGrant{{ReferenceID: "z-ref", Purpose: "mcp_credential", BindingDigest: strings.Repeat("z", 64), Configured: true}, {ReferenceID: "a-ref", Purpose: "mcp_credential", BindingDigest: strings.Repeat("a", 64), Configured: true}}, Tools: []Tool{{Name: "echo", InputSchema: schema, InputSchemaDigest: schemaDigest}}}
+	installation := Installation{ID: installationID, OwnerID: "owner", Candidate: i.Candidate, Revision: 3, State: "installed", ActiveVersionID: versionID, Versions: []Version{version}}
+	first, err := ExecutionBinding("owner", installation, version, "echo", []byte(`{"b":2,"a":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.SecretGrants) != 2 || first.SecretGrants[0].ReferenceID != "a-ref" || first.SecretGrants[1].ReferenceID != "z-ref" {
+		t.Fatalf("secret grants were not canonicalized: %#v", first.SecretGrants)
+	}
+	if first.ParameterDigest != DigestBytes([]byte(`{"a":1,"b":2}`)) || first.ToolSchemaDigest != schemaDigest {
+		t.Fatalf("binding digests = %#v", first)
+	}
+	second, err := ExecutionBinding("owner", installation, version, "echo", []byte(`{"a":2,"b":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ParameterDigest == second.ParameterDigest {
+		t.Fatal("different parameters shared a confirmation digest")
+	}
+	version.Tools[0].InputSchema = json.RawMessage(`{"type":"object"}`)
+	version.Tools[0].InputSchemaDigest = DigestBytes(version.Tools[0].InputSchema)
+	third, err := ExecutionBinding("owner", installation, version, "echo", []byte(`{"b":2,"a":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ToolSchemaDigest == third.ToolSchemaDigest || first.Equal(third) {
+		t.Fatal("different tool schema shared a confirmation binding")
+	}
+	if _, err := ExecutionBinding("owner", installation, version, "echo", []byte("not-json")); err != ErrInvalid {
+		t.Fatalf("invalid input error = %v, want ErrInvalid", err)
+	}
+	if !strings.HasPrefix(first.Operation, "execute") {
+		t.Fatalf("operation = %q", first.Operation)
 	}
 }

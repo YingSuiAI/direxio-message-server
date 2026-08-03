@@ -4,8 +4,6 @@ package agentskills
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +11,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/registryjson"
 )
 
 var (
@@ -26,8 +26,6 @@ var (
 
 const (
 	maxSkillBytes   = 1 << 20
-	maxSkillDepth   = 32
-	maxSkillNodes   = 4096
 	maxSkillSteps   = 64
 	maxSkillTags    = 32
 	maxSkillString  = 256
@@ -300,7 +298,7 @@ func Parse(content []byte) (Manifest, error) {
 	if err := rejectUnsafeFields(raw, ""); err != nil {
 		return Manifest{}, err
 	}
-	if _, err := canonicalValue(content); err != nil {
+	if _, err := registryjson.CanonicalValue(content); err != nil {
 		return Manifest{}, fmt.Errorf("manifest canonical JSON: %w", err)
 	}
 	var m Manifest
@@ -690,112 +688,9 @@ func validEndpoint(endpoint string) bool {
 	return true
 }
 func ContentDigest(content []byte) string {
-	value, err := canonicalValue(content)
-	if err != nil {
-		return ""
-	}
-	raw, ok := value.(map[string]interface{})
-	if !ok {
-		return ""
-	}
-	delete(raw, "content_digest")
-	canonical, err := json.Marshal(raw)
-	if err != nil {
-		return ""
-	}
-	sum := sha256.Sum256(canonical)
-	return hex.EncodeToString(sum[:])
+	return registryjson.ContentDigest(content)
 }
 
-func canonicalValue(content []byte) (interface{}, error) {
-	dec := json.NewDecoder(bytes.NewReader(content))
-	dec.UseNumber()
-	value, err := readCanonicalValue(dec)
-	if err != nil {
-		return nil, err
-	}
-	if err := checkJSONLimits(value, 0, new(int)); err != nil {
-		return nil, err
-	}
-	var trailing interface{}
-	if err := dec.Decode(&trailing); err != io.EOF {
-		if err == nil {
-			return nil, errors.New("trailing JSON")
-		}
-		return nil, err
-	}
-	return value, nil
-}
-func checkJSONLimits(value interface{}, depth int, nodes *int) error {
-	if depth > maxSkillDepth {
-		return errors.New("JSON depth cap exceeded")
-	}
-	*nodes = *nodes + 1
-	if *nodes > maxSkillNodes {
-		return errors.New("JSON node cap exceeded")
-	}
-	switch v := value.(type) {
-	case map[string]interface{}:
-		for _, child := range v {
-			if err := checkJSONLimits(child, depth+1, nodes); err != nil {
-				return err
-			}
-		}
-	case []interface{}:
-		for _, child := range v {
-			if err := checkJSONLimits(child, depth+1, nodes); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-func readCanonicalValue(dec *json.Decoder) (interface{}, error) {
-	tok, err := dec.Token()
-	if err != nil {
-		return nil, err
-	}
-	switch delim := tok.(type) {
-	case json.Delim:
-		switch delim {
-		case '{':
-			m := map[string]interface{}{}
-			for dec.More() {
-				keyTok, e := dec.Token()
-				if e != nil {
-					return nil, e
-				}
-				key := keyTok.(string)
-				if _, exists := m[key]; exists {
-					return nil, fmt.Errorf("duplicate key %q", key)
-				}
-				v, e := readCanonicalValue(dec)
-				if e != nil {
-					return nil, e
-				}
-				m[key] = v
-			}
-			if _, e := dec.Token(); e != nil {
-				return nil, e
-			}
-			return m, nil
-		case '[':
-			a := []interface{}{}
-			for dec.More() {
-				v, e := readCanonicalValue(dec)
-				if e != nil {
-					return nil, e
-				}
-				a = append(a, v)
-			}
-			if _, e := dec.Token(); e != nil {
-				return nil, e
-			}
-			return a, nil
-		}
-	}
-	return tok, nil
-}
 func cloneManifest(m Manifest) Manifest {
 	b, _ := json.Marshal(m)
 	var c Manifest
@@ -811,14 +706,7 @@ func contains(values []string, wanted string) bool {
 	return false
 }
 func sortedUnique(values []string) bool {
-	return sort.StringsAreSorted(values) && len(values) == uniqueCount(values)
-}
-func uniqueCount(values []string) int {
-	seen := map[string]struct{}{}
-	for _, v := range values {
-		seen[v] = struct{}{}
-	}
-	return len(seen)
+	return registryjson.SortedUnique(values)
 }
 func capabilitiesSubset(required []string, available map[string]struct{}) bool {
 	for _, c := range required {

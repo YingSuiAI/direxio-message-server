@@ -18,6 +18,7 @@ func TestBindingIsZeroCoversEveryField(t *testing.T) {
 		"target":            func(b *Binding) { b.TargetID = "target" },
 		"target revision":   func(b *Binding) { b.TargetRevision = 1 },
 		"target kind":       func(b *Binding) { b.TargetKind = "stack" },
+		"extension version": func(b *Binding) { b.ExtensionVersionID = "00000000-0000-4000-8000-000000000001" },
 		"source version":    func(b *Binding) { b.SourceVersion = "v1" },
 		"source commit":     func(b *Binding) { b.SourceCommit = "commit" },
 		"content digest":    func(b *Binding) { b.ContentDigest = Digest("content") },
@@ -99,7 +100,7 @@ func validExecutionV2Binding() Binding {
 
 func validLegacyBinding(owner, target string) Binding {
 	d := Digest(strings.Repeat("a", 64))
-	return Binding{OwnerID: owner, OperationDomain: "extension.execute", TargetID: target, TargetRevision: 1, TargetKind: "mcp", SourceVersion: "1.0.0", ContentDigest: d, ParameterDigest: d, NetworkDigest: d, SecretGrantDigest: d}
+	return Binding{OwnerID: owner, OperationDomain: "extension.execute", TargetID: target, TargetRevision: 1, TargetKind: "mcp", ExtensionVersionID: "00000000-0000-4000-8000-000000000001", SourceVersion: "1.0.0", ContentDigest: d, ParameterDigest: d, NetworkDigest: d, SecretGrantDigest: d}
 }
 
 func TestExecutionV2BindingRequiresCompleteImmutableSnapshot(t *testing.T) {
@@ -215,6 +216,28 @@ func TestExecutionV2BindingEqualityIncludesBindingDigest(t *testing.T) {
 	}
 }
 
+func TestExtensionBindingRequiresExplicitVersionAndKind(t *testing.T) {
+	valid := validLegacyBinding("@owner:example.test", "legacy-target")
+	if _, err := valid.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	withoutVersion := valid
+	withoutVersion.ExtensionVersionID = ""
+	if _, err := withoutVersion.Normalize(); err == nil {
+		t.Fatal("extension binding without immutable version was accepted")
+	}
+	wrongKind := valid
+	wrongKind.TargetKind = "stack"
+	if _, err := wrongKind.Normalize(); err == nil {
+		t.Fatal("extension binding with non-MCP target kind was accepted")
+	}
+	otherVersion := valid
+	otherVersion.ExtensionVersionID = "00000000-0000-4000-8000-000000000002"
+	if valid.Equal(otherVersion) {
+		t.Fatal("extension bindings with different versions compared equal")
+	}
+}
+
 func TestExecutionV2BindingIsCanonicallySealed(t *testing.T) {
 	first, err := validExecutionV2Binding().Normalize()
 	if err != nil {
@@ -312,7 +335,7 @@ func TestMemoryRequestScopesLiveTargetByOwnerAndRecordsOwner(t *testing.T) {
 func TestMemoryLegacyRequestReplayIsOwnerScoped(t *testing.T) {
 	now := time.Date(2029, 1, 1, 0, 0, 0, 0, time.UTC)
 	repository := NewMemoryRepository(func() time.Time { return now })
-	binding, err := (Binding{OperationDomain: "extension.execute", TargetID: "legacy-target", TargetRevision: 1, TargetKind: "mcp", SourceVersion: "1.0.0", ContentDigest: Digest(strings.Repeat("a", 64)), ParameterDigest: Digest(strings.Repeat("a", 64)), NetworkDigest: Digest(strings.Repeat("a", 64)), SecretGrantDigest: Digest(strings.Repeat("a", 64))}).Normalize()
+	binding, err := (Binding{OperationDomain: "extension.execute", TargetID: "legacy-target", TargetRevision: 1, TargetKind: "mcp", ExtensionVersionID: "00000000-0000-4000-8000-000000000001", SourceVersion: "1.0.0", ContentDigest: Digest(strings.Repeat("a", 64)), ParameterDigest: Digest(strings.Repeat("a", 64)), NetworkDigest: Digest(strings.Repeat("a", 64)), SecretGrantDigest: Digest(strings.Repeat("a", 64))}).Normalize()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -371,5 +394,35 @@ func TestMemoryMutationOwnerAndReplayAreOwnerScoped(t *testing.T) {
 	}
 	if _, err := repository.Consume(context.Background(), ConsumeCommand{OwnerID: other, ConfirmationID: third.ConfirmationID, IdempotencyKey: "00000000-0000-4000-8000-000000000030", TaskID: third.TaskID, Attempt: 1, LeaseEpoch: 1, ExpectedRevision: 2, ExpectedTaskRevision: 1, Binding: third.Binding, At: now}); err != ErrConflict {
 		t.Fatalf("cross-owner consume = %v, want ErrConflict", err)
+	}
+}
+
+func TestMemoryListFiltersByOwner(t *testing.T) {
+	now := time.Date(2029, 1, 1, 0, 0, 0, 0, time.UTC)
+	repository := NewMemoryRepository(func() time.Time { return now })
+	request := func(owner, key, taskID string) Confirmation {
+		binding := validLegacyBinding(owner, taskID)
+		value, err := repository.Request(context.Background(), RequestCommand{
+			OwnerID: owner, IdempotencyKey: key, Binding: binding, TaskID: taskID,
+			ExpiresAt: now.Add(time.Hour), At: now,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	owner := "@owner:example.test"
+	other := "@other:example.test"
+	request(owner, "00000000-0000-4000-8000-000000000031", "00000000-0000-4000-8000-000000000032")
+	request(other, "00000000-0000-4000-8000-000000000033", "00000000-0000-4000-8000-000000000034")
+	page, err := repository.List(context.Background(), ListQuery{OwnerID: owner, PageSize: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Confirmations) != 1 || page.Confirmations[0].OwnerID != owner {
+		t.Fatalf("owner list = %#v, want only %s", page.Confirmations, owner)
+	}
+	if _, err := repository.List(context.Background(), ListQuery{PageSize: 10}); err != ErrInvalid {
+		t.Fatalf("ownerless list error = %v, want ErrInvalid", err)
 	}
 }

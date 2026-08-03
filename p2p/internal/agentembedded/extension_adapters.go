@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcontrol/confirmation"
@@ -103,6 +104,9 @@ func NewPinnedMCPWorker(store extx.Store, factory func(string, extx.Installation
 			return extx.ErrInvalid
 		}
 		p := t.Spec.Payload.Extension
+		if p.Operation != task.ExtensionOperationExecuteTool {
+			return extx.ErrInvalid
+		}
 		i, e := store.Get(ctx, t.OwnerID, p.InstallationID)
 		if e != nil {
 			return e
@@ -114,6 +118,17 @@ func NewPinnedMCPWorker(store extx.Store, factory func(string, extx.Installation
 			}
 		}
 		if v.VersionID == "" || v.ContentDigest != p.Digest || c.Binding.VersionID != v.VersionID || c.Binding.ContentDigest != v.ContentDigest || c.Binding.ExecutionDigest != v.ExecutionDigest || c.Binding.ManifestDigest != v.ManifestDigest || c.Binding.NetworkDigest != v.NetworkDigest || c.Binding.SecretDigest != v.SecretDigest {
+			return extx.ErrConflict
+		}
+		if p.ExpectedRevision == 0 || int64(p.ExpectedRevision) != i.Revision {
+			return extx.ErrConflict
+		}
+		canonical, e := extx.CanonicalizeInput(p.CanonicalInputJSON)
+		if e != nil || !reflect.DeepEqual(canonical, p.CanonicalInputJSON) {
+			return extx.ErrConflict
+		}
+		expected, e := extx.ExecutionBinding(t.OwnerID, i, v, p.ToolName, canonical)
+		if e != nil || !expected.Equal(c.Binding) {
 			return extx.ErrConflict
 		}
 		client := factory(t.OwnerID, i, v)
@@ -189,14 +204,27 @@ func (a ConfirmationAdapter) Consume(ctx context.Context, r extx.ConsumeRequest)
 	return fromConfirmation(v), nil
 }
 func toConfirmationBinding(b extx.ConfirmationBinding) confirmation.Binding {
+	operation := extensionOperation(b.Operation)
 	g := make([]confirmation.SecretGrant, 0, len(b.SecretGrants))
 	for _, x := range b.SecretGrants {
 		g = append(g, confirmation.SecretGrant{ReferenceID: x.ReferenceID, Purpose: confirmation.SecretPurpose(x.Purpose), BindingDigest: confirmation.Digest(x.BindingDigest)})
 	}
-	return confirmation.Binding{OwnerID: b.OwnerID, OperationDomain: "extension." + b.Operation, TargetID: b.TargetID, TargetRevision: b.TargetRevision, SourceVersion: b.SourceVersion, SourceCommit: b.SourceCommit, ContentDigest: confirmation.Digest(b.ContentDigest), ManifestDigest: confirmation.Digest(b.ManifestDigest), ExecutionDigest: confirmation.Digest(b.ExecutionDigest), ParameterDigest: confirmation.Digest(b.ParameterDigest), NetworkDigest: confirmation.Digest(b.NetworkDigest), SecretGrantDigest: confirmation.Digest(b.SecretDigest), SelectedTool: b.ToolName, NetworkGrants: append([]string(nil), b.NetworkGrants...), SecretGrants: g}
+	return confirmation.Binding{OwnerID: b.OwnerID, OperationDomain: "extension." + operation, TargetID: b.TargetID, TargetRevision: b.TargetRevision, TargetKind: "mcp", ExtensionVersionID: b.VersionID, SourceVersion: b.SourceVersion, SourceCommit: b.SourceCommit, ContentDigest: confirmation.Digest(b.ContentDigest), ManifestDigest: confirmation.Digest(b.ManifestDigest), ExecutionDigest: confirmation.Digest(b.ExecutionDigest), PermissionDigest: confirmation.Digest(b.ToolSchemaDigest), ParameterDigest: confirmation.Digest(b.ParameterDigest), NetworkDigest: confirmation.Digest(b.NetworkDigest), SecretGrantDigest: confirmation.Digest(b.SecretDigest), SelectedTool: b.ToolName, NetworkGrants: append([]string(nil), b.NetworkGrants...), SecretGrants: g}
 }
 func fromConfirmation(v confirmation.Confirmation) extx.Confirmation {
-	return extx.Confirmation{ID: v.ConfirmationID, OwnerID: v.OwnerID, TaskID: v.TaskID, State: string(v.State), Revision: v.Revision, ExpiresAt: v.ExpiresAt, Binding: extx.ConfirmationBinding{OwnerID: v.Binding.OwnerID, Operation: v.Binding.OperationDomain, TargetID: v.Binding.TargetID, TargetRevision: v.Binding.TargetRevision, SourceVersion: v.Binding.SourceVersion, SourceCommit: v.Binding.SourceCommit, ToolName: v.Binding.SelectedTool, ContentDigest: string(v.Binding.ContentDigest), ManifestDigest: string(v.Binding.ManifestDigest), ExecutionDigest: string(v.Binding.ExecutionDigest), ParameterDigest: string(v.Binding.ParameterDigest), NetworkDigest: string(v.Binding.NetworkDigest), SecretDigest: string(v.Binding.SecretGrantDigest), NetworkGrants: append([]string(nil), v.Binding.NetworkGrants...)}}
+	g := make([]extx.SecretGrant, 0, len(v.Binding.SecretGrants))
+	for _, grant := range v.Binding.SecretGrants {
+		g = append(g, extx.SecretGrant{ReferenceID: grant.ReferenceID, Purpose: string(grant.Purpose), BindingDigest: string(grant.BindingDigest), Configured: true})
+	}
+	return extx.Confirmation{ID: v.ConfirmationID, OwnerID: v.OwnerID, TaskID: v.TaskID, State: string(v.State), Revision: v.Revision, ExpiresAt: v.ExpiresAt, Binding: extx.ConfirmationBinding{OwnerID: v.Binding.OwnerID, Operation: extensionOperation(v.Binding.OperationDomain), TargetID: v.Binding.TargetID, VersionID: v.Binding.ExtensionVersionID, TargetRevision: v.Binding.TargetRevision, SourceVersion: v.Binding.SourceVersion, SourceCommit: v.Binding.SourceCommit, ToolName: v.Binding.SelectedTool, ToolSchemaDigest: string(v.Binding.PermissionDigest), ContentDigest: string(v.Binding.ContentDigest), ManifestDigest: string(v.Binding.ManifestDigest), ExecutionDigest: string(v.Binding.ExecutionDigest), ParameterDigest: string(v.Binding.ParameterDigest), NetworkDigest: string(v.Binding.NetworkDigest), SecretDigest: string(v.Binding.SecretGrantDigest), NetworkGrants: append([]string(nil), v.Binding.NetworkGrants...), SecretGrants: g}}
+}
+
+func extensionOperation(value string) string {
+	value = strings.TrimSpace(value)
+	for strings.HasPrefix(value, "extension.") {
+		value = strings.TrimPrefix(value, "extension.")
+	}
+	return value
 }
 
 // TaskAdapter creates a canonical extension task in waiting_user state. Run

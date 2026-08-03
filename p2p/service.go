@@ -31,7 +31,6 @@ import (
 	conversationmodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/conversation"
 	eventsmodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/events"
 	groupsmodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/groups"
-	legacygatewaymodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/legacygateway"
 	mcpmodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/mcp"
 	membersmodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/members"
 	operationsmodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/operations"
@@ -174,7 +173,6 @@ type Service struct {
 	mcpModule                      *mcpmodule.Module
 	mcpCapabilities                *dirextalkmcp.Service
 	releaseController              releasecontrol.Controller
-	legacyAgentGatewayModule       *legacygatewaymodule.Module
 
 	servicePortalState
 	actions              map[string]actionHandler
@@ -223,7 +221,6 @@ type AccountDeprovisioner interface {
 type Store interface {
 	agentturns.Store
 	operationsmodule.Store
-	legacygatewaymodule.Store
 	portalStore
 	readMarkerStore
 	channelStore
@@ -948,15 +945,11 @@ func newService(cfg Config, store Store, transport Transport, state portalState,
 	if candidate, ok := store.(p2pstorage.ScheduleStore); ok {
 		scheduleStore = candidate
 	}
-	var confirmations p2pstorage.ScheduleConfirmationStore
-	if candidate, ok := store.(p2pstorage.ScheduleConfirmationStore); ok {
-		confirmations = candidate
-	}
 	var scheduleMaterializer schedulesmodule.OccurrenceMaterializer
 	if dbStore, ok := store.(*p2pstorage.DatabaseStore); ok {
 		scheduleMaterializer = embeddedScheduleMaterializer{store: dbStore}
 	}
-	service.scheduleModule = schedulesmodule.New(schedulesmodule.Config{Store: scheduleStore, Profiles: service.modelProfiles, Materializer: scheduleMaterializer, Confirmations: confirmations, OwnerID: service.OwnerMXID, SchedulerReady: func() bool {
+	service.scheduleModule = schedulesmodule.New(schedulesmodule.Config{Store: scheduleStore, Profiles: service.modelProfiles, Materializer: scheduleMaterializer, OwnerID: service.OwnerMXID, SchedulerReady: func() bool {
 		service.mu.Lock()
 		defer service.mu.Unlock()
 		return service.scheduleRunning

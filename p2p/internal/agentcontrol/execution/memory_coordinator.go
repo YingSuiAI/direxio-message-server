@@ -1151,7 +1151,7 @@ func (c *MemoryCoordinator) updateRunLocked(id string, status RunStatus, current
 	}
 	r.Revision++
 	r.UpdatedAt = at
-	if status == RunSucceeded || status == RunFailed || status == RunUncertain {
+	if status == RunSucceeded || status == RunFailed || status == RunUncertain || status == RunCanceled {
 		r.FinishedAt = at
 	}
 	c.store.runs[id] = r

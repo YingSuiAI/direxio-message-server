@@ -4,10 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+)
+
+const (
+	modelListResponseLimit = 4 << 20
+	modelListMaxCount      = 4096
 )
 
 func (r *Runtime) modelsList(ctx context.Context, params map[string]any) (map[string]any, error) {
@@ -172,6 +178,36 @@ func modelProviderDefaults() []map[string]any {
 	}
 }
 
+func (r *Runtime) fetchModelListPayload(ctx context.Context, req *http.Request, provider string, payload any) error {
+	resp, err := r.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("fetch %s models: %w", provider, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("fetch %s models failed: %s", provider, resp.Status)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, modelListResponseLimit+1))
+	if err != nil {
+		return fmt.Errorf("decode %s models: %w", provider, err)
+	}
+	if len(body) > modelListResponseLimit {
+		return fmt.Errorf("decode %s models: response exceeds %d-byte limit", provider, modelListResponseLimit)
+	}
+	if err := json.Unmarshal(body, payload); err != nil {
+		return fmt.Errorf("decode %s models: %w", provider, err)
+	}
+	return nil
+}
+
+func normalizeFetchedModelList(provider string, rawModels []map[string]any) ([]map[string]any, error) {
+	models := normalizeModelList(provider, rawModels)
+	if len(models) > modelListMaxCount {
+		return nil, fmt.Errorf("fetch %s models returned too many normalized models: %d exceeds %d", provider, len(models), modelListMaxCount)
+	}
+	return models, nil
+}
+
 func (r *Runtime) fetchAnthropicModels(ctx context.Context, baseURL, apiKey string) ([]map[string]any, error) {
 	baseURL = anthropicV1BaseURL(baseURL)
 	if baseURL == "" {
@@ -184,21 +220,16 @@ func (r *Runtime) fetchAnthropicModels(ctx context.Context, baseURL, apiKey stri
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("x-api-key", apiKey)
 	req.Header.Set("anthropic-version", anthropicVersion)
-	resp, err := r.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("fetch anthropic models: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("fetch anthropic models failed: %s", resp.Status)
-	}
 	var payload struct {
 		Data []map[string]any `json:"data"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return nil, fmt.Errorf("decode anthropic models: %w", err)
+	if err := r.fetchModelListPayload(ctx, req, "anthropic", &payload); err != nil {
+		return nil, err
 	}
-	models := normalizeModelList("anthropic", filterModelListForKind("anthropic", "conversation", payload.Data))
+	models, err := normalizeFetchedModelList("anthropic", filterModelListForKind("anthropic", "conversation", payload.Data))
+	if err != nil {
+		return nil, err
+	}
 	if len(models) == 0 {
 		return nil, fmt.Errorf("fetch anthropic models returned no models")
 	}
@@ -216,21 +247,16 @@ func (r *Runtime) fetchGeminiModels(ctx context.Context, baseURL, apiKey string)
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("x-goog-api-key", apiKey)
-	resp, err := r.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("fetch gemini models: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("fetch gemini models failed: %s", resp.Status)
-	}
 	var payload struct {
 		Models []map[string]any `json:"models"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return nil, fmt.Errorf("decode gemini models: %w", err)
+	if err := r.fetchModelListPayload(ctx, req, "gemini", &payload); err != nil {
+		return nil, err
 	}
-	models := normalizeModelList("gemini", filterModelListForKind("gemini", "conversation", payload.Models))
+	models, err := normalizeFetchedModelList("gemini", filterModelListForKind("gemini", "conversation", payload.Models))
+	if err != nil {
+		return nil, err
+	}
 	if len(models) == 0 {
 		return nil, fmt.Errorf("fetch gemini models returned no models")
 	}
@@ -251,27 +277,22 @@ func (r *Runtime) fetchOpenAICompatibleModels(ctx context.Context, provider, bas
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Bearer "+apiKey)
-	resp, err := r.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("fetch %s models: %w", provider, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("fetch %s models failed: %s", provider, resp.Status)
-	}
 	var payload struct {
 		Data   []map[string]any `json:"data"`
 		Models []map[string]any `json:"models"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return nil, fmt.Errorf("decode %s models: %w", provider, err)
+	if err := r.fetchModelListPayload(ctx, req, provider, &payload); err != nil {
+		return nil, err
 	}
 	rawModels := payload.Data
 	if len(rawModels) == 0 {
 		rawModels = payload.Models
 	}
 	rawModels = filterModelListForKind(provider, "conversation", rawModels)
-	models := normalizeModelList(provider, rawModels)
+	models, err := normalizeFetchedModelList(provider, rawModels)
+	if err != nil {
+		return nil, err
+	}
 	if len(models) == 0 {
 		return nil, fmt.Errorf("fetch %s models returned no models", provider)
 	}
@@ -319,21 +340,16 @@ func (r *Runtime) fetchOpenRouterEmbeddingModels(ctx context.Context, baseURL, a
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Bearer "+apiKey)
-	resp, err := r.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("fetch openrouter embedding models: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("fetch openrouter embedding models failed: %s", resp.Status)
-	}
 	var payload struct {
 		Data []map[string]any `json:"data"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return nil, fmt.Errorf("decode openrouter embedding models: %w", err)
+	if err := r.fetchModelListPayload(ctx, req, "openrouter embedding", &payload); err != nil {
+		return nil, err
 	}
-	models := normalizeModelList("openrouter", filterModelListForKind("openrouter", "embedding", payload.Data))
+	models, err := normalizeFetchedModelList("openrouter", filterModelListForKind("openrouter", "embedding", payload.Data))
+	if err != nil {
+		return nil, err
+	}
 	if len(models) == 0 {
 		return nil, fmt.Errorf("fetch openrouter embedding models returned no models")
 	}

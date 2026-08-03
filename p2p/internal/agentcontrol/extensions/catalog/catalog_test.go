@@ -1,11 +1,13 @@
 package catalog
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -174,5 +176,136 @@ func TestGitHubPinnedRemoteInspection(t *testing.T) {
 	}
 	if err := inspected.Validate(); err != nil {
 		t.Fatalf("github inspection: %v", err)
+	}
+}
+
+func TestGitHubRejectsMoreThan256BlobsBeforeFetching(t *testing.T) {
+	commit := strings.Repeat("a", 40)
+	entries := make([]map[string]any, 0, maxGitHubBlobs+1)
+	for i := 0; i < maxGitHubBlobs+1; i++ {
+		entries = append(entries, map[string]any{"path": fmt.Sprintf("file-%03d", i), "mode": "100644", "type": "blob", "sha": strings.Repeat("b", 40), "size": 0})
+	}
+	blobRequests := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/repos/owner/repo/git/trees/" + commit:
+			_ = json.NewEncoder(w).Encode(map[string]any{"sha": commit, "tree": entries, "truncated": false})
+		default:
+			if strings.Contains(r.URL.Path, "/git/blobs/") {
+				blobRequests++
+			}
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	cat, err := NewForTest(Config{Authorities: map[string]string{SourceGitHub: server.URL}, Client: server.Client(), MaxBodyBytes: 1 << 20, SigningKey: testKey()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = cat.providers[SourceGitHub].inspectRepo(context.Background(), "owner/repo", commit, "")
+	if err != ErrOversize {
+		t.Fatalf("inspectRepo error = %v, want ErrOversize", err)
+	}
+	if blobRequests != 0 {
+		t.Fatalf("blob requests = %d, want 0 after blob-count cutoff", blobRequests)
+	}
+}
+
+func TestGitHubRejectsDeclaredBlobOverflowBeforeRequest(t *testing.T) {
+	commit := strings.Repeat("a", 40)
+	sha := strings.Repeat("b", 40)
+	blobRequests, contentRequests := 0, 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/repos/owner/repo/git/trees/" + commit:
+			_ = json.NewEncoder(w).Encode(map[string]any{"sha": commit, "tree": []map[string]any{{"path": "manifest.json", "mode": "100644", "type": "blob", "sha": sha, "size": 1025}}, "truncated": false})
+		case "/repos/owner/repo/git/blobs/" + sha:
+			blobRequests++
+			_, _ = w.Write([]byte(`{"content":"","encoding":"base64"}`))
+		case "/repos/owner/repo/contents/manifest.json":
+			contentRequests++
+			_, _ = w.Write([]byte(`{"content":"","encoding":"base64"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	cat, err := NewForTest(Config{Authorities: map[string]string{SourceGitHub: server.URL}, Client: server.Client(), MaxBodyBytes: 1024, SigningKey: testKey()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = cat.providers[SourceGitHub].inspectRepo(context.Background(), "owner/repo", commit, "")
+	if err != ErrOversize {
+		t.Fatalf("inspectRepo error = %v, want ErrOversize", err)
+	}
+	if blobRequests != 0 || contentRequests != 0 {
+		t.Fatalf("fallback requests = blob %d contents %d, want 0", blobRequests, contentRequests)
+	}
+}
+
+func TestGitHubRejectsActualBlobOverflowWithoutFallbackRequest(t *testing.T) {
+	commit := strings.Repeat("a", 40)
+	data := bytes.Repeat([]byte("x"), 600)
+	sha := fullBlobSHA(data)
+	blobRequests, contentRequests := 0, 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/repos/owner/repo/git/trees/" + commit:
+			_ = json.NewEncoder(w).Encode(map[string]any{"sha": commit, "tree": []map[string]any{{"path": "manifest.json", "mode": "100644", "type": "blob", "sha": sha, "size": 0}}, "truncated": false})
+		case "/repos/owner/repo/git/blobs/" + sha:
+			blobRequests++
+			_ = json.NewEncoder(w).Encode(map[string]any{"content": base64.StdEncoding.EncodeToString(data), "encoding": "base64"})
+		case "/repos/owner/repo/contents/manifest.json":
+			contentRequests++
+			_, _ = w.Write([]byte(`{"content":"","encoding":"base64"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	cat, err := NewForTest(Config{Authorities: map[string]string{SourceGitHub: server.URL}, Client: server.Client(), MaxBodyBytes: 512, SigningKey: testKey()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = cat.providers[SourceGitHub].inspectRepo(context.Background(), "owner/repo", commit, "")
+	if err != ErrOversize {
+		t.Fatalf("inspectRepo error = %v, want ErrOversize", err)
+	}
+	if blobRequests != 1 || contentRequests != 0 {
+		t.Fatalf("requests = blob %d contents %d, want 1 and 0", blobRequests, contentRequests)
+	}
+}
+
+func TestGitHubRejectsCumulativeContentAndManifestOverflow(t *testing.T) {
+	commit := strings.Repeat("a", 40)
+	data := bytes.Repeat([]byte("x"), 2000)
+	sha := fullBlobSHA(data)
+	blobRequests := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/repos/owner/repo/git/trees/" + commit:
+			_ = json.NewEncoder(w).Encode(map[string]any{"sha": commit, "tree": []map[string]any{{"path": "manifest.json", "mode": "100644", "type": "blob", "sha": sha, "size": 0}}, "truncated": false})
+		case "/repos/owner/repo/git/blobs/" + sha:
+			blobRequests++
+			_ = json.NewEncoder(w).Encode(map[string]any{"content": base64.StdEncoding.EncodeToString(data), "encoding": "base64"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	cat, err := NewForTest(Config{Authorities: map[string]string{SourceGitHub: server.URL}, Client: server.Client(), MaxBodyBytes: 4096, SigningKey: testKey()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = cat.providers[SourceGitHub].inspectRepo(context.Background(), "owner/repo", commit, "")
+	if err != ErrOversize {
+		t.Fatalf("inspectRepo error = %v, want ErrOversize", err)
+	}
+	if blobRequests != 1 {
+		t.Fatalf("blob requests = %d, want one request before cumulative cutoff", blobRequests)
 	}
 }

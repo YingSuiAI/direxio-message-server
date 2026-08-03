@@ -206,6 +206,10 @@ func (r *MemoryRepository) List(_ context.Context, query ListQuery) (Page, error
 	if query.PageSize < 0 || query.PageSize > 100 {
 		return Page{}, ErrInvalid
 	}
+	owner := strings.TrimSpace(query.OwnerID)
+	if owner == "" {
+		return Page{}, ErrInvalid
+	}
 	pageSize := query.PageSize
 	if pageSize == 0 {
 		pageSize = 50
@@ -214,7 +218,7 @@ func (r *MemoryRepository) List(_ context.Context, query ListQuery) (Page, error
 	var cursor listCursor
 	if query.PageToken != "" {
 		decoded, err := base64.RawURLEncoding.DecodeString(query.PageToken)
-		if err != nil || json.Unmarshal(decoded, &cursor) != nil || cursor.Filter != filter {
+		if err != nil || json.Unmarshal(decoded, &cursor) != nil || cursor.OwnerID != owner || cursor.Filter != filter {
 			return Page{}, ErrInvalid
 		}
 	}
@@ -230,6 +234,9 @@ func (r *MemoryRepository) List(_ context.Context, query ListQuery) (Page, error
 	values := make([]Confirmation, 0, len(r.order))
 	for _, id := range r.order {
 		value := r.items[id]
+		if value.OwnerID != owner {
+			continue
+		}
 		if cursor.ID != "" && (value.CreatedAt.Before(cursor.CreatedAt) || (value.CreatedAt.Equal(cursor.CreatedAt) && value.ConfirmationID <= cursor.ID)) {
 			continue
 		}
@@ -256,7 +263,7 @@ func (r *MemoryRepository) List(_ context.Context, query ListQuery) (Page, error
 	page := Page{Confirmations: values[:end]}
 	if end < len(values) {
 		last := values[end-1]
-		encoded, _ := json.Marshal(listCursor{CreatedAt: last.CreatedAt, ID: last.ConfirmationID, Filter: filter})
+		encoded, _ := json.Marshal(listCursor{OwnerID: owner, CreatedAt: last.CreatedAt, ID: last.ConfirmationID, Filter: filter})
 		page.NextPageToken = base64.RawURLEncoding.EncodeToString(encoded)
 	}
 	return page, nil
@@ -269,6 +276,7 @@ func normalizedStates(states []State) []State {
 }
 
 type listCursor struct {
+	OwnerID   string
 	CreatedAt time.Time `json:"created_at"`
 	ID        string    `json:"id"`
 	Filter    Digest    `json:"filter"`
@@ -328,15 +336,6 @@ func (r *MemoryRepository) Confirm(ctx context.Context, command ConfirmCommand) 
 		value.Revision++
 		value.UpdatedAt = now
 		value.TerminalCode, value.TerminalReason = ReasonStale, ReasonStale
-		r.items[value.ConfirmationID] = value
-		return Confirmation{}, ErrStale
-	}
-	if !value.Binding.Equal(binding) {
-		value.State = StateExpired
-		value.Revision++
-		value.UpdatedAt = now
-		value.TerminalCode = ReasonStale
-		value.TerminalReason = ReasonStale
 		r.items[value.ConfirmationID] = value
 		return Confirmation{}, ErrStale
 	}
@@ -461,15 +460,6 @@ func (r *MemoryRepository) Consume(ctx context.Context, command ConsumeCommand) 
 		value.TerminalReason = ReasonExpired
 		r.items[value.ConfirmationID] = value
 		return Confirmation{}, ErrExpired
-	}
-	if !value.Binding.Equal(binding) {
-		value.State = StateExpired
-		value.Revision++
-		value.UpdatedAt = now
-		value.TerminalCode = ReasonStale
-		value.TerminalReason = ReasonStale
-		r.items[value.ConfirmationID] = value
-		return Confirmation{}, ErrStale
 	}
 	value.State = StateConsumed
 	value.Revision++

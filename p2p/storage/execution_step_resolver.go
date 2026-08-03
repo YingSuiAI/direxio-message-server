@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	coreaws "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcontrol/aws"
 	coreexecution "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcontrol/execution"
@@ -110,15 +111,29 @@ func (r *ExecutionStepResolver) ResolveStep(ctx context.Context, claim execution
 	// A reclaimed stage is poll-only. Resolve the already persisted immutable
 	// snapshot, attempt and receipt instead of allocating a successor attempt
 	// (which could turn a restart into a second SendCommand).
-	var receiptID, attemptID string
+	var receiptID, attemptID, commandID string
 	var fence coreexecution.Digest
-	err = r.Store.db.QueryRowContext(ctx, `SELECT r.receipt_id::text,r.attempt_id::text,r.fence_digest FROM core_execution_receipts r JOIN core_execution_dispatch_intents i ON i.owner_id=r.owner_id AND i.receipt_id=r.receipt_id AND i.attempt_id=r.attempt_id JOIN core_execution_step_attempts a ON a.owner_id=r.owner_id AND a.attempt_id=r.attempt_id WHERE r.owner_id=$1 AND r.run_id=$2 AND a.stage_id=$3 AND a.step_key=$4 AND a.step_set=$5 AND r.status IN ('accepted','running') AND r.command_id<>'' ORDER BY r.created_at DESC LIMIT 1`, claim.OwnerID, claim.RunID, claim.StageID, next.StepKey, next.StepSet).Scan(&receiptID, &attemptID, &fence)
+	var frozenRaw []byte
+	err = r.Store.db.QueryRowContext(ctx, `SELECT r.receipt_id::text,r.attempt_id::text,r.fence_digest,COALESCE(r.command_id,''),i.snapshot_json->'frozen_request_snapshot' FROM core_execution_receipts r JOIN core_execution_dispatch_intents i ON i.owner_id=r.owner_id AND i.receipt_id=r.receipt_id AND i.attempt_id=r.attempt_id JOIN core_execution_step_attempts a ON a.owner_id=r.owner_id AND a.attempt_id=r.attempt_id WHERE r.owner_id=$1 AND r.run_id=$2 AND a.stage_id=$3 AND a.step_key=$4 AND a.step_set=$5 AND r.status IN ('accepted','running') AND i.snapshot_json ? 'frozen_request_snapshot' ORDER BY r.created_at DESC LIMIT 1`, claim.OwnerID, claim.RunID, claim.StageID, next.StepKey, next.StepSet).Scan(&receiptID, &attemptID, &fence, &commandID, &frozenRaw)
 	if err == nil {
-		dispatch, resolveErr := NewDatabaseDispatchReceiptResolver(r.Store, r.Credentials).ResolveDispatchReceipt(ctx, claim.OwnerID, fence)
-		if resolveErr != nil || dispatch.Frozen.RunID != claim.RunID || dispatch.Frozen.StageID != claim.StageID || dispatch.Frozen.StepKey != next.StepKey || dispatch.Frozen.StepRevision != next.StepRevision || dispatch.Frozen.StepDigest != next.StepDigest || dispatch.CommandID == "" {
+		if commandID != "" {
+			dispatch, resolveErr := NewDatabaseDispatchReceiptResolver(r.Store, r.Credentials).ResolveDispatchReceipt(ctx, claim.OwnerID, fence)
+			if resolveErr != nil || dispatch.Frozen.RunID != claim.RunID || dispatch.Frozen.StageID != claim.StageID || dispatch.Frozen.StepKey != next.StepKey || dispatch.Frozen.StepRevision != next.StepRevision || dispatch.Frozen.StepDigest != next.StepDigest || dispatch.CommandID == "" {
+				return out, ErrExecutionStepResolve
+			}
+			return executionrunner.PreparedStep{Frozen: dispatch.Frozen, Attempt: coreexecution.StepAttempt{AttemptID: attemptID, OwnerID: claim.OwnerID, RunID: claim.RunID, StageID: claim.StageID, PlanID: dispatch.Frozen.PlanID, PlanRevision: dispatch.Frozen.PlanRevision, PlanDigest: dispatch.Frozen.PlanDigest, StageRevision: dispatch.Frozen.StageRevision, StageDigest: dispatch.Frozen.StageDigest, StepKey: dispatch.Frozen.StepKey, StepRevision: dispatch.Frozen.StepRevision, StepDigest: dispatch.Frozen.StepDigest, Attempt: dispatch.Frozen.Attempt, Revision: 1, Status: coreexecution.AttemptRunning}, Receipt: coreexecution.Receipt{ReceiptID: receiptID, OwnerID: claim.OwnerID, RunID: claim.RunID, AttemptID: attemptID, Status: coreexecution.ReceiptAccepted, SSMCommandID: dispatch.CommandID, RequestDigest: dispatch.RequestDigest, FenceDigest: dispatch.FenceDigest}}, nil
+		}
+		var snapshot coreaws.FrozenRequestSnapshot
+		if strictJSON(frozenRaw, &snapshot) != nil {
 			return out, ErrExecutionStepResolve
 		}
-		return executionrunner.PreparedStep{Frozen: dispatch.Frozen, Attempt: coreexecution.StepAttempt{AttemptID: attemptID, OwnerID: claim.OwnerID, RunID: claim.RunID, StageID: claim.StageID, PlanID: dispatch.Frozen.PlanID, PlanRevision: dispatch.Frozen.PlanRevision, PlanDigest: dispatch.Frozen.PlanDigest, StageRevision: dispatch.Frozen.StageRevision, StageDigest: dispatch.Frozen.StageDigest, StepKey: dispatch.Frozen.StepKey, StepRevision: dispatch.Frozen.StepRevision, StepDigest: dispatch.Frozen.StepDigest, Attempt: dispatch.Frozen.Attempt, Revision: 1, Status: coreexecution.AttemptRunning}, Receipt: coreexecution.Receipt{ReceiptID: receiptID, OwnerID: claim.OwnerID, RunID: claim.RunID, AttemptID: attemptID, Status: coreexecution.ReceiptAccepted, SSMCommandID: dispatch.CommandID, RequestDigest: dispatch.RequestDigest, FenceDigest: dispatch.FenceDigest}}, nil
+		frozen := frozenRequestFromSnapshot(snapshot)
+		computedFence, fenceErr := coreaws.CanonicalFenceDigest(frozen)
+		computedRequest, requestErr := coreaws.CanonicalRequestDigest(frozen)
+		if frozen.OwnerID != claim.OwnerID || frozen.RunID != claim.RunID || frozen.StageID != claim.StageID || frozen.StepKey != next.StepKey || frozen.StepRevision != next.StepRevision || frozen.StepDigest != next.StepDigest || frozen.AttemptID != attemptID || frozen.FenceDigest != fence || !frozen.RequestDigest.Valid() || fenceErr != nil || computedFence != fence || requestErr != nil || computedRequest != frozen.RequestDigest {
+			return out, ErrExecutionStepResolve
+		}
+		return executionrunner.PreparedStep{Frozen: frozen, Attempt: coreexecution.StepAttempt{AttemptID: attemptID, OwnerID: claim.OwnerID, RunID: claim.RunID, StageID: claim.StageID, PlanID: frozen.PlanID, PlanRevision: frozen.PlanRevision, PlanDigest: frozen.PlanDigest, StageRevision: frozen.StageRevision, StageDigest: frozen.StageDigest, StepKey: frozen.StepKey, StepRevision: frozen.StepRevision, StepDigest: frozen.StepDigest, Attempt: frozen.Attempt, Revision: 1, Status: coreexecution.AttemptRunning}, Receipt: coreexecution.Receipt{ReceiptID: receiptID, OwnerID: claim.OwnerID, RunID: claim.RunID, AttemptID: attemptID, Status: coreexecution.ReceiptAccepted, RequestDigest: frozen.RequestDigest, FenceDigest: frozen.FenceDigest}, ReconcileOnly: true}, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return out, ErrExecutionStepResolve
@@ -174,6 +189,22 @@ func (r *ExecutionStepResolver) ResolveStep(ctx context.Context, claim execution
 	receipt.FenceDigest = frozen.FenceDigest
 	out = executionrunner.PreparedStep{Frozen: frozen, Attempt: attempt, Receipt: receipt}
 	return out, nil
+}
+
+func frozenRequestFromSnapshot(s coreaws.FrozenRequestSnapshot) coreaws.FrozenRequest {
+	return coreaws.FrozenRequest{
+		OwnerID: s.OwnerID, PlanID: s.PlanID, PlanRevision: s.PlanRevision, PlanDigest: s.PlanDigest,
+		RunID: s.RunID, RunRevision: s.RunRevision, RunDigest: s.RunDigest,
+		StageID: s.StageID, StageRevision: s.StageRevision, StageDigest: s.StageDigest,
+		StepKey: s.StepKey, StepRevision: s.StepRevision, StepDigest: s.StepDigest,
+		AttemptID: s.AttemptID, Attempt: s.Attempt, Fence: s.Fence,
+		FenceDigest: s.FenceDigest, RequestDigest: s.RequestDigest,
+		Target: s.Target, TargetID: s.TargetID, TargetRevision: s.TargetRevision, TargetDigest: s.TargetDigest,
+		InstanceID:   s.InstanceID,
+		Credential:   coreaws.RehydrateCredentialMetadata(s.CredentialID, "frozen", s.CredentialRegion, s.CredentialAccountID, s.CredentialUserARN, int64(s.CredentialRevision), int64(s.CredentialRevision), time.Time{}, time.Time{}),
+		CredentialID: s.CredentialID, CredentialRevision: s.CredentialRevision,
+		Observation: s.Observation, Script: s.Script,
+	}
 }
 
 func (r *ExecutionStepResolver) resolveSecretProvision(

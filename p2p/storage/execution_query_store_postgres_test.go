@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 	"time"
@@ -44,5 +45,40 @@ func TestExecutionQueryStorePlanRunAndEvents(t *testing.T) {
 	}
 	if _, err := s.GetExecutionRun(ctx, "@foreign:example.org", materialized.Run.RunID); !errors.Is(err, coreexecution.ErrNotFound) {
 		t.Fatalf("foreign run read=%v", err)
+	}
+}
+
+func TestExecutionRunAggregateReadUsesRepeatableReadSnapshot(t *testing.T) {
+	ctx := context.Background()
+	store := openExecutionV2Schema(t)
+	f := newExecutionV2GraphFixture(t, store.DB())
+	tx, err := store.DB().BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	var runRevision, stageRevision int64
+	if err = tx.QueryRowContext(ctx, `SELECT revision FROM core_execution_runs WHERE owner_id=$1 AND run_id=$2`, f.Owner, f.RunID).Scan(&runRevision); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.QueryRowContext(ctx, `SELECT revision FROM core_execution_run_stages WHERE owner_id=$1 AND run_id=$2 AND stage_id=$3`, f.Owner, f.RunID, f.StageID).Scan(&stageRevision); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.DB().ExecContext(ctx, `UPDATE core_execution_run_stages SET revision=revision+1,updated_at=clock_timestamp() WHERE owner_id=$1 AND run_id=$2 AND stage_id=$3`, f.Owner, f.RunID, f.StageID); err != nil {
+		t.Fatal(err)
+	}
+	var currentStageRevision int64
+	if err = store.DB().QueryRowContext(ctx, `SELECT revision FROM core_execution_run_stages WHERE owner_id=$1 AND run_id=$2 AND stage_id=$3`, f.Owner, f.RunID, f.StageID).Scan(&currentStageRevision); err != nil {
+		t.Fatal(err)
+	}
+	if currentStageRevision != stageRevision+1 {
+		t.Fatalf("concurrent stage revision=%d, want %d", currentStageRevision, stageRevision+1)
+	}
+	var snapshotStageRevision int64
+	if err = tx.QueryRowContext(ctx, `SELECT revision FROM core_execution_run_stages WHERE owner_id=$1 AND run_id=$2 AND stage_id=$3`, f.Owner, f.RunID, f.StageID).Scan(&snapshotStageRevision); err != nil {
+		t.Fatal(err)
+	}
+	if snapshotStageRevision != stageRevision || runRevision == 0 {
+		t.Fatalf("repeatable-read aggregate saw run=%d stage=%d, want run=%d stage=%d", runRevision, snapshotStageRevision, runRevision, stageRevision)
 	}
 }

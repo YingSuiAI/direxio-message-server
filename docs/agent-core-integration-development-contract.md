@@ -43,9 +43,11 @@ tests. Core Go and Dart code must not identify GeoLibre as a product type.
 The migration registry preserves upstream `main` migrations v1 through v77
 unchanged. All schema introduced on this undeployed branch is represented by
 one direct-final v78 migration. A fresh database therefore creates the final
-Agent and Execution V2 schema in one step. v78 may directly extend an
-upstream-main table where the final schema requires it, but must not split
-branch work into chained compatibility migrations, compatibility tables,
+Agent and Execution V2 schema in one step. The schema is registered, but
+runtime capability/readiness is still independently gated: v78, types, action
+registration, and documentation do not publish a capability. v78 may directly
+extend an upstream-main table where the final schema requires it, but must not
+split branch work into chained compatibility migrations, compatibility tables,
 old-row rewrites or branch-only backfills.
 
 ## 3. Discovery and public actions

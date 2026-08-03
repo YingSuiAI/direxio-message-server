@@ -34,8 +34,8 @@ type executionV2GraphFixture struct {
 }
 
 // frozenUpstreamMigrationVersions is intentionally a literal copy of the
-// registrations in origin/main through v77.  V78 is the sole branch-local
-// registration: a clean install must not silently grow an upgrade chain.
+// registrations in origin/main through v77. V78 and v79 are the branch-local
+// registrations: a clean install must not silently grow an upgrade chain.
 var frozenUpstreamMigrationVersions = []string{
 	"p2p: integrated appservice tables v1",
 	"p2p: integrated appservice tables v2",
@@ -200,7 +200,7 @@ func TestExecutionV2RunStageTaskBindingExactScope(t *testing.T) {
 				t.Fatalf("mismatched task %s accepted or wrong guard: %v", field.name, err)
 			}
 			setTaskPayloadField(field.good)
-			if _, err := store.DB().ExecContext(ctx, `UPDATE core_execution_run_stages SET status='queued' WHERE owner_id=$1 AND run_id=$2 AND stage_id=$3`, f.Owner, f.RunID, f.StageID); err != nil {
+			if _, err := store.DB().ExecContext(ctx, `UPDATE core_execution_run_stages SET status='queued',revision=revision+1 WHERE owner_id=$1 AND run_id=$2 AND stage_id=$3`, f.Owner, f.RunID, f.StageID); err != nil {
 				t.Fatalf("exact task %s binding rejected: %v", field.name, err)
 			}
 		})
@@ -241,7 +241,7 @@ func TestExecutionV2RunStageConfirmationBindingExactScope(t *testing.T) {
 			if _, err := store.DB().ExecContext(ctx, query, field.good, f.Owner, f.ConfirmationID); err != nil {
 				t.Fatalf("restore confirmation %s=%q: %v", field.name, field.good, err)
 			}
-			if _, err := store.DB().ExecContext(ctx, `UPDATE core_execution_run_stages SET status='running' WHERE owner_id=$1 AND run_id=$2 AND stage_id=$3`, f.Owner, f.RunID, f.StageID); err != nil {
+			if _, err := store.DB().ExecContext(ctx, `UPDATE core_execution_run_stages SET status='running',revision=revision+1 WHERE owner_id=$1 AND run_id=$2 AND stage_id=$3`, f.Owner, f.RunID, f.StageID); err != nil {
 				t.Fatalf("exact confirmation %s binding rejected: %v", field.name, err)
 			}
 		})
@@ -500,6 +500,34 @@ func TestExecutionV2DispatchReconciliationAndDeploymentTamperFences(t *testing.T
 	}
 }
 
+func TestExecutionV2RunStageTerminalRowCannotBeTampered(t *testing.T) {
+	ctx := context.Background()
+	store := openExecutionV2Schema(t)
+	f := newExecutionV2GraphFixture(t, store.DB())
+	advance := []string{
+		`UPDATE core_execution_run_stages SET status='queued',revision=revision+1 WHERE owner_id=$1 AND run_id=$2 AND stage_id=$3`,
+		`UPDATE core_execution_run_stages SET status='running',revision=revision+1,started_at=clock_timestamp() WHERE owner_id=$1 AND run_id=$2 AND stage_id=$3`,
+		`UPDATE core_execution_run_stages SET status='succeeded',revision=revision+1,completed_at=clock_timestamp() WHERE owner_id=$1 AND run_id=$2 AND stage_id=$3`,
+	}
+	for _, query := range advance {
+		if _, err := store.DB().ExecContext(ctx, query, f.Owner, f.RunID, f.StageID); err != nil {
+			t.Fatalf("advance stage lifecycle: %v", err)
+		}
+	}
+	for name, query := range map[string]string{
+		"snapshot":   `UPDATE core_execution_run_stages SET snapshot_json='{"tampered":true}'::jsonb,revision=revision+1 WHERE owner_id=$1 AND run_id=$2 AND stage_id=$3`,
+		"binding":    `UPDATE core_execution_run_stages SET task_id=NULL,revision=revision+1 WHERE owner_id=$1 AND run_id=$2 AND stage_id=$3`,
+		"timestamps": `UPDATE core_execution_run_stages SET updated_at=clock_timestamp(),revision=revision+1 WHERE owner_id=$1 AND run_id=$2 AND stage_id=$3`,
+		"delete":     `DELETE FROM core_execution_run_stages WHERE owner_id=$1 AND run_id=$2 AND stage_id=$3`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := store.DB().ExecContext(ctx, query, f.Owner, f.RunID, f.StageID); err == nil || !strings.Contains(err.Error(), "execution run stage identity/state is immutable") {
+				t.Fatalf("terminal stage tamper accepted or wrong error: %v", err)
+			}
+		})
+	}
+}
+
 func TestFreshAgentExecutionV2SchemaRegistersOnceWithoutV1Ledgers(t *testing.T) {
 	ctx := context.Background()
 	connStr, closeDB := test.PrepareDBConnectionString(t, test.DBTypePostgres)
@@ -512,6 +540,7 @@ func TestFreshAgentExecutionV2SchemaRegistersOnceWithoutV1Ledgers(t *testing.T) 
 	defer store.Close()
 
 	const version = "p2p: agent and execution v2 fresh schema v78"
+	const terminalImmutabilityVersion = "p2p: execution run stage terminal immutability v79"
 	for _, run := range []int{1, 2} {
 		if run == 2 {
 			if err := store.Migrate(ctx); err != nil {
@@ -534,11 +563,12 @@ func TestFreshAgentExecutionV2SchemaRegistersOnceWithoutV1Ledgers(t *testing.T) 
 		t.Fatalf("close/reopen fresh schema: %v", err)
 	}
 	defer store.Close()
-	expectedMigrations := make(map[string]struct{}, len(frozenUpstreamMigrationVersions)+1)
+	expectedMigrations := make(map[string]struct{}, len(frozenUpstreamMigrationVersions)+2)
 	for _, frozen := range frozenUpstreamMigrationVersions {
 		expectedMigrations[frozen] = struct{}{}
 	}
 	expectedMigrations[version] = struct{}{}
+	expectedMigrations[terminalImmutabilityVersion] = struct{}{}
 	rows, err := store.DB().QueryContext(ctx, `SELECT version FROM db_migrations`)
 	if err != nil {
 		t.Fatal(err)
@@ -556,7 +586,7 @@ func TestFreshAgentExecutionV2SchemaRegistersOnceWithoutV1Ledgers(t *testing.T) 
 		t.Fatal(err)
 	}
 	if len(actualMigrations) != len(expectedMigrations) {
-		t.Fatalf("migration registrations = %d, want exactly frozen upstream + v78 = %d: %#v", len(actualMigrations), len(expectedMigrations), actualMigrations)
+		t.Fatalf("migration registrations = %d, want exactly frozen upstream + v78/v79 = %d: %#v", len(actualMigrations), len(expectedMigrations), actualMigrations)
 	}
 	for expected := range expectedMigrations {
 		if _, ok := actualMigrations[expected]; !ok {
@@ -591,7 +621,7 @@ func TestFreshAgentExecutionV2SchemaRegistersOnceWithoutV1Ledgers(t *testing.T) 
 		t.Fatal(err)
 	}
 	if !channelPostVisibilityColumn || !channelPostVisibilityIndex {
-		t.Fatalf("fresh v78 channel post visibility column=%v index=%v", channelPostVisibilityColumn, channelPostVisibilityIndex)
+		t.Fatalf("fresh v78/v79 channel post visibility column=%v index=%v", channelPostVisibilityColumn, channelPostVisibilityIndex)
 	}
 	for _, forbidden := range []string{
 		"core_aws_changes", "core_aws_plans", "core_aws_ec2_provisions",
@@ -634,6 +664,7 @@ func TestFreshAgentExecutionV2SchemaRegistersOnceWithoutV1Ledgers(t *testing.T) 
 		"core_execution_target_observations_immutable",
 		"core_execution_source_artifacts_immutable",
 		"core_execution_dispatch_intents_immutable",
+		"core_execution_run_stages_immutable",
 		"core_execution_receipt_terminal_evidence_guard",
 		"core_execution_reconciliation_scope_guard",
 		"core_execution_deployments_immutable",
