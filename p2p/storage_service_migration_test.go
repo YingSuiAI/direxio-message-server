@@ -71,14 +71,6 @@ func TestDatabaseStoreMigratesLegacyAgentPluginConfigToNativePortalConfig(t *tes
 		t.Fatalf("expected migrated blocked rooms, got %#v", agentConfig["mcp_blocked_room_ids"])
 	}
 
-	skills := mustHandle[map[string]any](t, service, "agent.skills.list", nil)["skills"].([]map[string]any)
-	if len(skills) != 1 || skills[0]["id"] != "legacy-skill" {
-		t.Fatalf("expected legacy skills in native config storage, got %#v", skills)
-	}
-	servers := mustHandle[map[string]any](t, service, "agent.mcp.servers.list", nil)["servers"].([]map[string]any)
-	if len(servers) != 1 || servers[0]["id"] != "legacy-mcp" {
-		t.Fatalf("expected legacy MCP servers in native config storage, got %#v", servers)
-	}
 	loaded, exists, err := (nativeAgentConfigStore{service: service}).Load(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -88,6 +80,18 @@ func TestDatabaseStoreMigratesLegacyAgentPluginConfigToNativePortalConfig(t *tes
 	}
 	if hasNestedKey(loaded, "api_key") || hasNestedKey(loaded, "api_key_ref") {
 		t.Fatalf("migrated native config must not persist model API keys, got %#v", loaded)
+	}
+	if skills := configRecords(loaded, "skills"); len(skills) != 1 || skills[0]["id"] != "legacy-skill" {
+		t.Fatalf("legacy skills must remain durably migrated, got %#v", skills)
+	}
+	if servers := configRecords(loaded, "mcp_servers"); len(servers) != 1 || servers[0]["id"] != "legacy-mcp" {
+		t.Fatalf("legacy MCP servers must remain durably migrated, got %#v", servers)
+	}
+	if skills := mustHandle[map[string]any](t, service, "agent.skills.list", nil)["skills"].([]map[string]any); len(skills) == 0 || containsSkillID(skills, "legacy-skill") {
+		t.Fatalf("embedded skills list must expose built-ins but hide migrated third-party records, got %#v", skills)
+	}
+	if servers := mustHandle[map[string]any](t, service, "agent.mcp.servers.list", nil)["servers"].([]map[string]any); len(servers) != 0 {
+		t.Fatalf("embedded MCP list must hide migrated third-party records, got %#v", servers)
 	}
 
 	reloadedStore, err := NewDatabaseStore(ctx, sqlutil.NewConnectionManager(nil, dbOpts), &dbOpts)
@@ -99,9 +103,15 @@ func TestDatabaseStoreMigratesLegacyAgentPluginConfigToNativePortalConfig(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	reloadedSkills := mustHandle[map[string]any](t, reloaded, "agent.skills.list", nil)["skills"].([]map[string]any)
-	if len(reloadedSkills) != 1 || reloadedSkills[0]["id"] != "legacy-skill" {
-		t.Fatalf("expected migrated skills to survive restart, got %#v", reloadedSkills)
+	reloadedConfig, reloadedExists, err := (nativeAgentConfigStore{service: reloaded}).Load(ctx)
+	if err != nil || !reloadedExists {
+		t.Fatalf("reload migrated native config: exists=%v err=%v", reloadedExists, err)
+	}
+	if skills := configRecords(reloadedConfig, "skills"); len(skills) != 1 || skills[0]["id"] != "legacy-skill" {
+		t.Fatalf("migrated skills must survive restart in durable config, got %#v", skills)
+	}
+	if skills := mustHandle[map[string]any](t, reloaded, "agent.skills.list", nil)["skills"].([]map[string]any); len(skills) == 0 || containsSkillID(skills, "legacy-skill") {
+		t.Fatalf("embedded skills list must keep built-ins and hide migrated records after restart, got %#v", skills)
 	}
 	secondReload, err := NewServiceWithStore(ctx, Config{ServerName: "example.com"}, reloadedStore)
 	if err != nil {
@@ -115,6 +125,26 @@ func TestDatabaseStoreMigratesLegacyAgentPluginConfigToNativePortalConfig(t *tes
 	if len(againSkills) != 1 {
 		t.Fatalf("expected idempotent migration without duplicated skills, got %#v", againSkills)
 	}
+}
+
+func configRecords(config map[string]any, key string) []map[string]any {
+	values, _ := config[key].([]any)
+	records := make([]map[string]any, 0, len(values))
+	for _, value := range values {
+		if record, ok := value.(map[string]any); ok {
+			records = append(records, record)
+		}
+	}
+	return records
+}
+
+func containsSkillID(skills []map[string]any, want string) bool {
+	for _, skill := range skills {
+		if id, _ := skill["id"].(string); id == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestDatabaseStoreRestoresPortalAndBusinessState(t *testing.T) {
@@ -162,7 +192,7 @@ func TestDatabaseStoreRestoresPortalAndBusinessState(t *testing.T) {
 	ch := mustHandle[channel](t, service, "channels.create", map[string]any{"channel_id": "ch_news", "name": "News", "channel_type": "post"})
 	mustHandle[groupRecord](t, service, "groups.invite_policy.update", map[string]any{"room_id": group.RoomID, "invite_policy": "owner"})
 	mustHandle[map[string]any](t, service, "channels.mute", map[string]any{"channel_id": ch.ChannelID})
-	post := mustHandle[channelPostRecord](t, service, "channels.posts.create", map[string]any{"channel_id": ch.ChannelID, "body": "post body"})
+	post := mustHandle[channelPostRecord](t, service, "channels.posts.create", map[string]any{"channel_id": ch.ChannelID, "body": "post body", "visibility": "public"})
 	mustHandle[channelCommentRecord](t, service, "channels.comments.create", map[string]any{"channel_id": ch.ChannelID, "post_id": post.PostID, "body": "comment body"})
 	mustHandle[map[string]any](t, service, "agent.config.update", map[string]any{
 		"display_name":         "Storage Agent",
@@ -262,7 +292,7 @@ func TestDatabaseStoreRestoresPortalAndBusinessState(t *testing.T) {
 		t.Fatalf("expected restored follow, got %#v", follows)
 	}
 	posts := mustHandle[map[string]any](t, reloaded, "channels.posts.list", map[string]any{"channel_id": ch.ChannelID})
-	if got, ok := posts["posts"].([]channelPostRecord); !ok || len(got) != 1 || got[0].Body != "post body" {
+	if got, ok := posts["posts"].([]channelPostRecord); !ok || len(got) != 1 || got[0].Body != "post body" || got[0].Visibility != "public" {
 		t.Fatalf("expected restored post, got %#v", posts)
 	}
 	comments := mustHandle[map[string]any](t, reloaded, "channels.comments.list", map[string]any{"post_id": post.PostID})

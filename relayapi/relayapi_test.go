@@ -15,12 +15,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/YingSuiAI/dirextalk-message-server/cmd/dendrite-demo-yggdrasil/signing"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/caching"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/httputil"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/sqlutil"
 	"github.com/YingSuiAI/dirextalk-message-server/relayapi"
 	"github.com/YingSuiAI/dirextalk-message-server/test"
+	"github.com/YingSuiAI/dirextalk-message-server/test/signing"
 	"github.com/YingSuiAI/dirextalk-message-server/test/testrig"
 	"github.com/gorilla/mux"
 	"github.com/matrix-org/gomatrixserverlib"

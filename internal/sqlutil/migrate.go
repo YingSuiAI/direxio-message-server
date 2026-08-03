@@ -10,6 +10,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -46,6 +47,7 @@ type Migrator struct {
 	db              *sql.DB
 	migrations      []Migration
 	knownMigrations map[string]struct{}
+	addErr          error
 	mutex           *sync.Mutex
 	insertStmt      *sql.Stmt
 }
@@ -60,21 +62,58 @@ func NewMigrator(db *sql.DB) *Migrator {
 	}
 }
 
-// AddMigrations appends migrations to the list of migrations. Migrations are executed
-// in the order they are added to the list. De-duplicates migrations using their Version field.
+// AddMigrations appends migrations to the list of migrations. Migrations are
+// executed in the order they are added. Duplicate versions are retained as a
+// configuration error and make Up fail before executing any migration; silently
+// dropping one can leave a database only partially upgraded.
 func (m *Migrator) AddMigrations(migrations ...Migration) {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 	for _, mig := range migrations {
-		if _, ok := m.knownMigrations[mig.Version]; !ok {
-			m.migrations = append(m.migrations, mig)
-			m.knownMigrations[mig.Version] = struct{}{}
+		if _, ok := m.knownMigrations[mig.Version]; ok {
+			if m.addErr == nil {
+				m.addErr = fmt.Errorf("duplicate database migration version %q", mig.Version)
+			}
+			continue
 		}
+		m.migrations = append(m.migrations, mig)
+		m.knownMigrations[mig.Version] = struct{}{}
 	}
 }
 
 // Up executes all migrations in order they were added.
 func (m *Migrator) Up(ctx context.Context) error {
+	return m.up(ctx, "")
+}
+
+// UpTo executes migrations in registration order through the named version.
+// The target must be known and is included in the transaction.
+func (m *Migrator) UpTo(ctx context.Context, target string) error {
+	if strings.TrimSpace(target) == "" {
+		return fmt.Errorf("unknown migration version %q", target)
+	}
+	return m.up(ctx, target)
+}
+
+func (m *Migrator) up(ctx context.Context, target string) error {
+	m.mutex.Lock()
+	addErr := m.addErr
+	known := target == ""
+	if target != "" {
+		for _, migration := range m.migrations {
+			if migration.Version == target {
+				known = true
+				break
+			}
+		}
+	}
+	m.mutex.Unlock()
+	if addErr != nil {
+		return addErr
+	}
+	if !known {
+		return fmt.Errorf("unknown migration version %q", target)
+	}
 	// ensure there is a table for known migrations
 	executedMigrations, err := m.ExecutedMigrations(ctx)
 	if err != nil {
@@ -87,6 +126,9 @@ func (m *Migrator) Up(ctx context.Context) error {
 			migration := m.migrations[i]
 			// Skip migration if it was already executed
 			if _, ok := executedMigrations[migration.Version]; ok {
+				if target != "" && migration.Version == target {
+					break
+				}
 				continue
 			}
 			logrus.Debugf("Executing database migration '%s'", migration.Version)
@@ -96,6 +138,9 @@ func (m *Migrator) Up(ctx context.Context) error {
 			}
 			if err = m.insertMigration(ctx, txn, migration.Version); err != nil {
 				return fmt.Errorf("unable to insert executed migrations: %w", err)
+			}
+			if target != "" && migration.Version == target {
+				break
 			}
 		}
 		return nil

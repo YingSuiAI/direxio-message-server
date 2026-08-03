@@ -9,6 +9,29 @@ import (
 	"github.com/YingSuiAI/dirextalk-message-server/test"
 )
 
+func TestFreshV78ReadMarkerSchemaIsCanonical(t *testing.T) {
+	ctx := context.Background()
+	connStr, closeDB := test.PrepareDBConnectionString(t, test.DBTypePostgres)
+	defer closeDB()
+	dbOpts := config.DatabaseOptions{ConnectionString: config.DataSource(connStr)}
+
+	store, err := NewDatabaseStore(ctx, sqlutil.NewConnectionManager(nil, dbOpts), &dbOpts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	assertReadMarkerPositionColumnCount(t, ctx, store, 2)
+	// The pure-V2 direct-final schema creates canonical read-marker columns in
+	// one fresh migration; legacy v72/v73 upgrade replay is intentionally gone.
+	var v78Count int
+	if err := store.DB().QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM db_migrations
+		WHERE version = 'p2p: agent and execution v2 fresh schema v78'
+	`).Scan(&v78Count); err != nil || v78Count != 1 {
+		t.Fatalf("v78 migration ledger count = %d, err = %v", v78Count, err)
+	}
+}
+
 func TestReadMarkerV72RowMigratesReopensAndCanonicalizesMonotonically(t *testing.T) {
 	ctx := context.Background()
 	connStr, closeDB := test.PrepareDBConnectionString(t, test.DBTypePostgres)

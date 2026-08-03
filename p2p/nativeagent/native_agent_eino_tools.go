@@ -20,8 +20,12 @@ func (r *Runtime) enabledEinoTools(ctx context.Context, config map[string]any, p
 
 func (r *Runtime) enabledNativeEinoTools(ctx context.Context, config map[string]any, params map[string]any) ([]einotool.BaseTool, func(), error) {
 	tools := make([]einotool.BaseTool, 0)
-	for _, nativeTool := range r.enabledTools(ctx, config, params) {
-		if strings.HasPrefix(nativeTool.Name, "mcp__") {
+	nativeTools := append([]Tool{}, r.enabledTools(ctx, config, params)...)
+	// web_search is compiled into the runtime but exists only for this request
+	// when the caller supplied a valid request-scoped Tavily credential.
+	nativeTools = append(nativeTools, r.requestScopedWebSearchTool(params)...)
+	for _, nativeTool := range nativeTools {
+		if !embeddedDirextalkTool(nativeTool.Name) && nativeTool.Name != "web_search" {
 			continue
 		}
 		info, err := nativeToolInfo(nativeTool)
@@ -30,13 +34,7 @@ func (r *Runtime) enabledNativeEinoTools(ctx context.Context, config map[string]
 		}
 		tools = append(tools, &einoNativeTool{native: nativeTool, info: info})
 	}
-	mcpTools, cleanup, err := r.enabledOfficialMCPTools(ctx, config, params)
-	if err != nil {
-		return nil, nil, err
-	}
-	tools = append(tools, mcpTools...)
-	tools = append(tools, r.enabledRuntimeEinoTools(config, params)...)
-	return tools, cleanup, nil
+	return tools, func() {}, nil
 }
 
 func nativeToolInfo(nativeTool Tool) (*schema.ToolInfo, error) {

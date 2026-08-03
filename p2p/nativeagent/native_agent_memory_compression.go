@@ -21,8 +21,13 @@ func (r *Runtime) compressMemory(ctx context.Context, params map[string]any) (ma
 	if window <= 0 {
 		window = nativeAgentDefaultMemoryWindow
 	}
-	profile := r.resolveModelProfile(params)
-	if hasModelProfile(params) {
+	profile := nativeModelProfile{}
+	if r.modelProfiles != nil || hasModelProfile(params) {
+		var resolveErr error
+		profile, resolveErr = r.resolveModelProfileForRequest(ctx, params)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
 		if err := validateModelProfile(profile); err != nil {
 			return nil, err
 		}
@@ -60,7 +65,7 @@ func (r *Runtime) compactNativeAgentMemoryWithModel(ctx context.Context, memory 
 	if err != nil {
 		return memory, err
 	}
-	memory.Summary = strings.TrimSpace(summary)
+	memory.Summary = boundedNativeAgentSummary(summary)
 	memory.Messages = recent
 	memory.UpdatedAt = time.Now().UTC().UnixMilli()
 	return memory, nil
@@ -85,23 +90,31 @@ func compactNativeAgentMemory(memory nativeAgentMemory, window int) nativeAgentM
 		parts = append(parts, overflowSummary)
 	}
 	summary := strings.Join(parts, "\n")
-	runes := []rune(summary)
-	if len(runes) > 4000 {
-		summary = string(runes[len(runes)-4000:])
-	}
-	memory.Summary = strings.TrimSpace(summary)
+	memory.Summary = boundedNativeAgentSummary(summary)
 	memory.UpdatedAt = time.Now().UTC().UnixMilli()
 	return memory
 }
 
+func boundedNativeAgentSummary(summary string) string {
+	runes := []rune(strings.TrimSpace(SanitizeScheduledText(summary, "")))
+	if len(runes) > 4000 {
+		runes = runes[len(runes)-4000:]
+	}
+	return strings.TrimSpace(string(runes))
+}
+
 func (r *Runtime) summarizeEinoMemory(ctx context.Context, profile nativeModelProfile, previousSummary string, overflow []*schema.Message) (string, error) {
-	chatModel, err := r.newEinoChatModel(ctx, profile)
+	summaryCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	profile.MaxOutputTokens = 512
+	chatModel, err := r.newEinoChatModel(summaryCtx, profile)
 	if err != nil {
 		return "", err
 	}
-	prompt := "Existing summary:\n" + fallbackString(strings.TrimSpace(previousSummary), "(empty)") +
-		"\n\nNew conversation messages to merge:\n" + einoMessagesToSummary(overflow)
-	message, err := chatModel.Generate(ctx, []*schema.Message{
+	previousSummary, overflowText := boundedMemorySummaryInputs(profile, previousSummary, einoMessagesToSummary(overflow))
+	prompt := "Existing summary:\n" + fallbackString(previousSummary, "(empty)") +
+		"\n\nNew conversation messages to merge:\n" + overflowText
+	message, err := chatModel.Generate(summaryCtx, []*schema.Message{
 		schema.SystemMessage("You compress Dirextalk Agent conversation memory. Preserve user preferences, decisions, room/contact names, tool outcomes, and unresolved tasks. Return a concise Chinese summary only."),
 		schema.UserMessage(prompt),
 	})
@@ -111,12 +124,50 @@ func (r *Runtime) summarizeEinoMemory(ctx context.Context, profile nativeModelPr
 	return message.Content, nil
 }
 
+func boundedMemorySummaryInputs(profile nativeModelProfile, previousSummary, overflow string) (string, string) {
+	budget := nativeAgentInputTokenBudget(profile.ContextWindow, profile.MaxOutputTokens)
+	if budget <= 0 {
+		budget = 12000
+	}
+	// Leave room for the compression instructions and provider framing. Favor
+	// newer overflow facts while retaining a smaller slice of the old summary.
+	budget = budget * 3 / 4
+	previousBudget := budget / 3
+	overflowBudget := budget - previousBudget
+	return tailRunesWithinTokenBudget(strings.TrimSpace(previousSummary), previousBudget), tailRunesWithinTokenBudget(strings.TrimSpace(overflow), overflowBudget)
+}
+
+func tailRunesWithinTokenBudget(value string, budget int) string {
+	if budget <= 0 || value == "" {
+		return ""
+	}
+	runes := []rune(value)
+	used, start := 0, len(runes)
+	for start > 0 {
+		cost := 1
+		if runes[start-1] < 128 {
+			cost = 1 // conservative for short mixed-language summaries
+		}
+		if used+cost > budget {
+			break
+		}
+		used += cost
+		start--
+	}
+	return strings.TrimSpace(string(runes[start:]))
+}
+
 func memoryCompressionUsesModel(config map[string]any, params map[string]any) bool {
 	mode := strings.ToLower(fallbackString(trimString(params["memory_compression"]), trimString(config["memory_compression"])))
 	if mode == "" {
 		mode = strings.ToLower(fallbackString(trimString(params["context_compression"]), trimString(config["context_compression"])))
 	}
-	return mode == "model" || mode == "llm" || mode == "eino_model" || boolParam(params["model_memory_compression"])
+	if mode == "text" || mode == "deterministic" || mode == "off" || mode == "disabled" {
+		return false
+	}
+	// Model-backed summarization is the default whenever the active profile has
+	// credentials. Callers can explicitly select deterministic text compaction.
+	return mode == "" || mode == "model" || mode == "llm" || mode == "eino_model" || boolParam(params["model_memory_compression"])
 }
 
 func compressionLabel(profile nativeModelProfile) string {

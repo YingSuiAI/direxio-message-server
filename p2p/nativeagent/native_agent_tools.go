@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/YingSuiAI/dirextalk-message-server/internal/dirextalkmcp"
 )
 
 type Tool struct {
@@ -11,7 +13,11 @@ type Tool struct {
 	Description string
 	Parameters  map[string]any
 	Write       bool
-	Handler     func(context.Context, map[string]any) (any, error)
+	// Available is evaluated whenever the tool registry is built. It is used
+	// for server capabilities that can become ready after startup; nil means
+	// available for backwards-compatible first-party/test tools.
+	Available func() bool
+	Handler   func(context.Context, map[string]any) (any, error)
 }
 
 func (r *Runtime) enabledTools(ctx context.Context, config map[string]any, params map[string]any) []Tool {
@@ -47,7 +53,13 @@ func (r *Runtime) enabledTools(ctx context.Context, config map[string]any, param
 			}
 		}
 	}
-	enableNativeAgentManagementTools(enabled, availableTools)
+	// Durable knowledge tools are a compiled core capability. Keep them
+	// available after upgrades even when an older enabled_tools list omits them.
+	for _, tool := range availableTools {
+		if nativeAgentMemoryToolName(tool.Name) != "" || nativeAgentExecutionV2Tool(tool.Name) {
+			enable(tool)
+		}
+	}
 	tools := make([]Tool, 0, len(availableTools))
 	for _, tool := range availableTools {
 		if enabled[tool.Name] {
@@ -77,59 +89,79 @@ func nativeToolAlias(value string) string {
 	value = strings.ReplaceAll(value, ".", "_")
 	value = strings.ReplaceAll(value, "-", "_")
 	aliases := map[string]string{
-		"contacts_list":                 "dirextalk_contacts_list",
-		"search_contacts":               "dirextalk_contacts_search",
-		"contacts_search":               "dirextalk_contacts_search",
-		"rooms_search":                  "dirextalk_rooms_search",
-		"search_rooms":                  "dirextalk_rooms_search",
-		"messages_list":                 "dirextalk_messages_list",
-		"list_messages":                 "dirextalk_messages_list",
-		"messages_send":                 "dirextalk_messages_send",
-		"send_message":                  "dirextalk_messages_send",
-		"room_members_list":             "dirextalk_room_members_list",
-		"channel_posts_list":            "dirextalk_channel_posts_list",
-		"channel_comments_list":         "dirextalk_channel_comments_list",
-		"channel_comments_create":       "dirextalk_channel_comments_create",
-		"summarize":                     "dirextalk_summarize",
-		"summarize_conversation":        "dirextalk_summarize",
-		"agent_contacts_list":           "dirextalk_contacts_list",
-		"agent_contacts_search":         "dirextalk_contacts_search",
-		"agent_rooms_search":            "dirextalk_rooms_search",
-		"agent_messages_list":           "dirextalk_messages_list",
-		"agent_messages_send":           "dirextalk_messages_send",
-		"agent_room_members_list":       "dirextalk_room_members_list",
-		"agent_channel_posts_list":      "dirextalk_channel_posts_list",
-		"agent_channel_comments_list":   "dirextalk_channel_comments_list",
-		"agent_channel_comments_create": "dirextalk_channel_comments_create",
-		"agent_summarize":               "dirextalk_summarize",
-		"skills_list":                   "native_agent_skills_list",
-		"skills_install":                "native_agent_skills_install",
-		"skills_enable":                 "native_agent_skills_enable",
-		"skills_disable":                "native_agent_skills_disable",
-		"skills_uninstall":              "native_agent_skills_uninstall",
-		"install_skill":                 "native_agent_skills_install",
-		"enable_skill":                  "native_agent_skills_enable",
-		"disable_skill":                 "native_agent_skills_disable",
-		"uninstall_skill":               "native_agent_skills_uninstall",
-		"agent_skills_list":             "native_agent_skills_list",
-		"agent_skills_install":          "native_agent_skills_install",
-		"agent_skills_enable":           "native_agent_skills_enable",
-		"agent_skills_disable":          "native_agent_skills_disable",
-		"agent_skills_uninstall":        "native_agent_skills_uninstall",
-		"mcp_servers_list":              "native_agent_mcp_servers_list",
-		"mcp_servers_install":           "native_agent_mcp_servers_install",
-		"mcp_servers_enable":            "native_agent_mcp_servers_enable",
-		"mcp_servers_disable":           "native_agent_mcp_servers_disable",
-		"mcp_servers_uninstall":         "native_agent_mcp_servers_uninstall",
-		"install_mcp_server":            "native_agent_mcp_servers_install",
-		"enable_mcp_server":             "native_agent_mcp_servers_enable",
-		"disable_mcp_server":            "native_agent_mcp_servers_disable",
-		"uninstall_mcp_server":          "native_agent_mcp_servers_uninstall",
-		"agent_mcp_servers_list":        "native_agent_mcp_servers_list",
-		"agent_mcp_servers_install":     "native_agent_mcp_servers_install",
-		"agent_mcp_servers_enable":      "native_agent_mcp_servers_enable",
-		"agent_mcp_servers_disable":     "native_agent_mcp_servers_disable",
-		"agent_mcp_servers_uninstall":   "native_agent_mcp_servers_uninstall",
+		"agent_schedules_list":                       "native_agent_schedules_list",
+		"agent_schedules_get":                        "native_agent_schedules_get",
+		"agent_schedule_runs_list":                   "native_agent_schedule_runs_list",
+		"agent_schedule_runs_get":                    "native_agent_schedule_runs_get",
+		"agent_execution_v2_projects_analyze":        "native_agent_execution_v2_projects_analyze",
+		"agent_execution_v2_targets_list":            "native_agent_execution_v2_targets_list",
+		"agent_execution_v2_targets_get":             "native_agent_execution_v2_targets_get",
+		"agent_execution_v2_targets_reserve":         "native_agent_execution_v2_targets_reserve",
+		"agent_execution_v2_plans_create":            "native_agent_execution_v2_plans_create",
+		"agent_execution_v2_plans_get":               "native_agent_execution_v2_plans_get",
+		"agent_execution_v2_runs_create":             "native_agent_execution_v2_runs_create",
+		"agent_execution_v2_runs_get":                "native_agent_execution_v2_runs_get",
+		"agent_execution_v2_runs_events":             "native_agent_execution_v2_runs_events",
+		"agent_execution_v2_service_bindings_list":   "native_agent_execution_v2_service_bindings_list",
+		"agent_execution_v2_service_bindings_get":    "native_agent_execution_v2_service_bindings_get",
+		"agent_execution_v2_service_bindings_invoke": "native_agent_execution_v2_service_bindings_invoke",
+		"contacts_list":                              "dirextalk_contacts_list",
+		"search_contacts":                            "dirextalk_contacts_search",
+		"contacts_search":                            "dirextalk_contacts_search",
+		"rooms_search":                               "dirextalk_rooms_search",
+		"search_rooms":                               "dirextalk_rooms_search",
+		"messages_list":                              "dirextalk_messages_list",
+		"list_messages":                              "dirextalk_messages_list",
+		"messages_send":                              "dirextalk_messages_send",
+		"send_message":                               "dirextalk_messages_send",
+		"room_members_list":                          "dirextalk_room_members_list",
+		"channel_posts_list":                         "dirextalk_channel_posts_list",
+		"channel_comments_list":                      "dirextalk_channel_comments_list",
+		"channel_comments_create":                    "dirextalk_channel_comments_create",
+		"summarize":                                  "dirextalk_summarize",
+		"summarize_conversation":                     "dirextalk_summarize",
+		"agent_contacts_list":                        "dirextalk_contacts_list",
+		"agent_contacts_search":                      "dirextalk_contacts_search",
+		"agent_rooms_search":                         "dirextalk_rooms_search",
+		"agent_messages_list":                        "dirextalk_messages_list",
+		"agent_messages_send":                        "dirextalk_messages_send",
+		"agent_room_members_list":                    "dirextalk_room_members_list",
+		"agent_channel_posts_list":                   "dirextalk_channel_posts_list",
+		"agent_channel_comments_list":                "dirextalk_channel_comments_list",
+		"agent_channel_comments_create":              "dirextalk_channel_comments_create",
+		"agent_summarize":                            "dirextalk_summarize",
+		"memory_remember":                            "native_agent_memory_remember",
+		"remember":                                   "native_agent_memory_remember",
+		"memory_search":                              "native_agent_memory_search",
+		"recall":                                     "native_agent_memory_search",
+		"skills_list":                                "native_agent_skills_list",
+		"skills_install":                             "native_agent_skills_install",
+		"skills_enable":                              "native_agent_skills_enable",
+		"skills_disable":                             "native_agent_skills_disable",
+		"skills_uninstall":                           "native_agent_skills_uninstall",
+		"install_skill":                              "native_agent_skills_install",
+		"enable_skill":                               "native_agent_skills_enable",
+		"disable_skill":                              "native_agent_skills_disable",
+		"uninstall_skill":                            "native_agent_skills_uninstall",
+		"agent_skills_list":                          "native_agent_skills_list",
+		"agent_skills_install":                       "native_agent_skills_install",
+		"agent_skills_enable":                        "native_agent_skills_enable",
+		"agent_skills_disable":                       "native_agent_skills_disable",
+		"agent_skills_uninstall":                     "native_agent_skills_uninstall",
+		"mcp_servers_list":                           "native_agent_mcp_servers_list",
+		"mcp_servers_install":                        "native_agent_mcp_servers_install",
+		"mcp_servers_enable":                         "native_agent_mcp_servers_enable",
+		"mcp_servers_disable":                        "native_agent_mcp_servers_disable",
+		"mcp_servers_uninstall":                      "native_agent_mcp_servers_uninstall",
+		"install_mcp_server":                         "native_agent_mcp_servers_install",
+		"enable_mcp_server":                          "native_agent_mcp_servers_enable",
+		"disable_mcp_server":                         "native_agent_mcp_servers_disable",
+		"uninstall_mcp_server":                       "native_agent_mcp_servers_uninstall",
+		"agent_mcp_servers_list":                     "native_agent_mcp_servers_list",
+		"agent_mcp_servers_install":                  "native_agent_mcp_servers_install",
+		"agent_mcp_servers_enable":                   "native_agent_mcp_servers_enable",
+		"agent_mcp_servers_disable":                  "native_agent_mcp_servers_disable",
+		"agent_mcp_servers_uninstall":                "native_agent_mcp_servers_uninstall",
 	}
 	if strings.HasPrefix(value, "dirextalk_") {
 		return value
@@ -141,9 +173,90 @@ func nativeToolAlias(value string) string {
 }
 
 func (r *Runtime) availableTools() []Tool {
-	tools := append([]Tool{}, r.tools...)
-	tools = append(tools, r.managementTools()...)
+	tools := make([]Tool, 0, len(r.tools)+2)
+	seen := map[string]bool{}
+	for _, tool := range r.tools {
+		if tool.Available != nil && !tool.Available() {
+			continue
+		}
+		// These names are reserved for the compiled, owner-scoped handlers below.
+		if nativeAgentMemoryToolName(tool.Name) != "" {
+			continue
+		}
+		if embeddedDirextalkTool(tool.Name) {
+			tools = append(tools, tool)
+			seen[tool.Name] = true
+		}
+	}
+	if r.persistentMemoryReady && r.knowledge != nil {
+		for _, tool := range r.knowledgeEinoTools() {
+			if tool.Available != nil && !tool.Available() {
+				continue
+			}
+			if !seen[tool.Name] {
+				tools = append(tools, tool)
+			}
+		}
+	}
 	return tools
+}
+
+// embeddedDirextalkTool is a positive allowlist anchored to the compiled MCP
+// capability registry. Configuration may select from it, but cannot add tools.
+func embeddedDirextalkTool(name string) bool {
+	if name == "dirextalk_summarize" {
+		return true
+	}
+	if nativeAgentMemoryToolName(name) != "" {
+		return true
+	}
+	// Control and schedule names are a closed set. Prefix checks would publish
+	// future confirm/create/delete actions merely because they share a prefix.
+	switch name {
+	case "native_agent_schedules_list", "native_agent_schedules_get",
+		"native_agent_schedule_runs_list", "native_agent_schedule_runs_get",
+		"native_agent_aws_credentials_list", "native_agent_aws_credentials_test",
+		"native_agent_execution_v2_projects_analyze",
+		"native_agent_execution_v2_targets_list", "native_agent_execution_v2_targets_get", "native_agent_execution_v2_targets_reserve",
+		"native_agent_execution_v2_plans_create", "native_agent_execution_v2_plans_get",
+		"native_agent_execution_v2_runs_create", "native_agent_execution_v2_runs_get",
+		"native_agent_execution_v2_runs_status", "native_agent_execution_v2_runs_events",
+		"native_agent_execution_v2_service_bindings_list", "native_agent_execution_v2_service_bindings_get",
+		"native_agent_execution_v2_service_bindings_invoke":
+		return true
+	}
+	_, ok := dirextalkmcp.NativeToolAction(name)
+	return ok
+}
+
+func nativeAgentMemoryToolName(name string) string {
+	switch strings.TrimSpace(name) {
+	case "native_agent_memory_remember", "native_agent_memory_search":
+		return strings.TrimSpace(name)
+	default:
+		return ""
+	}
+}
+
+// Execution V2 planning and orchestration tools are part of the embedded
+// control plane, not optional user-installed extensions. Older Agent configs
+// persist an explicit enabled_tools allowlist, so upgrades must add these safe
+// owner-scoped tools when their server capability is ready. The allowlist in
+// embeddedDirextalkTool deliberately excludes confirmation and raw transports.
+func nativeAgentExecutionV2Tool(name string) bool {
+	switch strings.TrimSpace(name) {
+	case "native_agent_aws_credentials_list", "native_agent_aws_credentials_test",
+		"native_agent_execution_v2_projects_analyze",
+		"native_agent_execution_v2_targets_list", "native_agent_execution_v2_targets_get", "native_agent_execution_v2_targets_reserve",
+		"native_agent_execution_v2_plans_create", "native_agent_execution_v2_plans_get",
+		"native_agent_execution_v2_runs_create", "native_agent_execution_v2_runs_get",
+		"native_agent_execution_v2_runs_status", "native_agent_execution_v2_runs_events",
+		"native_agent_execution_v2_service_bindings_list", "native_agent_execution_v2_service_bindings_get",
+		"native_agent_execution_v2_service_bindings_invoke":
+		return true
+	default:
+		return false
+	}
 }
 
 func (r *Runtime) invokeDirectTool(ctx context.Context, action string, params map[string]any) (map[string]any, error) {

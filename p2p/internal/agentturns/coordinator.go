@@ -57,7 +57,8 @@ func (c *Coordinator) Stream(attachmentCtx context.Context, request Request, run
 	c.acceptMu.Lock()
 	reservation, err := c.store.ReserveAgentTurn(context.Background(), Candidate{
 		OwnerID: request.OwnerID, TurnID: request.TurnID, ConversationID: request.ConversationID,
-		Action: request.Action, Digest: request.Digest,
+		Action: request.Action, Digest: request.Digest, ModelProfileID: request.ModelProfileID,
+		ModelProfileRevision: request.ModelProfileRevision, CredentialVersion: request.CredentialVersion,
 	})
 	if err != nil {
 		c.acceptMu.Unlock()
@@ -67,6 +68,9 @@ func (c *Coordinator) Stream(attachmentCtx context.Context, request Request, run
 		c.acceptMu.Unlock()
 		return ErrTurnIDReused
 	}
+	request.ModelProfileID = reservation.Turn.ModelProfileID
+	request.ModelProfileRevision = reservation.Turn.ModelProfileRevision
+	request.CredentialVersion = reservation.Turn.CredentialVersion
 	live := c.liveFor(reservation.Turn, reservation.Created)
 	events, liveEvents, unsubscribe, err := c.subscribe(reservation.Turn, live, request.AfterSeq)
 	if err != nil {
@@ -116,6 +120,13 @@ func (c *Coordinator) Stream(attachmentCtx context.Context, request Request, run
 			}
 		}
 	}
+}
+
+func (c *Coordinator) Get(ctx context.Context, ownerID, turnID string) (Turn, bool, error) {
+	if c == nil || c.store == nil {
+		return Turn{}, false, fmt.Errorf("agent turn coordinator is unavailable")
+	}
+	return c.store.GetAgentTurn(ctx, strings.TrimSpace(ownerID), strings.TrimSpace(turnID))
 }
 
 func (c *Coordinator) Stop(ctx context.Context, ownerID, turnID string) (Turn, bool, error) {
@@ -234,7 +245,7 @@ func (c *Coordinator) runJob(job *turnJob) {
 	if !changed {
 		return
 	}
-	executionCtx, cancel := context.WithCancel(context.Background())
+	executionCtx, cancel := context.WithCancel(WithIssuedAt(context.Background(), turn.CreatedAt))
 	job.live.mu.Lock()
 	job.live.cancel = cancel
 	job.live.mu.Unlock()

@@ -2,18 +2,20 @@ package nativeagent
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/cloudwego/eino/schema"
 )
 
 type einoAgentSession struct {
-	systemPrompt  string
-	contextWindow int
+	systemPrompt    string
+	contextWindow   int
+	maxOutputTokens int
 }
 
 func (s einoAgentSession) rewrite(_ context.Context, messages []*schema.Message) []*schema.Message {
-	return sanitizeEinoMessagesForModel(compactEinoMessages(messages, s.contextWindow))
+	return compactEinoMessagesForContext(messages, s.contextWindow, s.maxOutputTokens)
 }
 
 func (s einoAgentSession) modify(_ context.Context, messages []*schema.Message) []*schema.Message {
@@ -41,8 +43,13 @@ func requestEinoMessages(params map[string]any) []*schema.Message {
 		}
 	}
 	prompt := fallbackString(trimString(params["prompt"]), trimString(params["message"]))
-	if prompt != "" {
-		result = append(result, schema.UserMessage(prompt))
+	attachments, _ := parseNativeAgentAttachments(params)
+	if prompt != "" || len(attachments) > 0 {
+		if len(attachments) > 0 {
+			result = append(result, &schema.Message{Role: schema.User, Content: prompt, UserInputMultiContent: nativeAgentAttachmentParts(prompt, attachments)})
+		} else {
+			result = append(result, schema.UserMessage(prompt))
+		}
 	}
 	if len(result) == 0 {
 		result = append(result, schema.UserMessage("你好"))
@@ -85,6 +92,108 @@ func compactEinoMessages(messages []*schema.Message, contextWindow int) []*schem
 	return sanitizeEinoMessagesForModel(result)
 }
 
+// compactEinoMessagesForContext treats model context_window as a token budget.
+// The previous implementation treated it as a message count, so a 128k model
+// effectively never compacted and could overflow on a few large tool results.
+// This conservative estimator deliberately reserves space for output and tool
+// schemas; the provider remains authoritative for exact tokenization.
+func compactEinoMessagesForContext(messages []*schema.Message, contextWindow, maxOutputTokens int) []*schema.Message {
+	messages = sanitizeEinoMessagesForModel(messages)
+	if contextWindow <= 0 {
+		return compactEinoMessages(messages, 48)
+	}
+	budget := nativeAgentInputTokenBudget(contextWindow, maxOutputTokens)
+	if budget <= 0 || estimateEinoMessagesTokens(messages) <= budget {
+		return messages
+	}
+
+	var system *schema.Message
+	start := 0
+	if len(messages) > 0 && messages[0] != nil && messages[0].Role == schema.System {
+		system = messages[0]
+		start = 1
+	}
+	used := estimateEinoMessageTokens(system)
+	kept := make([]*schema.Message, 0, len(messages)-start)
+	for i := len(messages) - 1; i >= start; i-- {
+		cost := estimateEinoMessageTokens(messages[i])
+		if len(kept) > 0 && used+cost > budget {
+			break
+		}
+		kept = append(kept, messages[i])
+		used += cost
+	}
+	for left, right := 0, len(kept)-1; left < right; left, right = left+1, right-1 {
+		kept[left], kept[right] = kept[right], kept[left]
+	}
+	result := make([]*schema.Message, 0, len(kept)+1)
+	if system != nil {
+		result = append(result, system)
+	}
+	result = append(result, kept...)
+	return sanitizeEinoMessagesForModel(result)
+}
+
+func nativeAgentInputTokenBudget(contextWindow, maxOutputTokens int) int {
+	if contextWindow <= 0 {
+		return 0
+	}
+	outputReserve := maxOutputTokens
+	if outputReserve <= 0 {
+		outputReserve = contextWindow / 4
+	}
+	if outputReserve > contextWindow/2 {
+		outputReserve = contextWindow / 2
+	}
+	toolReserve := contextWindow / 10
+	if toolReserve > 4096 {
+		toolReserve = 4096
+	}
+	budget := contextWindow - outputReserve - toolReserve
+	if budget < contextWindow/4 {
+		budget = contextWindow / 4
+	}
+	return budget
+}
+
+func estimateEinoMessagesTokens(messages []*schema.Message) int {
+	total := 0
+	for _, message := range messages {
+		total += estimateEinoMessageTokens(message)
+	}
+	return total
+}
+
+func estimateEinoMessageTokens(message *schema.Message) int {
+	if message == nil {
+		return 0
+	}
+	total := 12 + estimateNativeAgentTextTokens(message.Content)
+	for _, call := range message.ToolCalls {
+		total += 16 + estimateNativeAgentTextTokens(call.Function.Name) + estimateNativeAgentTextTokens(call.Function.Arguments)
+	}
+	for _, part := range message.UserInputMultiContent {
+		if part.Text != "" {
+			total += estimateNativeAgentTextTokens(part.Text)
+		} else {
+			total += 256
+		}
+	}
+	return total
+}
+
+func estimateNativeAgentTextTokens(value string) int {
+	ascii, other := 0, 0
+	for _, r := range value {
+		if r < 128 {
+			ascii++
+		} else {
+			other++
+		}
+	}
+	return (ascii+2)/3 + other + 1
+}
+
 func sanitizeEinoMessagesForModel(messages []*schema.Message) []*schema.Message {
 	result := make([]*schema.Message, 0, len(messages))
 	pendingToolCalls := map[string]struct{}{}
@@ -125,12 +234,79 @@ func cloneEinoMessages(messages []*schema.Message) []*schema.Message {
 		}
 		clone := *message
 		if len(message.ToolCalls) > 0 {
-			clone.ToolCalls = append([]schema.ToolCall{}, message.ToolCalls...)
+			clone.ToolCalls = make([]schema.ToolCall, len(message.ToolCalls))
+			for i, call := range message.ToolCalls {
+				clone.ToolCalls[i] = call
+				if call.Extra != nil {
+					clone.ToolCalls[i].Extra = cloneAnyMap(call.Extra)
+				}
+			}
 		}
+		clone.UserInputMultiContent = cloneEinoInputParts(message.UserInputMultiContent)
+		clone.MultiContent = cloneEinoChatParts(message.MultiContent)
 		if len(message.Extra) > 0 {
 			clone.Extra = cloneAnyMap(message.Extra)
 		}
 		result = append(result, &clone)
+	}
+	return result
+}
+
+func cloneEinoChatParts(parts []schema.ChatMessagePart) []schema.ChatMessagePart {
+	if len(parts) == 0 {
+		return nil
+	}
+	result := make([]schema.ChatMessagePart, len(parts))
+	for i, part := range parts {
+		result[i] = part
+		if part.ImageURL != nil {
+			copyPart := *part.ImageURL
+			copyPart.Extra = cloneAnyMap(part.ImageURL.Extra)
+			result[i].ImageURL = &copyPart
+		}
+		if part.AudioURL != nil {
+			copyPart := *part.AudioURL
+			copyPart.Extra = cloneAnyMap(part.AudioURL.Extra)
+			result[i].AudioURL = &copyPart
+		}
+		if part.VideoURL != nil {
+			copyPart := *part.VideoURL
+			copyPart.Extra = cloneAnyMap(part.VideoURL.Extra)
+			result[i].VideoURL = &copyPart
+		}
+		if part.FileURL != nil {
+			copyPart := *part.FileURL
+			copyPart.Extra = cloneAnyMap(part.FileURL.Extra)
+			result[i].FileURL = &copyPart
+		}
+	}
+	return result
+}
+
+func cloneEinoInputParts(parts []schema.MessageInputPart) []schema.MessageInputPart {
+	if len(parts) == 0 {
+		return nil
+	}
+	result := make([]schema.MessageInputPart, len(parts))
+	for i, part := range parts {
+		result[i] = part
+		if part.Image != nil {
+			image := *part.Image
+			image.MessagePartCommon = part.Image.MessagePartCommon
+			if part.Image.URL != nil {
+				value := *part.Image.URL
+				image.URL = &value
+			}
+			if part.Image.Base64Data != nil {
+				value := *part.Image.Base64Data
+				image.Base64Data = &value
+			}
+			image.Extra = cloneAnyMap(part.Image.Extra)
+			result[i].Image = &image
+		}
+		if part.Extra != nil {
+			result[i].Extra = cloneAnyMap(part.Extra)
+		}
 	}
 	return result
 }
@@ -149,6 +325,15 @@ func trimEinoMessageForMemory(message *schema.Message) *schema.Message {
 	clone := *message
 	clone.ResponseMeta = nil
 	clone.Extra = nil
+	if len(clone.UserInputMultiContent) > 0 {
+		marker := attachmentMemoryMarker(clone.UserInputMultiContent)
+		if strings.TrimSpace(clone.Content) == "" {
+			clone.Content = marker
+		} else if marker != "" {
+			clone.Content = strings.TrimSpace(clone.Content) + "\n" + marker
+		}
+		clone.UserInputMultiContent = nil
+	}
 	if clone.Role == schema.Assistant && len(clone.ToolCalls) == 0 && strings.TrimSpace(clone.Content) == "" {
 		return nil
 	}
@@ -159,6 +344,19 @@ func trimEinoMessageForMemory(message *schema.Message) *schema.Message {
 		clone.ToolCalls = append([]schema.ToolCall{}, clone.ToolCalls...)
 	}
 	return &clone
+}
+
+func attachmentMemoryMarker(parts []schema.MessageInputPart) string {
+	count := 0
+	for _, part := range parts {
+		if part.Type == schema.ChatMessagePartTypeImageURL && part.Image != nil {
+			count++
+		}
+	}
+	if count == 0 {
+		return ""
+	}
+	return fmt.Sprintf("[attached %d image(s)]", count)
 }
 
 func compactEinoMessagesForMemory(messages []*schema.Message) []*schema.Message {

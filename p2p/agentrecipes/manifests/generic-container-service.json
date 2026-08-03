@@ -1,0 +1,91 @@
+{
+  "id": "generic-container-service",
+  "version": "1.0.0",
+  "schema_version": "recipe/v1",
+  "content_digest": "71547065ef61f2983cf25e1434c1e298196d14aebe1d8594bcdb0da7e813bcae",
+  "minimum_core_version": "1.0.0",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "target": {"type": "object", "properties": {"package": {"type": "string"}}},
+      "container": {
+        "type": "object",
+        "properties": {
+          "image_digest": {"type": "string"},
+          "name": {"type": "string"},
+          "host_address": {"type": "string"},
+          "host_port": {"type": "integer"},
+          "container_port": {"type": "integer"},
+          "restart_policy": {"type": "string"}
+        }
+      },
+      "service": {"type": "object", "properties": {"probe": {"type": "string"}, "resource": {"type": "string"}}},
+      "repository": {"type": "string"}
+    }
+  },
+  "output_schema": {"type": "object"},
+  "intent_tags": ["deploy"],
+  "required_target_capabilities": ["target.aws_ec2_instance", "transport.aws_ssm"],
+  "network_access": {
+    "allowed": true,
+    "purpose": "container-image-download",
+    "endpoints": ["public_https_egress", "target_local:service"]
+  },
+  "secret_purposes": [],
+  "stages": [
+    {
+      "stage_key": "inspect",
+      "title": "Inspect target",
+      "kind": "target.inspect",
+      "risk": "R0",
+      "gate": "none",
+      "steps": [{"step_key": "inspect-target", "kind": "target.inspect", "template": {}, "timeout_seconds": 30, "idempotency_marker": "inspect"}],
+      "timeout_seconds": 60
+    },
+    {
+      "stage_key": "bootstrap",
+      "title": "Bootstrap packages",
+      "kind": "package.ensure",
+      "risk": "R2",
+      "gate": "remote_privileged_execution",
+      "depends_on": ["inspect"],
+      "steps": [{"step_key": "ensure-package", "kind": "package.ensure", "template": {"package_ref": "${target.package}"}, "timeout_seconds": 120, "idempotency_marker": "bootstrap", "network_grants": ["public_https_egress"]}],
+      "timeout_seconds": 180
+    },
+    {
+      "stage_key": "apply",
+      "title": "Apply container",
+      "kind": "container.apply",
+      "risk": "R2",
+      "gate": "remote_privileged_execution",
+      "depends_on": ["bootstrap"],
+      "steps": [{
+        "step_key": "apply-container",
+        "kind": "container.apply",
+        "template": {
+          "image_digest": "${container.image_digest}",
+          "name": "${container.name}",
+          "host_address": "${container.host_address}",
+          "host_port": "${container.host_port}",
+          "container_port": "${container.container_port}",
+          "restart_policy": "${container.restart_policy}"
+        },
+        "timeout_seconds": 180,
+        "idempotency_marker": "apply",
+        "network_grants": ["public_https_egress"]
+      }],
+      "timeout_seconds": 240
+    },
+    {
+      "stage_key": "probe",
+      "title": "Probe service",
+      "kind": "http.probe",
+      "risk": "R0",
+      "gate": "none",
+      "depends_on": ["apply"],
+      "steps": [{"step_key": "probe-http", "kind": "http.probe", "template": {"probe_ref": "${service.probe}"}, "timeout_seconds": 30, "idempotency_marker": "probe", "network_grants": ["target_local:service"]}],
+      "timeout_seconds": 60
+    }
+  ],
+  "allowed_step_kinds": ["container.apply", "http.probe", "package.ensure", "target.inspect"]
+}

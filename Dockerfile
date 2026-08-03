@@ -29,6 +29,7 @@ RUN --mount=target=. \
     -ldflags="-s -w -X github.com/YingSuiAI/dirextalk-message-server/internal.version=${VERSION} -X github.com/YingSuiAI/dirextalk-message-server/internal.commit=${COMMIT} -X github.com/YingSuiAI/dirextalk-message-server/internal.buildTime=${BUILD_TIME}" \
     -o /out/ \
       ./cmd/dirextalk-message-server \
+      ./cmd/agent-secretctl \
       ./cmd/generate-config \
       ./cmd/generate-keys
 
@@ -55,6 +56,7 @@ LABEL org.opencontainers.image.created="${BUILD_TIME}"
 
 COPY --from=build /out/generate-config /usr/bin/generate-config
 COPY --from=build /out/generate-keys /usr/bin/generate-keys
+COPY --from=build /out/agent-secretctl /usr/bin/agent-secretctl
 COPY --from=build /out/dirextalk-message-server /usr/bin/dirextalk-message-server
 
 VOLUME /etc/dirextalk-message-server
@@ -62,3 +64,5 @@ WORKDIR /etc/dirextalk-message-server
 
 ENTRYPOINT ["/usr/bin/dirextalk-message-server"]
 EXPOSE 8008 8448
+# Keep the image self-describing for Compose callers.
+HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=30 CMD wget -q -O - http://127.0.0.1:8008/_p2p/health >/dev/null || exit 1

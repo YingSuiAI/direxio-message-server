@@ -179,13 +179,48 @@ func NormalizeConfig(cfg dirextalkdomain.AgentConfig) dirextalkdomain.AgentConfi
 // SanitizeNativeConfigMap clones the mutable levels it edits and removes
 // runtime credentials and references from durable/public configuration.
 func SanitizeNativeConfigMap(config map[string]any) map[string]any {
-	sanitized := cloneMap(config)
-	delete(sanitized, "api_key")
-	delete(sanitized, "api_key_ref")
-	if profiles, ok := sanitized["model_profiles"].([]any); ok {
-		sanitized["model_profiles"] = sanitizeModelProfiles(profiles)
+	sanitized, ok := sanitizeNativeConfigValue(config).(map[string]any)
+	if !ok {
+		return map[string]any{}
 	}
 	return sanitized
+}
+
+func sanitizeNativeConfigValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		sanitized := make(map[string]any, len(typed))
+		for key, child := range typed {
+			if sensitiveNativeConfigKey(key) {
+				continue
+			}
+			sanitized[key] = sanitizeNativeConfigValue(child)
+		}
+		return sanitized
+	case []any:
+		sanitized := make([]any, len(typed))
+		for index, child := range typed {
+			sanitized[index] = sanitizeNativeConfigValue(child)
+		}
+		return sanitized
+	case []map[string]any:
+		sanitized := make([]map[string]any, len(typed))
+		for index, child := range typed {
+			sanitized[index], _ = sanitizeNativeConfigValue(child).(map[string]any)
+		}
+		return sanitized
+	default:
+		return value
+	}
+}
+
+func sensitiveNativeConfigKey(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(key)) {
+	case "api_key", "api_key_ref", "tool_credentials", "web_search_credentials", "credential_ref", "credentials_ref":
+		return true
+	default:
+		return false
+	}
 }
 
 func sanitizeModelProfiles(profiles []any) []any {

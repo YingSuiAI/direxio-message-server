@@ -39,9 +39,11 @@ type Post struct {
 	Body           string                            `json:"body"`
 	MessageType    string                            `json:"message_type"`
 	MediaJSON      string                            `json:"media_json"`
+	Visibility     string                            `json:"visibility"`
 	OriginServerTS int64                             `json:"origin_server_ts"`
 	CommentCount   int64                             `json:"comment_count"`
 	ReactionCount  int64                             `json:"reaction_count"`
+	LikeCount      int64                             `json:"like_count"`
 	ReactedByMe    bool                              `json:"reacted_by_me"`
 	FavoriteCount  int64                             `json:"favorite_count"`
 	FavoritedByMe  bool                              `json:"favorited_by_me"`
@@ -85,6 +87,8 @@ type ContentStore interface {
 	GetChannelPostByEventID(context.Context, string, string) (dirextalkdomain.ChannelPostRecord, bool, error)
 	ListChannelPosts(context.Context, string) ([]dirextalkdomain.ChannelPostRecord, error)
 	ListChannelPostsPage(context.Context, string, int64, int64, int64, string, int) ([]dirextalkdomain.ChannelPostRecord, bool, error)
+	ListChannelPostsOffsetPage(context.Context, string, int64, int) ([]dirextalkdomain.ChannelPostRecord, bool, error)
+	ListChannelPostsByVisibilityPage(context.Context, string, string, int64, int) ([]dirextalkdomain.ChannelPostRecord, bool, error)
 	InsertChannelComment(context.Context, dirextalkdomain.ChannelCommentRecord) error
 	GetChannelCommentByID(context.Context, string, string) (dirextalkdomain.ChannelCommentRecord, bool, error)
 	GetChannelCommentByEventID(context.Context, string, string) (dirextalkdomain.ChannelCommentRecord, bool, error)
@@ -130,6 +134,7 @@ type ContentConfig struct {
 	Now               func() time.Time
 	NewToken          func(string) string
 	NewEventID        func(string) string
+	RequireJoined     func(context.Context, string) *actionbase.Error
 	AuthorizeRecall   func(context.Context, string, string) *actionbase.Error
 	MapTransportError func(error) *actionbase.Error
 }
@@ -203,6 +208,14 @@ func (m *ContentModule) transportError(err error) *actionbase.Error {
 	return actionbase.InternalError(err)
 }
 
+func (m *ContentModule) requireJoined(ctx context.Context, roomID string) *actionbase.Error {
+	roomID = strings.TrimSpace(roomID)
+	if roomID == "" || m.config.RequireJoined == nil {
+		return nil
+	}
+	return m.config.RequireJoined(ctx, roomID)
+}
+
 func (m *ContentModule) roomIDForChannel(ctx context.Context, channelID, fallbackRoomID string) (string, *actionbase.Error) {
 	if roomID := strings.TrimSpace(fallbackRoomID); roomID != "" {
 		return roomID, nil
@@ -229,6 +242,7 @@ func postFromRecord(record dirextalkdomain.ChannelPostRecord) Post {
 		PostID: record.PostID, ChannelID: record.ChannelID, RoomID: record.RoomID,
 		EventID: record.EventID, AuthorMXID: record.AuthorMXID, AuthorName: record.AuthorName,
 		Body: record.Body, MessageType: record.MessageType, MediaJSON: record.MediaJSON,
+		Visibility:     dirextalkdomain.NormalizeChannelPostVisibility(record.Visibility),
 		OriginServerTS: record.OriginServerTS, CommentCount: record.CommentCount,
 	}
 }
@@ -243,6 +257,7 @@ func postRecord(post Post) dirextalkdomain.ChannelPostRecord {
 		PostID: post.PostID, ChannelID: post.ChannelID, RoomID: post.RoomID,
 		EventID: post.EventID, AuthorMXID: post.AuthorMXID, AuthorName: post.AuthorName,
 		Body: post.Body, MessageType: post.MessageType, MediaJSON: post.MediaJSON,
+		Visibility:     dirextalkdomain.NormalizeChannelPostVisibility(post.Visibility),
 		OriginServerTS: post.OriginServerTS, CommentCount: post.CommentCount,
 	}
 }

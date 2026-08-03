@@ -20,6 +20,21 @@ func MemberMembershipJoined(membership string) bool {
 	return strings.EqualFold(strings.TrimSpace(membership), "join")
 }
 
+const (
+	ChannelPostVisibilityPrivate = "private"
+	ChannelPostVisibilityPublic  = "public"
+)
+
+// NormalizeChannelPostVisibility keeps legacy or malformed projected posts
+// private. Request handlers validate explicit client values before calling
+// this fallback-oriented normalization.
+func NormalizeChannelPostVisibility(visibility string) string {
+	if strings.EqualFold(strings.TrimSpace(visibility), ChannelPostVisibilityPublic) {
+		return ChannelPostVisibilityPublic
+	}
+	return ChannelPostVisibilityPrivate
+}
+
 type PortalState struct {
 	Initialized    bool
 	Password       string
@@ -96,6 +111,7 @@ type ChannelPostRecord struct {
 	Body           string `json:"body"`
 	MessageType    string `json:"message_type"`
 	MediaJSON      string `json:"media_json"`
+	Visibility     string `json:"visibility"`
 	OriginServerTS int64  `json:"origin_server_ts"`
 	CommentCount   int64  `json:"comment_count"`
 }

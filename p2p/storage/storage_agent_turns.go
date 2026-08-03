@@ -11,7 +11,7 @@ import (
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentturns"
 )
 
-const agentTurnColumns = `owner_id, turn_id, conversation_id, action, request_digest, state, error_message, created_at, updated_at`
+const agentTurnColumns = `owner_id, turn_id, conversation_id, action, model_profile_id, model_profile_revision, credential_version, request_digest, state, error_message, created_at, updated_at`
 
 func (s *DatabaseStore) ReserveAgentTurn(ctx context.Context, candidate agentturns.Candidate) (agentturns.Reservation, error) {
 	var reservation agentturns.Reservation
@@ -19,11 +19,11 @@ func (s *DatabaseStore) ReserveAgentTurn(ctx context.Context, candidate agenttur
 		now := time.Now().UTC()
 		row := txn.QueryRowContext(ctx, `
 			INSERT INTO p2p_native_agent_turns (
-				owner_id, turn_id, conversation_id, action, request_digest, state, created_at, updated_at
-			) VALUES ($1, $2, $3, $4, $5, 'accepted', $6, $6)
+				owner_id, turn_id, conversation_id, action, model_profile_id, model_profile_revision, credential_version, request_digest, state, created_at, updated_at
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'accepted', $9, $9)
 			ON CONFLICT (owner_id, turn_id) DO NOTHING
 			RETURNING `+agentTurnColumns,
-			candidate.OwnerID, candidate.TurnID, candidate.ConversationID, candidate.Action, candidate.Digest[:], now)
+			candidate.OwnerID, candidate.TurnID, candidate.ConversationID, candidate.Action, candidate.ModelProfileID, candidate.ModelProfileRevision, candidate.CredentialVersion, candidate.Digest[:], now)
 		turn, err := scanAgentTurn(row)
 		if err == nil {
 			reservation = agentturns.Reservation{Turn: turn, Created: true}
@@ -238,7 +238,7 @@ func scanAgentTurn(row rowScanner) (agentturns.Turn, error) {
 	var turn agentturns.Turn
 	var digest []byte
 	var state string
-	err := row.Scan(&turn.OwnerID, &turn.TurnID, &turn.ConversationID, &turn.Action, &digest, &state, &turn.Error, &turn.CreatedAt, &turn.UpdatedAt)
+	err := row.Scan(&turn.OwnerID, &turn.TurnID, &turn.ConversationID, &turn.Action, &turn.ModelProfileID, &turn.ModelProfileRevision, &turn.CredentialVersion, &digest, &state, &turn.Error, &turn.CreatedAt, &turn.UpdatedAt)
 	if err != nil {
 		return agentturns.Turn{}, err
 	}

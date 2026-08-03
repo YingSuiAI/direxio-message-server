@@ -69,8 +69,17 @@ func TestPluginAndAgentStreamsPreserveFramesAndSharedIDNamespace(t *testing.T) {
 	})
 	agentDelta := nextOutbound(t, connection)
 	agentDone := nextOutbound(t, connection)
-	if agentDelta["type"] != "server.native_agent_stream.event" || agentDelta["event"] != "delta" || agentDone["event"] != "done" {
+	if agentDelta["type"] != "server.native_agent_stream.event" || agentDelta["event"] != "delta" || agentDelta["action"] != "agent.chat" || agentDone["event"] != "done" || agentDone["action"] != "agent.chat" {
 		t.Fatalf("agent frames = %#v / %#v", agentDelta, agentDone)
+	}
+
+	module.startNativeAgentStream(ctx, connection, map[string]any{
+		"id": "agent-voice", "action": "agent.voice.session.stream",
+	})
+	voiceDelta := nextOutbound(t, connection)
+	voiceDone := nextOutbound(t, connection)
+	if voiceDelta["type"] != "server.native_agent_stream.event" || voiceDelta["event"] != "delta" || voiceDelta["action"] != "agent.voice.session.stream" || voiceDone["event"] != "done" || voiceDone["action"] != "agent.voice.session.stream" {
+		t.Fatalf("voice frames must preserve canonical stream action = %#v / %#v", voiceDelta, voiceDone)
 	}
 
 	module.startPluginStream(ctx, connection, map[string]any{

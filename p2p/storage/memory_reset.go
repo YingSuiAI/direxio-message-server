@@ -1,7 +1,6 @@
 package storage
 
 import (
-	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/legacygateway"
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/operations"
 )
 
@@ -33,7 +32,4 @@ func (s *MemoryStore) ResetAccountState() {
 	s.eventDedupe = make(map[string]int64)
 	s.reports = make(map[string]reportRecord)
 	s.operations = make(map[string]operations.Record)
-	s.legacyAgentInvocations = make(map[legacyAgentInvocationKey]legacygateway.InvocationRecord)
-	s.legacyAgentInvocationEvents = make(map[string]legacyAgentInvocationKey)
-	s.legacyAgentInvocationIdempotency = make(map[legacyAgentIdempotencyKey]legacyAgentInvocationKey)
 }

@@ -64,6 +64,10 @@ func (m *Module) readFrames(ctx context.Context, conn *websocket.Conn, client *c
 			m.startNativeAgentStream(ctx, client, frame)
 		case "client.native_agent_stream.cancel":
 			m.cancelNativeAgentStream(client, frame)
+		case "client.agent_core_stream":
+			m.rejectAgentCoreStream(client, frame)
+		case "client.agent_core_stream.cancel":
+			m.rejectAgentCoreStream(client, frame)
 		default:
 			m.touchSession(sessionID)
 		}

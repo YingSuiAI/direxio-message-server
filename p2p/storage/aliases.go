@@ -48,6 +48,11 @@ func normalizeMemberRecord(record memberRecord) memberRecord {
 	return record
 }
 
+func normalizeChannelPostRecord(record channelPostRecord) channelPostRecord {
+	record.Visibility = dirextalkdomain.NormalizeChannelPostVisibility(record.Visibility)
+	return record
+}
+
 func conversationIDForRoomID(roomID string) string {
 	return dirextalkdomain.ConversationIDForRoomID(roomID)
 }

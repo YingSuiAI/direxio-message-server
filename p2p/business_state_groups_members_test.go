@@ -537,12 +537,23 @@ func TestProductUpdatesPreserveExistingFieldsAndPublicGetDoesNotCreate(t *testin
 	if updatedGroup.Name != "Original Group" || updatedGroup.Topic != "original topic" || updatedGroup.InvitePolicy != "member" || updatedGroup.AvatarURL != "mxc://new-group-avatar" {
 		t.Fatalf("expected partial group update to preserve existing fields, got %#v", updatedGroup)
 	}
+	updatedGroup = mustHandle[groupRecord](t, service, "groups.update", map[string]any{
+		"room_id":    group.RoomID,
+		"name":       "",
+		"group_name": "",
+		"topic":      "",
+		"avatar_url": "",
+	})
+	if updatedGroup.Name != "Original Group" || updatedGroup.Topic != "original topic" || updatedGroup.AvatarURL != "mxc://new-group-avatar" {
+		t.Fatalf("expected empty group fields not to modify existing values, got %#v", updatedGroup)
+	}
 
 	ch := mustHandle[channel](t, service, "channels.create", map[string]any{
 		"channel_id":       "news",
 		"room_id":          "!news:example.com",
 		"name":             "News",
 		"description":      "original description",
+		"avatar_url":       "mxc://old-channel-avatar",
 		"visibility":       "private",
 		"join_policy":      "approval",
 		"channel_type":     "post",
@@ -554,6 +565,15 @@ func TestProductUpdatesPreserveExistingFieldsAndPublicGetDoesNotCreate(t *testin
 	})
 	if updatedChannel.Name != "News" || updatedChannel.Visibility != "private" || updatedChannel.JoinPolicy != "approval" || updatedChannel.ChannelType != "post" || updatedChannel.Description != "new description" {
 		t.Fatalf("expected partial channel update to preserve existing fields, got %#v", updatedChannel)
+	}
+	updatedChannel = mustHandle[channel](t, service, "channels.update", map[string]any{
+		"channel_id":  ch.ChannelID,
+		"name":        "",
+		"description": "",
+		"avatar_url":  "",
+	})
+	if updatedChannel.Name != "News" || updatedChannel.Description != "new description" || updatedChannel.AvatarURL != "mxc://old-channel-avatar" {
+		t.Fatalf("expected empty channel fields not to modify existing values, got %#v", updatedChannel)
 	}
 
 	if _, apiErr := service.Handle(context.Background(), "channels.public.get", map[string]any{"room_id": ch.RoomID}); apiErr == nil || apiErr.Status != 404 {
@@ -581,6 +601,68 @@ func TestProductUpdatesPreserveExistingFieldsAndPublicGetDoesNotCreate(t *testin
 	bootstrapChannels := bootstrap["channels"].([]channel)
 	if len(bootstrapChannels) != 1 || !bootstrapChannels[0].IsOwned || bootstrapChannels[0].Role != "owner" || bootstrapChannels[0].MemberStatus != "join" {
 		t.Fatalf("expected sync bootstrap to expose owner membership fields, got %#v", bootstrapChannels)
+	}
+}
+
+func TestOnlyProductOwnersCanUpdateGroupAndChannelDetails(t *testing.T) {
+	service := NewService(Config{ServerName: "example.com"})
+	bootstrapService(t, service)
+	group := mustHandle[groupRecord](t, service, "groups.create", map[string]any{
+		"room_id":    "!owner-group:example.com",
+		"name":       "Original Group",
+		"avatar_url": "mxc://example.com/group-old",
+	})
+	ch := mustHandle[channel](t, service, "channels.create", map[string]any{
+		"channel_id":  "owner-channel",
+		"room_id":     "!owner-channel:example.com",
+		"name":        "Original Channel",
+		"description": "Original Description",
+		"avatar_url":  "mxc://example.com/channel-old",
+	})
+
+	updatedGroup := mustHandle[groupRecord](t, service, "groups.update", map[string]any{
+		"room_id":    group.RoomID,
+		"name":       "Updated Group",
+		"avatar_url": "mxc://example.com/group-new",
+	})
+	if updatedGroup.Name != "Updated Group" || updatedGroup.AvatarURL != "mxc://example.com/group-new" {
+		t.Fatalf("owner group update = %#v", updatedGroup)
+	}
+	updatedChannel := mustHandle[channel](t, service, "channels.update", map[string]any{
+		"channel_id":  ch.ChannelID,
+		"name":        "Updated Channel",
+		"description": "Updated Description",
+		"avatar_url":  "mxc://example.com/channel-new",
+	})
+	if updatedChannel.Name != "Updated Channel" ||
+		updatedChannel.Description != "Updated Description" ||
+		updatedChannel.AvatarURL != "mxc://example.com/channel-new" {
+		t.Fatalf("owner channel update = %#v", updatedChannel)
+	}
+
+	service.mu.Lock()
+	service.ownerMXID = "@member:example.com"
+	service.mu.Unlock()
+	if _, apiErr := service.Handle(context.Background(), "groups.update", map[string]any{
+		"room_id": group.RoomID,
+		"name":    "Blocked Group",
+	}); apiErr == nil || apiErr.Status != http.StatusForbidden {
+		t.Fatalf("non-owner group update error = %#v, want 403", apiErr)
+	}
+	if _, apiErr := service.Handle(context.Background(), "channels.update", map[string]any{
+		"channel_id":  ch.ChannelID,
+		"description": "Blocked Description",
+	}); apiErr == nil || apiErr.Status != http.StatusForbidden {
+		t.Fatalf("non-owner channel update error = %#v, want 403", apiErr)
+	}
+
+	storedGroup, ok, err := service.groupByRoom(context.Background(), group.RoomID)
+	if err != nil || !ok || storedGroup.Name != "Updated Group" {
+		t.Fatalf("blocked group update changed durable state: group=%#v ok=%v err=%v", storedGroup, ok, err)
+	}
+	storedChannel, ok, err := service.channelByIDOrRoom(context.Background(), ch.ChannelID, "")
+	if err != nil || !ok || storedChannel.Description != "Updated Description" {
+		t.Fatalf("blocked channel update changed durable state: channel=%#v ok=%v err=%v", storedChannel, ok, err)
 	}
 }
 

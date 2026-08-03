@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/cloudwego/eino/components/model"
+	"github.com/cloudwego/eino/schema"
 )
 
 func TestDirectModelHTTPFailuresRemainProviderIndependent(t *testing.T) {
@@ -65,6 +66,53 @@ func TestDirectModelStreamsDecodeProviderEvents(t *testing.T) {
 				t.Fatalf("final Recv error = %v, want EOF", err)
 			}
 		})
+	}
+}
+
+func TestAnthropicStreamReconstructsFragmentedToolUse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/messages" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("event: message_start\ndata: {\"type\":\"message_start\"}\n"))
+		_, _ = w.Write([]byte("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n"))
+		_, _ = w.Write([]byte("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"I'll check contacts. \"}}\n"))
+		_, _ = w.Write([]byte("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_contacts_1\",\"name\":\"dirextalk_contacts_list\",\"input\":{}}}\n"))
+		_, _ = w.Write([]byte("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"limit\\\":\"}}\n"))
+		_, _ = w.Write([]byte("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"20,\\\"include_blocked\\\":\"}}\n"))
+		_, _ = w.Write([]byte("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"false}\"}}\n"))
+		_, _ = w.Write([]byte("event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n"))
+		_, _ = w.Write([]byte("event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"}}\n"))
+		_, _ = w.Write([]byte("event: message_stop\ndata: {\"type\":\"message_stop\"}\n"))
+	}))
+	defer server.Close()
+
+	runtime := New(Config{})
+	model := newAnthropicDirectChatModel(runtime, nativeModelProfile{
+		Provider: "anthropic",
+		Model:    "claude-test",
+		BaseURL:  server.URL,
+		APIKey:   "test-key",
+	})
+	stream, err := model.Stream(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	message, err := schema.ConcatMessageStream(stream)
+	if err != nil {
+		t.Fatalf("ConcatMessageStream: %v", err)
+	}
+	if message == nil || message.Content != "I'll check contacts. " {
+		t.Fatalf("message content = %#v", message)
+	}
+	if len(message.ToolCalls) != 1 {
+		t.Fatalf("tool calls = %#v", message.ToolCalls)
+	}
+	call := message.ToolCalls[0]
+	if call.ID != "toolu_contacts_1" || call.Function.Name != "dirextalk_contacts_list" || call.Function.Arguments != `{"limit":20,"include_blocked":false}` {
+		t.Fatalf("reconstructed tool call = %#v", call)
 	}
 }
 

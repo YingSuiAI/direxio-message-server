@@ -2,12 +2,136 @@ package agent
 
 import (
 	"context"
+	"encoding/base64"
+	"errors"
 	"testing"
 
 	"github.com/YingSuiAI/dirextalk-message-server/internal/dirextalkdomain"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/dirextalkmcp"
+	"github.com/YingSuiAI/dirextalk-message-server/p2p/agentmemory"
 	actionbase "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/action"
+	"github.com/YingSuiAI/dirextalk-message-server/p2p/nativeagent"
+	"github.com/YingSuiAI/dirextalk-message-server/p2p/serviceapi"
 )
+
+func TestManagedKnowledgeActionSpecsHaveRuntimeHandlers(t *testing.T) {
+	handlers := New(Config{}).Handlers()
+	specs := make(map[string]bool)
+	for _, spec := range serviceapi.ActionSpecs() {
+		specs[spec.Name] = true
+	}
+	for _, action := range []string{
+		"agent.web_search.test",
+		"agent.knowledge.memories.list",
+		"agent.knowledge.memories.update",
+		"agent.knowledge.memories.delete",
+	} {
+		if !specs[action] {
+			t.Fatalf("ActionSpecs omitted %s", action)
+		}
+		if handlers[action] == nil {
+			t.Fatalf("runtime handlers omitted %s", action)
+		}
+	}
+}
+
+func TestClientCannotForgeServerPinnedImageProfile(t *testing.T) {
+	runtime := nativeagent.New(nativeagent.Config{OwnerID: func() string { return "owner" }})
+	module := New(Config{Runner: runtimeBackedRunner{runtime: runtime}})
+	handler := module.Handlers()["agent.chat"]
+	_, actionErr := handler(context.Background(), map[string]any{
+		"prompt": "look", "_server_pinned_profile": true,
+		"model_profile": map[string]any{"provider": "openai", "model": "gpt", "base_url": "https://example.invalid/v1", "api_key": "client-secret", "model_kind": "conversation", "input_modalities": []any{"text", "image"}},
+		"attachments":   []any{map[string]any{"type": "image", "mime_type": "image/png", "data_base64": base64.StdEncoding.EncodeToString([]byte("x"))}},
+	})
+	if actionErr == nil || actionErr.Status != 400 {
+		t.Fatalf("forged server profile status = %#v, want 400", actionErr)
+	}
+}
+
+type failingConversationStore struct{}
+
+func (failingConversationStore) CreateConversation(context.Context, string, string, string, string, [32]byte) (agentmemory.Conversation, bool, error) {
+	return agentmemory.Conversation{}, false, errors.New("injected conversation store failure")
+}
+func (failingConversationStore) ListAgentConversations(context.Context, string, int, string) ([]agentmemory.Conversation, string, error) {
+	return nil, "", errors.New("injected conversation store failure")
+}
+func (failingConversationStore) GetConversation(context.Context, string, string, int, string) (agentmemory.Conversation, []agentmemory.StoredMessage, string, error) {
+	return agentmemory.Conversation{}, nil, "", errors.New("injected conversation store failure")
+}
+func (failingConversationStore) RenameConversation(context.Context, string, string, string, int64, string, [32]byte) (agentmemory.Conversation, bool, error) {
+	return agentmemory.Conversation{}, false, errors.New("injected conversation store failure")
+}
+func (failingConversationStore) DeleteConversation(context.Context, string, string, int64, string, [32]byte) (agentmemory.Conversation, bool, error) {
+	return agentmemory.Conversation{}, false, errors.New("injected conversation store failure")
+}
+
+type invalidCursorConversationStore struct{ failingConversationStore }
+
+func (invalidCursorConversationStore) ListAgentConversations(context.Context, string, int, string) ([]agentmemory.Conversation, string, error) {
+	return nil, "", agentmemory.ErrInvalidCursor
+}
+func (invalidCursorConversationStore) GetConversation(context.Context, string, string, int, string) (agentmemory.Conversation, []agentmemory.StoredMessage, string, error) {
+	return agentmemory.Conversation{}, nil, "", agentmemory.ErrInvalidCursor
+}
+
+type invalidCursorKnowledgeStore struct{}
+
+func (invalidCursorKnowledgeStore) CreateKnowledgeMemory(context.Context, string, string, string, []string, string, [32]byte) (agentmemory.KnowledgeMemory, bool, error) {
+	return agentmemory.KnowledgeMemory{}, false, errors.New("unexpected knowledge create")
+}
+func (invalidCursorKnowledgeStore) SearchKnowledgeMemory(context.Context, string, string, int, string) ([]agentmemory.KnowledgeMemory, string, error) {
+	return nil, "", agentmemory.ErrInvalidCursor
+}
+func (invalidCursorKnowledgeStore) KnowledgeStatus(context.Context, string) (int, error) {
+	return 0, errors.New("unexpected knowledge status")
+}
+
+type runtimeBackedRunner struct{ runtime *nativeagent.Runtime }
+
+func (r runtimeBackedRunner) Apply(ctx context.Context, action string) error {
+	return r.runtime.Apply(ctx, action)
+}
+func (r runtimeBackedRunner) Invoke(ctx context.Context, action string, params map[string]any) (map[string]any, error) {
+	return r.runtime.Invoke(ctx, action, params)
+}
+func (r runtimeBackedRunner) Stream(ctx context.Context, action string, params map[string]any, emit func(nativeagent.Event) error) error {
+	return r.runtime.Stream(ctx, action, params, emit)
+}
+
+func TestConversationHandlerOnlyMapsValidationErrorsToBadRequest(t *testing.T) {
+	invalid := New(Config{}).Handlers()["agent.chat.conversations.list"]
+	if _, err := invalid(context.Background(), map[string]any{"page_size": "not-an-integer"}); err == nil || err.Status != 400 {
+		t.Fatalf("invalid conversation param status = %#v, want 400", err)
+	}
+	failedRuntime := nativeagent.New(nativeagent.Config{OwnerID: func() string { return "owner" }, Conversations: failingConversationStore{}})
+	failed := New(Config{Runner: runtimeBackedRunner{runtime: failedRuntime}}).Handlers()["agent.chat.conversations.list"]
+	if _, err := failed(context.Background(), nil); err == nil || err.Status < 500 {
+		t.Fatalf("store failure status = %#v, want 5xx", err)
+	}
+}
+
+func TestAgentHandlersMapOnlyTypedInvalidCursorsToBadRequest(t *testing.T) {
+	runtime := nativeagent.New(nativeagent.Config{
+		OwnerID:       func() string { return "owner" },
+		Conversations: invalidCursorConversationStore{},
+		Knowledge:     invalidCursorKnowledgeStore{},
+	})
+	handlers := New(Config{Runner: runtimeBackedRunner{runtime: runtime}}).Handlers()
+	for _, test := range []struct {
+		action string
+		params map[string]any
+	}{
+		{"agent.chat.conversations.list", map[string]any{"page_token": "malformed"}},
+		{"agent.chat.conversations.get", map[string]any{"conversation_id": "conversation", "message_cursor": "0"}},
+		{"agent.knowledge.search", map[string]any{"page_token": "malformed"}},
+	} {
+		if _, err := handlers[test.action](context.Background(), test.params); err == nil || err.Status != 400 {
+			t.Fatalf("%s cursor status = %#v, want 400", test.action, err)
+		}
+	}
+}
 
 type recordingMCPInvoker struct {
 	action string

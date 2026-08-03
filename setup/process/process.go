@@ -9,11 +9,14 @@ import (
 )
 
 type ProcessContext struct {
-	mu       sync.RWMutex
-	wg       sync.WaitGroup      // used to wait for components to shutdown
-	ctx      context.Context     // cancelled when Stop is called
-	shutdown context.CancelFunc  // shut down Dendrite
-	degraded map[string]struct{} // reasons why the process is degraded
+	mu                         sync.RWMutex
+	wg                         sync.WaitGroup      // used to wait for components to shutdown
+	ctx                        context.Context     // cancelled when Stop is called
+	shutdown                   context.CancelFunc  // shut down Dendrite
+	degraded                   map[string]struct{} // reasons why the process is degraded
+	shutdownCallbacksMu        sync.Mutex
+	shutdownCallbacks          []func()
+	shutdownCallbacksFinalized bool
 }
 
 func NewProcessContext() *ProcessContext {
@@ -22,6 +25,7 @@ func NewProcessContext() *ProcessContext {
 		ctx:      ctx,
 		shutdown: shutdown,
 		wg:       sync.WaitGroup{},
+		degraded: make(map[string]struct{}),
 	}
 }
 
@@ -47,6 +51,50 @@ func (b *ProcessContext) WaitForShutdown() <-chan struct{} {
 
 func (b *ProcessContext) WaitForComponentsToFinish() {
 	b.wg.Wait()
+	if b.ctx.Err() != nil {
+		b.finalizeShutdownCallbacks()
+	}
+}
+
+// RegisterShutdownCallback runs once after process cancellation and all
+// registered components have stopped. It is the final shutdown phase for
+// resources that must remain fenced while HTTP and workers drain.
+func (b *ProcessContext) RegisterShutdownCallback(callback func()) {
+	if b == nil || callback == nil {
+		return
+	}
+	b.shutdownCallbacksMu.Lock()
+	if !b.shutdownCallbacksFinalized {
+		b.shutdownCallbacks = append(b.shutdownCallbacks, callback)
+		b.shutdownCallbacksMu.Unlock()
+		return
+	}
+	b.shutdownCallbacksMu.Unlock()
+	invokeShutdownCallback(callback)
+}
+
+func (b *ProcessContext) finalizeShutdownCallbacks() {
+	b.shutdownCallbacksMu.Lock()
+	if b.shutdownCallbacksFinalized {
+		b.shutdownCallbacksMu.Unlock()
+		return
+	}
+	b.shutdownCallbacksFinalized = true
+	callbacks := append([]func(){}, b.shutdownCallbacks...)
+	b.shutdownCallbacks = nil
+	b.shutdownCallbacksMu.Unlock()
+	for _, callback := range callbacks {
+		invokeShutdownCallback(callback)
+	}
+}
+
+func invokeShutdownCallback(callback func()) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			logrus.WithField("panic", recovered).Error("shutdown callback panicked")
+		}
+	}()
+	callback()
 }
 
 func (b *ProcessContext) Degraded(err error) {

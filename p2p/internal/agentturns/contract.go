@@ -49,23 +49,29 @@ var (
 )
 
 type Turn struct {
-	OwnerID        string
-	TurnID         string
-	ConversationID string
-	Action         string
-	Digest         [32]byte
-	State          State
-	Error          string
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	OwnerID              string
+	TurnID               string
+	ConversationID       string
+	Action               string
+	ModelProfileID       string
+	ModelProfileRevision int64
+	CredentialVersion    int64
+	Digest               [32]byte
+	State                State
+	Error                string
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
 }
 
 type Candidate struct {
-	OwnerID        string
-	TurnID         string
-	ConversationID string
-	Action         string
-	Digest         [32]byte
+	OwnerID              string
+	TurnID               string
+	ConversationID       string
+	Action               string
+	ModelProfileID       string
+	ModelProfileRevision int64
+	CredentialVersion    int64
+	Digest               [32]byte
 }
 
 type Reservation struct {
@@ -97,13 +103,32 @@ type Store interface {
 }
 
 type Request struct {
-	OwnerID        string
-	TurnID         string
-	ConversationID string
-	Action         string
-	Digest         [32]byte
-	AfterSeq       int64
+	OwnerID              string
+	TurnID               string
+	ConversationID       string
+	Action               string
+	ModelProfileID       string
+	ModelProfileRevision int64
+	CredentialVersion    int64
+	Digest               [32]byte
+	AfterSeq             int64
 }
+
+// WithIssuedAt carries the persisted durable-turn creation timestamp into the
+// execution context. Retries must use this server-owned timestamp rather than
+// wall-clock issuance at the time of the retry.
+func WithIssuedAt(ctx context.Context, at time.Time) context.Context {
+	return context.WithValue(ctx, issuedAtContextKey{}, at.UTC())
+}
+
+// IssuedAt returns the persisted durable-turn creation timestamp, if the
+// coordinator attached one to the runtime context.
+func IssuedAt(ctx context.Context) (time.Time, bool) {
+	at, ok := ctx.Value(issuedAtContextKey{}).(time.Time)
+	return at, ok && !at.IsZero()
+}
+
+type issuedAtContextKey struct{}
 
 func (r Request) WithAfterSeq(after int64) Request {
 	r.AfterSeq = after
@@ -181,7 +206,7 @@ func secretFreeValue(value any) any {
 		sort.Strings(keys)
 		result := make(map[string]any, len(keys))
 		for _, key := range keys {
-			if secretKey(key) || key == "after_seq" {
+			if secretKey(key) || key == "after_seq" || key == "model_profile_revision" || key == "credential_version" {
 				continue
 			}
 			normalizedKey := strings.ToLower(strings.TrimSpace(key))
@@ -223,7 +248,7 @@ func secretFreeConcreteValue(value any) any {
 		result := make(map[string]any, len(keys))
 		for _, reflectedKey := range keys {
 			key := reflectedKey.String()
-			if secretKey(key) || key == "after_seq" {
+			if secretKey(key) || key == "after_seq" || key == "model_profile_revision" || key == "credential_version" {
 				continue
 			}
 			item := reflected.MapIndex(reflectedKey).Interface()
@@ -276,7 +301,7 @@ func secretFreeJSONText(value any) any {
 
 func secretKey(key string) bool {
 	key = strings.ToLower(strings.TrimSpace(key))
-	if key == "authorization" || key == "cookie" || key == "headers" || key == "token" || key == "credential" || key == "credentials" {
+	if key == "authorization" || key == "cookie" || key == "headers" || key == "token" || key == "credential" || key == "credentials" || key == "tool_credentials" || key == "web_search_credentials" {
 		return true
 	}
 	for _, marker := range []string{"api_key", "access_token", "bearer", "password", "secret", "private_key"} {

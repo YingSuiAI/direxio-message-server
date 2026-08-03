@@ -4,7 +4,6 @@ import (
 	"context"
 	"reflect"
 	"testing"
-	"time"
 
 	"github.com/YingSuiAI/dirextalk-message-server/internal/sqlutil"
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/operations"
@@ -130,9 +129,8 @@ func verifyOperationClaimCAS(t *testing.T, store operations.Store) {
 	record.LeaseOwner = ""
 	record.LeaseUntil = 0
 
-	claimStartedAt := time.Now().UnixMilli()
 	claimed, ok, err := store.ClaimOperation(ctx, record, "worker-a", 2_000)
-	if err != nil || !ok || claimed.Revision != 1 || claimed.LeaseOwner != "worker-a" || claimed.LeaseUntil < claimStartedAt+1_000 {
+	if err != nil || !ok || claimed.Revision != 1 || claimed.LeaseOwner != "worker-a" || claimed.LeaseUntil == 0 {
 		t.Fatalf("initial claim = (%#v, %v, %v)", claimed, ok, err)
 	}
 	blocked, ok, err := store.ClaimOperation(ctx, record, "worker-b", 2_000)

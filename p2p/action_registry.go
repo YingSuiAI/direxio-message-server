@@ -25,6 +25,8 @@ func (s *Service) actionHandlers() map[string]actionHandler {
 		s.collectActionHandlerModule("sync", s.registerSyncActions),
 		{name: "conversations", handlers: s.conversationModule.Handlers()},
 		{name: "agent", handlers: s.agentModule.Handlers()},
+		{name: "embedded-schedules", handlers: s.scheduleModule.Handlers()},
+		{name: "agent-embedded", handlers: s.agentEmbedded.Handlers()},
 		{name: "plugins", handlers: s.pluginsModule.Handlers()},
 		{name: "contacts", handlers: s.contactsModule.Handlers()},
 		{name: "members", handlers: s.membersModule.Handlers()},
@@ -81,4 +83,5 @@ func (s *Service) registerSyncActions(actions map[string]actionHandler) {
 
 func (s *Service) registerChannelActions(actions map[string]actionHandler) {
 	actions["channels.read_marker"] = s.updateReadMarker
+	actions["channels.public.posts.list"] = s.publicChannelPosts
 }

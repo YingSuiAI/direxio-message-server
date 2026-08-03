@@ -67,14 +67,20 @@ func (m *Module) Update(ctx context.Context, raw map[string]any) (any, *actionba
 	if actionErr != nil || !ok {
 		return nil, actionErr
 	}
+	if m.config.RequireOwner == nil {
+		return nil, actionbase.InternalError(errors.New("group owner policy is not configured"))
+	}
+	if actionErr := m.config.RequireOwner(ctx, group.RoomID); actionErr != nil {
+		return nil, actionErr
+	}
 	if name := params.FirstString("name", "group_name"); name != "" {
 		group.Name = name
 	}
-	if _, exists := raw["topic"]; exists {
-		group.Topic = params.String("topic")
+	if topic := params.String("topic"); topic != "" {
+		group.Topic = topic
 	}
-	if _, exists := raw["avatar_url"]; exists {
-		group.AvatarURL = params.String("avatar_url")
+	if avatarURL := params.String("avatar_url"); avatarURL != "" {
+		group.AvatarURL = avatarURL
 	}
 	if policy := params.String("invite_policy"); policy != "" {
 		group.InvitePolicy = policy

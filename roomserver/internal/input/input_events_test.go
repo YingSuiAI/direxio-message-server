@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/YingSuiAI/dirextalk-message-server/cmd/dendrite-demo-yggdrasil/signing"
 	federationAPI "github.com/YingSuiAI/dirextalk-message-server/federationapi/api"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/caching"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/sqlutil"
@@ -21,6 +20,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/YingSuiAI/dirextalk-message-server/test"
+	"github.com/YingSuiAI/dirextalk-message-server/test/signing"
 )
 
 func Test_EventAuth(t *testing.T) {

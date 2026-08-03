@@ -2,109 +2,139 @@ package nativeagent
 
 import (
 	"context"
-	"path/filepath"
+	"encoding/json"
+	"sort"
 	"strings"
 	"testing"
+
+	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentskills"
 )
 
-func TestSkillInstallListsAndInjectsStaticSkillPrompt(t *testing.T) {
-	store := &testConfigStore{config: map[string]any{}}
-	runtime := New(Config{DataDir: filepath.Join(t.TempDir(), "agent"), Store: store})
-	ctx := context.Background()
-
-	install, err := runtime.Invoke(ctx, "agent.skills.install", map[string]any{
-		"id":      "answer-style",
-		"content": "# Skill\n\nAlways answer with the marker SKILL_USED.",
-	})
+func TestSkillsListUsesOnlyBuiltInDeclarativeManifests(t *testing.T) {
+	runtime := New(Config{})
+	result, err := runtime.skillsList(context.Background())
 	if err != nil {
-		t.Fatalf("install skill: %v", err)
+		t.Fatal(err)
 	}
-	if install["ok"] != true {
-		t.Fatalf("expected skill install ok, got %#v", install)
+	skills, ok := result["skills"].([]map[string]any)
+	if !ok || len(skills) == 0 {
+		t.Fatalf("built-in skills = %#v", result)
 	}
-	list, err := runtime.Invoke(ctx, "agent.skills.list", nil)
-	if err != nil {
-		t.Fatalf("list skills: %v", err)
-	}
-	skills, ok := list["skills"].([]map[string]any)
-	if !ok || len(skills) != 1 {
-		t.Fatalf("expected one skill, got %#v", list)
-	}
-	config, _, err := runtime.agentConfig(ctx)
-	if err != nil {
-		t.Fatalf("load config: %v", err)
-	}
-	systemPrompt := runtime.agentSystemPrompt(ctx, config, map[string]any{"prompt": "hello"}, "")
-	if !strings.Contains(systemPrompt, "SKILL_USED") {
-		t.Fatalf("expected static skill text in system prompt, got %q", systemPrompt)
-	}
-	if _, err := runtime.Invoke(ctx, "agent.skills.disable", map[string]any{"id": "answer-style"}); err != nil {
-		t.Fatalf("disable skill: %v", err)
-	}
-	config, _, err = runtime.agentConfig(ctx)
-	if err != nil {
-		t.Fatalf("load disabled config: %v", err)
-	}
-	systemPrompt = runtime.agentSystemPrompt(ctx, config, map[string]any{"prompt": "hello"}, "")
-	if strings.Contains(systemPrompt, "SKILL_USED") {
-		t.Fatalf("disabled skill must not be injected, got %q", systemPrompt)
-	}
-	if _, err := runtime.Invoke(ctx, "agent.skills.enable", map[string]any{"id": "answer-style"}); err != nil {
-		t.Fatalf("enable skill: %v", err)
-	}
-	if _, err := runtime.Invoke(ctx, "agent.skills.install", map[string]any{
-		"id":      "second-skill",
-		"content": "# Skill\n\nSecond skill marker SECOND_SKILL_USED.",
-	}); err != nil {
-		t.Fatalf("install second skill: %v", err)
-	}
-	if _, err := runtime.Invoke(ctx, "agent.skills.uninstall", map[string]any{"id": "answer-style"}); err != nil {
-		t.Fatalf("uninstall skill: %v", err)
-	}
-	list, err = runtime.Invoke(ctx, "agent.skills.list", nil)
-	if err != nil {
-		t.Fatalf("list skills after uninstall: %v", err)
-	}
-	skills = list["skills"].([]map[string]any)
-	if len(skills) != 1 || skills[0]["id"] != "second-skill" {
-		t.Fatalf("expected only second skill after uninstall, got %#v", list)
-	}
-}
-
-func TestGithubRawSkillURLsPreferNamedMonorepoSkill(t *testing.T) {
-	urls := githubRawSkillURLs(map[string]any{
-		"repo_url": "https://github.com/vercel-labs/skills",
-		"name":     "find-skills",
-	})
-	wantFirst := "https://raw.githubusercontent.com/vercel-labs/skills/main/skills/find-skills/SKILL.md"
-	if len(urls) == 0 || urls[0] != wantFirst {
-		t.Fatalf("first GitHub skill URL = %#v, want first %q", urls, wantFirst)
-	}
-	if !containsString(urls, "https://raw.githubusercontent.com/vercel-labs/skills/main/find-skills/SKILL.md") {
-		t.Fatalf("expected direct skill directory fallback in %#v", urls)
-	}
-	if !containsString(urls, "https://raw.githubusercontent.com/vercel-labs/skills/main/SKILL.md") {
-		t.Fatalf("expected root SKILL.md fallback in %#v", urls)
-	}
-}
-
-func TestGithubRawSkillURLsSupportOwnerRepoShorthandAndExplicitPath(t *testing.T) {
-	urls := githubRawSkillURLs(map[string]any{
-		"repo_url": "mattpocock/skills",
-		"path":     "skills/engineering/code-review",
-		"ref":      "main",
-	})
-	want := []string{"https://raw.githubusercontent.com/mattpocock/skills/main/skills/engineering/code-review/SKILL.md"}
-	if len(urls) != len(want) || urls[0] != want[0] {
-		t.Fatalf("GitHub skill URLs = %#v, want %#v", urls, want)
-	}
-}
-
-func containsString(values []string, needle string) bool {
-	for _, value := range values {
-		if value == needle {
-			return true
+	for _, skill := range skills {
+		for _, key := range []string{"id", "version", "content_digest"} {
+			if trimString(skill[key]) == "" {
+				t.Fatalf("skill %q omitted %s: %#v", skill["id"], key, skill)
+			}
+		}
+		if _, ok := skill["allowed_step_kinds"].([]string); !ok {
+			t.Fatalf("skill %q omitted allowed step metadata: %#v", skill["id"], skill)
+		}
+		if _, ok := skill["required_target_capabilities"].([]string); !ok {
+			t.Fatalf("skill %q omitted declarative metadata: %#v", skill["id"], skill)
+		}
+		if strings.Contains(strings.ToLower(trimString(skill["id"])), "geolibre") {
+			t.Fatalf("fixture skill leaked into default list: %#v", skill)
 		}
 	}
-	return false
+}
+
+func TestEnabledSkillsPromptSelectsExplicitOrIntentSkillsFailClosed(t *testing.T) {
+	registry, err := agentskills.Builtin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := New(Config{PlanningSkills: registry})
+	ctx := WithRequestContext(context.Background(), "@owner:example.org", "", "deploy a service")
+	prompt := runtime.enabledSkillsPromptForRequest(ctx, nil, nil)
+	if prompt == "" || !strings.Contains(prompt, "content_digest") || !strings.Contains(prompt, "allowed_step_kinds") || !strings.Contains(prompt, "required_target_capabilities") {
+		t.Fatalf("intent-selected prompt omitted fixed metadata: %q", prompt)
+	}
+	if strings.Count(prompt, `"content_digest"`) > maxNativeAgentSkills {
+		t.Fatalf("intent selection exceeded cap: %q", prompt)
+	}
+
+	explicit := runtime.enabledSkillsPromptForRequest(context.Background(), nil, map[string]any{"selected_skill_ids": []any{"health-verifier"}})
+	if !strings.Contains(explicit, `"id":"health-verifier"`) || strings.Contains(explicit, `"id":"container-service-deploy"`) {
+		t.Fatalf("explicit selection was not deterministic: %q", explicit)
+	}
+	if got := runtime.enabledSkillsPromptForRequest(context.Background(), nil, map[string]any{"selected_skill_ids": []any{"not-built-in"}}); got != "" {
+		t.Fatalf("unknown skill must fail closed, got %q", got)
+	}
+	if got := runtime.enabledSkillsPromptForRequest(context.Background(), map[string]any{"skills": []any{map[string]any{"id": "not-built-in", "enabled": true}}}, nil); got != "" {
+		t.Fatalf("mutable skill records must be ignored, got %q", got)
+	}
+}
+
+func TestHistoricalSelectedSkillIDsResolveArchivedManifests(t *testing.T) {
+	runtime := New(Config{})
+	cases := []struct {
+		selected, id, version, digest string
+	}{
+		{"placement-advisor", "placement-advisor", "1.0.0", "8ba47184e18c1ce354a1d5af106fc706ae9003dd4984dc1a4cfc757c238cbb99"},
+		{"resource-sizing", "resource-sizing", "1.0.0", "28bdc0b940968fb4ad2e63c1cd364f6c7538e6cd826fa2140b19e320f8608ccf"},
+		{"aws-target-advisor@1.1.0#bcb4aae7ae549146342b4bc7b23f2161cdb8f5d9f41a631bc046db1ea3b65763", "aws-target-advisor", "1.1.0", "bcb4aae7ae549146342b4bc7b23f2161cdb8f5d9f41a631bc046db1ea3b65763"},
+	}
+	for _, test := range cases {
+		selected, err := runtime.selectPlanningSkills(context.Background(), nil, map[string]any{"selected_skill_ids": []any{test.selected}})
+		if err != nil {
+			t.Fatalf("select historical %q: %v", test.selected, err)
+		}
+		if len(selected) != 1 || selected[0].ID != test.id || selected[0].Version != test.version || selected[0].ContentDigest != test.digest {
+			t.Fatalf("select historical %q = %#v, want %s@%s/%s", test.selected, selected, test.id, test.version, test.digest)
+		}
+	}
+	selected, err := runtime.selectPlanningSkills(context.Background(), nil, map[string]any{"selected_skill_ids": []any{"aws-target-advisor"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(selected) != 1 || selected[0].Version != "1.2.0" {
+		t.Fatalf("bare active selection = %#v, want aws-target-advisor@1.2.0", selected)
+	}
+}
+
+func TestPrepareEinoRunRejectsInvalidExplicitSkillSelection(t *testing.T) {
+	registry, err := agentskills.Builtin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid := registry.Manifests()[0].ID
+	runtime := New(Config{PlanningSkills: registry})
+	cases := []struct {
+		name   string
+		params map[string]any
+	}{
+		{name: "unknown", params: map[string]any{"selected_skill_ids": []any{"not-built-in"}}},
+		{name: "too-many", params: map[string]any{"selected_skill_ids": []any{valid, valid + "-2", valid + "-3", valid + "-4"}}},
+		{name: "wrong-type", params: map[string]any{"selected_skill_ids": "not-a-list"}},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := runtime.prepareEinoRun(context.Background(), nil, test.params, nativeModelProfile{}); err == nil {
+				t.Fatal("invalid explicit skill selection unexpectedly prepared")
+			}
+		})
+	}
+
+	fixture := registry.Manifests()[0]
+	fixture.ID = "fixture-skill"
+	fixture.IntentTags = append(fixture.IntentTags, "fixture")
+	sort.Strings(fixture.IntentTags)
+	fixture.ContentDigest = ""
+	raw, err := json.Marshal(fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.ContentDigest = agentskills.ContentDigest(raw)
+	raw, err = json.Marshal(fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixtureRegistry, err := agentskills.NewRegistry(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixtureRuntime := New(Config{PlanningSkills: fixtureRegistry})
+	if _, err := fixtureRuntime.prepareEinoRun(context.Background(), nil, map[string]any{"selected_skill_ids": []any{"fixture-skill"}}, nativeModelProfile{}); err == nil {
+		t.Fatal("fixture skill unexpectedly prepared")
+	}
 }

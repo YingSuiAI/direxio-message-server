@@ -1,12 +1,26 @@
 # Dirextalk Message Server
 
-Dirextalk Message Server is the Dirextalk backend that combines a Matrix-compatible homeserver with the Dirextalk P2P product API in one Go monolith.
+Dirextalk Message Server is Dirextalk's backend contract authority. It combines a Matrix-compatible homeserver, the ProductCore action API, product policy, projections, Native Agent, external MCP access, and PostgreSQL-backed runtime storage in one Go monolith.
 
 It is based on Element Dendrite, but this repository is maintained as a Dirextalk product server rather than a general-purpose Matrix homeserver distribution.
 
 ![Dirextalk Message Server overview](docs/images/dirextalk-message-server-overview.png)
 
 [中文说明](README_zh.md)
+
+Each personal node keeps one contract boundary for Matrix, ProductCore, and
+Native Agent:
+
+- Matrix is the source of truth for rooms, membership, ordinary messages,
+  media, history, search, unread state, and redaction.
+- ProductCore actions provide the authenticated product facade for validation,
+  remote forwarding, Matrix write orchestration, and projection reads.
+- PostgreSQL-backed P2P tables are projection/read models unless a current
+  contract explicitly makes a record authoritative.
+- Native Agent and `POST /mcp` are backend-owned capabilities. They are not
+  installed, configured, or invoked through the plugin lifecycle. BYOK web
+  search accepts a Tavily key only in the request-scoped
+  `tool_credentials.web_search` object and never persists it.
 
 ## Runtime
 
@@ -16,7 +30,9 @@ It is based on Element Dendrite, but this repository is maintained as a Dirextal
 - Default config path in Docker: `/etc/dirextalk-message-server/message-server.yaml`
 - Default data path in Docker: `/var/dirextalk-message-server`
 - Go module: `github.com/YingSuiAI/dirextalk-message-server`
-- Go version: `1.26.4`
+- Go version: `1.26.5`
+- Server database: PostgreSQL only; SQLite and file DSNs are unsupported.
+- Docker development database: PostgreSQL 18
 
 ## API Surface
 
@@ -34,6 +50,22 @@ Dirextalk product APIs use the body-action surface:
 - `POST /_p2p/command`
 - `GET /_p2p/ws`
 - `GET /.well-known/portal/owner.json`
+
+The generated ProductCore action metadata is
+[docs/product-action-contract.json](docs/product-action-contract.json); it is
+the checkable action list and may change as capabilities are added. Owner
+clients prefer `client.request`/`server.response` over the realtime WebSocket
+and use HTTP query/command fallback when realtime is not ready. External MCP
+clients use JSON-RPC over `POST /mcp` with an `agent_token`.
+
+Authentication and transport boundaries:
+
+- Owner ProductCore actions use `Authorization: Bearer <access_token>`.
+- `realtime.ws_ticket.create` issues a short-lived single-use owner ticket;
+  `GET /_p2p/ws` accepts that ticket, not a bearer token.
+- `agent_token` is limited to `agent.matrix_session.create` and the standard
+  `POST /mcp` endpoint; it cannot create an owner WebSocket ticket or call
+  owner actions.
 
 Product requests use this envelope:
 
@@ -109,16 +141,27 @@ go test ./p2p ./internal/productpolicy -count=1
 
 The Go test helper creates isolated `dendrite_test_*` databases and drops them when each test finishes.
 
+## Contract Sources
+
+Read these maintained current sources before changing clients, deployment
+tooling, or Agent/MCP behavior:
+
+- [Generated ProductCore action contract](docs/product-action-contract.json)
+- [Current project documentation](docs/current-project-documentation.md)
+- [Current Agent and MCP contract](docs/agent-mcp-current-contract.md)
+- [Embedded Agent and Execution V2 contract](docs/agent-core-integration-development-contract.md)
+- [Execution V2 ADR](docs/adr/2026-07-31-execution-orchestration-v2.md)
+
+For historical interface audit only, see the [API change record](docs/api-interface-change-record.md).
+
 ## Documentation
 
 Current maintained docs are intentionally small. Historical Dendrite site docs, obsolete trackers, and one-off implementation plans are not maintained in this fork.
 
 - [Current project documentation](docs/current-project-documentation.md)
-- [Implementation notes](docs/p2p-integrated-as-implementation.md)
-- [API change record](docs/api-interface-change-record.md)
-- [API audit and optimization notes](docs/api-audit-and-optimization.md)
-- [Postman collection](docs/postman/dirextalk-message-server.postman_collection.json)
-- [Plugin Postman collection](docs/postman/dirextalk-plugins.postman_collection.json)
+- [Current Agent and MCP contract](docs/agent-mcp-current-contract.md)
+- [API change record (historical audit)](docs/api-interface-change-record.md)
+- [Release notes](release/RELEASE_NOTES.md)
 - [Docker image notes](docs/dirextalk-message-server.md)
 - [Push gateway contract](docs/dirextalk-push-gateway.md)
 

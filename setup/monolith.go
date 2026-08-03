@@ -95,6 +95,9 @@ func (m *Monolith) AddAllPublicRoutes(
 		P2PEventRetentionPruneOnWrite:   p2pEventRetentionPruneOnWriteFromEnv(),
 		PushRules:                       m.UserAPI,
 		ReleaseController:               releasecontrol.NewUnixController(releasecontrol.UnixControllerConfig{}),
+		ModelProfileKeyFile:             strings.TrimSpace(os.Getenv("P2P_AGENT_MODEL_PROFILE_KEY_FILE")),
+		AgentSecretKeyringFile:          strings.TrimSpace(os.Getenv("P2P_AGENT_SECRET_KEYRING_FILE")),
+		AgentArtifactDir:                strings.TrimSpace(os.Getenv("P2P_AGENT_ARTIFACT_DIR")),
 	}
 	matrixHistoryBaseURL := matrixHistoryReaderBaseURL(p2pConfig.Homeserver)
 	matrixProfileResolver := p2p.NewHTTPMatrixProfileResolver(matrixHistoryBaseURL, nil)
@@ -148,6 +151,12 @@ func (m *Monolith) AddAllPublicRoutes(
 		} else {
 			p2pService.SetProjectorStarted(true)
 		}
+	}
+	if !p2pService.StartEmbeddedScheduler(processCtx, "embedded-scheduler") {
+		logrus.Debug("embedded schedule capability unavailable; scheduler not started")
+	}
+	if !p2pService.StartExecutionV2Runner(processCtx, "execution-v2") {
+		logrus.Debug("execution.v2 AWS SSM capability unavailable; runner not started")
 	}
 	p2p.Register(routers.P2P, p2pService)
 	p2p.RegisterMCP(routers.MCP, p2pService)

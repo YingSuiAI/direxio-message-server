@@ -43,7 +43,8 @@ func (m *anthropicDirectChatModel) Stream(ctx context.Context, input []*schema.M
 	if err != nil {
 		return nil, err
 	}
-	return streamDirectModel(ctx, m.r.client, m.newRequest, payload, anthropicDirectMessageFromStreamEvent)
+	decoder := newAnthropicDirectStreamDecoder()
+	return streamDirectModel(ctx, m.r.client, m.newRequest, payload, decoder.decode)
 }
 
 func (m *anthropicDirectChatModel) WithTools(tools []*schema.ToolInfo) (model.ToolCallingChatModel, error) {

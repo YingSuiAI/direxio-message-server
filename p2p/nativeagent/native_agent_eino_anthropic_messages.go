@@ -31,7 +31,24 @@ func anthropicDirectMessages(input []*schema.Message) (string, []map[string]any)
 				"content":     message.Content,
 			}}})
 		default:
-			if strings.TrimSpace(message.Content) != "" {
+			if len(message.UserInputMultiContent) > 0 {
+				content := make([]map[string]any, 0, len(message.UserInputMultiContent))
+				for _, part := range message.UserInputMultiContent {
+					switch part.Type {
+					case schema.ChatMessagePartTypeText:
+						if part.Text != "" {
+							content = append(content, map[string]any{"type": "text", "text": part.Text})
+						}
+					case schema.ChatMessagePartTypeImageURL:
+						if part.Image != nil && part.Image.Base64Data != nil {
+							content = append(content, map[string]any{"type": "image", "source": map[string]any{"type": "base64", "media_type": part.Image.MIMEType, "data": *part.Image.Base64Data}})
+						}
+					}
+				}
+				if len(content) > 0 {
+					messages = append(messages, map[string]any{"role": "user", "content": content})
+				}
+			} else if strings.TrimSpace(message.Content) != "" {
 				messages = append(messages, map[string]any{"role": "user", "content": message.Content})
 			}
 		}
@@ -117,6 +134,24 @@ func anthropicDirectMessageFromResponse(decoded map[string]any) *schema.Message 
 }
 
 func anthropicDirectMessageFromStreamEvent(data []byte) *schema.Message {
+	return newAnthropicDirectStreamDecoder().decode(data)
+}
+
+// anthropicDirectStreamDecoder keeps the small amount of state needed to turn
+// Anthropic's content-block SSE protocol into Eino's stream chunks. Anthropic
+// announces a tool call in content_block_start and sends its JSON arguments in
+// one or more input_json_delta events. Eino concatenates ToolCalls by Index, so
+// the start and every fragment must carry the same index.
+type anthropicDirectStreamDecoder struct {
+	nextIndex  int
+	activeTool *int
+}
+
+func newAnthropicDirectStreamDecoder() *anthropicDirectStreamDecoder {
+	return &anthropicDirectStreamDecoder{}
+}
+
+func (d *anthropicDirectStreamDecoder) decode(data []byte) *schema.Message {
 	var event map[string]any
 	if err := json.Unmarshal(data, &event); err != nil {
 		return nil
@@ -124,14 +159,89 @@ func anthropicDirectMessageFromStreamEvent(data []byte) *schema.Message {
 	switch trimString(event["type"]) {
 	case "content_block_delta":
 		delta, _ := event["delta"].(map[string]any)
-		if trimString(delta["type"]) == "text_delta" && trimString(delta["text"]) != "" {
-			return schema.AssistantMessage(trimString(delta["text"]), nil)
+		switch trimString(delta["type"]) {
+		case "text_delta":
+			if text := anthropicEventString(delta["text"]); text != "" {
+				return schema.AssistantMessage(text, nil)
+			}
+		case "input_json_delta":
+			partial := anthropicEventString(delta["partial_json"])
+			if partial == "" {
+				return nil
+			}
+			index := d.eventIndex(event)
+			if index == nil {
+				index = d.activeTool
+			}
+			if index == nil {
+				return nil
+			}
+			return schema.AssistantMessage("", []schema.ToolCall{{
+				Index: index,
+				Type:  "function",
+				Function: schema.FunctionCall{
+					Arguments: partial,
+				},
+			}})
 		}
 	case "content_block_start":
 		block, _ := event["content_block"].(map[string]any)
-		if trimString(block["type"]) == "text" && trimString(block["text"]) != "" {
-			return schema.AssistantMessage(trimString(block["text"]), nil)
+		switch trimString(block["type"]) {
+		case "text":
+			if text := anthropicEventString(block["text"]); text != "" {
+				return schema.AssistantMessage(text, nil)
+			}
+		case "tool_use":
+			index := d.eventIndex(event)
+			if index == nil {
+				value := d.nextIndex
+				index = &value
+			}
+			d.activeTool = index
+			if *index >= d.nextIndex {
+				d.nextIndex = *index + 1
+			}
+			return schema.AssistantMessage("", []schema.ToolCall{{
+				Index: index,
+				ID:    trimString(block["id"]),
+				Type:  "function",
+				Function: schema.FunctionCall{
+					Name:      trimString(block["name"]),
+					Arguments: anthropicToolArguments(block["input"]),
+				},
+			}})
+		}
+	case "content_block_stop":
+		if index := d.eventIndex(event); index != nil && d.activeTool != nil && *index == *d.activeTool {
+			d.activeTool = nil
 		}
 	}
 	return nil
+}
+
+func (d *anthropicDirectStreamDecoder) eventIndex(event map[string]any) *int {
+	if index, ok := intFromJSONNumber(event["index"]); ok && index >= 0 {
+		value := index
+		return &value
+	}
+	return nil
+}
+
+func anthropicEventString(value any) string {
+	valueString, _ := value.(string)
+	return valueString
+}
+
+func anthropicToolArguments(value any) string {
+	if value == nil {
+		return ""
+	}
+	if text, ok := value.(string); ok {
+		return text
+	}
+	data, err := json.Marshal(value)
+	if err != nil || string(data) == "{}" {
+		return ""
+	}
+	return string(data)
 }
