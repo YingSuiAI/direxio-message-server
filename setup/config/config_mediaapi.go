@@ -19,7 +19,7 @@ type MediaAPI struct {
 
 	// The maximum file size in bytes that is allowed to be stored on this server.
 	// Note: if max_file_size_bytes is set to 0, the size is unlimited.
-	// Note: if max_file_size_bytes is not set, it will default to 10485760 (10MB)
+	// Note: if max_file_size_bytes is not set, it will default to 52428800 (50MB)
 	MaxFileSizeBytes FileSizeBytes `yaml:"max_file_size_bytes,omitempty"`
 
 	// Whether to dynamically generate thumbnails on-the-fly if the requested resolution is not already generated
@@ -33,7 +33,7 @@ type MediaAPI struct {
 }
 
 // DefaultMaxFileSizeBytes defines the default file size allowed in transfers
-var DefaultMaxFileSizeBytes = FileSizeBytes(10485760)
+var DefaultMaxFileSizeBytes = FileSizeBytes(52428800)
 
 func (c *MediaAPI) Defaults(opts DefaultOpts) {
 	c.MaxFileSizeBytes = DefaultMaxFileSizeBytes
