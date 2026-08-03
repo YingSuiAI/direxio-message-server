@@ -1,6 +1,6 @@
 # ADR: Execution Orchestration V2
 
-Date: 2026-07-31  
+Date: 2026-07-31
 Status: Accepted contract; implementation and release gated
 
 ## Context

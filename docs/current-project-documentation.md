@@ -80,8 +80,6 @@ server-enforced results, a 2 MiB provider body, and a 15-second timeout;
 reconnect/resume never rehydrates the key.
 当前 x1 本机部署固定使用单节点 `docker-compose.p2p.yml` 的 `message-server` 容器。非 Agent plugin 功能当前废弃/暂停维护，不作为当前部署验收项；仓库不再保留独立 Agent/plugin compose overlay，后续如重新启用非 Agent Docker plugin runner，应从单节点 `docker-compose.p2p.yml` 的当前配置重新验收。`dendrite-a`、`dendrite-b`、`dendrite-c` 只属于三节点回归环境，不作为 x1 实际服务入口，也不安装或承载插件。
 
-Current model-profile contract: the server persists encrypted owner model profiles and default roles. Native Agent chat, stream, and compression omit model fields and resolve the owner default conversation profile; inline profile/key input is legacy compatibility only. `agent.models.list` remains an explicit request-scoped lookup and does not persist profiles.
-
 Agent keyring 与 execution artifact 默认分别位于现有 Message Server 数据卷内的
 `/var/dirextalk-message-server/agent/secret-keyring.json` 和
 `/var/dirextalk-message-server/agent/artifacts`；相关环境变量仅用于覆盖默认位置，标准部署不增加独立 Agent 数据卷。
@@ -336,8 +334,8 @@ Push：
 Agent/API：
 
 - Agent token 不再有动态权限表，只能通过 product body-action 访问 `agent.matrix_session.create`，并可访问标准 `POST /mcp` MCP endpoint，不能调用 `realtime.ws_ticket.create` 创建 WS ticket；其他 protected action 只认 owner `access_token`。本地 bridge 使用 `agent.matrix_session.create` 得到的 Matrix session 监听 agents room 并回写消息。
-- MCP capability 是 owner-scoped 代理能力：`agent_token` 只负责授权标准 MCP endpoint，联系人列表/搜索、房间搜索、成员身份列表、普通消息默认发送/读取、频道帖子/评论读取和评论创建都按 portal owner 视角操作；普通消息发送不能发送到配置的 `agent_room_id`，agent room 回复只能由 gateway 使用 `agent_gateway`/`gateway_source` 标记路径以 `@agent:<server>` 发出；普通消息读取复用当前 owner `access_token` 读取 Matrix history，不创建 `DIREXTALK_MATRIX_HISTORY` 设备，也不刷新 Matrix session，因此不会导致 owner 手机/浏览器 session 被踢下线。标准 MCP 工具返回 `created_at`、`sender_mxid`、`sender_display_name`、`sender_domain`、`sender_localpart` 和成员 `joined_at` 等可读字段；MCP 读接口使用 `from_time`/`to_time`、`cursor` 和 `limit` 按 newest-first 稳定分页，拒绝旧的 `from_ts`/`to_ts`；cursor 固定首次查询快照，新插入内容只会出现在新的无 cursor 查询中。频道帖子工具返回帖子 `comment_count`、`like_count`、跨用户 Matrix favorite reaction 的 `favorite_count` 以及当前 owner 的 `favorited_by_me`；频道普通聊天仍用消息工具读取。`agent.config.get/update` 返回和持久化 `avatar_url` 与 `mcp_blocked_room_ids`；黑名单房间不会出现在 MCP 房间搜索，其他直接定位黑名单房间或其频道帖子的 MCP 读写会返回 403。内部实现由 `internal/dirextalkmcp` 统一拥有 MCP registry、schemas、pagination、room authorization、DTOs、errors 和 invocation；Native Agent 内置 Dirextalk tools 和标准 `POST /mcp` 都调用同一个 service，`p2p` 只适配 Store、Transport、Matrix history、profile resolver、owner context 和 blocklist。标准 `POST /mcp` 使用 MCP Streamable HTTP 的 JSON-RPC POST：支持 `initialize`、`tools/list`、`tools/call`，第一版只接受 `Authorization: Bearer <agent_token>`，不接受 query-string token，校验 `Origin`，在不需要 server-to-client streaming 时 GET/SSE 返回 405，并且不会把入站 bearer token 传给下游 capability。Native Agent 在 message-server 内负责标准 MCP client、skills、模型平台配置和 Agent orchestration；后端保留 owner-only `plugins.*` 管理/调用边界。固定 `mcp.*` body action 已删除，`mcp.*` 字符串只作为 `internal/dirextalkmcp` 内部 capability action id 和 p2p adapter 测试标识存在。
-- Native Agent 对话是 server-backed native runtime 业务，独立于旧 connect/Codex bridge room 会话。普通 Native Agent 调用直接使用 owner-protected `agent.*` body action；流式对话通过 `client.native_agent_stream` 发送 `id`、`action` 和 `params`，服务端会把 `agent.chat` 自动映射到 native runtime 的 `agent.chat.stream`，并以 `server.native_agent_stream.event` 持续返回 `delta`、`trace`、`done`；服务端只接受 `p2p/serviceapi.ActionSpecs` 声明为 Native Agent WS stream 的 action，非 stream 或非 Agent stream action 在进入 runtime 前返回错误；OpenAI-compatible reasoning 模型返回的显式 `reasoning_content` 会在 `delta` 与最终 `done` payload 中透传，客户端只能展示该字段，不得编造隐藏推理链；客户端取消时发送 `client.native_agent_stream.cancel`，服务端返回 `server.native_agent_stream.cancelled`。Native Agent 还提供 `agent.models.list`、`agent.runtime.inspect`、`agent.runtime.install`、`agent.runtime.which`、`agent.runtime.run`、`agent.skills.registry.search`、`agent.skills.list/install/enable/disable/uninstall`、`agent.mcp.servers.list/install/enable/disable/uninstall`、`agent.mcp.registry.search` 和 `agent.config.propose_patch`；`agent.models.list` 使用本次请求传入的 provider/base_url/api_key 调用支持的厂商模型列表接口，返回真实 `models[]` 和厂商实际提供的字段，不保存、不回显 API Key，也不补造上下文长度、温度、top_p、max output 或推理模式默认值；客户端模型设置保存本地 profiles，缺失的上下文/温度等参数保持空值并在请求中省略，让厂商默认生效，不支持模型列表的厂商仍允许手动填写模型 ID。Agent 对话可向模型暴露已编译的 Dirextalk 工具；PostgreSQL durable knowledge store ready 时额外暴露 `native_agent_memory_remember` 与 `native_agent_memory_search`（别名 `memory_remember`/`memory_search`、`remember`/`recall`），owner 和幂等键由服务端请求上下文推导。只有明确的记忆请求才允许写入，普通对话不会静默保存；回忆请求先搜索并且只有成功工具结果才能声称已保存或找到。Runtime CLI、skills、MCP server metadata、conversation memory 和 durable knowledge memory 均落在 `P2P_NATIVE_AGENT_DATA_DIR` 或 PostgreSQL store。
+- MCP capability 是 owner-scoped 代理能力：`agent_token` 只负责授权标准 MCP endpoint，联系人、房间、成员、消息和频道内容工具按 portal owner 视角执行，并在 Matrix 读写前校验 joined membership。标准 `POST /mcp` 使用 MCP Streamable HTTP JSON-RPC，支持 `initialize`、`tools/list`、`tools/call`，只接受 `Authorization: Bearer <agent_token>`，拒绝 query-string token，校验 `Origin`，并且不会把入站 bearer token 传给下游 capability。Native Agent 内置 Dirextalk tools 与标准 `POST /mcp` 共用 `internal/dirextalkmcp` registry/service；固定 `mcp.*` body action 已删除。详见 [当前 Agent 和 MCP 合约](agent-mcp-current-contract.md)。
+- Native Agent 对话是独立于 Online Agent Matrix room 的 server-backed `agent.*` 业务；普通调用走 owner-protected action，流式调用走 `client.native_agent_stream` / `server.native_agent_stream.*`。服务端只发布已通过依赖与 readiness 检查的能力；本机 runtime CLI、可变第三方 Skill 安装/执行、MCP server 安装/执行和任意 shell/code passthrough 均不可用。模型 profile、持久化对话/知识记忆和内置工具遵循 [当前 Agent 和 MCP 合约](agent-mcp-current-contract.md)；Execution V2 仅按 [Agent 与 Execution V2 合约](agent-core-integration-development-contract.md) 与 [ADR](adr/2026-07-31-execution-orchestration-v2.md) 的 readiness gate 发布。
 - `agent.matrix_session.create` 使用 owner `access_token` 或 `agent_token` 调用，用于本地 cc-connect/gateway 获取 `@agent:<server>` 的 Matrix Client-Server session；它不返回 owner Matrix session，也不回显 `agent_token` 或 portal password。
 - Agent 在线状态对 owner 客户端只暴露一个 Matrix 房间状态字段：真实 `agent_room_id` 内的 `io.dirextalk.agent.status`，state key 为 `@agent:<server>`，content 只含 `online`。运行中的本地 bridge 通过 `@agent:<server>` Matrix session 发布 `online=true/false`；服务端不能从 Agent 配置、`/sync` 或 WS session 推断在线，只在启动/修复 agents room 或禁用 Agent 配置时写 `online=false` 兜底。`sync.bootstrap` 只返回 `agent_room_id` 供客户端定位房间，不再返回 `agent_online`；WS `server.event` 不发送 `agent.presence`。`agent.status`/`agents.status` 已删除，客户端不得再调用。
 - Agent 预览和最终可恢复正文都通过 Matrix 消息/编辑回写；客户端展示 Matrix timeline 的聚合编辑结果，不消费 `server.agent_stream`。
@@ -354,7 +352,7 @@ Multi-node：
 
 当前工具链：
 
-- Go 1.26.4。
+- Go 1.26.5。
 - 命令从仓库根目录执行。
 - Windows 使用 PowerShell；Linux、macOS 或 WSL 使用 Bash/Zsh。文档命令应按当前环境给出，不应强制限定为 WSL。
 
@@ -440,7 +438,7 @@ docker compose -f docker-compose.p2p-dual.yml config
 - README/AGENTS 级文档只描述当前运行与开发规则，不维护继承自 Dendrite 的站点式安装、管理、FAQ 或历史计划文档。
 - 本文件是当前项目事实源。
 - `docs/api-interface-change-record.md` 记录接口变更审计。
-- `docs/api-audit-and-optimization.md` 记录当前审计与优化结论。
-- `docs/p2p-integrated-as-implementation.md` 记录实现细节。
+- `docs/agent-mcp-current-contract.md` 记录当前 Agent/MCP 合约。
+- `docs/agent-core-integration-development-contract.md` 与 `docs/adr/2026-07-31-execution-orchestration-v2.md` 记录 Execution V2 的详细规范和发布门禁。
 - `docs/dirextalk-message-server.md` 记录 Docker 镜像和运行说明，`docs/dirextalk-push-gateway.md` 记录 Push Gateway 合约。
 - 不在活文档、技能规则或示例中保留旧接口作为当前可用能力。

@@ -35,7 +35,7 @@ func TestMemoryCoordinatorConfirmationAndSequentialReceipts(t *testing.T) {
 	if len(m.Stages) != 1 || len(m.Tasks) != 1 || len(m.Confirmations) != 1 || m.Stages[0].Status != StageWaitingUser {
 		t.Fatalf("materialization %#v", m)
 	}
-	if q := m.Tasks[0].Spec.Payload.ExecutionStage; q.RunRevision == 0 || q.RunRevision != uint64(m.Confirmations[0].Binding.RunRevision) {
+	if q := m.Tasks[0].Spec.Payload.ExecutionStage; q.RunRevision == 0 || q.RunRevision != uint64(m.Confirmations[0].Binding.RunRevision) || q.RunRevision != m.Stages[0].RunRevision || m.Stages[0].RunRevision != 1 {
 		t.Fatalf("task/confirmation run revision fence mismatch: task=%#v binding=%#v", q, m.Confirmations[0].Binding)
 	}
 	conf := m.Confirmations[0]
@@ -85,6 +85,10 @@ func TestMemoryCoordinatorAutoStageUnlocksDependentConfirmation(t *testing.T) {
 	if stage.Status != StageWaitingUser || stage.TaskID == "" || stage.ConfirmationID == "" {
 		t.Fatalf("dependent %#v", stage)
 	}
+	childTask := c.store.tasks[stage.TaskID]
+	if q := childTask.Spec.Payload.ExecutionStage; q.RunRevision != stage.RunRevision || q.RunRevision == 0 || uint64(c.store.confirmations[stage.ConfirmationID].Binding.RunRevision) != q.RunRevision {
+		t.Fatalf("dependent run revision fence mismatch: stage=%#v task=%#v confirmation=%#v", stage, q, c.store.confirmations[stage.ConfirmationID].Binding)
+	}
 	run, err := c.GetRun(context.Background(), ownerID, m.Run.RunID)
 	if err != nil || run.Status != RunRunning || run.Validate() != nil {
 		t.Fatalf("started run regressed to a pre-start state: run=%#v err=%v validate=%v", run, err, run.Validate())
@@ -118,8 +122,12 @@ func TestMemoryCoordinatorUncertainDoesNotRedispatchAndReconciles(t *testing.T) 
 		t.Fatal("reconciliation released the target but retained its confirmation reservation")
 	}
 	r, err := c.GetRun(context.Background(), ownerID, m.Run.RunID)
-	if err != nil || r.Status != RunUncertain {
+	if err != nil || r.Status != RunSucceeded {
 		t.Fatalf("run %#v %v", r, err)
+	}
+	stage, err := c.GetStage(context.Background(), ownerID, m.Run.RunID, m.Stages[0].StageID)
+	if err != nil || stage.Status != StageSucceeded {
+		t.Fatalf("stage %#v %v", stage, err)
 	}
 	if len(c.store.resolutions[m.Run.RunID]) != 1 || !c.store.resolutions[m.Run.RunID][0].Succeeded {
 		t.Fatalf("missing immutable reconciliation successor: %#v", c.store.resolutions[m.Run.RunID])
@@ -397,8 +405,129 @@ func TestMemoryCoordinatorUncertainReconcileReleasesReservationWithoutRedispatch
 	}
 	stage := c.store.stages[stageMapKey(m.Run.RunID, m.Stages[0].StageID)]
 	attempts := c.store.attempts[stage.StageID]
-	if stage.Status != StageUncertain || len(attempts) != 1 || attempts[0].Status != AttemptUncertain {
-		t.Fatalf("reconciliation rewrote original uncertain evidence: stage=%#v attempts=%#v", stage, attempts)
+	if stage.Status != StageSucceeded || len(attempts) != 1 || attempts[0].Status != AttemptSucceeded || attempts[0].Uncertain {
+		t.Fatalf("reconciliation did not promote uncertain evidence: stage=%#v attempts=%#v", stage, attempts)
+	}
+}
+
+func TestMemoryCoordinatorReconcileTypedOutcomesAndUnresolvedReadback(t *testing.T) {
+	for _, tc := range []struct {
+		mode               FakeMode
+		wantStage          StageStatus
+		wantAttempt        AttemptStatus
+		wantReceipt        ReceiptStatus
+		wantRun            RunStatus
+		wantResolution     bool
+		wantLeaseUncertain bool
+	}{
+		{FakeReconcileSuccess, StageSucceeded, AttemptSucceeded, ReceiptSucceeded, RunSucceeded, true, false},
+		{FakeReconcileFailed, StageFailed, AttemptFailed, ReceiptFailed, RunFailed, true, false},
+		{FakeReconcileCanceled, StageCanceled, AttemptCanceled, ReceiptCanceled, RunCanceled, true, false},
+		{FakeReconcilePending, StageUncertain, AttemptUncertain, ReceiptUncertain, RunUncertain, false, true},
+		{FakeReconcileUnknown, StageUncertain, AttemptUncertain, ReceiptUncertain, RunUncertain, false, true},
+	} {
+		t.Run(string(tc.mode), func(t *testing.T) {
+			c, m := createMemoryRun(t, plan(), FakeUncertainAfterDispatch)
+			conf := m.Confirmations[0]
+			if _, err := c.ConfirmStage(context.Background(), ConfirmStageCommand{OwnerID: ownerID, ConfirmationID: conf.ID, ExpectedRevision: conf.Revision, IdempotencyKey: deterministicID("typed-reconcile-confirm:" + string(tc.mode))}); err != nil {
+				t.Fatal(err)
+			}
+			dispatches := 0
+			c.executor.Dispatches = &dispatches
+			if err := c.ExecuteClaimedStage(context.Background(), ownerID, m.Tasks[0].ID, "worker", time.Time{}); err != ErrUncertain {
+				t.Fatalf("execute=%v", err)
+			}
+			c.executor = FakeExecutor{Mode: tc.mode, Dispatches: &dispatches}
+			stage, err := c.ReconcileStage(context.Background(), ownerID, m.Run.RunID, m.Stages[0].StageID, time.Time{})
+			if tc.wantResolution {
+				if err != nil || stage.Status != tc.wantStage {
+					t.Fatalf("stage=%#v err=%v", stage, err)
+				}
+				if c.store.stages[stageMapKey(m.Run.RunID, m.Stages[0].StageID)].Status != tc.wantStage || c.store.attempts[m.Stages[0].StageID][0].Status != tc.wantAttempt {
+					t.Fatalf("promoted stage/attempt=%#v/%#v", c.store.stages[stageMapKey(m.Run.RunID, m.Stages[0].StageID)], c.store.attempts[m.Stages[0].StageID])
+				}
+				if got := c.store.receipts[c.store.attempts[m.Stages[0].StageID][0].ReceiptID].Status; got != tc.wantReceipt {
+					t.Fatalf("receipt=%s", got)
+				}
+				run, getErr := c.GetRun(context.Background(), ownerID, m.Run.RunID)
+				if getErr != nil || run.Status != tc.wantRun {
+					t.Fatalf("run=%#v err=%v", run, getErr)
+				}
+				if len(c.store.resolutions[m.Run.RunID]) != 1 || c.store.resolutions[m.Run.RunID][0].Outcome != tc.wantStage {
+					t.Fatalf("resolution=%#v", c.store.resolutions[m.Run.RunID])
+				}
+			} else {
+				if err != ErrConflict || stage.Status != "" {
+					t.Fatalf("unresolved stage=%#v err=%v", stage, err)
+				}
+				got := c.store.stages[stageMapKey(m.Run.RunID, m.Stages[0].StageID)]
+				if got.Status != tc.wantStage || c.store.attempts[m.Stages[0].StageID][0].Status != tc.wantAttempt || c.store.receipts[c.store.attempts[m.Stages[0].StageID][0].ReceiptID].Status != tc.wantReceipt {
+					t.Fatalf("uncertain evidence stage=%#v attempts=%#v receipts=%#v", got, c.store.attempts[m.Stages[0].StageID], c.store.receipts)
+				}
+				if len(c.store.resolutions[m.Run.RunID]) != 0 {
+					t.Fatalf("unresolved readback appended resolution=%#v", c.store.resolutions[m.Run.RunID])
+				}
+			}
+			if dispatches != 1 || c.store.leases[targetID].uncertain != tc.wantLeaseUncertain {
+				t.Fatalf("dispatches=%d lease=%#v", dispatches, c.store.leases[targetID])
+			}
+		})
+	}
+}
+
+func TestMemoryCoordinatorReconcilePromotesOrSkipsDAG(t *testing.T) {
+	for _, tc := range []struct {
+		mode      FakeMode
+		wantRun   RunStatus
+		wantChild StageStatus
+		wantTask  bool
+	}{
+		{FakeReconcileSuccess, RunRunning, StageQueued, true},
+		{FakeReconcileFailed, RunFailed, StageSkipped, false},
+		{FakeReconcileCanceled, RunCanceled, StageSkipped, false},
+	} {
+		t.Run(string(tc.mode), func(t *testing.T) {
+			p := plan()
+			p.Stages[0].Risk, p.Stages[0].Gate = RiskR0, GateNone
+			p.Stages[0].Steps[0] = ExecutionStep{StepKey: "inspect", Kind: StepTargetInspect, TargetID: targetID, TargetRevision: 1, TargetDigest: sha, TimeoutSeconds: 1, IdempotencyMarker: "inspect", OutputPolicy: OutputDiscard, TargetInspect: &TargetInspectStep{ObservationID: artifactID}}
+			child := p.Stages[0]
+			child.StageKey, child.Risk, child.Gate, child.DependsOn = "dependent", RiskR0, GateNone, []string{"deploy"}
+			child.Steps[0].StepKey, child.Steps[0].IdempotencyMarker = "dependent-step", "dependent-marker"
+			child.Steps[0].TargetInspect.ObservationID = artifactID
+			child.Steps[0].Digest = ""
+			child.Digest = ""
+			p.Stages = append(p.Stages, child)
+			p.Digest = ""
+			c, m := createMemoryRun(t, p, FakeUncertainAfterDispatch)
+			if len(m.Tasks) != 1 || m.Stages[0].Status != StageQueued {
+				t.Fatalf("initial materialization=%#v", m)
+			}
+			dispatches := 0
+			c.executor.Dispatches = &dispatches
+			if err := c.ExecuteClaimedStage(context.Background(), ownerID, m.Tasks[0].ID, "worker", time.Time{}); err != ErrUncertain {
+				t.Fatalf("execute=%v", err)
+			}
+			c.executor = FakeExecutor{Mode: tc.mode, Dispatches: &dispatches}
+			if _, err := c.ReconcileStage(context.Background(), ownerID, m.Run.RunID, m.Stages[0].StageID, time.Time{}); err != nil {
+				t.Fatal(err)
+			}
+			var gotChild RunStage
+			for _, stage := range c.store.stages {
+				if stage.RunID == m.Run.RunID && stage.StageKey == "dependent" {
+					gotChild = stage
+				}
+			}
+			if gotChild.Status != tc.wantChild || (gotChild.TaskID != "") != tc.wantTask {
+				t.Fatalf("child=%#v want status=%s task=%v", gotChild, tc.wantChild, tc.wantTask)
+			}
+			run, err := c.GetRun(context.Background(), ownerID, m.Run.RunID)
+			if err != nil || run.Status != tc.wantRun {
+				t.Fatalf("run=%#v err=%v", run, err)
+			}
+			if dispatches != 1 {
+				t.Fatalf("reconcile redispatched=%d", dispatches)
+			}
+		})
 	}
 }
 
@@ -447,6 +576,35 @@ func TestMemoryCoordinatorRejectsTaskRunRevisionFenceMismatch(t *testing.T) {
 	c.store.mu.Unlock()
 	if err := c.ExecuteClaimedStage(context.Background(), ownerID, task.ID, "worker", time.Time{}); err != ErrConflict {
 		t.Fatalf("run revision mismatch accepted: %v", err)
+	}
+}
+
+func TestMemoryCoordinatorRejectsUnconfirmedTaskRunRevisionFenceMismatch(t *testing.T) {
+	p := plan()
+	p.Stages[0].Risk, p.Stages[0].Gate = RiskR0, GateNone
+	p.Stages[0].Steps[0] = ExecutionStep{
+		StepKey: "inspect", Kind: StepTargetInspect, TargetID: targetID,
+		TargetRevision: 1, TargetDigest: sha, TimeoutSeconds: 1,
+		IdempotencyMarker: "inspect", OutputPolicy: OutputDiscard,
+		TargetInspect: &TargetInspectStep{ObservationID: artifactID},
+	}
+	p.Stages[0].Digest, p.Digest = "", ""
+	var err error
+	p, err = p.Normalize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, m := createMemoryRun(t, p, FakeSuccess)
+	if len(m.Tasks) != 1 || len(m.Confirmations) != 0 || m.Stages[0].RunRevision == 0 {
+		t.Fatalf("materialization=%#v", m)
+	}
+	c.store.mu.Lock()
+	task := c.store.tasks[m.Tasks[0].ID]
+	task.Spec.Payload.ExecutionStage.RunRevision++
+	c.store.tasks[task.ID] = task
+	c.store.mu.Unlock()
+	if err := c.ExecuteClaimedStage(context.Background(), ownerID, task.ID, "worker", time.Time{}); err != ErrConflict {
+		t.Fatalf("unconfirmed run revision mismatch accepted: %v", err)
 	}
 }
 

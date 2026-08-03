@@ -15,8 +15,8 @@ func TestBuiltinManifestsAndExactDigestPins(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := len(r.Manifests()); got != 9 {
-		t.Fatalf("built-in skill count = %d, want 9", got)
+	if got := len(r.Manifests()); got != 7 {
+		t.Fatalf("built-in skill count = %d, want 7", got)
 	}
 	m := r.Manifests()[0]
 	if _, err := r.ResolveExact(m.ID, m.Version, m.ContentDigest); err != nil {
@@ -32,6 +32,80 @@ func TestBuiltinManifestsAndExactDigestPins(t *testing.T) {
 	tampered := strings.Replace(string(raw), `"intent_tags":[`, `"intent_tags":["tampered",`, 1)
 	if _, err := Parse([]byte(tampered)); err == nil {
 		t.Fatal("tampered manifest unexpectedly parsed")
+	}
+}
+
+func TestBuiltinTargetAdvisorConsolidatesPlacementAndSizing(t *testing.T) {
+	r, err := Builtin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, manifest := range r.Manifests() {
+		if manifest.ID == "placement-advisor" || manifest.ID == "resource-sizing" {
+			t.Fatalf("redundant built-in skill remains: %q", manifest.ID)
+		}
+		if manifest.ID != "aws-target-advisor" {
+			continue
+		}
+		for _, tag := range []string{"placement", "sizing"} {
+			if !contains(manifest.IntentTags, tag) {
+				t.Fatalf("aws target advisor omitted %q intent tag: %v", tag, manifest.IntentTags)
+			}
+		}
+	}
+	for _, intent := range []string{"placement", "sizing"} {
+		selected, err := r.Select(SelectionQuery{Intent: intent, Limit: 3})
+		if err != nil {
+			t.Fatalf("select %s: %v", intent, err)
+		}
+		if len(selected) != 1 || selected[0].ID != "aws-target-advisor" {
+			t.Fatalf("select %s = %#v, want aws-target-advisor only", intent, selected)
+		}
+	}
+}
+
+func TestBuiltinHistoricalSkillPinsAndSelectionsRemainImmutable(t *testing.T) {
+	r, err := Builtin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		id, version, digest string
+	}{
+		{"placement-advisor", "1.0.0", "8ba47184e18c1ce354a1d5af106fc706ae9003dd4984dc1a4cfc757c238cbb99"},
+		{"resource-sizing", "1.0.0", "28bdc0b940968fb4ad2e63c1cd364f6c7538e6cd826fa2140b19e320f8608ccf"},
+		{"aws-target-advisor", "1.1.0", "bcb4aae7ae549146342b4bc7b23f2161cdb8f5d9f41a631bc046db1ea3b65763"},
+	}
+	for _, test := range cases {
+		manifest, err := r.ResolveExact(test.id, test.version, test.digest)
+		if err != nil {
+			t.Fatalf("resolve historical %s@%s: %v", test.id, test.version, err)
+		}
+		if manifest.ID != test.id || manifest.Version != test.version || manifest.ContentDigest != test.digest {
+			t.Fatalf("historical pin = %#v, want %s@%s/%s", manifest, test.id, test.version, test.digest)
+		}
+	}
+	for _, test := range []struct {
+		selected, id, version string
+	}{
+		{"placement-advisor", "placement-advisor", "1.0.0"},
+		{"resource-sizing", "resource-sizing", "1.0.0"},
+		{"aws-target-advisor@1.1.0#bcb4aae7ae549146342b4bc7b23f2161cdb8f5d9f41a631bc046db1ea3b65763", "aws-target-advisor", "1.1.0"},
+	} {
+		manifest, err := r.ResolveSelectedID(test.selected)
+		if err != nil {
+			t.Fatalf("resolve historical selection %q: %v", test.selected, err)
+		}
+		if manifest.ID != test.id || manifest.Version != test.version {
+			t.Fatalf("selection %q = %s@%s, want %s@%s", test.selected, manifest.ID, manifest.Version, test.id, test.version)
+		}
+	}
+	active, err := r.ResolveSelectedID("aws-target-advisor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active.Version != "1.2.0" {
+		t.Fatalf("bare active selection resolved archived version %s", active.Version)
 	}
 }
 

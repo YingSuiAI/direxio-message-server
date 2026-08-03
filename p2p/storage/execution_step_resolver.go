@@ -330,11 +330,11 @@ func (r *ExecutionStepResolver) resolveEC2Provision(
 		PlanDigest, RunDigest, StageDigest, StepDigest, TargetDigest coreexecution.Digest
 		LeaseID, LeaseToken                                          string
 		LeaseEpoch                                                   uint64
-	}{claim.OwnerID, plan.ID, run.RunID, stage.StageID, step.StepKey, attemptID, plan.Revision, run.Revision, stage.StageRevision, next.StepRevision, plan.Digest, run.RunDigest, stage.StageDigest, step.Digest, target.Digest, claim.LeaseID, claim.LeaseToken, claim.LeaseEpoch})
+	}{claim.OwnerID, plan.ID, run.RunID, stage.StageID, step.StepKey, attemptID, plan.Revision, stage.RunRevision, stage.StageRevision, next.StepRevision, plan.Digest, run.RunDigest, stage.StageDigest, step.Digest, target.Digest, claim.LeaseID, claim.LeaseToken, claim.LeaseEpoch})
 	if err != nil {
 		return out, ErrExecutionStepResolve
 	}
-	request := coreaws.EC2ProvisionRequest{OwnerID: claim.OwnerID, PlanID: plan.ID, PlanRevision: plan.Revision, PlanDigest: plan.Digest, RunID: run.RunID, RunRevision: run.Revision, RunDigest: run.RunDigest, StageID: stage.StageID, StageRevision: stage.StageRevision, StageDigest: stage.StageDigest, AttemptID: attemptID, StepRevision: next.StepRevision, Target: target, Step: step, PolicyDigest: preview.PolicyDigest, CostQuoteDigest: preview.CostQuoteDigest, FenceDigest: fence}
+	request := coreaws.EC2ProvisionRequest{OwnerID: claim.OwnerID, PlanID: plan.ID, PlanRevision: plan.Revision, PlanDigest: plan.Digest, RunID: run.RunID, RunRevision: stage.RunRevision, RunDigest: run.RunDigest, StageID: stage.StageID, StageRevision: stage.StageRevision, StageDigest: stage.StageDigest, AttemptID: attemptID, StepRevision: next.StepRevision, Target: target, Step: step, PolicyDigest: preview.PolicyDigest, CostQuoteDigest: preview.CostQuoteDigest, FenceDigest: fence}
 	request.RequestDigest, err = coreaws.CanonicalEC2ProvisionRequestDigest(request)
 	intent := coreaws.EC2ProvisionIntent{OwnerID: request.OwnerID, FenceDigest: request.FenceDigest, RequestDigest: request.RequestDigest, ProviderOperationKey: coreaws.EC2ProvisionOperationKey(target.ID), Request: request}
 	if err != nil || coreaws.ValidateEC2ProvisionIntentSnapshot(intent) != nil {

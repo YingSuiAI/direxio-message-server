@@ -307,83 +307,6 @@ func (r *ExecutionReconciler) loadEvidence(ctx context.Context, in ExecutionSSMR
 	return e, nil
 }
 
-func (r *ExecutionReconciler) commitResolutionAuditOnly(ctx context.Context, in ExecutionSSMReconcileCommand, requestDigest coreexecution.Digest, evidence executionSSMReconcileEvidence, outcome string, outcomeDigest coreexecution.Digest) (coreexecution.ExecutionRun, error) {
-	var zero coreexecution.ExecutionRun
-	tx, err := r.store.db.BeginTx(ctx, nil)
-	if err != nil {
-		return zero, err
-	}
-	defer tx.Rollback()
-	// A concurrent identical command may have completed after our readback.
-	// Reuse only exact immutable evidence; no second resolution is inserted.
-	var oldOutcome, oldDigest string
-	resolutionExists := false
-	err = tx.QueryRowContext(ctx, `SELECT outcome,outcome_digest FROM core_execution_reconciliation_resolutions WHERE owner_id=$1 AND run_id=$2 AND stage_id=$3 AND request_digest=$4`, in.OwnerID, in.RunID, in.StageID, evidence.requestDigest).Scan(&oldOutcome, &oldDigest)
-	if err == nil {
-		if oldOutcome != outcome || oldDigest != string(outcomeDigest) {
-			return zero, coreexecution.ErrConflict
-		}
-		resolutionExists = true
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		return zero, err
-	}
-	if !resolutionExists {
-		var runRevision, leaseEpoch uint64
-		var runStatus, stageStatus, leaseStatus, receiptStatus, intentStatus string
-		var leaseID, token, receiptID, attemptID, commandID, providerOperation, receiptRequest, receiptFence, intentRequest, intentFence string
-		err = tx.QueryRowContext(ctx, `SELECT run.revision,run.status,stage.status,lease.lease_id::text,lease.token::text,lease.epoch,lease.status,lease.receipt_id::text,COALESCE(lease.provider_operation_id,''),receipt.attempt_id::text,receipt.status,COALESCE(receipt.command_id,''),receipt.request_digest,receipt.fence_digest,intent.status,intent.request_digest,intent.fence_digest FROM core_execution_runs run JOIN core_execution_run_stages stage ON stage.owner_id=run.owner_id AND stage.run_id=run.run_id JOIN core_execution_target_mutation_leases lease ON lease.owner_id=stage.owner_id AND lease.target_id=stage.target_id AND lease.target_revision=stage.target_revision JOIN core_execution_receipts receipt ON receipt.owner_id=lease.owner_id AND receipt.run_id=lease.run_id AND receipt.receipt_id=lease.receipt_id JOIN core_execution_dispatch_intents intent ON intent.owner_id=receipt.owner_id AND intent.run_id=receipt.run_id AND intent.stage_id=stage.stage_id AND intent.receipt_id=receipt.receipt_id AND intent.attempt_id=receipt.attempt_id WHERE run.owner_id=$1 AND run.run_id=$2 AND stage.stage_id=$3 FOR UPDATE OF run,stage,lease,receipt,intent`, in.OwnerID, in.RunID, in.StageID).Scan(&runRevision, &runStatus, &stageStatus, &leaseID, &token, &leaseEpoch, &leaseStatus, &receiptID, &providerOperation, &attemptID, &receiptStatus, &commandID, &receiptRequest, &receiptFence, &intentStatus, &intentRequest, &intentFence)
-		if err != nil || runRevision != in.ExpectedRevision || runStatus != string(coreexecution.RunUncertain) || stageStatus != string(coreexecution.StageUncertain) || leaseID != evidence.leaseID || token != evidence.token || leaseEpoch != evidence.leaseEpoch || leaseStatus != "uncertain" || receiptID != evidence.receiptID || providerOperation != evidence.providerOperationID || attemptID != evidence.attemptID || receiptStatus != string(coreexecution.ReceiptUncertain) || commandID != evidence.commandID || receiptRequest != string(evidence.requestDigest) || receiptFence != string(evidence.fenceDigest) || intentStatus != "uncertain" || intentRequest != receiptRequest || intentFence != receiptFence {
-			return zero, coreexecution.ErrConflict
-		}
-		at := r.now().UTC().Truncate(time.Microsecond)
-		if _, err = tx.ExecContext(ctx, `INSERT INTO core_execution_reconciliation_resolutions(owner_id,run_id,stage_id,lease_id,token,epoch,receipt_id,provider_operation_id,request_digest,outcome,outcome_digest,observed_at,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12)`, in.OwnerID, in.RunID, in.StageID, evidence.leaseID, evidence.token, evidence.leaseEpoch, evidence.receiptID, evidence.providerOperationID, evidence.requestDigest, outcome, outcomeDigest, at); err != nil {
-			return zero, mapExecutionConflict(err)
-		}
-		res, updateErr := tx.ExecContext(ctx, `UPDATE core_execution_target_mutation_leases SET status='released',expires_at=NULL,revision=revision+1,updated_at=$1 WHERE owner_id=$2 AND lease_id=$3 AND token=$4 AND epoch=$5 AND status='uncertain' AND run_id=$6 AND stage_id=$7 AND receipt_id=$8`, at, in.OwnerID, evidence.leaseID, evidence.token, evidence.leaseEpoch, in.RunID, in.StageID, evidence.receiptID)
-		if updateErr != nil {
-			return zero, updateErr
-		}
-		if n, _ := res.RowsAffected(); n != 1 {
-			return zero, coreexecution.ErrConflict
-		}
-		if _, err = tx.ExecContext(ctx, `UPDATE agent_confirmations SET reservation_json=NULL,revision=revision+1,updated_at=$1 WHERE owner_id=$2 AND task_id=(SELECT task_id FROM core_execution_run_stages WHERE owner_id=$2 AND run_id=$3 AND stage_id=$4) AND state='consumed' AND reservation_json IS NOT NULL`, at, in.OwnerID, in.RunID, in.StageID); err != nil {
-			return zero, err
-		}
-		if err = insertExecutionEvent(ctx, tx, in.OwnerID, in.RunID, "uncertain_reconciled_"+outcome, in.StageID, coreexecution.StageUncertain, at); err != nil {
-			return zero, err
-		}
-	}
-	materialized, err := loadExecutionMaterialization(ctx, tx, in.OwnerID, in.RunID)
-	if err != nil || materialized.Run.Revision != in.ExpectedRevision || materialized.Run.Status != coreexecution.RunUncertain {
-		return zero, coreexecution.ErrConflict
-	}
-	run := materialized.Run
-	responseRaw, err := json.Marshal(run)
-	if err != nil {
-		return zero, err
-	}
-	responseDigest, err := coreexecution.CanonicalDigest(run)
-	if err != nil {
-		return zero, err
-	}
-	key, _ := uuid.Parse(in.IdempotencyKey)
-	res, err := tx.ExecContext(ctx, `INSERT INTO core_execution_idempotency(owner_id,idempotency_id,run_id,key_digest,request_digest,response_digest,status,schema_version,response_json,created_at) VALUES($1,$2,$3,$4,$5,$6,'succeeded','execution-idempotency/v2',$7,$8) ON CONFLICT(owner_id,idempotency_id) DO NOTHING`, in.OwnerID, key, in.RunID, string(digestBytes([]byte(in.IdempotencyKey))), requestDigest, responseDigest, responseRaw, r.now().UTC().Truncate(time.Microsecond))
-	if err != nil {
-		return zero, mapExecutionConflict(err)
-	}
-	if n, _ := res.RowsAffected(); n != 1 {
-		var oldRequest, oldResponse string
-		var oldRaw []byte
-		if err = tx.QueryRowContext(ctx, `SELECT request_digest,response_digest,response_json FROM core_execution_idempotency WHERE owner_id=$1 AND idempotency_id=$2 FOR UPDATE`, in.OwnerID, key).Scan(&oldRequest, &oldResponse, &oldRaw); err != nil || oldRequest != string(requestDigest) || oldResponse != string(responseDigest) || string(oldRaw) != string(responseRaw) {
-			return zero, coreexecution.ErrConflict
-		}
-	}
-	if err = tx.Commit(); err != nil {
-		return zero, err
-	}
-	return run, nil
-}
-
 // commitResolution is the authoritative uncertain-outcome transition. The
 // audit row is inserted before any evidence is advanced so the database scope
 // guard can prove the exact uncertain lease/receipt pair. Receipt, attempt,
@@ -650,7 +573,11 @@ func transitionSettledCanceledExecutionRunTx(ctx context.Context, tx *sql.Tx, ow
 		return err
 	}
 	if active {
-		return coreexecution.ErrConflict
+		// A canceled provider operation settles only its exact stage.  Independent
+		// roots may still be queued, running, or approval-gated; keep the aggregate
+		// running until those stages settle instead of rolling back the durable
+		// resolution and leaving the canceled lease fenced forever.
+		return nil
 	}
 	var revision uint64
 	var raw []byte

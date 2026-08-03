@@ -55,7 +55,7 @@ Existing non-deployment embedded capabilities, such as model profiles, memory,
 tasks, schedules, confirmations, remote MCP and reusable AWS control, retain
 their current readiness checks.
 
-Execution capability tokens are:
+Execution capability tokens (publication gated) are:
 
 ```text
 execution.v2
@@ -66,6 +66,9 @@ execution.v2.provision
 execution.v2.bindings
 execution.v2.transport.aws_ssm
 ```
+
+These names are contract identifiers, not evidence that a route is live. Types,
+schemas, or action registration alone never publish a capability.
 
 Deferred transports are advertised only after their own implementation,
 failure semantics and acceptance tests are ready:

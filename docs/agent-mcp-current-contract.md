@@ -1,17 +1,15 @@
 # Current Agent and MCP Contract
 
-> Embedded Agent control source behavior is recorded in
+> Current code, generated contract metadata, and focused tests are the authority.
+> Detailed embedded Agent and Execution V2 requirements are recorded in
 > [`agent-core-integration-development-contract.md`](agent-core-integration-development-contract.md)
-> and is capability/readiness gated. There is no external Core runtime. This
-> document remains the backend-owned contract for the Agent room, Native Agent,
-> and public Dirextalk MCP paths.
+> and [`adr/2026-07-31-execution-orchestration-v2.md`](adr/2026-07-31-execution-orchestration-v2.md).
+> Both are capability/readiness gated; there is no external Core runtime.
 
 This document is the backend-owned current contract for Dirextalk Agent state, Native Agent, and external MCP access. It describes existing behavior; it does not add a compatibility surface.
 
-The Execution Orchestration V2 boundary is recorded in
-[`adr/2026-07-31-execution-orchestration-v2.md`](adr/2026-07-31-execution-orchestration-v2.md).
-That ADR is an authoritative contract gate, not a claim that V2 routes or
-actions are currently live.
+Registration, schemas, or documentation alone never make an action or
+capability live.
 
 ## External MCP
 
@@ -31,7 +29,7 @@ actions are currently live.
 
 ## Native Agent Ownership
 
-- Native Agent is owned by `dirextalk-message-server`. The backend owns native `agent.*` actions, `client.native_agent_stream` / `server.native_agent_stream.*` frames, model-provider request handling, skills, external MCP client wiring, runtime CLI tools, orchestration, built-in Dirextalk tools, native config storage, and sanitized migration from the former hidden Agent plugin config.
+- Native Agent is owned by `dirextalk-message-server`. The backend owns native `agent.*` actions, `client.native_agent_stream` / `server.native_agent_stream.*` frames, model-provider request handling, immutable planning metadata, external MCP client wiring, orchestration, built-in Dirextalk tools, native config storage, and sanitized migration from the former hidden Agent plugin config. Local runtime CLI execution, mutable third-party Skill installation/execution, and mutable MCP server installation/execution remain unavailable.
 - Native Agent is not installed, enabled, configured, or invoked through `plugins.*`. Backend `plugins.*` actions remain for non-Agent plugins.
 - Model-backed Native Agent chat and compression resolve the owner’s default `conversation` model profile when the request omits profile configuration. Legacy inline `model_profile` requests remain supported for compatibility, but server-owned profiles are preferred and model API keys must not be persisted, returned, or injected into plugin or runtime environment state.
 - Native Agent BYOK web search is request-scoped. The owner may call `agent.web_search.test` over HTTP or the owner WebSocket with `tool_credentials.web_search.enabled=true`, `provider=tavily`, and a Tavily `api_key`; the key is write-only and is never stored in Agent config, model profiles, durable turns, conversation memory, logs, errors, or results. The same valid request credential adds the compiled `web_search` Eino tool to that chat turn; without it, the tool is absent.
@@ -84,43 +82,23 @@ actions are currently live.
 - `native_agent_schedules_confirm` can execute only on a later owner-authored turn in the same conversation whose current user text exactly normalizes to `确认执行 <code>`. Model arguments, previous-turn text, `dangerous_tools_confirm`, another owner, or another conversation cannot approve it. Completed/failed confirmations replay the authoritative terminal result; restart and concurrent retries are receipt-fenced and do not execute the Stage A mutation twice.
 - These interactive tools are separate from the restricted scheduled runner allowlist and from the Online Agent Matrix room/timeline. The scheduled runner cannot call mutation tools, and Flutter must present the proposal phrase then wait for a new Native turn.
 
-## Execution Orchestration V2
+## Execution Orchestration V2 (contract and release gate)
 
-The backend permits built-in declarative Planning Skills/Recipes only as
-side-effect-free planning inputs. They may emit immutable, canonical,
-secret-free plan fragments bound to content and revision digests; they cannot
-run local third-party shell/code/skills, call providers, fetch third-party
-content, or mutate state. GeoLibre is a fixture/recipe for tests and examples,
-not a product target or public contract.
+The detailed normative contract is
+[`agent-core-integration-development-contract.md`](agent-core-integration-development-contract.md);
+the accepted architecture decision is
+[`adr/2026-07-31-execution-orchestration-v2.md`](adr/2026-07-31-execution-orchestration-v2.md).
+V2 planning is declarative and side-effect free; remote mutations use a
+server-owned typed coordinator with durable receipts and explicit uncertainty.
+The Message Server does not execute local third-party shell/code/Skills or
+expose raw SSM/SSH/AWS passthrough.
 
-V2 keeps four boundaries: planner (validate requests and produce fragments),
-compiler (merge fragments into a typed stage graph and frozen plan digest),
-policy (owner, capability, target, revisions, risk, expiry, quota and
-idempotency), and a server-owned deterministic coordinator (resolve only frozen
-typed stages, dispatch them to remote targets over a versioned typed transport,
-and persist typed receipt/progress/readback/error evidence). The Message Server
-never exposes raw SSM/SSH/AWS passthrough and does not provide a local
-third-party executor or fallback.
-
-Frozen plans and mutating stages use an owner-scoped control-plane
-confirmation containing the exact digests, policy/revision facts, expiry and
-idempotency key. Native Agent confirmation cannot authorize a V2 mutation. A
-lost or ambiguous mutation dispatch is recorded as `uncertain`; it is not
-replayed, switched to another transport, or run locally. Only typed
-read-only reconciliation or explicitly authorized destroy/recovery can
-continue.
-
-The deployment/workload V1 implementation was never deployed and has no
-historical user data. Its create/read/observe/reconcile/destroy contracts,
-database objects and compatibility adapters are removed; V2 is the only
-deployment/execution contract. The first production slice is AWS SSM
-long-running services. SSH, generic HTTP, DNS, TLS and Coding Worker are
+Every `execution.v2.*` capability and ProductCore action is published only
+after its authenticated route, durable PostgreSQL state, typed
+executor/transport, focused tests, and explicit readiness/enablement all pass.
+Action registration, schemas, and docs alone are not live. AWS SSM is the
+first production slice; SSH, generic HTTP, DNS, TLS, and Coding Worker remain
 deferred and must not be advertised.
-
-The server publishes each `execution.v2.*` capability and ProductCore action
-only when its route, durable storage, typed executor/transport, focused tests,
-and explicit readiness check exist. Deferred transports and step kinds remain
-omitted rather than being presented as successful or available.
 
 ## Consumer Boundaries
 

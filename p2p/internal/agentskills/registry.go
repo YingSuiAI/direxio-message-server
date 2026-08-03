@@ -88,30 +88,57 @@ type SelectionQuery struct {
 	Limit              int
 }
 type Pin struct{ ID, Version, ContentDigest string }
-type Registry struct{ manifests []Manifest }
+type Registry struct {
+	// manifests is the active catalog. It is the only tier exposed through
+	// Manifests and Select.
+	manifests []Manifest
+	// archived contains immutable manifests kept solely for exact-pin and
+	// historical selection compatibility. Archived entries are never selected
+	// for a new intent and are never listed to callers.
+	archived []Manifest
+}
 
 func NewRegistry(contents ...[]byte) (*Registry, error) {
-	entries := make([]Manifest, 0, len(contents))
+	return NewRegistryWithArchived(contents, nil)
+}
+
+// NewRegistryWithArchived builds an active registry with an optional archive
+// of immutable historical manifests. The archive is intentionally separate
+// from the active catalog so callers cannot accidentally expose or select
+// retired skills.
+func NewRegistryWithArchived(activeContents, archivedContents [][]byte) (*Registry, error) {
 	seen := map[string]struct{}{}
-	for _, content := range contents {
-		m, err := Parse(content)
-		if err != nil {
-			return nil, err
+	parse := func(contents [][]byte) ([]Manifest, error) {
+		entries := make([]Manifest, 0, len(contents))
+		for _, content := range contents {
+			m, err := Parse(content)
+			if err != nil {
+				return nil, err
+			}
+			key := m.ID + "@" + m.Version
+			if _, ok := seen[key]; ok {
+				return nil, fmt.Errorf("duplicate manifest %s", key)
+			}
+			seen[key] = struct{}{}
+			entries = append(entries, m)
 		}
-		key := m.ID + "@" + m.Version
-		if _, ok := seen[key]; ok {
-			return nil, fmt.Errorf("duplicate manifest %s", key)
-		}
-		seen[key] = struct{}{}
-		entries = append(entries, m)
+		sort.Slice(entries, func(i, j int) bool {
+			if entries[i].ID != entries[j].ID {
+				return entries[i].ID < entries[j].ID
+			}
+			return entries[i].Version < entries[j].Version
+		})
+		return entries, nil
 	}
-	sort.Slice(entries, func(i, j int) bool {
-		if entries[i].ID != entries[j].ID {
-			return entries[i].ID < entries[j].ID
-		}
-		return entries[i].Version < entries[j].Version
-	})
-	return &Registry{manifests: entries}, nil
+	active, err := parse(activeContents)
+	if err != nil {
+		return nil, err
+	}
+	archived, err := parse(archivedContents)
+	if err != nil {
+		return nil, err
+	}
+	return &Registry{manifests: active, archived: archived}, nil
 }
 
 func (r *Registry) Manifests() []Manifest {
@@ -167,8 +194,11 @@ func (r *Registry) Resolve(pin Pin) (Manifest, error) {
 	if r == nil {
 		return Manifest{}, errors.New("nil registry")
 	}
-	for _, m := range r.manifests {
-		if m.ID == pin.ID && m.Version == pin.Version {
+	for _, tier := range [][]Manifest{r.manifests, r.archived} {
+		for _, m := range tier {
+			if m.ID != pin.ID || m.Version != pin.Version {
+				continue
+			}
 			if m.ContentDigest != pin.ContentDigest {
 				return Manifest{}, fmt.Errorf("digest mismatch for %s@%s", pin.ID, pin.Version)
 			}
@@ -179,6 +209,77 @@ func (r *Registry) Resolve(pin Pin) (Manifest, error) {
 }
 func (r *Registry) ResolveExact(id, version, contentDigest string) (Manifest, error) {
 	return r.Resolve(Pin{ID: id, Version: version, ContentDigest: contentDigest})
+}
+
+// ResolveSelectedID resolves a selected_skill_ids entry. Bare IDs resolve to
+// the active manifest when present and fall back to an archived manifest only
+// when the ID was retired. A version-qualified ID (id@version) resolves that
+// immutable version, while id@version#digest (or id@version:digest) is an
+// exact pin. This keeps old explicit selections working without making a bare
+// active ID silently select an archived version.
+func (r *Registry) ResolveSelectedID(value string) (Manifest, error) {
+	if r == nil {
+		return Manifest{}, errors.New("nil registry")
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return Manifest{}, errors.New("empty selected skill id")
+	}
+	if strings.Contains(value, "@") {
+		id, version, contentDigest, err := parseSelectedID(value)
+		if err != nil {
+			return Manifest{}, err
+		}
+		if contentDigest != "" {
+			return r.ResolveExact(id, version, contentDigest)
+		}
+		return r.resolveVersion(id, version)
+	}
+	if !canonicalID.MatchString(value) {
+		return Manifest{}, fmt.Errorf("invalid selected skill id %q", value)
+	}
+	for _, tier := range [][]Manifest{r.manifests, r.archived} {
+		for _, m := range tier {
+			if m.ID == value {
+				return cloneManifest(m), nil
+			}
+		}
+	}
+	return Manifest{}, fmt.Errorf("planning skill %q is not built in", value)
+}
+
+func (r *Registry) resolveVersion(id, version string) (Manifest, error) {
+	for _, tier := range [][]Manifest{r.manifests, r.archived} {
+		for _, m := range tier {
+			if m.ID == id && m.Version == version {
+				return cloneManifest(m), nil
+			}
+		}
+	}
+	return Manifest{}, fmt.Errorf("manifest version not found: %s@%s", id, version)
+}
+
+func parseSelectedID(value string) (id, version, contentDigest string, err error) {
+	at := strings.IndexByte(value, '@')
+	if at <= 0 || at == len(value)-1 || strings.Contains(value[at+1:], "@") {
+		return "", "", "", fmt.Errorf("invalid selected skill pin %q", value)
+	}
+	id = value[:at]
+	if !canonicalID.MatchString(id) {
+		return "", "", "", fmt.Errorf("invalid selected skill id %q", id)
+	}
+	rest := value[at+1:]
+	if separator := strings.IndexAny(rest, "#:"); separator >= 0 {
+		contentDigest = rest[separator+1:]
+		rest = rest[:separator]
+		if !digest.MatchString(contentDigest) {
+			return "", "", "", fmt.Errorf("invalid selected skill digest for %s", id)
+		}
+	}
+	if !semver.MatchString(rest) {
+		return "", "", "", fmt.Errorf("invalid selected skill version for %s", id)
+	}
+	return id, rest, contentDigest, nil
 }
 
 func Parse(content []byte) (Manifest, error) {

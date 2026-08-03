@@ -41,11 +41,14 @@ type MemoryCoordinatorStore struct {
 	resolutions    map[string][]memoryReconciliationResolution
 }
 
-// memoryReconciliationResolution is an append-only successor record.  It
-// deliberately does not alter the terminal uncertain run/stage evidence.
+// memoryReconciliationResolution is append-only outcome evidence for one
+// exact uncertain lease. The queryable run/stage aggregate is promoted only
+// after this record is appended.
 type memoryReconciliationResolution struct {
 	RunID, StageID, LeaseToken string
 	LeaseEpoch                 uint64
+	Outcome                    StageStatus
+	OutcomeDigest              Digest
 	Succeeded                  bool
 	At                         time.Time
 }
@@ -88,6 +91,9 @@ const (
 	FakeReconcileSuccess       FakeMode = "reconcile_success"
 	FakeReconcileFailed        FakeMode = "reconcile_failed"
 	FakeErrorAfterDispatch     FakeMode = "error_after_dispatch"
+	FakeReconcileCanceled      FakeMode = "reconcile_canceled"
+	FakeReconcilePending       FakeMode = "reconcile_pending"
+	FakeReconcileUnknown       FakeMode = "reconcile_unknown"
 )
 
 type FakeExecutor struct {
@@ -99,6 +105,7 @@ type FakeExecutor struct {
 type fakeResult struct {
 	providerOperation, commandID string
 	failed, uncertain            bool
+	reconciled                   StageStatus
 }
 
 func (f FakeExecutor) execute(ctx context.Context, stage RunStage) (fakeResult, error) {
@@ -137,7 +144,21 @@ func (f FakeExecutor) execute(ctx context.Context, stage RunStage) (fakeResult, 
 	return r, nil
 }
 func (f FakeExecutor) reconcile(_ context.Context, _ RunStage) fakeResult {
-	return fakeResult{failed: f.Mode == FakeReconcileFailed}
+	switch f.Mode {
+	case FakeReconcileSuccess:
+		return fakeResult{reconciled: StageSucceeded}
+	case FakeReconcileFailed:
+		return fakeResult{reconciled: StageFailed}
+	case FakeReconcileCanceled:
+		return fakeResult{reconciled: StageCanceled}
+	case FakeReconcilePending, FakeReconcileUnknown:
+		fallthrough
+	default:
+		// A pending, running, or unknown typed readback is not a terminal
+		// provider fact. The caller must leave the original uncertain evidence
+		// fenced for a later readback-only reconciliation.
+		return fakeResult{}
+	}
 }
 
 type MemoryCoordinator struct {
@@ -242,7 +263,7 @@ func (c *MemoryCoordinator) CreateRun(_ context.Context, in CreateRunCommand) (R
 	}
 	for i, ps := range stagePlans {
 		sid := DeterministicStageID(rid, ps.StageKey)
-		rs := RunStage{StageID: sid, RunID: rid, OwnerID: p.OwnerID, PlanID: p.ID, StageKey: ps.StageKey, PlanRevision: p.Revision, StageRevision: ps.Revision, StageDigest: ps.Digest, TargetID: ps.TargetID, TargetRevision: ps.TargetRevision, TargetDigest: ps.TargetDigest, Ordinal: uint64(i + 1), StageIdempotencyKey: deterministicID("execution:v2:stage-idem:" + rid + ":" + ps.StageKey), Status: StageBlocked, CreatedAt: at, UpdatedAt: at}
+		rs := RunStage{StageID: sid, RunID: rid, OwnerID: p.OwnerID, PlanID: p.ID, StageKey: ps.StageKey, PlanRevision: p.Revision, RunRevision: r.Revision, StageRevision: ps.Revision, StageDigest: ps.Digest, TargetID: ps.TargetID, TargetRevision: ps.TargetRevision, TargetDigest: ps.TargetDigest, Ordinal: uint64(i + 1), StageIdempotencyKey: deterministicID("execution:v2:stage-idem:" + rid + ":" + ps.StageKey), Status: StageBlocked, CreatedAt: at, UpdatedAt: at}
 		rs.StageIdempotencyKey = DeterministicStageIdempotencyKey(sid, in.Operation)
 		if in.Operation == RunOperationRollback && len(ps.RollbackSteps) == 0 {
 			rs.Status = StageSkipped
@@ -455,14 +476,21 @@ func (c *MemoryCoordinator) ExecuteClaimedStage(ctx context.Context, owner, task
 func (c *MemoryCoordinator) ReconcileStage(_ context.Context, owner, runID, stageID string, at time.Time) (RunStage, error) {
 	c.store.mu.Lock()
 	defer c.store.mu.Unlock()
-	rs, ok := c.store.stages[stageMapKey(runID, stageID)]
-	if !ok || rs.OwnerID != owner || rs.Status != StageUncertain {
+	key := stageMapKey(runID, stageID)
+	rs, ok := c.store.stages[key]
+	if !ok || rs.OwnerID != owner {
 		return RunStage{}, ErrConflict
 	}
 	for _, resolution := range c.store.resolutions[runID] {
 		if resolution.StageID == stageID {
+			// Reconciliation is idempotent after the exact immutable evidence has
+			// been resolved. It never performs a second provider readback or
+			// inserts a second resolution successor.
 			return cloneStage(rs), nil
 		}
+	}
+	if rs.Status != StageUncertain {
+		return RunStage{}, ErrConflict
 	}
 	l := c.store.leases[rs.TargetID]
 	t := c.store.tasks[rs.TaskID]
@@ -477,28 +505,30 @@ func (c *MemoryCoordinator) ReconcileStage(_ context.Context, owner, runID, stag
 	if current.token != token || current.epoch != epoch || current.runID != runID || current.stageID != stageID || !current.uncertain {
 		return RunStage{}, ErrConflict
 	}
-	if err := c.recordResolutionLocked(rs, token, epoch, !r.failed, c.at(at)); err != nil {
-		return RunStage{}, err
-	}
-	if rs.ConfirmationID != "" {
-		delete(c.store.reservations, rs.ConfirmationID)
-	}
-	// Resolution is append-only evidence for the original uncertain stage, but
-	// it also proves that this exact lease no longer needs to fence the target.
-	// Keep the run/stage/attempt uncertain and release only the matching lease;
-	// a later repair or rollback run must acquire a new epoch.
-	resolved := c.store.leases[rs.TargetID]
-	if resolved.token != token || resolved.epoch != epoch || resolved.runID != runID || resolved.stageID != stageID {
+	status := r.reconciled
+	if status != StageSucceeded && status != StageFailed && status != StageCanceled {
+		// Pending/running/unknown readback is not a typed terminal fact. Keep
+		// the original uncertain attempt, receipt, stage, run, and lease intact.
 		return RunStage{}, ErrConflict
 	}
-	resolved.uncertain = false
-	resolved.expiresAt = time.Time{}
-	resolved.runID = ""
-	resolved.stageID = ""
-	c.store.leases[rs.TargetID] = resolved
-	// The original run/stage remain terminal uncertain forever; callers inspect
-	// the append-only resolution successor rather than a rewritten history.
-	return cloneStage(rs), nil
+	resolvedAt := c.at(at)
+	outcomeDigest := reconciliationOutcomeDigest(rs, status)
+	if err := c.recordResolutionLocked(rs, token, epoch, status, outcomeDigest, resolvedAt); err != nil {
+		return RunStage{}, err
+	}
+	var attemptStatus AttemptStatus
+	var runStatus RunStatus
+	reason := ""
+	switch status {
+	case StageSucceeded:
+		attemptStatus, runStatus = AttemptSucceeded, RunSucceeded
+	case StageFailed:
+		attemptStatus, runStatus, reason = AttemptFailed, RunFailed, "stage_failed"
+	case StageCanceled:
+		attemptStatus, runStatus, reason = AttemptCanceled, RunCanceled, "provider_operation_canceled"
+	}
+	c.resolveUncertainLocked(rs, t, attemptStatus, status, runStatus, reason, outcomeDigest, resolvedAt)
+	return cloneStage(c.store.stages[key]), nil
 }
 
 func (c *MemoryCoordinator) GetRun(_ context.Context, owner, id string) (ExecutionRun, error) {
@@ -594,6 +624,12 @@ func (c *MemoryCoordinator) promoteLocked(runID string, at time.Time) {
 func (c *MemoryCoordinator) materializeTaskLocked(rs RunStage, at time.Time, confirm bool) {
 	p := c.store.plans[rs.PlanID]
 	run := c.store.runs[rs.RunID]
+	// A child stage remains bound to the immutable run revision captured when
+	// the graph was created. Never bind a newly materialized child to the
+	// mutable aggregate head after reconciliation/restart.
+	if rs.RunRevision != 0 {
+		run.Revision = rs.RunRevision
+	}
 	tid := DeterministicTaskID(rs.StageID)
 	payload := &coretask.ExecutionStageTaskPayload{PlanID: p.ID, PlanRevision: p.Revision, PlanDigest: string(p.Digest), DeploymentID: p.DeploymentID, RunID: rs.RunID, RunRevision: run.Revision, StageID: rs.StageID, StageRevision: rs.StageRevision, StageDigest: string(rs.StageDigest), TargetID: rs.TargetID, TargetRevision: rs.TargetRevision, TargetDigest: string(rs.TargetDigest)}
 	if confirm {
@@ -766,18 +802,40 @@ func (c *MemoryCoordinator) finalizeLocked(s RunStage, t coretask.Task, as Attem
 	c.eventLocked(s.RunID, s.StageID, "stage_terminal", ss, at)
 }
 
-// resolveUncertainLocked records a new resolution event and changes aggregate
-// state without rewriting the immutable uncertain attempt/receipt evidence.
-func (c *MemoryCoordinator) resolveUncertainLocked(s RunStage, t coretask.Task, as AttemptStatus, ss StageStatus, rs RunStatus, reason string, at time.Time) {
-	s.Status, s.FinishedAt, s.UpdatedAt = ss, at, at
-	c.store.stages[stageMapKey(s.RunID, s.StageID)] = s
-	t.Status, t.Lease, t.FailureCode, t.FailureSummary = coretask.StatusSucceeded, nil, "", ""
-	t.Result = &coretask.Result{Summary: "execution stage reconciled"}
-	if ss != StageSucceeded {
-		t.Status, t.FailureCode, t.FailureSummary, t.Result = coretask.StatusFailed, reason, reason, nil
+// resolveUncertainLocked advances only the exact uncertain evidence that was
+// read back. The resolution row is append-only, while the queryable aggregate
+// is promoted in place under the same store lock.
+func (c *MemoryCoordinator) resolveUncertainLocked(s RunStage, t coretask.Task, as AttemptStatus, ss StageStatus, rs RunStatus, reason string, outcomeDigest Digest, at time.Time) {
+	attempts := c.store.attempts[s.StageID]
+	for i := len(attempts) - 1; i >= 0; i-- {
+		a := &attempts[i]
+		if a.Status != AttemptUncertain {
+			continue
+		}
+		a.Status, a.Uncertain, a.Revision, a.UpdatedAt = as, false, a.Revision+1, at
+		if rec, ok := c.store.receipts[a.ReceiptID]; ok {
+			rec.Status, rec.ResponseDigest, rec.Revision = receiptStatusForStage(ss), outcomeDigest, rec.Revision+1
+			c.store.receipts[rec.ReceiptID] = rec
+		}
+		break
 	}
+	c.store.attempts[s.StageID] = attempts
+
+	s.Status, s.UpdatedAt = ss, at
+	c.store.stages[stageMapKey(s.RunID, s.StageID)] = s
+	t.Lease = nil
 	t.Revision++
 	t.UpdatedAt = at
+	t.FailureCode, t.FailureSummary, t.Result = "", "", nil
+	switch ss {
+	case StageSucceeded:
+		t.Status = coretask.StatusSucceeded
+		t.Result = &coretask.Result{Summary: "execution stage reconciled"}
+	case StageFailed:
+		t.Status, t.FailureCode, t.FailureSummary = coretask.StatusFailed, reason, reason
+	case StageCanceled:
+		t.Status, t.FailureCode, t.FailureSummary = coretask.StatusCanceled, reason, reason
+	}
 	c.store.tasks[t.ID] = t
 	if s.ConfirmationID != "" {
 		conf := c.store.confirmations[s.ConfirmationID]
@@ -789,12 +847,71 @@ func (c *MemoryCoordinator) resolveUncertainLocked(s RunStage, t coretask.Task, 
 	l := c.store.leases[s.TargetID]
 	l.uncertain, l.expiresAt, l.runID, l.stageID = false, time.Time{}, "", ""
 	c.store.leases[s.TargetID] = l
-	c.updateRunLocked(s.RunID, rs, s.StageID, at)
-	c.eventLocked(s.RunID, s.StageID, "uncertain_resolved_"+string(as), ss, at)
+
+	// Production reconciliation reopens the uncertain run before promoting its
+	// DAG. A successful stage may therefore leave the run running while a child
+	// is queued/waiting; a failed/canceled stage skips all blocked descendants
+	// and settles the aggregate when no other stage is active.
+	run := c.store.runs[s.RunID]
+	run.Status, run.TerminalReason, run.FinishedAt = RunRunning, "", time.Time{}
+	run.Revision++
+	run.UpdatedAt = at
+	c.store.runs[s.RunID] = run
+	if ss == StageSucceeded {
+		c.promoteLocked(s.RunID, at)
+	} else {
+		c.skipBlockedDescendantsLocked(s.RunID, at)
+		c.settleReconciledRunLocked(s.RunID, rs, reason, s.StageID, at)
+	}
+	c.eventLocked(s.RunID, s.StageID, "uncertain_reconciled_"+string(ss), ss, at)
+}
+
+func receiptStatusForStage(status StageStatus) ReceiptStatus {
+	switch status {
+	case StageSucceeded:
+		return ReceiptSucceeded
+	case StageFailed:
+		return ReceiptFailed
+	case StageCanceled:
+		return ReceiptCanceled
+	default:
+		return ReceiptUncertain
+	}
+}
+
+func reconciliationOutcomeDigest(s RunStage, status StageStatus) Digest {
+	return mustDigest(struct {
+		StageID string
+		Status  StageStatus
+	}{s.StageID, status})
+}
+
+func (c *MemoryCoordinator) settleReconciledRunLocked(runID string, preferred RunStatus, reason, currentStage string, at time.Time) {
+	active, hasUncertain := false, false
+	for _, key := range c.stageKeysLocked(runID) {
+		s := c.store.stages[key]
+		switch s.Status {
+		case StageBlocked, StageWaitingUser, StageQueued, StageRunning:
+			active = true
+		case StageUncertain:
+			hasUncertain = true
+		}
+	}
+	if active {
+		return
+	}
+	target, terminalReason := preferred, reason
+	if hasUncertain {
+		target, terminalReason = RunUncertain, "stage_outcome_uncertain"
+	}
+	c.updateRunLocked(runID, target, currentStage, at)
+	r := c.store.runs[runID]
+	r.TerminalReason = terminalReason
+	c.store.runs[runID] = r
 }
 func (c *MemoryCoordinator) payloadMatchesLocked(t coretask.Task, s RunStage, p ExecutionPlan) error {
 	q := t.Spec.Payload.ExecutionStage
-	if q == nil || q.PlanID != p.ID || q.PlanRevision != p.Revision || q.PlanDigest != string(p.Digest) || q.RunID != s.RunID || q.RunRevision == 0 || q.StageID != s.StageID || q.StageRevision != s.StageRevision || q.StageDigest != string(s.StageDigest) || q.TargetID != s.TargetID || q.TargetRevision != s.TargetRevision || q.TargetDigest != string(s.TargetDigest) {
+	if q == nil || q.PlanID != p.ID || q.PlanRevision != p.Revision || q.PlanDigest != string(p.Digest) || q.RunID != s.RunID || q.RunRevision == 0 || q.RunRevision != s.RunRevision || q.StageID != s.StageID || q.StageRevision != s.StageRevision || q.StageDigest != string(s.StageDigest) || q.TargetID != s.TargetID || q.TargetRevision != s.TargetRevision || q.TargetDigest != string(s.TargetDigest) {
 		return ErrConflict
 	}
 	if s.ConfirmationID != "" && uint64(c.store.confirmations[s.ConfirmationID].Binding.RunRevision) != q.RunRevision {
@@ -843,17 +960,19 @@ func (c *MemoryCoordinator) removeLatestIntentLocked(stageID string) {
 	delete(c.store.receipts, last.ReceiptID)
 	c.store.attempts[stageID] = attempts[:len(attempts)-1]
 }
-func (c *MemoryCoordinator) recordResolutionLocked(s RunStage, token string, epoch uint64, succeeded bool, at time.Time) error {
+func (c *MemoryCoordinator) recordResolutionLocked(s RunStage, token string, epoch uint64, outcome StageStatus, outcomeDigest Digest, at time.Time) error {
 	for _, old := range c.store.resolutions[s.RunID] {
 		if old.StageID == s.StageID && old.LeaseToken == token && old.LeaseEpoch == epoch {
-			if old.Succeeded != succeeded {
+			if old.Outcome != outcome || old.OutcomeDigest != outcomeDigest {
 				return ErrConflict
 			}
 			return nil
 		}
 	}
-	c.store.resolutions[s.RunID] = append(c.store.resolutions[s.RunID], memoryReconciliationResolution{RunID: s.RunID, StageID: s.StageID, LeaseToken: token, LeaseEpoch: epoch, Succeeded: succeeded, At: at})
-	c.eventLocked(s.RunID, s.StageID, "uncertain_resolution_recorded", StageUncertain, at)
+	c.store.resolutions[s.RunID] = append(c.store.resolutions[s.RunID], memoryReconciliationResolution{
+		RunID: s.RunID, StageID: s.StageID, LeaseToken: token, LeaseEpoch: epoch,
+		Outcome: outcome, OutcomeDigest: outcomeDigest, Succeeded: outcome == StageSucceeded, At: at,
+	})
 	return nil
 }
 
@@ -948,6 +1067,45 @@ func (c *MemoryCoordinator) markLatestAttemptLocked(stageID string, status Attem
 	}
 	c.store.attempts[stageID] = attempts
 }
+
+// skipBlockedDescendantsLocked mirrors the durable DAG transition: once a
+// stage has a terminal non-success outcome, every blocked descendant is
+// skipped transitively and is never materialized as an executable task.
+func (c *MemoryCoordinator) skipBlockedDescendantsLocked(runID string, at time.Time) {
+	for {
+		changed := false
+		for _, key := range c.stageKeysLocked(runID) {
+			s := c.store.stages[key]
+			if s.Status != StageBlocked {
+				continue
+			}
+			p := c.store.plans[s.PlanID]
+			blocked := false
+			for _, dependency := range p.stage(s.StageKey).DependsOn {
+				for _, parent := range c.store.stages {
+					if parent.RunID != runID || parent.StageKey != dependency {
+						continue
+					}
+					switch parent.Status {
+					case StageFailed, StageUncertain, StageSkipped, StageCanceled, StageRejected, StageExpired:
+						blocked = true
+					}
+				}
+			}
+			if !blocked {
+				continue
+			}
+			s.Status, s.UpdatedAt = StageSkipped, at
+			c.store.stages[key] = s
+			c.eventLocked(runID, s.StageID, "stage_skipped", StageSkipped, at)
+			changed = true
+		}
+		if !changed {
+			return
+		}
+	}
+}
+
 func (c *MemoryCoordinator) dependenciesDoneLocked(runID string, s RunStage) bool {
 	p := c.store.plans[s.PlanID]
 	if c.store.runs[runID].Operation == RunOperationRollback {

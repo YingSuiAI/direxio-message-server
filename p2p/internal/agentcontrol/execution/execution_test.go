@@ -366,7 +366,7 @@ func TestMissingDependencyRollbackClosureAndDeepClone(t *testing.T) {
 }
 
 func TestRunRecordStatusInvariants(t *testing.T) {
-	if !RunWaitingUser.CanTransition(RunQueued) || RunSucceeded.CanTransition(RunRunning) || RunUncertain.CanTransition(RunSucceeded) || !StageQueued.CanTransition(StageRunning) || StageFailed.CanTransition(StageQueued) || StageUncertain.CanTransition(StageSucceeded) || !PlanDraft.CanTransition(PlanReady) {
+	if !RunWaitingUser.CanTransition(RunQueued) || RunSucceeded.CanTransition(RunRunning) || !RunUncertain.CanTransition(RunSucceeded) || !RunUncertain.CanTransition(RunFailed) || !RunUncertain.CanTransition(RunCanceled) || !StageQueued.CanTransition(StageRunning) || StageFailed.CanTransition(StageQueued) || !StageUncertain.CanTransition(StageSucceeded) || !StageUncertain.CanTransition(StageFailed) || !StageUncertain.CanTransition(StageCanceled) || !PlanDraft.CanTransition(PlanReady) {
 		t.Fatal("lifecycle transition bounds")
 	}
 	now := time.Date(2030, 1, 1, 2, 0, 0, 0, time.UTC)

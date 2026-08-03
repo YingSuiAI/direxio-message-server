@@ -315,7 +315,7 @@ Claude prompt:
 ```text
 Audit documentation freshness.
 
-Compare docs/current-project-documentation.md, docs/api-interface-change-record.md, docs/api-audit-and-optimization.md, docs/p2p-integrated-as-implementation.md, docs/native-agent-requirements.md, docs/native-agent-progress.md, docs/dirextalk-message-server.md, docs/dirextalk-push-gateway.md, AGENTS.md, and .codex/skills/*/SKILL.md against current code.
+Compare docs/current-project-documentation.md, docs/agent-mcp-current-contract.md, docs/agent-core-integration-development-contract.md, docs/api-interface-change-record.md, docs/dirextalk-message-server.md, docs/dirextalk-push-gateway.md, AGENTS.md, and .codex/skills/*/SKILL.md against current code.
 
 Find stale references, removed endpoints/actions, wrong token rules, wrong WS fallback rules, outdated Agent/plugin/MCP descriptions, examples that cannot import or run, and missing updates required by current behavior.
 ```

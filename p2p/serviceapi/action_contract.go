@@ -42,45 +42,36 @@ func cloneActionSchema(schema *ActionSchema) *ActionSchema {
 	if schema == nil {
 		return nil
 	}
-	var cloneFields func(map[string]ActionFieldSchema) map[string]ActionFieldSchema
-	cloneFields = func(fields map[string]ActionFieldSchema) map[string]ActionFieldSchema {
+	cloneFields := func(fields map[string]ActionFieldSchema) map[string]ActionFieldSchema {
 		if fields == nil {
 			return nil
 		}
 		out := make(map[string]ActionFieldSchema, len(fields))
 		for name, field := range fields {
-			copyField := field
-			if field.Properties != nil {
-				copyField.Properties = make(map[string]ActionFieldSchema, len(field.Properties))
-				for childName, child := range field.Properties {
-					childCopy := child
-					if child.Presence != nil {
-						presence := *child.Presence
-						childCopy.Presence = &presence
-					}
-					copyField.Properties[childName] = childCopy
-				}
-			}
-			if field.Items != nil {
-				item := *field.Items
-				if field.Items.Presence != nil {
-					presence := *field.Items.Presence
-					item.Presence = &presence
-				}
-				if field.Items.Properties != nil {
-					item.Properties = cloneFields(field.Items.Properties)
-				}
-				copyField.Items = &item
-			}
-			if field.Presence != nil {
-				presence := *field.Presence
-				copyField.Presence = &presence
-			}
-			out[name] = copyField
+			out[name] = cloneField(field)
 		}
 		return out
 	}
 	return &ActionSchema{Request: cloneFields(schema.Request), Response: cloneFields(schema.Response)}
+}
+
+func cloneField(field ActionFieldSchema) ActionFieldSchema {
+	clone := field
+	if field.Properties != nil {
+		clone.Properties = make(map[string]ActionFieldSchema, len(field.Properties))
+		for name, child := range field.Properties {
+			clone.Properties[name] = cloneField(child)
+		}
+	}
+	if field.Items != nil {
+		item := cloneField(*field.Items)
+		clone.Items = &item
+	}
+	if field.Presence != nil {
+		presence := *field.Presence
+		clone.Presence = &presence
+	}
+	return clone
 }
 
 func cloneActionSpec(spec ActionSpec) ActionSpec {

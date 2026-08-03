@@ -153,6 +153,23 @@ func TestDeploymentIntentSelectsAnalysisAWSTargetAndOneRecipe(t *testing.T) {
 	}
 }
 
+func TestPlacementAndSizingIntentSelectConsolidatedAWSTargetAdvisor(t *testing.T) {
+	runtime := New(Config{})
+	for _, intent := range []string{"placement", "sizing"} {
+		selected, err := runtime.selectPlanningSkills(
+			context.Background(),
+			nil,
+			map[string]any{"skill_intent": intent},
+		)
+		if err != nil {
+			t.Fatalf("select %s: %v", intent, err)
+		}
+		if len(selected) != 1 || selected[0].ID != "aws-target-advisor" {
+			t.Fatalf("select %s = %#v, want aws-target-advisor only", intent, selected)
+		}
+	}
+}
+
 func mustManifestJSON(t *testing.T, manifests []agentskills.Manifest, id string) []byte {
 	t.Helper()
 	for _, manifest := range manifests {

@@ -1,6 +1,6 @@
 # Dirextalk Message Server
 
-Dirextalk Message Server 是 Dirextalk 后端服务，将 Matrix 兼容 homeserver 与 Dirextalk P2P 产品 API 合并在一个 Go monolith 中。
+Dirextalk Message Server 是 Dirextalk 的后端合约权威。在一个 Go monolith 中合并 Matrix 兼容 homeserver、ProductCore action API、产品策略、projection、Native Agent、外部 MCP 访问和 PostgreSQL-backed 运行时存储。
 
 本仓库基于 Element Dendrite，但维护目标是 Dirextalk 产品服务，而不是通用 Matrix homeserver 发行版。
 
@@ -28,7 +28,9 @@ Dirextalk Message Server 是 Dirextalk 后端服务，将 Matrix 兼容 homeserv
 - Docker 默认配置路径：`/etc/dirextalk-message-server/message-server.yaml`
 - Docker 默认数据路径：`/var/dirextalk-message-server`
 - Go module：`github.com/YingSuiAI/dirextalk-message-server`
-- Go 版本：`1.26.4`
+- Go 版本：`1.26.5`
+- 服务端数据库：仅支持 PostgreSQL；不支持 SQLite 或 file DSN。
+- Docker 开发数据库：PostgreSQL 18
 
 ## API 入口
 
@@ -53,6 +55,14 @@ Dirextalk 产品 API 使用 body-action 入口：
 WebSocket 上使用 `client.request`/`server.response`，realtime 未 ready 时回退
 到 HTTP query/command；外部 MCP 客户端在 `POST /mcp` 上使用带 `agent_token`
 的 JSON-RPC。
+
+鉴权和传输边界：
+
+- Owner ProductCore action 使用 `Authorization: Bearer <access_token>`。
+- `realtime.ws_ticket.create` 颁发短期单次 owner ticket；`GET /_p2p/ws`
+  只接受该 ticket，不接受 bearer token。
+- `agent_token` 只能调用 `agent.matrix_session.create` 和标准 `POST /mcp`；
+  不能创建 owner WebSocket ticket 或调用 owner action。
 
 请求 envelope：
 
@@ -128,16 +138,26 @@ go test ./p2p ./internal/productpolicy -count=1
 
 测试 helper 会创建相互隔离的 `dendrite_test_*` 数据库，并在对应测试结束后删除这些测试库。
 
+## 合约事实源
+
+修改客户端、部署工具或 Agent/MCP 行为前，优先读取这些当前维护的事实源：
+
+- [生成后的 ProductCore action 合约](docs/product-action-contract.json)
+- [当前项目文档](docs/current-project-documentation.md)
+- [当前 Agent 和 MCP 合约](docs/agent-mcp-current-contract.md)
+- [Embedded Agent 与 Execution V2 合约](docs/agent-core-integration-development-contract.md)
+- [Execution V2 ADR](docs/adr/2026-07-31-execution-orchestration-v2.md)
+
+仅用于历史接口审计的 [API 变更记录](docs/api-interface-change-record.md)。
+
 ## 文档
 
 当前维护文档保持精简。继承自 Dendrite 的站点文档、过时 tracker 和一次性实施计划不再作为本 fork 的维护文档。
 
 - [当前项目文档](docs/current-project-documentation.md)
-- [实现说明](docs/p2p-integrated-as-implementation.md)
-- [API 变更记录](docs/api-interface-change-record.md)
-- [API 审计与优化记录](docs/api-audit-and-optimization.md)
-- [Postman collection](docs/postman/dirextalk-message-server.postman_collection.json)
-- [插件 Postman collection](docs/postman/dirextalk-plugins.postman_collection.json)
+- [当前 Agent 和 MCP 合约](docs/agent-mcp-current-contract.md)
+- [API 变更记录（历史审计）](docs/api-interface-change-record.md)
+- [Release notes](release/RELEASE_NOTES.md)
 - [Docker 镜像说明](docs/dirextalk-message-server.md)
 - [Push Gateway 合约](docs/dirextalk-push-gateway.md)
 

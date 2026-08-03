@@ -138,20 +138,13 @@ func (r *Runtime) selectDeploymentPlanningSkills(userText string) []agentskills.
 }
 
 func (r *Runtime) resolveSelectedSkills(ids []string) ([]agentskills.Manifest, error) {
-	manifests := r.planningSkills.Manifests()
-	byID := make(map[string]agentskills.Manifest, len(manifests))
-	for _, manifest := range manifests {
-		if isFixtureSkill(manifest) {
-			continue
-		}
-		// Built-in manifests are sorted by ID/version; the last version wins
-		// if a future release ships more than one version of an ID.
-		byID[manifest.ID] = manifest
-	}
 	result := make([]agentskills.Manifest, 0, len(ids))
 	for _, id := range ids {
-		manifest, ok := byID[id]
-		if !ok {
+		manifest, err := r.planningSkills.ResolveSelectedID(id)
+		if err != nil {
+			return nil, err
+		}
+		if isFixtureSkill(manifest) {
 			return nil, fmt.Errorf("planning skill %q is not built in", id)
 		}
 		result = append(result, manifest)
