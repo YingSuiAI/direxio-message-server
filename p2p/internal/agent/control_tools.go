@@ -39,7 +39,11 @@ func ControlTools(control ControlInvoker) []nativeagent.Tool {
 				// bounded Native Agent adapter.
 				if action == "agent.execution.v2.projects.analyze" {
 					if _, ok := request["project_id"]; !ok {
-						request["project_id"] = controlProjectID(ctx)
+						projectID, projectErr := controlProjectID(ctx)
+						if projectErr != nil {
+							return nil, projectErr
+						}
+						request["project_id"] = projectID
 					}
 				}
 				if err := rejectNativeControlSecrets(request); err != nil {
@@ -54,7 +58,11 @@ func ControlTools(control ControlInvoker) []nativeagent.Tool {
 					if strings.TrimSpace(owner) == "" || strings.TrimSpace(conversation) == "" || strings.TrimSpace(intent) == "" {
 						return nil, fmt.Errorf("native agent control write requires owner, conversation, and turn context")
 					}
-					request["idempotency_key"] = controlIdempotencyKey(ctx, action, request)
+					idempotencyKey, keyErr := controlIdempotencyKey(ctx, action, request)
+					if keyErr != nil {
+						return nil, keyErr
+					}
+					request["idempotency_key"] = idempotencyKey
 				}
 				result, err := control.Invoke(ctx, action, request)
 				if err != nil {
@@ -604,17 +612,29 @@ func normalizedControlKey(key string) string {
 // tool result is persisted or handed to confirmation-card extraction.
 func RedactNativeControlResult(value any) any { return redactNativeControlResult(value) }
 
-func controlIdempotencyKey(ctx context.Context, _ string, _ map[string]any) string {
+func controlIdempotencyKey(ctx context.Context, action string, request map[string]any) (string, error) {
+	canonicalRequest, err := json.Marshal(request)
+	if err != nil {
+		return "", fmt.Errorf("canonicalize native agent control request: %w", err)
+	}
+	requestDigest := sha256.Sum256(canonicalRequest)
 	owner, conversation, _ := nativeagent.RequestContext(ctx)
 	intent := nativeagent.RequestIntent(ctx)
-	scope := strings.TrimSpace(owner) + "\x00" + strings.TrimSpace(conversation) + "\x00" + strings.TrimSpace(intent)
+	scope := strings.TrimSpace(owner) + "\x00" +
+		strings.TrimSpace(conversation) + "\x00" +
+		strings.TrimSpace(intent) + "\x00" +
+		strings.TrimSpace(action) + "\x00" +
+		hex.EncodeToString(requestDigest[:])
 	digest := sha256.Sum256([]byte(scope))
-	return uuid.NewSHA1(uuid.Nil, digest[:]).String()
+	return uuid.NewSHA1(uuid.Nil, digest[:]).String(), nil
 }
 
-func controlProjectID(ctx context.Context) string {
-	idempotency := controlIdempotencyKey(ctx, "agent.execution.v2.projects.analyze", nil)
-	return uuid.NewSHA1(uuid.Nil, []byte("project\x00"+idempotency)).String()
+func controlProjectID(ctx context.Context) (string, error) {
+	idempotency, err := controlIdempotencyKey(ctx, "agent.execution.v2.projects.analyze", nil)
+	if err != nil {
+		return "", err
+	}
+	return uuid.NewSHA1(uuid.Nil, []byte("project\x00"+idempotency)).String(), nil
 }
 
 func pageSchema() map[string]any {

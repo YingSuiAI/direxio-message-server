@@ -205,6 +205,43 @@ func TestProjectAnalysisAllocatesStableProjectIdentityWhenOmitted(t *testing.T) 
 	}
 }
 
+func TestControlMutationsInSameTurnUseDistinctIdempotencyKeys(t *testing.T) {
+	invoker := &recordingControlInvoker{ready: map[string]bool{
+		"agent.execution.v2.projects.analyze": true,
+		"agent.execution.v2.targets.reserve":  true,
+	}}
+	tools := ControlTools(invoker)
+	ctx := nativeagent.WithRequestContextIntent(context.Background(), "@owner:example", "conversation", "turn-workflow", "")
+	analyze := controlToolByName(t, tools, "native_agent_execution_v2_projects_analyze")
+	reserve := controlToolByName(t, tools, "native_agent_execution_v2_targets_reserve")
+	if _, err := analyze.Handler(ctx, map[string]any{"source": map[string]any{
+		"kind": "oci_image", "location": "registry.example/app@sha256:" + strings.Repeat("a", 64), "immutable": true,
+	}}); err != nil {
+		t.Fatalf("analyze project: %v", err)
+	}
+	credentialID := uuid.NewString()
+	reservation := map[string]any{
+		"credential_id": credentialID, "credential_revision": 1, "instance_type": "t3.large", "volume_gib": 40,
+	}
+	if _, err := reserve.Handler(ctx, reservation); err != nil {
+		t.Fatalf("reserve target: %v", err)
+	}
+	if _, err := reserve.Handler(ctx, reservation); err != nil {
+		t.Fatalf("replay target reservation: %v", err)
+	}
+	if len(invoker.calls) != 3 {
+		t.Fatalf("calls = %#v", invoker.calls)
+	}
+	analysisKey := invoker.calls[0].params["idempotency_key"]
+	reservationKey := invoker.calls[1].params["idempotency_key"]
+	if analysisKey == reservationKey {
+		t.Fatalf("analysis and reservation shared idempotency key %#v", analysisKey)
+	}
+	if reservationKey != invoker.calls[2].params["idempotency_key"] {
+		t.Fatalf("reservation replay changed idempotency key: %#v / %#v", reservationKey, invoker.calls[2].params["idempotency_key"])
+	}
+}
+
 func TestControlMutationInjectsTurnScopedUUIDAndRejectsModelIdempotency(t *testing.T) {
 	invoker := &recordingControlInvoker{ready: map[string]bool{"agent.execution.v2.runs.create": true}}
 	tool := controlToolByName(t, ControlTools(invoker), "native_agent_execution_v2_runs_create")
@@ -308,12 +345,36 @@ func TestNativeAgentServiceBindingInvokeRedactsUnexpectedAdapterMarkers(t *testi
 	}
 }
 
-func TestControlIdempotencyOnlyUsesAuthenticatedTurnScope(t *testing.T) {
+func TestControlIdempotencySeparatesActionAndCanonicalRequest(t *testing.T) {
 	ctx := nativeagent.WithRequestContextIntent(context.Background(), "owner", "conversation", "turn", "")
-	first := controlIdempotencyKey(ctx, "action-a", map[string]any{"command_steps": []any{"danger"}})
-	second := controlIdempotencyKey(ctx, "action-b", map[string]any{"typed_target": map[string]any{"secret": "danger"}})
-	if first == "" || first != second {
-		t.Fatalf("idempotency key included action/params: %q %q", first, second)
+	key := func(action string, request map[string]any) string {
+		t.Helper()
+		value, err := controlIdempotencyKey(ctx, action, request)
+		if err != nil {
+			t.Fatalf("control idempotency key: %v", err)
+		}
+		return value
+	}
+	first := key("action-a", map[string]any{"instance_type": "t3.large", "volume_gib": 40})
+	replay := key("action-a", map[string]any{"volume_gib": 40, "instance_type": "t3.large"})
+	differentAction := key("action-b", map[string]any{"instance_type": "t3.large", "volume_gib": 40})
+	differentRequest := key("action-a", map[string]any{"instance_type": "t3.xlarge", "volume_gib": 40})
+	for _, key := range []string{first, replay, differentAction, differentRequest} {
+		if uuid.Validate(key) != nil {
+			t.Fatalf("invalid idempotency key %q", key)
+		}
+	}
+	if first != replay {
+		t.Fatalf("equivalent requests were not replay-stable: %q %q", first, replay)
+	}
+	if first == differentAction {
+		t.Fatalf("different actions shared idempotency key %q", first)
+	}
+	if first == differentRequest {
+		t.Fatalf("different requests shared idempotency key %q", first)
+	}
+	if _, err := controlIdempotencyKey(ctx, "action-a", map[string]any{"invalid": make(chan int)}); err == nil {
+		t.Fatal("non-JSON request received an idempotency key")
 	}
 }
 
