@@ -23,7 +23,7 @@ func TestReactionTogglePersistsAndListsActiveReaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	service, err := NewServiceWithStore(ctx, Config{ServerName: "example.com"}, store)
+	service, err := NewServiceWithStore(ctx, withTestExternalAgent(Config{ServerName: "example.com"}), store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func TestReactionTogglePersistsAndListsActiveReaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reloadedStore.Close()
-	reloaded, err := NewServiceWithStore(ctx, Config{ServerName: "example.com"}, reloadedStore)
+	reloaded, err := NewServiceWithStore(ctx, withTestExternalAgent(Config{ServerName: "example.com"}), reloadedStore)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestCommentReactionTogglePersistsAndListsActiveReaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	service, err := NewServiceWithStore(ctx, Config{ServerName: "example.com"}, store)
+	service, err := NewServiceWithStore(ctx, withTestExternalAgent(Config{ServerName: "example.com"}), store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestCommentReactionTogglePersistsAndListsActiveReaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reloadedStore.Close()
-	reloaded, err := NewServiceWithStore(ctx, Config{ServerName: "example.com"}, reloadedStore)
+	reloaded, err := NewServiceWithStore(ctx, withTestExternalAgent(Config{ServerName: "example.com"}), reloadedStore)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -599,7 +599,7 @@ func TestStoredChannelCountsSurviveReload(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	service, err := NewServiceWithStore(ctx, Config{ServerName: "example.com"}, store)
+	service, err := NewServiceWithStore(ctx, withTestExternalAgent(Config{ServerName: "example.com"}), store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -637,7 +637,7 @@ func TestStoredChannelCountsSurviveReload(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reloadedStore.Close()
-	reloaded, err := NewServiceWithStore(ctx, Config{ServerName: "example.com"}, reloadedStore)
+	reloaded, err := NewServiceWithStore(ctx, withTestExternalAgent(Config{ServerName: "example.com"}), reloadedStore)
 	if err != nil {
 		t.Fatal(err)
 	}

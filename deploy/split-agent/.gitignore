@@ -1,0 +1,12 @@
+# Provisioned files contain credentials, certificates, database URLs, and
+# instance identities. Keep them outside Git even when the output directory is
+# placed below this deployment directory.
+.run/
+*.key
+*.pem
+*.token
+*.secret
+*.env
+*.manifest
+agent-config.yaml
+message-config.yaml

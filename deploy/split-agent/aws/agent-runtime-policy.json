@@ -1,0 +1,92 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "CallerIdentityOnly",
+      "Effect": "Allow",
+      "Action": "sts:GetCallerIdentity",
+      "Resource": "*"
+    },
+    {
+      "Sid": "PinnedEC2CommandTarget",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:GetCommandInvocation",
+        "ssm:ListCommandInvocations",
+        "ssm:SendCommand"
+      ],
+      "Resource": [
+        "arn:aws:ssm:us-east-1:123456789012:document/AWS-RunShellScript",
+        "arn:aws:ec2:us-east-1:123456789012:instance/i-0123456789abcdef0"
+      ]
+    },
+    {
+      "Sid": "PinnedEC2Readback",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:DescribeInstanceInformation"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "PinnedECSReadback",
+      "Effect": "Allow",
+      "Action": [
+        "ecs:DescribeClusters",
+        "ecs:DescribeServices",
+        "ecs:DescribeTaskDefinition",
+        "ecs:ListTasks"
+      ],
+      "Resource": [
+        "arn:aws:ecs:us-east-1:123456789012:cluster/dirextalk-acceptance",
+        "arn:aws:ecs:us-east-1:123456789012:service/dirextalk-acceptance/message-server",
+        "arn:aws:ecs:us-east-1:123456789012:task-definition/dirextalk-message-server:1"
+      ]
+    },
+    {
+      "Sid": "PinnedECSMutation",
+      "Effect": "Allow",
+      "Action": [
+        "ecs:RunTask",
+        "ecs:StopTask",
+        "ecs:UpdateService"
+      ],
+      "Resource": [
+        "arn:aws:ecs:us-east-1:123456789012:cluster/dirextalk-acceptance",
+        "arn:aws:ecs:us-east-1:123456789012:service/dirextalk-acceptance/message-server",
+        "arn:aws:ecs:us-east-1:123456789012:task-definition/dirextalk-message-server:1"
+      ]
+    },
+    {
+      "Sid": "PinnedECSTaskRoleDelegation",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": [
+        "arn:aws:iam::123456789012:role/dirextalk-acceptance-task",
+        "arn:aws:iam::123456789012:role/dirextalk-acceptance-execution"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": "ecs-tasks.amazonaws.com"
+        }
+      }
+    },
+    {
+      "Sid": "PinnedCloudFormationServiceRoleDelegation",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "arn:aws:iam::123456789012:role/dirextalk-acceptance-cfn",
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": "cloudformation.amazonaws.com"
+        }
+      }
+    },
+    {
+      "Sid": "PinnedAcceptanceSecret",
+      "Effect": "Allow",
+      "Action": "secretsmanager:GetSecretValue",
+      "Resource": "arn:aws:secretsmanager:us-east-1:123456789012:secret:dirextalk/acceptance/runtime"
+    }
+  ]
+}

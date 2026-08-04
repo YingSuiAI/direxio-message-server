@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	syncAPITypes "github.com/YingSuiAI/dirextalk-message-server/syncapi/types"
@@ -105,6 +106,10 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 	case api.OutputTypeNewRoomEvent:
 		ev := output.NewRoomEvent.Event
 		if err := s.processMessage(*output.NewRoomEvent, output.NewRoomEvent.RewritesState); err != nil {
+			if consumerShutdownError(ctx, err) || consumerShutdownError(s.ctx, err) {
+				log.WithError(err).Debug("roomserver output log: stopping while writing event")
+				return true
+			}
 			// panic rather than continue with an inconsistent database
 			log.WithFields(log.Fields{
 				"event_id":   ev.EventID(),
@@ -117,6 +122,10 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 
 	case api.OutputTypeNewInboundPeek:
 		if err := s.processInboundPeek(*output.NewInboundPeek); err != nil {
+			if consumerShutdownError(ctx, err) || consumerShutdownError(s.ctx, err) {
+				log.WithError(err).Debug("roomserver output log: stopping while processing inbound peek")
+				return true
+			}
 			log.WithFields(log.Fields{
 				"event":      output.NewInboundPeek,
 				log.ErrorKey: err,
@@ -139,6 +148,22 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 	}
 
 	return true
+}
+
+// consumerShutdownError identifies expected database/transport failures when
+// process shutdown races an in-flight JetStream delivery. They are acknowledged
+// and drained instead of panicking after the backing database is closed.
+func consumerShutdownError(ctx context.Context, err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	if ctx != nil && ctx.Err() != nil {
+		return true
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "database is closed")
 }
 
 // processInboundPeek starts tracking a new federated inbound peek (replacing the existing one if any)

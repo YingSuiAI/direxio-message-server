@@ -1,0 +1,657 @@
+name: ${DIREXTALK_SPLIT_STACK_NAME:?set a unique fresh split-stack name}
+
+# Production shape for the split deployment. Every application image must be
+# an immutable registry reference (normally a digest). The local sibling
+# build is intentionally kept in compose.local.yaml.
+
+x-message-image: &message-image
+  image: ${DIREXTALK_MESSAGE_SERVER_IMAGE_IMMUTABLE:?set an immutable message-server image reference}
+
+x-agent-image: &agent-image
+  image: ${DIREXTALK_AGENT_IMAGE_IMMUTABLE:?set an immutable Agent image reference}
+
+x-postgres-hardening: &postgres-hardening
+  read_only: true
+  cap_drop: ["ALL"]
+  cap_add: ["CHOWN", "FOWNER", "DAC_OVERRIDE", "SETUID", "SETGID"]
+  security_opt: ["no-new-privileges:true"]
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,nodev,mode=1777
+    - /run/postgresql:rw,noexec,nosuid,nodev,mode=2775
+
+x-agent-hardening: &agent-hardening
+  user: "65532:65532"
+  read_only: true
+  cap_drop: ["ALL"]
+  security_opt: ["no-new-privileges:true"]
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,nodev,mode=1777
+
+  # The server keeps UID 0 only for the file-based Compose secrets: the runtime
+  # entrypoint must read the protected DB DSN and capability keys before
+  # exec'ing the binary. It still runs read-only, with no ambient capabilities
+  # and with no-new-privileges; all writable state is explicitly named-volume/
+  # tmpfs data.
+x-message-hardening: &message-hardening
+  read_only: true
+  cap_drop: ["ALL"]
+  # Rootless Docker bind-mounts protected host files with the provisioning
+  # user's host UID.  This narrowly permits reading those files while keeping
+  # write, execute, and every other ambient capability dropped.
+  cap_add: ["DAC_READ_SEARCH"]
+  security_opt: ["no-new-privileges:true"]
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,nodev,mode=1777
+
+x-extension-runner-hardening: &extension-runner-hardening
+  user: "${DIREXTALK_CORE_EXTENSION_RUNNER_UID:?set the extension runner UID}:${DIREXTALK_CORE_EXTENSION_RUNNER_UID:?set the extension runner UID}"
+  read_only: true
+  cap_drop: ["ALL"]
+  security_opt: ["no-new-privileges:true"]
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,nodev,mode=1777
+
+x-core-runner-hardening: &core-runner-hardening
+  user: "${DIREXTALK_CORE_WORKLOAD_RUNNER_UID:?set the Core Runner UID}:${DIREXTALK_CORE_WORKLOAD_RUNNER_UID:?set the Core Runner UID}"
+  read_only: true
+  cap_drop: ["ALL"]
+  security_opt: ["no-new-privileges:true"]
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,nodev,mode=1777
+
+services:
+  message-postgres:
+    image: ${DIREXTALK_POSTGRES_IMAGE_IMMUTABLE:?set an immutable PostgreSQL image reference}
+    <<: *postgres-hardening
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: dirextalk_message_server
+      POSTGRES_USER: dirextalk_message_server
+      POSTGRES_PASSWORD_FILE: /run/secrets/message_postgres_password
+    secrets:
+      - source: message_postgres_password
+        target: message_postgres_password
+    volumes:
+      - message_postgres_data:/var/lib/postgresql
+    networks: [message_database]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+
+  agent-postgres:
+    image: ${DIREXTALK_POSTGRES_IMAGE_IMMUTABLE:?set an immutable PostgreSQL image reference}
+    <<: *postgres-hardening
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: dirextalk_agent
+      POSTGRES_USER: dirextalk_agent
+      POSTGRES_PASSWORD_FILE: /run/secrets/agent_postgres_password
+    secrets:
+      - source: agent_postgres_password
+        target: agent_postgres_password
+    volumes:
+      - agent_postgres_data:/var/lib/postgresql
+    networks: [agent_database]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+
+  qdrant:
+    image: ${DIREXTALK_QDRANT_IMAGE_IMMUTABLE:?set an immutable Qdrant image reference}
+    restart: unless-stopped
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,mode=1777
+      - /qdrant/snapshots:rw,noexec,nosuid,nodev,mode=0700
+    volumes:
+      - agent_qdrant_data:/qdrant/storage
+    networks: [agent_private]
+
+  agent-secret-init:
+    image: ${DIREXTALK_UTILITY_IMAGE_IMMUTABLE:?set an immutable utility image reference}
+    entrypoint: ["sh"]
+    user: "0:0"
+    cap_drop: ["ALL"]
+    cap_add: ["CHOWN", "FOWNER", "DAC_READ_SEARCH", "DAC_OVERRIDE"]
+    security_opt: ["no-new-privileges:true"]
+    command:
+      - -ec
+      - >-
+        set -eu;
+        install -d -m 0700 /out /out-config /out-data/knowledge-content /out-data/knowledge-mount;
+        for item in database_url tls_cert tls_key service_token capability_ca ms_to_agent_token
+        grant_public_key product_ca product_tls_cert product_tls_key agent_to_ms_token voice_relay_token core_secret_master_key;
+        do install -m 0400 /run/secrets/$$item /out/$$item; done;
+        install -m 0400 /bootstrap/config.yaml /out-config/config.yaml;
+        chown -R 65532:65532 /out /out-config /out-data;
+        chmod 0500 /out-data/knowledge-mount;
+    secrets:
+      - source: agent_database_url
+        target: database_url
+        mode: 0400
+      - source: agent_tls_cert
+        target: tls_cert
+        mode: 0400
+      - source: agent_tls_key
+        target: tls_key
+        mode: 0400
+      - source: agent_service_token
+        target: service_token
+        mode: 0400
+      - source: agent_voice_relay_token
+        target: voice_relay_token
+        mode: 0400
+      - source: capability_ca
+        target: capability_ca
+        mode: 0400
+      - source: ms_to_agent_token
+        target: ms_to_agent_token
+        mode: 0400
+      - source: grant_public_key
+        target: grant_public_key
+        mode: 0400
+      - source: product_ca
+        target: product_ca
+        mode: 0400
+      - source: agent_product_tls_cert
+        target: product_tls_cert
+        mode: 0400
+      - source: agent_product_tls_key
+        target: product_tls_key
+        mode: 0400
+      - source: agent_to_ms_token
+        target: agent_to_ms_token
+        mode: 0400
+      - source: core_secret_master_key
+        target: core_secret_master_key
+        mode: 0400
+    volumes:
+      - type: bind
+        source: ${DIREXTALK_AGENT_CONFIG_FILE:?set the Agent non-secret config path}
+        target: /bootstrap/config.yaml
+        read_only: true
+      - agent_secret_material:/out
+      - agent_config_material:/out-config
+      - agent_knowledge_content:/out-data/knowledge-content
+      - agent_knowledge_mount:/out-data/knowledge-mount
+    networks: [agent_private]
+    restart: "no"
+
+  agent-migrate:
+    image: ${DIREXTALK_AGENT_IMAGE_IMMUTABLE:?set an immutable Agent image reference}
+    <<: *agent-hardening
+    command: ["migrate"]
+    restart: "no"
+    volumes:
+      - agent_config_material:/etc/dirextalk-agent:ro
+      - agent_secret_material:/run/secrets:ro
+    networks: [agent_private, agent_database]
+    depends_on:
+      agent-secret-init:
+        condition: service_completed_successfully
+      agent-postgres:
+        condition: service_healthy
+
+  agent:
+    image: ${DIREXTALK_AGENT_IMAGE_IMMUTABLE:?set an immutable Agent image reference}
+    <<: *agent-hardening
+    command: ["serve"]
+    restart: unless-stopped
+    environment:
+      AGENT_HEALTHCHECK_SERVER_NAME: ${DIREXTALK_AGENT_TLS_SERVER_NAME:-dirextalk-agent}
+    expose: ["9443", "50052", "8444"]
+    volumes:
+      - agent_config_material:/etc/dirextalk-agent:ro
+      - agent_secret_material:/run/secrets:ro
+      - agent_extension_socket:${DIREXTALK_CORE_EXTENSION_RUNNER_DIR:?set the extension runner socket directory}
+      - agent_extension_staging:/var/lib/dirextalk-agent/extension-staging
+      - agent_extension_workspaces:/var/lib/dirextalk-agent/extension-workspaces
+      - core_runner_socket:${DIREXTALK_CORE_WORKLOAD_RUNNER_DIR:?set the Core Runner socket directory}
+      - agent_knowledge_content:/var/lib/dirextalk-agent/knowledge-content
+      - agent_knowledge_mount:/var/lib/dirextalk-agent/knowledge-mount:ro
+      - agent_core_data:/var/lib/dirextalk-agent/core-data
+    networks: [agent_private, agent_database, agent_caller, agent_egress]
+    depends_on:
+      agent-migrate:
+        condition: service_completed_successfully
+      qdrant:
+        condition: service_started
+      extension-runner:
+        condition: service_healthy
+        required: false
+      core-runner:
+        condition: service_healthy
+        required: false
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/dirextalk-agent", "healthcheck", "--expect-instance-id", "${DIREXTALK_AGENT_INSTANCE_ID:?set the Agent instance ID}"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  # Optional isolated extension executor. The profile is intentionally not
+  # enabled by default; enabling the Core feature flag alone never starts a
+  # process. The runner has no network, database, Agent secret, or Docker
+  # socket. Its only host bind is a caller-provisioned delegated cgroup-v2
+  # subtree.
+  extension-runner:
+    image: ${DIREXTALK_EXTENSION_RUNNER_IMAGE_IMMUTABLE:?set an immutable extension runner image reference}
+    <<: *extension-runner-hardening
+    profiles: ["extensions"]
+    restart: unless-stopped
+    cgroup_parent: ${DIREXTALK_EXTENSION_CGROUP_PARENT:-${DIREXTALK_SPLIT_STACK_NAME:?set a unique split stack name}-extension.slice}
+    group_add: ["65532"]
+    command:
+      - serve
+      - --socket
+      - ${DIREXTALK_CORE_EXTENSION_RUNNER_SOCKET:?set the extension runner socket path}
+      - --agent-uid
+      - "65532"
+      - --install-root
+      - /var/lib/dirextalk-agent/extension-install
+      - --workspace-root
+      - /var/lib/dirextalk-agent/extension-workspaces
+      - --cgroup-root
+      - /cgroup
+      - --state-root
+      - /var/lib/dirextalk-agent/extension-state
+    volumes:
+      - agent_extension_socket:${DIREXTALK_CORE_EXTENSION_RUNNER_DIR:?set the extension runner socket directory}
+      - agent_extension_install:/var/lib/dirextalk-agent/extension-install
+      - agent_runner_workspaces:/var/lib/dirextalk-agent/extension-workspaces
+      - agent_extension_state:/var/lib/dirextalk-agent/extension-state
+      - type: bind
+        source: ${DIREXTALK_EXTENSION_CGROUP_ROOT:?set a delegated cgroup-v2 subtree for the extension runner}
+        target: /cgroup
+    network_mode: "none"
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/dirextalk-extension-runner", "probe", "--socket", "${DIREXTALK_CORE_EXTENSION_RUNNER_SOCKET:?set the extension runner socket path}", "--runner-uid", "${DIREXTALK_CORE_EXTENSION_RUNNER_UID:?set the extension runner UID}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+    depends_on:
+      extension-socket-init:
+        condition: service_completed_successfully
+
+  extension-socket-init:
+    image: ${DIREXTALK_UTILITY_IMAGE_IMMUTABLE:?set an immutable utility image reference}
+    entrypoint: ["sh"]
+    user: "0:0"
+    cap_drop: ["ALL"]
+    cap_add: ["CHOWN", "FOWNER", "FSETID"]
+    security_opt: ["no-new-privileges:true"]
+    profiles: ["extensions"]
+    command:
+      - -ec
+      - >-
+        install -d -m 3770 /socket;
+        chown ${DIREXTALK_CORE_EXTENSION_RUNNER_UID:?set the extension runner UID}:65532 /socket;
+        chmod 3770 /socket
+    volumes:
+      - agent_extension_socket:/socket
+    network_mode: "none"
+    restart: "no"
+
+  # Optional isolated local workload provider. It is separate from the Agent
+  # process and is deliberately profile-gated. It has no network, database,
+  # Agent secret, Docker socket, or host filesystem access beyond the
+  # delegated cgroup-v2 subtree.
+  core-runner:
+    image: ${DIREXTALK_CORE_RUNNER_IMAGE_IMMUTABLE:?set an immutable Core Runner image reference}
+    <<: *core-runner-hardening
+    profiles: ["core-runner"]
+    restart: unless-stopped
+    cgroup_parent: ${DIREXTALK_CORE_RUNNER_CGROUP_PARENT:-${DIREXTALK_SPLIT_STACK_NAME:?set a unique split stack name}-core-runner.slice}
+    group_add: ["65532"]
+    command:
+      - serve
+      - --socket
+      - ${DIREXTALK_CORE_WORKLOAD_RUNNER_SOCKET:?set the Core Runner socket path}
+      - --agent-uid
+      - "65532"
+      - --install-root
+      - /var/lib/dirextalk-core-runner/installs
+      - --workspace-root
+      - /var/lib/dirextalk-core-runner/workspaces
+      - --cgroup-root
+      - /cgroup
+      - --static-shell
+      - /usr/local/libexec/dirextalk-core-shell
+      - --state-root
+      - /var/lib/dirextalk-core-runner/state
+    volumes:
+      - core_runner_socket:${DIREXTALK_CORE_WORKLOAD_RUNNER_DIR:?set the Core Runner socket directory}
+      - core_runner_installs:/var/lib/dirextalk-core-runner/installs
+      - core_runner_workspaces:/var/lib/dirextalk-core-runner/workspaces
+      - core_runner_state:/var/lib/dirextalk-core-runner/state
+      - type: bind
+        source: ${DIREXTALK_CORE_RUNNER_CGROUP_ROOT:?set a delegated cgroup-v2 subtree for Core Runner}
+        target: /cgroup
+    network_mode: "none"
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/dirextalk-core-runner", "probe", "--socket", "${DIREXTALK_CORE_WORKLOAD_RUNNER_SOCKET:?set the Core Runner socket path}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+    depends_on:
+      core-runner-socket-init:
+        condition: service_completed_successfully
+
+  core-runner-socket-init:
+    image: ${DIREXTALK_UTILITY_IMAGE_IMMUTABLE:?set an immutable utility image reference}
+    entrypoint: ["sh"]
+    user: "0:0"
+    cap_drop: ["ALL"]
+    cap_add: ["CHOWN", "FOWNER", "FSETID"]
+    security_opt: ["no-new-privileges:true"]
+    profiles: ["core-runner"]
+    command:
+      - -ec
+      - >-
+        install -d -m 3770 /socket;
+        chown ${DIREXTALK_CORE_WORKLOAD_RUNNER_UID:?set the Core Runner UID}:65532 /socket;
+        chmod 3770 /socket
+    volumes:
+      - core_runner_socket:/socket
+    network_mode: "none"
+    restart: "no"
+
+  message-server-init:
+    <<: *message-image
+    restart: "no"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - >-
+        install -d -m 0700 /etc/dirextalk-message-server /var/dirextalk-message-server /var/dirextalk-message-server/agent;
+        if [ ! -f /etc/dirextalk-message-server/matrix_key.pem ]; then
+          /usr/bin/generate-keys -private-key /etc/dirextalk-message-server/matrix_key.pem;
+        fi;
+        if [ "$${MESSAGE_SERVER_TLS_MODE}" = external ]; then
+          test -s /bootstrap/external/server.crt || { echo 'external TLS certificate is missing or empty' >&2; exit 1; };
+          test -s /bootstrap/external/server.key || { echo 'external TLS private key is missing or empty' >&2; exit 1; };
+          install -m 0400 /bootstrap/external/server.crt /etc/dirextalk-message-server/server.crt;
+          install -m 0400 /bootstrap/external/server.key /etc/dirextalk-message-server/server.key;
+        else
+          test "$${MESSAGE_SERVER_TLS_MODE}" = local || { echo 'MESSAGE_SERVER_TLS_MODE must be local or external' >&2; exit 1; };
+          if [ ! -f /etc/dirextalk-message-server/server.crt ] || [ ! -f /etc/dirextalk-message-server/server.key ]; then
+            /usr/bin/generate-keys -tls-cert /etc/dirextalk-message-server/server.crt -tls-key /etc/dirextalk-message-server/server.key -server "$${MESSAGE_SERVER_NAME}";
+          fi;
+        fi;
+        /usr/bin/generate-config -dir /var/dirextalk-message-server -db "__DIREXTALK_DB_DSN__" -server "$${MESSAGE_SERVER_NAME}" > /etc/dirextalk-message-server/message-server.yaml;
+        if [ "$${MESSAGE_LOCAL_BOOTSTRAP_ENABLED}" = true ]; then
+          test -s /run/secrets/message_registration_shared_secret || { echo 'local bootstrap shared secret is missing or empty' >&2; exit 1; };
+          registration_secret=$$(cat /run/secrets/message_registration_shared_secret);
+          if grep -Eq '^  registration_shared_secret:' /etc/dirextalk-message-server/message-server.yaml; then
+            sed -i "s|^  registration_shared_secret:.*|  registration_shared_secret: \"$${registration_secret}\"|" /etc/dirextalk-message-server/message-server.yaml;
+          elif grep -Eq '^client_api:' /etc/dirextalk-message-server/message-server.yaml; then
+            sed -i "/^client_api:/a\\  registration_shared_secret: \"$${registration_secret}\"" /etc/dirextalk-message-server/message-server.yaml;
+          else
+            printf '\\nclient_api:\\n  registration_shared_secret: \"%s\"\\n' "$${registration_secret}" >> /etc/dirextalk-message-server/message-server.yaml;
+          fi;
+          unset registration_secret;
+        else
+          test "$${MESSAGE_LOCAL_BOOTSTRAP_ENABLED}" = false || { echo 'MESSAGE_LOCAL_BOOTSTRAP_ENABLED must be true or false' >&2; exit 1; };
+        fi;
+        sed -i "s|well_known_client_name: .*|well_known_client_name: \"$${MESSAGE_CLIENT_BASE_URL}\"|" /etc/dirextalk-message-server/message-server.yaml;
+        chmod 0400 /etc/dirextalk-message-server/message-server.yaml;
+    environment:
+      MESSAGE_SERVER_NAME: ${DIREXTALK_MESSAGE_SERVER_NAME:-localhost}
+      MESSAGE_CLIENT_BASE_URL: ${DIREXTALK_MESSAGE_CLIENT_BASE_URL:?set DIREXTALK_MESSAGE_CLIENT_BASE_URL in the protected stack .env}
+      MESSAGE_SERVER_TLS_MODE: ${DIREXTALK_MESSAGE_TLS_MODE:-local}
+      MESSAGE_LOCAL_BOOTSTRAP_ENABLED: ${DIREXTALK_LOCAL_BOOTSTRAP_ENABLED:-false}
+    secrets:
+      - source: message_registration_shared_secret
+        target: /run/secrets/message_registration_shared_secret
+        mode: 0400
+    volumes:
+      - message_server_config:/etc/dirextalk-message-server
+      - message_server_data:/var/dirextalk-message-server
+      - type: bind
+        source: ${DIREXTALK_MESSAGE_TLS_CERT_FILE:?set the message-server TLS certificate file}
+        target: /bootstrap/external/server.crt
+        read_only: true
+      - type: bind
+        source: ${DIREXTALK_MESSAGE_TLS_KEY_FILE:?set the message-server TLS private key file}
+        target: /bootstrap/external/server.key
+        read_only: true
+    networks: [message_private, message_database]
+    depends_on:
+      message-postgres:
+        condition: service_healthy
+
+  message-server:
+    <<: [*message-image, *message-hardening]
+    restart: unless-stopped
+    environment:
+      P2P_PORTAL_CREDENTIALS_FILE: /var/dirextalk-message-server/p2p/bootstrap.json
+      P2P_PORTAL_PASSWORD_FILE: /run/secrets/message_portal_password
+      P2P_PLUGIN_DOCKER_ENABLED: "false"
+      P2P_PLUGIN_BACKEND_BASE_URL: http://message-server:8008
+      P2P_MESSAGE_SERVER_INSTANCE_ID: ${DIREXTALK_MESSAGE_SERVER_INSTANCE_ID:?set the message-server instance ID}
+      P2P_AGENT_INSTANCE_ID: ${DIREXTALK_AGENT_INSTANCE_ID:?set the Agent instance ID}
+      P2P_ACCOUNT_GENERATION: ${DIREXTALK_ACCOUNT_GENERATION:?set the fresh account generation}
+      P2P_AGENT_CAPABILITY_ADDR: agent:50052
+      P2P_AGENT_CAPABILITY_CA_FILE: /run/capability/ca-cert.pem
+      P2P_AGENT_CAPABILITY_CLIENT_CERT_FILE: /run/capability/ms-client-cert.pem
+      P2P_AGENT_CAPABILITY_CLIENT_KEY_FILE: /run/capability/ms-client-key.pem
+      P2P_AGENT_CAPABILITY_TOKEN_FILE: /run/capability/ms-to-agent.token
+      P2P_AGENT_VOICE_CALLBACK_URL: ${DIREXTALK_AGENT_VOICE_CALLBACK_URL:-https://agent:8444}
+      P2P_AGENT_VOICE_CALLBACK_AUTH_TOKEN_FILE: /run/capability/agent-voice-relay.token
+      P2P_AGENT_VOICE_CALLBACK_CA_FILE: /run/capability/ca-cert.pem
+      P2P_AGENT_VOICE_CALLBACK_CLIENT_CERT_FILE: /run/capability/ms-client-cert.pem
+      P2P_AGENT_VOICE_CALLBACK_CLIENT_KEY_FILE: /run/capability/ms-client-key.pem
+      P2P_AGENT_VOICE_CALLBACK_SERVER_NAME: ${DIREXTALK_AGENT_TLS_SERVER_NAME:-dirextalk-agent}
+      P2P_CAPABILITY_GRANT_PRIVATE_KEY_FILE: /run/capability/grant-private.key
+      P2P_CAPABILITY_GRANT_PUBLIC_KEY_FILE: /run/capability/grant-public.key
+      P2P_PRODUCT_CAPABILITY_LISTEN_ADDR: :50053
+      P2P_REQUIRE_PRODUCT_CAPABILITY: "true"
+      P2P_PRODUCT_CAPABILITY_CA_FILE: /run/capability/ca-cert.pem
+      P2P_PRODUCT_CAPABILITY_SERVER_CERT_FILE: /run/capability/ms-server-cert.pem
+      P2P_PRODUCT_CAPABILITY_SERVER_KEY_FILE: /run/capability/ms-server-key.pem
+      P2P_PRODUCT_CAPABILITY_TOKEN_FILE: /run/capability/agent-to-ms.token
+      P2P_AGENT_CAPABILITY_PEER_COMMON_NAME: agent-client
+    entrypoint: ["/usr/local/bin/message-server-entrypoint"]
+    command:
+      - --http-bind-address
+      - :8008
+      - --https-bind-address
+      - :8448
+      - --tls-cert
+      - /etc/dirextalk-message-server/server.crt
+      - --tls-key
+      - /etc/dirextalk-message-server/server.key
+    ports:
+      - "${DIREXTALK_MESSAGE_HTTP_BIND:?set DIREXTALK_MESSAGE_HTTP_BIND in the protected stack .env}:8008"
+      - "${DIREXTALK_MESSAGE_HTTPS_BIND:?set DIREXTALK_MESSAGE_HTTPS_BIND in the protected stack .env}:8448"
+    expose: ["50053"]
+    volumes:
+      - message_server_config:/etc/dirextalk-message-server:ro
+      - message_server_data:/var/dirextalk-message-server
+      - message_plugins_data:/var/dirextalk-message-server/plugins
+    configs:
+      - source: message_server_entrypoint
+        target: /usr/local/bin/message-server-entrypoint
+        mode: 0555
+    secrets:
+      - source: capability_ca
+        target: /run/capability/ca-cert.pem
+        mode: 0400
+      - source: ms_client_cert
+        target: /run/capability/ms-client-cert.pem
+        mode: 0400
+      - source: ms_client_key
+        target: /run/capability/ms-client-key.pem
+        mode: 0400
+      - source: ms_to_agent_token
+        target: /run/capability/ms-to-agent.token
+        mode: 0400
+      - source: agent_voice_relay_token
+        target: /run/capability/agent-voice-relay.token
+        mode: 0400
+      - source: ms_server_cert
+        target: /run/capability/ms-server-cert.pem
+        mode: 0400
+      - source: ms_server_key
+        target: /run/capability/ms-server-key.pem
+        mode: 0400
+      - source: agent_to_ms_token
+        target: /run/capability/agent-to-ms.token
+        mode: 0400
+      - source: message_database_url
+        target: /run/secrets/message_database_url
+        mode: 0400
+      - source: message_portal_password
+        target: /run/secrets/message_portal_password
+        mode: 0400
+      - source: grant_private_key
+        target: /run/capability/grant-private.key
+        mode: 0400
+      - source: grant_public_key
+        target: /run/capability/grant-public.key
+        mode: 0400
+    networks: [message_private, message_database, agent_caller, message_public]
+    depends_on:
+      message-postgres:
+        condition: service_healthy
+      message-server-init:
+        condition: service_completed_successfully
+      agent:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8008/_p2p/health >/dev/null && wget --no-check-certificate -q -O - https://127.0.0.1:8448/_p2p/health >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+networks:
+  message_private:
+    name: ${DIREXTALK_MESSAGE_PRIVATE_NETWORK:?set a fresh message private network name}
+    internal: true
+  message_public:
+    # Rootless Docker's published-port forwarding requires the service to be
+    # attached to one non-internal bridge. This network is intentionally
+    # dedicated to message-server; every Agent/DB/Qdrant network remains
+    # internal and no other service joins this public edge.
+    name: ${DIREXTALK_MESSAGE_PUBLIC_NETWORK:?set a fresh message public network name}
+    internal: false
+  message_database:
+    name: ${DIREXTALK_MESSAGE_DATABASE_NETWORK:?set a fresh message database network name}
+    internal: true
+  agent_private:
+    name: ${DIREXTALK_AGENT_PRIVATE_NETWORK:?set a fresh Agent private network name}
+    internal: true
+  agent_database:
+    name: ${DIREXTALK_AGENT_DATABASE_NETWORK:?set a fresh Agent database network name}
+    internal: true
+  agent_caller:
+    name: ${DIREXTALK_AGENT_CALLER_NETWORK:?set a fresh Agent caller network name}
+    internal: true
+  agent_egress:
+    name: ${DIREXTALK_AGENT_EGRESS_NETWORK:?set a fresh Agent egress network name}
+
+volumes:
+  message_postgres_data:
+    name: ${DIREXTALK_MESSAGE_POSTGRES_VOLUME:?set a fresh message PostgreSQL volume name}
+  message_server_config:
+    name: ${DIREXTALK_MESSAGE_CONFIG_VOLUME:?set a fresh message config volume name}
+  message_server_data:
+    name: ${DIREXTALK_MESSAGE_DATA_VOLUME:?set a fresh message data volume name}
+  message_plugins_data:
+    name: ${DIREXTALK_MESSAGE_PLUGINS_VOLUME:?set a fresh message plugins volume name}
+  agent_postgres_data:
+    name: ${DIREXTALK_AGENT_POSTGRES_VOLUME:?set a fresh Agent PostgreSQL volume name}
+  agent_secret_material:
+    name: ${DIREXTALK_AGENT_SECRET_VOLUME:?set a fresh Agent secret volume name}
+  agent_config_material:
+    name: ${DIREXTALK_AGENT_CONFIG_VOLUME:?set a fresh Agent config volume name}
+  agent_core_data:
+    name: ${DIREXTALK_AGENT_CORE_DATA_VOLUME:?set a fresh Agent data volume name}
+  agent_extension_socket:
+    name: ${DIREXTALK_AGENT_SOCKET_VOLUME:?set a fresh extension socket volume name}
+  agent_extension_install:
+    name: ${DIREXTALK_AGENT_INSTALL_VOLUME:?set a fresh extension install volume name}
+  agent_extension_staging:
+    name: ${DIREXTALK_AGENT_STAGING_VOLUME:?set a fresh extension staging volume name}
+  agent_extension_workspaces:
+    name: ${DIREXTALK_AGENT_WORKSPACE_VOLUME:?set a fresh extension workspace volume name}
+  agent_runner_workspaces:
+    name: ${DIREXTALK_AGENT_RUNNER_WORKSPACE_VOLUME:?set a fresh extension runner workspace volume name}
+  agent_extension_state:
+    name: ${DIREXTALK_AGENT_RUNNER_STATE_VOLUME:?set a fresh extension runner state volume name}
+  agent_knowledge_content:
+    name: ${DIREXTALK_AGENT_KNOWLEDGE_CONTENT_VOLUME:?set a fresh Knowledge content volume name}
+  agent_knowledge_mount:
+    name: ${DIREXTALK_AGENT_KNOWLEDGE_MOUNT_VOLUME:?set a fresh Knowledge mount volume name}
+  agent_qdrant_data:
+    name: ${DIREXTALK_AGENT_QDRANT_VOLUME:?set a fresh Qdrant volume name}
+  core_runner_socket:
+    name: ${DIREXTALK_CORE_RUNNER_SOCKET_VOLUME:?set a fresh Core Runner socket volume name}
+  core_runner_installs:
+    name: ${DIREXTALK_CORE_RUNNER_INSTALL_VOLUME:?set a fresh Core Runner install volume name}
+  core_runner_workspaces:
+    name: ${DIREXTALK_CORE_RUNNER_WORKSPACE_VOLUME:?set a fresh Core Runner workspace volume name}
+  core_runner_state:
+    name: ${DIREXTALK_CORE_RUNNER_STATE_VOLUME:?set a fresh Core Runner state volume name}
+
+configs:
+  message_server_entrypoint:
+    file: ${DIREXTALK_MESSAGE_SERVER_ENTRYPOINT_FILE:?set the message-server entrypoint helper file}
+
+secrets:
+  message_postgres_password:
+    file: ${DIREXTALK_MESSAGE_POSTGRES_PASSWORD_FILE:?set the message PostgreSQL password file}
+  agent_postgres_password:
+    file: ${DIREXTALK_AGENT_POSTGRES_PASSWORD_FILE:?set the Agent PostgreSQL password file}
+  message_database_url:
+    file: ${DIREXTALK_MESSAGE_DATABASE_URL_FILE:?set the message database URL file}
+  message_registration_shared_secret:
+    file: ${DIREXTALK_MESSAGE_REGISTRATION_SHARED_SECRET_FILE:?set the local bootstrap shared secret file}
+  message_portal_password:
+    file: ${DIREXTALK_MESSAGE_PORTAL_PASSWORD_FILE:?set the protected message portal password file}
+  agent_database_url:
+    file: ${DIREXTALK_AGENT_DATABASE_URL_FILE:?set the Agent database URL file}
+  agent_tls_cert:
+    file: ${DIREXTALK_AGENT_SERVER_CERT_FILE:?set the Agent TLS certificate file}
+  agent_tls_key:
+    file: ${DIREXTALK_AGENT_SERVER_KEY_FILE:?set the Agent TLS private key file}
+  agent_service_token:
+    file: ${DIREXTALK_AGENT_SERVICE_TOKEN_FILE:?set the Agent service token file}
+  agent_voice_relay_token:
+    file: ${DIREXTALK_AGENT_VOICE_RELAY_TOKEN_FILE:?set the Agent voice relay token file}
+  capability_ca:
+    file: ${DIREXTALK_CAPABILITY_CA_FILE:?set the Capability CA certificate file}
+  ms_to_agent_token:
+    file: ${DIREXTALK_MS_TO_AGENT_TOKEN_FILE:?set the MS-to-Agent token file}
+  agent_to_ms_token:
+    file: ${DIREXTALK_AGENT_TO_MS_TOKEN_FILE:?set the Agent-to-MS token file}
+  grant_private_key:
+    file: ${DIREXTALK_GRANT_PRIVATE_KEY_FILE:?set the grant private key file}
+  grant_public_key:
+    file: ${DIREXTALK_GRANT_PUBLIC_KEY_FILE:?set the grant public key file}
+  ms_client_cert:
+    file: ${DIREXTALK_MS_CLIENT_CERT_FILE:?set the MS client certificate file}
+  ms_client_key:
+    file: ${DIREXTALK_MS_CLIENT_KEY_FILE:?set the MS client private key file}
+  ms_server_cert:
+    file: ${DIREXTALK_MS_SERVER_CERT_FILE:?set the MS server certificate file}
+  ms_server_key:
+    file: ${DIREXTALK_MS_SERVER_KEY_FILE:?set the MS server private key file}
+  product_ca:
+    file: ${DIREXTALK_CAPABILITY_CA_FILE:?set the Product Capability CA file}
+  agent_product_tls_cert:
+    file: ${DIREXTALK_AGENT_CLIENT_CERT_FILE:?set the Agent Product client certificate file}
+  agent_product_tls_key:
+    file: ${DIREXTALK_AGENT_CLIENT_KEY_FILE:?set the Agent Product client private key file}
+  core_secret_master_key:
+    file: ${DIREXTALK_CORE_SECRET_MASTER_KEY_FILE:?set the Agent 32-byte at-rest master key file}

@@ -48,8 +48,25 @@ type Migrator struct {
 	migrations      []Migration
 	knownMigrations map[string]struct{}
 	addErr          error
+	baselineVersion string
+	baselinePrefix  string
 	mutex           *sync.Mutex
 	insertStmt      *sql.Stmt
+}
+
+// SetBaselineVersion makes this migrator execute its registered schema
+// builders once while recording one fresh-project version. It is intended for
+// components that explicitly do not support historical upgrades; ordinary
+// migrators retain the ordered per-version behavior above.
+func (m *Migrator) SetBaselineVersion(version string) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	m.baselineVersion = strings.TrimSpace(version)
+	if index := strings.IndexByte(m.baselineVersion, ' '); index > 0 {
+		m.baselinePrefix = m.baselineVersion[:index]
+	} else {
+		m.baselinePrefix = m.baselineVersion
+	}
 }
 
 // NewMigrator creates a new DB migrator.
@@ -98,6 +115,8 @@ func (m *Migrator) UpTo(ctx context.Context, target string) error {
 func (m *Migrator) up(ctx context.Context, target string) error {
 	m.mutex.Lock()
 	addErr := m.addErr
+	baselineVersion := m.baselineVersion
+	baselinePrefix := m.baselinePrefix
 	known := target == ""
 	if target != "" {
 		for _, migration := range m.migrations {
@@ -118,6 +137,32 @@ func (m *Migrator) up(ctx context.Context, target string) error {
 	executedMigrations, err := m.ExecutedMigrations(ctx)
 	if err != nil {
 		return fmt.Errorf("unable to create/get migrations: %w", err)
+	}
+	if baselineVersion != "" {
+		if _, ok := executedMigrations[baselineVersion]; ok {
+			return nil
+		}
+		// A fresh-only component must not silently reinterpret an old P2P
+		// migration ledger as the new baseline. Unrelated component migrations
+		// may share db_migrations in a single database and are ignored.
+		for version := range executedMigrations {
+			if baselinePrefix != "" && strings.HasPrefix(version, baselinePrefix) {
+				return fmt.Errorf("fresh baseline %q cannot run over prior migration %q; recreate the P2P database", baselineVersion, version)
+			}
+		}
+		defer m.close()
+		return WithTransaction(m.db, func(txn *sql.Tx) error {
+			for i := range m.migrations {
+				migration := m.migrations[i]
+				if err := migration.Up(ctx, txn); err != nil {
+					return fmt.Errorf("unable to execute fresh baseline component %q: %w", migration.Version, err)
+				}
+			}
+			if err := m.insertMigration(ctx, txn, baselineVersion); err != nil {
+				return fmt.Errorf("unable to insert fresh baseline migration: %w", err)
+			}
+			return nil
+		})
 	}
 	// ensure we close the insert statement, as it's not needed anymore
 	defer m.close()

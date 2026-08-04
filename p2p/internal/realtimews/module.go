@@ -12,14 +12,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/YingSuiAI/dirextalk-message-server/internal/agentstream"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/dirextalkdomain"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/realtime"
 	actionbase "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/action"
-	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentturns"
 	eventsmodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/events"
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/httpapi"
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/plugins"
-	"github.com/YingSuiAI/dirextalk-message-server/p2p/nativeagent"
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
 )
@@ -67,11 +66,11 @@ type PluginStreamPort interface {
 
 // AgentStreamPort invokes Native Agent streaming actions.
 type AgentStreamPort interface {
-	Stream(context.Context, string, map[string]any, func(nativeagent.Event) error) error
+	Stream(context.Context, string, map[string]any, func(agentstream.Event) error) error
 }
 
 type DurableAgentStreamPort interface {
-	DurableStream(context.Context, string, string, map[string]any, func(agentturns.StreamEvent) error) error
+	DurableStream(context.Context, string, string, map[string]any, func(agentstream.StreamEvent) error) error
 }
 
 type Dependencies struct {

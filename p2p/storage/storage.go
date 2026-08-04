@@ -10,8 +10,9 @@ import (
 )
 
 type DatabaseStore struct {
-	db     *sql.DB
-	writer sqlutil.Writer
+	db                  *sql.DB
+	writer              sqlutil.Writer
+	externalNativeAgent bool
 }
 
 func NewDatabaseStore(ctx context.Context, cm *sqlutil.Connections, dbProperties *config.DatabaseOptions) (*DatabaseStore, error) {
@@ -22,7 +23,7 @@ func NewDatabaseStore(ctx context.Context, cm *sqlutil.Connections, dbProperties
 	if err != nil {
 		return nil, err
 	}
-	store := &DatabaseStore{db: db, writer: writer}
+	store := &DatabaseStore{db: db, writer: writer, externalNativeAgent: true}
 	if err := store.migrate(ctx); err != nil {
 		return nil, err
 	}
@@ -30,7 +31,7 @@ func NewDatabaseStore(ctx context.Context, cm *sqlutil.Connections, dbProperties
 }
 
 func NewUnmigratedDatabaseStore(db *sql.DB, writer sqlutil.Writer) *DatabaseStore {
-	return &DatabaseStore{db: db, writer: writer}
+	return &DatabaseStore{db: db, writer: writer, externalNativeAgent: true}
 }
 
 func (s *DatabaseStore) DB() *sql.DB {

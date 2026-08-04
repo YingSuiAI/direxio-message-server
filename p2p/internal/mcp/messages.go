@@ -52,13 +52,14 @@ func (m *Module) messagesSend(ctx context.Context, params map[string]any) (any, 
 			content[agentGatewaySourceContentKey] = "agent_gateway"
 		}
 	}
-	result, err := m.matrix.SendMessage(ctx, dirextalktransport.SendMessageRequest{
+	result, err := m.sendMatrixMutation(ctx, dirextalktransport.SendMessageRequest{
 		SenderMXID:  senderMXID,
 		RoomID:      roomID,
 		MessageType: "text",
 		Timestamp:   m.now(),
 		Content:     content,
-	})
+		LogicalID:   roomID,
+	}, "product.messages.v1", "send")
 	if err != nil {
 		return nil, transportWriteError(err)
 	}

@@ -90,8 +90,11 @@ func ProductHandler(port ProductPort) http.HandlerFunc {
 	}
 }
 
-// HealthHandler exposes the additive build and schema metadata contract.
-func HealthHandler(buildInfo BuildInfoProvider) http.HandlerFunc {
+// HealthHandler exposes the additive build and schema metadata contract. The
+// optional readiness callback lets deployments fail closed while a required
+// external capability peer/catalog is unavailable without changing existing
+// callers that only need build metadata.
+func HealthHandler(buildInfo BuildInfoProvider, readiness ...func() error) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		SetCORSHeaders(w, r)
 		if r.Method == http.MethodOptions {
@@ -99,8 +102,16 @@ func HealthHandler(buildInfo BuildInfoProvider) http.HandlerFunc {
 			return
 		}
 		build := currentBuildInfo(buildInfo)
-		WriteJSON(w, http.StatusOK, map[string]any{
-			"status":                "ok",
+		status := http.StatusOK
+		statusValue := "ok"
+		if len(readiness) > 0 && readiness[0] != nil {
+			if err := readiness[0](); err != nil {
+				status = http.StatusServiceUnavailable
+				statusValue = "not_ready"
+			}
+		}
+		WriteJSON(w, status, map[string]any{
+			"status":                statusValue,
 			"version":               build.Version,
 			"commit":                build.Commit,
 			"build_time":            build.BuildTime,

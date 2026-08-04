@@ -73,14 +73,24 @@ type ContactRecord struct {
 }
 
 type AgentConfig struct {
-	DisplayName       string         `json:"display_name"`
-	AvatarURL         string         `json:"avatar_url"`
-	ContextWindow     int64          `json:"context_window"`
-	Enabled           bool           `json:"enabled"`
-	Model             string         `json:"model"`
-	SystemPrompt      string         `json:"system_prompt"`
-	MCPBlockedRoomIDs []string       `json:"mcp_blocked_room_ids"`
-	Native            map[string]any `json:"-"`
+	DisplayName         string              `json:"display_name"`
+	AvatarURL           string              `json:"avatar_url"`
+	NativeAgentIdentity AgentIdentityConfig `json:"native_agent_identity"`
+	OnlineAgentIdentity AgentIdentityConfig `json:"online_agent_identity"`
+	ContextWindow       int64               `json:"context_window"`
+	Enabled             bool                `json:"enabled"`
+	Model               string              `json:"model"`
+	SystemPrompt        string              `json:"system_prompt"`
+	MCPBlockedRoomIDs   []string            `json:"mcp_blocked_room_ids"`
+	Native              map[string]any      `json:"-"`
+}
+
+// AgentIdentityConfig keeps the product-visible Matrix Online Agent identity
+// separate from the Native Agent identity shown by the external runtime.
+// Legacy top-level display_name/avatar_url fields remain accepted as aliases.
+type AgentIdentityConfig struct {
+	DisplayName string `json:"display_name"`
+	AvatarURL   string `json:"avatar_url"`
 }
 
 type Channel struct {
@@ -314,13 +324,15 @@ type EventBounds struct {
 
 func (c *AgentConfig) UnmarshalJSON(data []byte) error {
 	type agentConfigJSON struct {
-		DisplayName       string   `json:"display_name"`
-		AvatarURL         string   `json:"avatar_url"`
-		ContextWindow     int64    `json:"context_window"`
-		Enabled           bool     `json:"enabled"`
-		Model             string   `json:"model"`
-		SystemPrompt      string   `json:"system_prompt"`
-		MCPBlockedRoomIDs []string `json:"mcp_blocked_room_ids"`
+		DisplayName         string              `json:"display_name"`
+		AvatarURL           string              `json:"avatar_url"`
+		NativeAgentIdentity AgentIdentityConfig `json:"native_agent_identity"`
+		OnlineAgentIdentity AgentIdentityConfig `json:"online_agent_identity"`
+		ContextWindow       int64               `json:"context_window"`
+		Enabled             bool                `json:"enabled"`
+		Model               string              `json:"model"`
+		SystemPrompt        string              `json:"system_prompt"`
+		MCPBlockedRoomIDs   []string            `json:"mcp_blocked_room_ids"`
 	}
 	var known agentConfigJSON
 	if err := json.Unmarshal(data, &known); err != nil {
@@ -335,6 +347,15 @@ func (c *AgentConfig) UnmarshalJSON(data []byte) error {
 	}
 	c.DisplayName = known.DisplayName
 	c.AvatarURL = known.AvatarURL
+	c.NativeAgentIdentity = known.NativeAgentIdentity
+	c.OnlineAgentIdentity = known.OnlineAgentIdentity
+	legacyIdentity := AgentIdentityConfig{DisplayName: known.DisplayName, AvatarURL: known.AvatarURL}
+	if agentIdentityConfigEmpty(c.NativeAgentIdentity) {
+		c.NativeAgentIdentity = legacyIdentity
+	}
+	if agentIdentityConfigEmpty(c.OnlineAgentIdentity) {
+		c.OnlineAgentIdentity = legacyIdentity
+	}
 	c.ContextWindow = known.ContextWindow
 	c.Enabled = known.Enabled
 	c.Model = known.Model
@@ -349,7 +370,7 @@ func (c *AgentConfig) UnmarshalJSON(data []byte) error {
 }
 
 func (c AgentConfig) MarshalJSON() ([]byte, error) {
-	out := make(map[string]any, len(c.Native)+7)
+	out := make(map[string]any, len(c.Native)+9)
 	for key, value := range c.Native {
 		if !agentConfigKnownJSONKey(key) {
 			out[key] = value
@@ -357,6 +378,8 @@ func (c AgentConfig) MarshalJSON() ([]byte, error) {
 	}
 	out["display_name"] = c.DisplayName
 	out["avatar_url"] = c.AvatarURL
+	out["native_agent_identity"] = c.NativeAgentIdentity
+	out["online_agent_identity"] = c.OnlineAgentIdentity
 	out["context_window"] = c.ContextWindow
 	out["enabled"] = c.Enabled
 	out["model"] = c.Model
@@ -369,12 +392,18 @@ func agentConfigKnownJSONKeys() []string {
 	return []string{
 		"display_name",
 		"avatar_url",
+		"native_agent_identity",
+		"online_agent_identity",
 		"context_window",
 		"enabled",
 		"model",
 		"system_prompt",
 		"mcp_blocked_room_ids",
 	}
+}
+
+func agentIdentityConfigEmpty(identity AgentIdentityConfig) bool {
+	return strings.TrimSpace(identity.DisplayName) == "" && strings.TrimSpace(identity.AvatarURL) == ""
 }
 
 func agentConfigKnownJSONKey(key string) bool {

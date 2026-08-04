@@ -5,7 +5,7 @@ require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/MFAshby/stdemuxerhook v1.0.0
 	github.com/Masterminds/semver/v3 v3.3.1
-	github.com/YingSuiAI/dirextalk-capability-api v0.0.0-00010101000000-000000000000
+	github.com/YingSuiAI/dirextalk-capability-api v1.0.1
 	github.com/aws/aws-sdk-go-v2 v1.43.2
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.29
 	github.com/aws/aws-sdk-go-v2/service/cloudformation v1.74.1
@@ -54,6 +54,7 @@ require (
 	golang.org/x/sys v0.45.0
 	golang.org/x/term v0.43.0
 	google.golang.org/grpc v1.82.0
+	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v2 v2.4.0
 	gotest.tools/v3 v3.5.2
 )
@@ -160,11 +161,10 @@ require (
 	golang.org/x/text v0.38.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
-	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/macaroon.v2 v2.1.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
 go 1.26.5
 
-replace github.com/YingSuiAI/dirextalk-capability-api => /home/adam/dirextalk/dirextalk-capability-api
+replace github.com/YingSuiAI/dirextalk-capability-api => ../dirextalk-capability-api

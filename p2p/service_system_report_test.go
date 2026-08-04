@@ -38,7 +38,7 @@ func TestReportSubmitPersistsReportAndSystemConversationAfterReload(t *testing.T
 	defer store.Close()
 
 	transport := &recordingTransport{roomID: "!system:example.com", eventID: "$report:example.com", ts: 1783433640000}
-	service, err := NewServiceWithStoreAndTransport(ctx, Config{ServerName: "example.com"}, store, transport)
+	service, err := NewServiceWithStoreAndTransport(ctx, withTestExternalAgent(Config{ServerName: "example.com"}), store, transport)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestReportSubmitPersistsReportAndSystemConversationAfterReload(t *testing.T
 		t.Fatal(err)
 	}
 	defer reloadedStore.Close()
-	reloaded, err := NewServiceWithStore(ctx, Config{ServerName: "example.com"}, reloadedStore)
+	reloaded, err := NewServiceWithStore(ctx, withTestExternalAgent(Config{ServerName: "example.com"}), reloadedStore)
 	if err != nil {
 		t.Fatal(err)
 	}

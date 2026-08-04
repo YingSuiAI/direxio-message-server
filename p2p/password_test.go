@@ -110,7 +110,7 @@ func TestPortalAuthUsesRequestedMatrixDeviceID(t *testing.T) {
 }
 
 func TestAgentMatrixSessionCreateUsesAgentIdentity(t *testing.T) {
-	service := NewService(Config{ServerName: "example.com"})
+	service := NewService(withTestExternalAgent(Config{ServerName: "example.com"}))
 	issuer := &recordingMatrixSessionIssuer{}
 	service.SetMatrixSessionIssuer(issuer)
 	mustHandle[map[string]any](t, service, "agent.config.update", map[string]any{

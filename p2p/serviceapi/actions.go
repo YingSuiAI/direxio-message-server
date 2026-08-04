@@ -52,6 +52,7 @@ var actionSpecs = []ActionSpec{
 	{Name: "conversations.get", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
 
 	{Name: "agent.password", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
+	{Name: "agent.account.deprovision", Auth: ActionAuthOwner, Transport: ActionTransportHTTPOnly},
 	{Name: "agent.matrix_session.create", Auth: ActionAuthAgent, Transport: ActionTransportHTTPOnly},
 	{Name: "agent.config.get", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
 	{Name: "agent.config.update", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},

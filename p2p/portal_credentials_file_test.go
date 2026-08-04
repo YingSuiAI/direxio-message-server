@@ -26,7 +26,7 @@ func TestPortalCredentialsFileIsWrittenAndUpdated(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	service, err := NewServiceWithStore(ctx, Config{ServerName: "example.com"}, store)
+	service, err := NewServiceWithStore(ctx, withTestExternalAgent(Config{ServerName: "example.com"}), store)
 	if err != nil {
 		t.Fatal(err)
 	}

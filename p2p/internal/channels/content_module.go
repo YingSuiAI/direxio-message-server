@@ -121,22 +121,25 @@ type ContentConversationPort interface {
 }
 
 type ContentOwner struct {
-	MXID        string
-	DisplayName string
+	MXID             string
+	DisplayName      string
+	AgentMXID        string
+	AgentDisplayName string
 }
 
 // ContentConfig contains side-effect and identity boundaries. NewToken and
 // NewEventID preserve the legacy synthetic identifiers when Matrix transport
 // is absent; MapTransportError preserves ProductPolicy error status mapping.
 type ContentConfig struct {
-	Owner             func() ContentOwner
-	Matrix            func() MatrixContentPort
-	Now               func() time.Time
-	NewToken          func(string) string
-	NewEventID        func(string) string
-	RequireJoined     func(context.Context, string) *actionbase.Error
-	AuthorizeRecall   func(context.Context, string, string) *actionbase.Error
-	MapTransportError func(error) *actionbase.Error
+	Owner               func() ContentOwner
+	Matrix              func() MatrixContentPort
+	Now                 func() time.Time
+	NewToken            func(string) string
+	NewEventID          func(string) string
+	RequireJoined       func(context.Context, string) *actionbase.Error
+	AuthorizeRecall     func(context.Context, string, string) *actionbase.Error
+	MapTransportError   func(error) *actionbase.Error
+	PreparedMatrixStore dirextalktransport.PreparedMatrixMutationStore
 }
 
 type ContentModule struct {

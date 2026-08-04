@@ -1618,7 +1618,7 @@ func TestProjectMemberEventDeduplicatesP2PDelta(t *testing.T) {
 
 	user := test.NewUser(t)
 	room := test.NewRoom(t, user)
-	service, err := NewServiceWithStore(ctx, Config{ServerName: "test"}, store)
+	service, err := NewServiceWithStore(ctx, withTestExternalAgent(Config{ServerName: "test"}), store)
 	if err != nil {
 		t.Fatal(err)
 	}

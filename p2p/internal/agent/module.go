@@ -1,4 +1,6 @@
-// Package agent owns Native Agent runtime actions and their MCP tool bridge.
+// Package agent owns the message-server Native Agent facade. Execution,
+// durable turns, schedules, models, memory, extensions, and voice sessions
+// are owned by the external dirextalk-agent service.
 package agent
 
 import (
@@ -6,429 +8,231 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"reflect"
 	"strings"
 	"time"
 
-	"github.com/YingSuiAI/dirextalk-message-server/internal/dirextalkmcp"
-	"github.com/YingSuiAI/dirextalk-message-server/p2p/agentmemory"
+	"github.com/YingSuiAI/dirextalk-message-server/internal/agentgateway"
+	"github.com/YingSuiAI/dirextalk-message-server/internal/agentstream"
 	actionbase "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/action"
-	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentturns"
-	"github.com/YingSuiAI/dirextalk-message-server/p2p/nativeagent"
-	"github.com/YingSuiAI/dirextalk-message-server/p2p/storage"
 )
 
-// Runner is the stable Native Agent runtime boundary exposed by p2p.Config.
+// Runner is the only Native Agent runtime boundary exposed by p2p.Config.
 type Runner interface {
 	Apply(context.Context, string) error
 	Invoke(context.Context, string, map[string]any) (map[string]any, error)
-	Stream(context.Context, string, map[string]any, func(nativeagent.Event) error) error
+	Stream(context.Context, string, map[string]any, func(agentstream.Event) error) error
 }
 
-// ControlInvoker is the narrow, owner-bound seam for compiled Native Agent
-// control tools. The service wiring owns the binding to the authenticated
-// owner and the embedded action handlers; the runtime never accepts an owner
-// identifier from model-authored tool arguments.
-type ControlInvoker interface {
-	Invoke(context.Context, string, map[string]any) (any, error)
-	Available(string) bool
-}
-
-// ControlInvokerFunc adapts a late-bound embedded handler while preserving the
-// small ControlInvoker contract used by Native Agent tools and tests.
-type ControlInvokerFunc func(context.Context, string, map[string]any) (any, error)
-
-func (f ControlInvokerFunc) Invoke(ctx context.Context, action string, params map[string]any) (any, error) {
-	if f == nil {
-		return nil, fmt.Errorf("native agent control is unavailable")
-	}
-	return f(ctx, action, params)
-}
-
-func (f ControlInvokerFunc) Available(string) bool { return f != nil }
-
-// ControlInvokerAdapter binds action readiness separately from invocation. This
-// keeps unavailable capabilities out of the model tool registry while still
-// allowing the service to resolve handlers late during startup/shutdown.
-type ControlInvokerAdapter struct {
-	Ready func(string) bool
-	Call  func(context.Context, string, map[string]any) (any, error)
-}
-
-func (a ControlInvokerAdapter) Available(action string) bool {
-	return a.Ready != nil && a.Ready(strings.TrimSpace(action))
-}
-
-func (a ControlInvokerAdapter) Invoke(ctx context.Context, action string, params map[string]any) (any, error) {
-	if a.Call == nil || !a.Available(action) {
-		return nil, fmt.Errorf("native agent control action %q is unavailable", strings.TrimSpace(action))
-	}
-	return a.Call(ctx, action, params)
-}
-
-// Config contains the runtime dependencies owned outside the Agent module.
 type Config struct {
-	Runner                Runner
-	DataDir               string
-	Store                 nativeagent.ConfigStore
-	MCP                   *dirextalkmcp.Service
-	Control               ControlInvoker
-	Account               AccountPort
-	Turns                 agentturns.Store
-	OwnerID               func() string
-	Memory                nativeagent.ConversationMemoryStore
-	PersistentMemoryReady bool
-	ModelProfiles         storage.ModelProfileStore
-	ModelProfileResolver  nativeagent.ModelProfileResolver
-	VoiceEnabled          bool
-	VoiceActive           func(string) bool
-	VoiceGeneration       func() uint64
-	ScheduleTools         []nativeagent.Tool
+	Runner  Runner
+	Account AccountPort
+	OwnerID func() string
 }
 
-// Module owns runtime-backed ProductCore actions and streaming invocation.
 type Module struct {
-	runner        Runner
-	account       AccountPort
-	turns         *agentturns.Coordinator
-	turnErr       error
-	ownerID       func() string
-	modelProfiles storage.ModelProfileStore
-	voice         *voiceCoordinator
+	runner  Runner
+	account AccountPort
+	ownerID func() string
 }
-
-type pinnedProfileContextKey struct{}
-type pinnedProfileContext struct{ revision, credential int64 }
 
 func New(cfg Config) *Module {
-	runner := cfg.Runner
-	if runner == nil {
-		runner = runtimeRunner{runtime: nativeagent.New(nativeagent.Config{
-			DataDir:               cfg.DataDir,
-			Store:                 cfg.Store,
-			Tools:                 append(append(Tools(cfg.MCP), ControlTools(cfg.Control)...), cfg.ScheduleTools...),
-			ModelProfiles:         cfg.ModelProfileResolver,
-			OwnerID:               cfg.OwnerID,
-			Memory:                cfg.Memory,
-			PersistentMemoryReady: cfg.PersistentMemoryReady,
-			EmbeddingSession:      embeddingForStore(cfg.ModelProfiles, cfg.OwnerID, nil),
-		})}
-	}
-	turns, turnErr := agentturns.NewCoordinator(context.Background(), cfg.Turns)
-	module := &Module{runner: runner, account: cfg.Account, turns: turns, turnErr: turnErr, ownerID: cfg.OwnerID, modelProfiles: cfg.ModelProfiles}
-	if cfg.VoiceEnabled {
-		module.voice = newVoiceCoordinator(cfg.ModelProfiles, cfg.OwnerID)
-		module.voice.active = cfg.VoiceActive
-		module.voice.generation = cfg.VoiceGeneration
-		module.voice.durable = func(ctx context.Context, owner string, params map[string]any, emit func(agentturns.StreamEvent) error) error {
-			revision, credential := actionbase.Int64(params["_voice_revision"]), actionbase.Int64(params["_voice_credential"])
-			delete(params, "_voice_revision")
-			delete(params, "_voice_credential")
-			return module.durablePinnedStream(ctx, owner, "agent.chat.stream", params, revision, credential, emit)
-		}
-		module.voice.stop = func(ctx context.Context, owner, turnID string) error {
-			if module.turns == nil {
-				return fmt.Errorf("native agent turn coordinator is not configured")
-			}
-			_, _, err := module.turns.Stop(ctx, owner, turnID)
-			return err
-		}
-	}
-	return module
-}
-
-// Handlers returns the complete Agent ProductCore action surface.
-func (m *Module) Handlers() map[string]actionbase.Handler {
-	handlers := make(map[string]actionbase.Handler, len(runtimeActions)+11)
-	for _, action := range runtimeActions {
-		handlers[action] = m.invoke(action)
-	}
-	handlers[actionPassword] = m.accountPassword
-	handlers[actionMatrixSessionCreate] = m.createMatrixSession
-	handlers[actionConfigGet] = m.getConfig
-	handlers[actionConfigUpdate] = m.updateConfig
-	handlers["agent.chat.stream"] = streamOnly
-	if m.voice != nil {
-		handlers["agent.voice.session.stream"] = streamOnly
-	}
-	handlers["agent.chat.turn.stop"] = m.stopTurn
-	handlers["agent.chat.turns.list"] = m.listTurns
-	handlers["agent.model_profiles.sync"] = m.modelProfileSync
-	handlers["agent.model_profiles.list"] = m.modelProfileList
-	handlers["agent.model_profiles.get"] = m.modelProfileGet
-	handlers["agent.model_profiles.delete"] = m.modelProfileDelete
-	if m.voice != nil {
-		handlers["agent.voice.session.create"] = m.createVoiceSession
-		handlers["agent.voice.session.start"] = m.startVoiceSession
-		handlers["agent.voice.session.transcript"] = m.submitVoiceTranscript
-		handlers["agent.voice.session.interrupt"] = m.interruptVoiceSession
-		handlers["agent.voice.session.end"] = m.endVoiceSession
-	}
-	return handlers
+	return &Module{runner: cfg.Runner, account: cfg.Account, ownerID: cfg.OwnerID}
 }
 
 func (m *Module) ReadyError() error {
 	if m == nil {
 		return fmt.Errorf("native agent module is unavailable")
 	}
-	return m.turnErr
+	if m.runner == nil {
+		return fmt.Errorf("external native agent gateway is not configured")
+	}
+	return nil
 }
 
-// Stream invokes a runtime streaming action after the websocket adapter has
-// established its connection-scoped cancellation and frame writer.
-func (m *Module) Stream(ctx context.Context, action string, params map[string]any, emit func(nativeagent.Event) error) error {
+// HasLocalTurnCoordinator and HasLocalVoiceCoordinator remain as diagnostic
+// compatibility seams. Both are permanently false after the hard split.
+func (m *Module) HasLocalTurnCoordinator() bool  { return false }
+func (m *Module) HasLocalVoiceCoordinator() bool { return false }
+
+func (m *Module) Stream(ctx context.Context, action string, params map[string]any, emit func(agentstream.Event) error) error {
 	if m == nil || m.runner == nil {
-		return fmt.Errorf("native agent runtime is not configured")
+		return fmt.Errorf("external native agent gateway is not configured")
 	}
-	if strings.TrimSpace(action) == "agent.voice.session.stream" && m.voice != nil {
-		return m.voice.stream(ctx, m.currentOwnerID(), params, emit)
-	}
-	params = cloneMap(params)
-	delete(params, "_server_pinned_profile")
 	return m.runner.Stream(ctx, strings.TrimSpace(action), cloneMap(params), emit)
 }
 
-func (m *Module) DurableStream(ctx context.Context, ownerID, action string, params map[string]any, emit func(agentturns.StreamEvent) error) error {
-	if m == nil || m.runner == nil || m.turns == nil {
-		return fmt.Errorf("native agent turn coordinator is not configured")
+// DurableStream forwards a remote durable operation and projects its events
+// into the existing ProductCore websocket DTO. No local turn store or runner
+// is constructed in message-server.
+func (m *Module) DurableStream(ctx context.Context, ownerID, action string, params map[string]any, emit func(agentstream.StreamEvent) error) error {
+	if m == nil || m.runner == nil {
+		return fmt.Errorf("external native agent gateway is not configured")
+	}
+	if strings.TrimSpace(action) != "agent.chat.stream" {
+		return fmt.Errorf("%w: %q", agentgateway.ErrUnsupportedAction, action)
+	}
+	turnID := strings.TrimSpace(actionbase.String(params["turn_id"]))
+	conversationID := agentstream.ConversationID(params)
+	if !agentstream.ValidID(turnID) {
+		return fmt.Errorf("turn_id is invalid")
+	}
+	if !agentstream.ValidID(conversationID) {
+		return fmt.Errorf("conversation_id is invalid")
+	}
+	if emit == nil {
+		return fmt.Errorf("native agent stream callback is required")
 	}
 	params = cloneMap(params)
-	delete(params, "_server_pinned_profile")
-	turnID := actionbase.String(params["turn_id"])
-	conversationID := nativeagent.ConversationID(params)
-	profileID := durableServerModelProfileID(params)
-	var existing agentturns.Turn
-	var existingOK bool
-	if turnID != "" {
-		var getErr error
-		existing, existingOK, getErr = m.turns.Get(context.Background(), ownerID, turnID)
-		if getErr != nil {
-			return getErr
+	params["turn_id"] = turnID
+	params["conversation_id"] = conversationID
+	return m.runner.Stream(ctx, action, params, func(event agentstream.Event) error {
+		state := agentstream.StateRunning
+		kind := agentstream.EventRuntime
+		switch strings.TrimSpace(event.Event) {
+		case "accepted":
+			state = agentstream.StateAccepted
+			kind = agentstream.EventAccepted
+		case "done":
+			state = agentstream.StateSucceeded
+		case "error":
+			state = agentstream.StateFailed
+			kind = agentstream.EventError
+		case "cancelled":
+			state = agentstream.StateStopped
+			kind = agentstream.EventError
 		}
-	}
-	contentPresent := durableChatContentPresent(params)
-	if existingOK && !contentPresent {
-		if suppliedConversation := actionbase.String(params["conversation_id"]); suppliedConversation != "" && suppliedConversation != existing.ConversationID {
-			return agentturns.ErrTurnIDReused
-		}
-		if suppliedAction := strings.TrimSpace(action); suppliedAction != "" && suppliedAction != existing.Action {
-			return agentturns.ErrTurnIDReused
-		}
-		if suppliedProfile := durableServerModelProfileID(params); suppliedProfile != "" && suppliedProfile != existing.ModelProfileID {
-			return agentturns.ErrTurnIDReused
-		}
-		conversationID = existing.ConversationID
-		profileID = existing.ModelProfileID
-		digest := existing.Digest
-		request := agentturns.Request{OwnerID: strings.TrimSpace(ownerID), TurnID: turnID, ConversationID: conversationID, Action: existing.Action, ModelProfileID: profileID, ModelProfileRevision: existing.ModelProfileRevision, CredentialVersion: existing.CredentialVersion, Digest: digest, AfterSeq: actionbase.Int64(params["after_seq"])}
-		return m.turns.Stream(ctx, request, func(context.Context, func(agentturns.RuntimeEvent) error) error { return nil }, emit)
-	}
-	if action == "agent.chat" || action == "agent.chat.stream" {
-		if _, err := nativeagent.ValidateNativeAgentChatParams(params); err != nil {
-			return err
-		}
-	}
-	var pinnedRevision, pinnedCredential int64
-	if profileID == "" && action != "" && (action == "agent.chat" || action == "agent.chat.stream") && m.modelProfiles != nil {
-		if _, inline := params["model_profile"]; !inline {
-			profile, resolveErr := m.modelProfiles.ResolveDefaultModelProfilePin(ctx, strings.TrimSpace(ownerID), storage.ModelKindConversation)
-			if resolveErr == nil {
-				profileID, pinnedRevision, pinnedCredential = profile.ProfileID, profile.Revision, profile.CredentialVersion
-			} else {
-				return resolveErr
-			}
-		}
-	}
-	requestedRevision := actionbase.Int64(params["model_profile_revision"])
-	requestedCredential := actionbase.Int64(params["credential_version"])
-	if (requestedRevision > 0) != (requestedCredential > 0) {
-		return fmt.Errorf("model profile revision and credential version must be provided together")
-	}
-	if pin, ok := ctx.Value(pinnedProfileContextKey{}).(pinnedProfileContext); ok {
-		if (requestedRevision > 0 && requestedRevision != pin.revision) ||
-			(requestedCredential > 0 && requestedCredential != pin.credential) {
-			return fmt.Errorf("model profile pin is ambiguous")
-		}
-		requestedRevision, requestedCredential = pin.revision, pin.credential
-	}
-	if profileID != "" && turnID != "" {
-		if existing, ok, getErr := m.turns.Get(context.Background(), ownerID, turnID); getErr == nil && ok && existing.ModelProfileID == profileID {
-			pinnedRevision, pinnedCredential = existing.ModelProfileRevision, existing.CredentialVersion
-		}
-	}
-	if profileID != "" && (pinnedRevision <= 0 || pinnedCredential <= 0) {
-		if m.modelProfiles == nil {
-			return fmt.Errorf("server model profiles are unavailable")
-		}
-		var profile storage.ModelProfile
-		var resolveErr error
-		if requestedRevision > 0 {
-			profile, resolveErr = m.modelProfiles.ResolveModelProfilePinned(ctx, strings.TrimSpace(ownerID), profileID, requestedRevision, requestedCredential)
-		} else {
-			profile, resolveErr = m.modelProfiles.ResolveModelProfile(ctx, strings.TrimSpace(ownerID), profileID)
-		}
-		if resolveErr != nil {
-			return resolveErr
-		}
-		pinnedRevision, pinnedCredential = profile.Revision, profile.CredentialVersion
-	}
-	if action == "agent.chat" || action == "agent.chat.stream" {
-		attachments, _ := nativeagent.ValidateNativeAgentChatParams(params)
-		if len(attachments) > 0 {
-			// The runtime repeats this fence; doing it here prevents a bad
-			// request from reserving a durable turn or calculating its digest.
-			profile, resolveErr := m.modelProfiles.ResolveModelProfilePinned(ctx, strings.TrimSpace(ownerID), profileID, pinnedRevision, pinnedCredential)
-			if resolveErr != nil {
-				return resolveErr
-			}
-			if profile.ModelKind != storage.ModelKindConversation || !containsImageModality(profile.InputModalities) {
-				return fmt.Errorf("image attachments require a conversation model profile with image input")
-			}
-		}
-	}
-	digest, err := agentturns.RequestDigest(action, params)
-	if err != nil {
-		return err
-	}
-	request := agentturns.Request{
-		OwnerID: strings.TrimSpace(ownerID), TurnID: turnID, ConversationID: conversationID,
-		Action: strings.TrimSpace(action), ModelProfileID: profileID, ModelProfileRevision: pinnedRevision,
-		CredentialVersion: pinnedCredential, Digest: digest, AfterSeq: actionbase.Int64(params["after_seq"]),
-	}
-	return m.turns.Stream(ctx, request, func(runCtx context.Context, runtimeEmit func(agentturns.RuntimeEvent) error) error {
-		runParams := cloneMap(params)
-		delete(runParams, "after_seq")
-		delete(runParams, "model_profile_revision")
-		delete(runParams, "credential_version")
-		if request.ModelProfileID != "" {
-			if m.modelProfiles == nil {
-				return fmt.Errorf("server model profiles are unavailable")
-			}
-			profile, resolveErr := m.modelProfiles.ResolveModelProfilePinned(runCtx, request.OwnerID, request.ModelProfileID, request.ModelProfileRevision, request.CredentialVersion)
-			if resolveErr != nil {
-				return resolveErr
-			}
-			runParams["model_profile"] = durableModelProfileParams(profile)
-			runParams["_server_pinned_profile"] = true
-			delete(runParams, "model_profile_id")
-			delete(runParams, "client_model_profile_id")
-		}
-		return m.runner.Stream(runCtx, request.Action, runParams, func(event nativeagent.Event) error {
-			return runtimeEmit(agentturns.RuntimeEvent{Event: event.Event, Data: event.Data})
-		})
-	}, emit)
+		turn := agentstream.Turn{OwnerID: strings.TrimSpace(ownerID), TurnID: turnID, ConversationID: conversationID, Action: action, State: state, UpdatedAt: time.Now().UTC()}
+		return emit(agentstream.StreamEvent{Kind: kind, Turn: turn, TurnID: turnID, ConversationID: conversationID, Event: event.Event, Data: event.Data})
+	})
 }
 
-func (m *Module) durablePinnedStream(ctx context.Context, owner, action string, params map[string]any, revision, credential int64, emit func(agentturns.StreamEvent) error) error {
-	ctx = context.WithValue(ctx, pinnedProfileContextKey{}, pinnedProfileContext{revision: revision, credential: credential})
-	return m.DurableStream(ctx, owner, action, params, emit)
+type externalDurableRunner interface {
+	Stream(context.Context, string, map[string]any, func(agentstream.Event) error) error
+	Cancel(context.Context, string, map[string]any) (map[string]any, error)
+	Get(context.Context, string, map[string]any) (map[string]any, error)
 }
 
-func durableServerModelProfileID(params map[string]any) string {
-	if _, inline := params["model_profile"]; inline {
-		return ""
+func (m *Module) Cancel(ctx context.Context, action string, params map[string]any) (map[string]any, error) {
+	runner, ok := m.runner.(externalDurableRunner)
+	if !ok {
+		return nil, fmt.Errorf("external native agent turn control is unavailable")
 	}
-	serverID := actionbase.String(params["model_profile_id"])
-	legacyID := actionbase.String(params["client_model_profile_id"])
-	if serverID != "" && legacyID == "" {
-		return serverID
-	}
-	if serverID == "" {
-		return legacyID
-	}
-	if serverID == legacyID {
-		return serverID
-	}
-	return ""
+	return runner.Cancel(ctx, action, cloneMap(params))
 }
 
-func durableModelProfileParams(profile storage.ModelProfile) map[string]any {
-	params := map[string]any{
-		"provider": profile.Provider, "base_url": profile.BaseURL, "model": profile.Model,
-		"system_prompt": profile.SystemPrompt, "api_key": profile.APIKey,
-		"max_output_tokens": profile.MaxOutputTokens, "context_window": profile.ContextWindow,
-		"reasoning_mode": profile.ReasoningEffort, "model_kind": profile.ModelKind,
-		"input_modalities": append([]string(nil), profile.InputModalities...),
-	}
-	if profile.Temperature != nil {
-		params["temperature"] = *profile.Temperature
-	}
-	if profile.TopP != nil {
-		params["top_p"] = *profile.TopP
-	}
-	return params
-}
-
-func durableChatContentPresent(params map[string]any) bool {
-	for _, key := range []string{"prompt", "message", "messages", "attachments"} {
-		value, ok := params[key]
-		if !ok || value == nil {
-			continue
-		}
-		if text, ok := value.(string); ok {
-			if strings.TrimSpace(text) != "" {
-				return true
-			}
-			continue
-		}
-		if key == "messages" || key == "attachments" {
-			if reflect.ValueOf(value).Kind() == reflect.Slice && reflect.ValueOf(value).Len() > 0 {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func containsImageModality(modalities []string) bool {
-	for _, modality := range modalities {
-		if strings.EqualFold(strings.TrimSpace(modality), "image") {
-			return true
-		}
-	}
-	return false
+func (m *Module) CancelExternal(ctx context.Context, action string, params map[string]any) (map[string]any, error) {
+	return m.Cancel(ctx, action, params)
 }
 
 func (m *Module) stopTurn(ctx context.Context, params map[string]any) (any, *actionbase.Error) {
-	if m == nil || m.turns == nil {
-		return nil, actionbase.StatusError(http.StatusBadGateway, "native agent turn coordinator is not configured")
-	}
-	turnID := actionbase.String(params["turn_id"])
-	if turnID == "" {
-		return nil, actionbase.BadRequest("turn_id is required")
-	}
-	if !agentturns.ValidID(turnID) {
+	turnID := strings.TrimSpace(actionbase.String(params["turn_id"]))
+	if !agentstream.ValidID(turnID) {
 		return nil, actionbase.BadRequest("turn_id is invalid")
 	}
-	turn, changed, err := m.turns.Stop(ctx, m.currentOwnerID(), turnID)
+	result, err := m.Cancel(ctx, "agent.chat.turn.stop", map[string]any{"turn_id": turnID})
 	if err != nil {
-		if errors.Is(err, agentturns.ErrTurnNotFound) {
-			return nil, actionbase.CodedError(http.StatusNotFound, "M_TURN_NOT_FOUND", "M_TURN_NOT_FOUND")
-		}
-		return nil, actionbase.InternalError(err)
+		return nil, externalAgentActionError(err)
 	}
-	result := turnResponse(turn)
-	result["changed"] = changed
+	if result == nil {
+		result = map[string]any{}
+	}
+	result["turn_id"] = turnID
+	result["changed"] = true
 	return result, nil
 }
 
 func (m *Module) listTurns(ctx context.Context, params map[string]any) (any, *actionbase.Error) {
-	if m == nil || m.turns == nil {
-		return nil, actionbase.StatusError(http.StatusBadGateway, "native agent turn coordinator is not configured")
+	if m == nil || m.runner == nil {
+		return nil, actionbase.StatusError(http.StatusBadGateway, "external native agent runtime is not configured")
 	}
-	conversationID := ""
-	if actionbase.String(params["conversation_id"]) != "" {
-		conversationID = nativeagent.ConversationID(params)
-	}
-	turns, err := m.turns.List(ctx, m.currentOwnerID(), conversationID, int(actionbase.Int64(params["limit"])))
+	result, err := m.runner.Invoke(ctx, "agent.chat.turns.list", cloneMap(params))
 	if err != nil {
-		return nil, actionbase.InternalError(err)
+		return nil, externalAgentActionError(err)
 	}
-	items := make([]map[string]any, 0, len(turns))
-	for _, turn := range turns {
-		items = append(items, turnResponse(turn))
+	return result, nil
+}
+
+func (m *Module) Handlers() map[string]actionbase.Handler {
+	if m == nil {
+		return nil
 	}
-	return map[string]any{"turns": items}, nil
+	handlers := map[string]actionbase.Handler{
+		actionPassword:            m.accountPassword,
+		actionMatrixSessionCreate: m.createMatrixSession,
+		actionConfigGet:           m.getConfig,
+		actionConfigUpdate:        m.updateConfig,
+		"agent.chat.stream":       streamOnly,
+		"agent.chat.turn.stop":    m.stopTurn,
+		"agent.chat.turns.list":   m.listTurns,
+	}
+	for _, action := range runtimeActions {
+		handlers[action] = m.invoke(action)
+	}
+	for _, action := range externalNativeActions {
+		if action == "agent.chat.turn.stop" || action == "agent.chat.turns.list" {
+			continue
+		}
+		if strings.HasSuffix(action, ".stream") {
+			handlers[action] = streamOnly
+		} else {
+			handlers[action] = m.invoke(action)
+		}
+	}
+	return handlers
+}
+
+func (m *Module) invoke(action string) actionbase.Handler {
+	return func(ctx context.Context, params map[string]any) (any, *actionbase.Error) {
+		if m == nil || m.runner == nil {
+			return nil, actionbase.StatusError(http.StatusBadGateway, "external native agent gateway is not configured")
+		}
+		result, err := m.runner.Invoke(ctx, strings.TrimSpace(action), cloneMap(params))
+		if err != nil {
+			return nil, externalAgentActionError(err)
+		}
+		return result, nil
+	}
+}
+
+func externalAgentActionError(err error) *actionbase.Error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, agentgateway.ErrUnsupportedAction) {
+		return actionbase.StatusError(http.StatusNotImplemented, err.Error())
+	}
+	message := strings.ToLower(strings.TrimSpace(err.Error()))
+	switch {
+	case strings.Contains(message, "forbidden"), strings.Contains(message, "permission"), strings.Contains(message, "scope"):
+		return actionbase.StatusError(http.StatusForbidden, err.Error())
+	case strings.Contains(message, "not found"), strings.Contains(message, "does not exist"):
+		return actionbase.StatusError(http.StatusNotFound, err.Error())
+	case strings.Contains(message, "conflict"), strings.Contains(message, "revision"), strings.Contains(message, "idempotency"):
+		return actionbase.StatusError(http.StatusConflict, err.Error())
+	case strings.Contains(message, "invalid"), strings.Contains(message, "required"), strings.Contains(message, "malformed"), strings.Contains(message, "server-derived"):
+		return actionbase.BadRequest(err.Error())
+	case strings.Contains(message, "not ready"), strings.Contains(message, "unavailable"), strings.Contains(message, "not configured"):
+		return actionbase.StatusError(http.StatusServiceUnavailable, err.Error())
+	case strings.Contains(message, "deadline exceeded"), strings.Contains(message, "timeout"):
+		return actionbase.StatusError(http.StatusGatewayTimeout, err.Error())
+	default:
+		return actionbase.StatusError(http.StatusBadGateway, err.Error())
+	}
+}
+
+func streamOnly(context.Context, map[string]any) (any, *actionbase.Error) {
+	return nil, actionbase.BadRequest("action requires websocket")
+}
+
+func cloneMap(values map[string]any) map[string]any {
+	if values == nil {
+		return map[string]any{}
+	}
+	cloned := make(map[string]any, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func (m *Module) currentOwnerID() string {
@@ -438,125 +242,11 @@ func (m *Module) currentOwnerID() string {
 	return "owner"
 }
 
-func turnResponse(turn agentturns.Turn) map[string]any {
-	result := map[string]any{
-		"turn_id": turn.TurnID, "conversation_id": turn.ConversationID, "action": turn.Action,
-		"state": string(turn.State), "created_at": turn.CreatedAt.UTC().Format(time.RFC3339Nano),
-		"updated_at": turn.UpdatedAt.UTC().Format(time.RFC3339Nano),
-	}
-	if turn.Error != "" {
-		result["error"] = turn.Error
-	}
-	return result
-}
-
-func (m *Module) invoke(action string) actionbase.Handler {
-	return func(ctx context.Context, params map[string]any) (any, *actionbase.Error) {
-		if m == nil || m.runner == nil {
-			return nil, actionbase.StatusError(http.StatusBadGateway, "native agent runtime is not configured")
-		}
-		params = cloneMap(params)
-		delete(params, "_server_pinned_profile")
-		result, err := m.runner.Invoke(ctx, strings.TrimSpace(action), params)
-		if err != nil {
-			if errors.Is(err, agentmemory.ErrInvalidCursor) {
-				return nil, actionbase.BadRequest(err.Error())
-			}
-			if errors.Is(err, agentmemory.ErrIdempotencyConflict) || errors.Is(err, agentmemory.ErrRevisionConflict) {
-				return nil, actionbase.StatusError(http.StatusConflict, err.Error())
-			}
-			if errors.Is(err, agentmemory.ErrNotFound) || errors.Is(err, agentmemory.ErrDeleted) {
-				return nil, actionbase.StatusError(http.StatusNotFound, err.Error())
-			}
-			if nativeagent.IsValidationError(err) {
-				return nil, actionbase.BadRequest(err.Error())
-			}
-			if nativeagent.IsEmbeddedExtensionsForbidden(err) {
-				return nil, actionbase.StatusError(http.StatusForbidden, err.Error())
-			}
-			return nil, actionbase.StatusError(http.StatusBadGateway, err.Error())
-		}
-		return result, nil
-	}
-}
-
-func streamOnly(context.Context, map[string]any) (any, *actionbase.Error) {
-	return nil, actionbase.BadRequest("action requires websocket")
-}
-
-type runtimeRunner struct {
-	runtime *nativeagent.Runtime
-}
-
-func (r runtimeRunner) Apply(ctx context.Context, action string) error {
-	if r.runtime == nil {
-		return fmt.Errorf("native agent runtime is not configured")
-	}
-	return r.runtime.Apply(ctx, strings.TrimSpace(action))
-}
-
-func (r runtimeRunner) Invoke(ctx context.Context, action string, params map[string]any) (map[string]any, error) {
-	if r.runtime == nil {
-		return nil, fmt.Errorf("native agent runtime is not configured")
-	}
-	return r.runtime.Invoke(ctx, strings.TrimSpace(action), cloneMap(params))
-}
-
-func (r runtimeRunner) Stream(ctx context.Context, action string, params map[string]any, emit func(nativeagent.Event) error) error {
-	if r.runtime == nil {
-		return fmt.Errorf("native agent runtime is not configured")
-	}
-	return r.runtime.Stream(ctx, strings.TrimSpace(action), cloneMap(params), emit)
-}
-
 var runtimeActions = []string{
-	"agent.config.propose_patch",
-	"agent.chat",
-	"agent.web_search.test",
-	"agent.chat.conversations.create",
-	"agent.chat.conversations.list",
-	"agent.chat.conversations.get",
-	"agent.chat.conversations.rename",
-	"agent.chat.conversations.delete",
-	"agent.context.compress",
-	"agent.models.list",
-	"agent.runtime.inspect",
-	"agent.runtime.install",
-	"agent.runtime.which",
-	"agent.runtime.run",
-	"agent.skills.list",
-	"agent.skills.install",
-	"agent.skills.enable",
-	"agent.skills.disable",
-	"agent.skills.uninstall",
-	"agent.skills.registry.search",
-	"agent.mcp.servers.list",
-	"agent.mcp.servers.install",
-	"agent.mcp.servers.enable",
-	"agent.mcp.servers.disable",
-	"agent.mcp.servers.uninstall",
-	"agent.mcp.registry.search",
-	"agent.knowledge.config.get",
-	"agent.knowledge.config.update",
-	"agent.knowledge.sources.list",
-	"agent.knowledge.sources.delete",
-	"agent.knowledge.upload.start",
-	"agent.knowledge.upload.chunk",
-	"agent.knowledge.upload.finish",
-	"agent.knowledge.memory.create",
-	"agent.knowledge.memories.list",
-	"agent.knowledge.memories.update",
-	"agent.knowledge.memories.delete",
-	"agent.knowledge.search",
-	"agent.knowledge.status",
-	"agent.contacts.list",
-	"agent.contacts.search",
-	"agent.rooms.search",
-	"agent.messages.list",
-	"agent.messages.send",
-	"agent.room_members.list",
-	"agent.channel_posts.list",
-	"agent.channel_comments.list",
-	"agent.channel_comments.create",
-	"agent.summarize",
+	"agent.config.propose_patch", "agent.chat", "agent.web_search.test",
+	"agent.chat.conversations.create", "agent.chat.conversations.list", "agent.chat.conversations.get", "agent.chat.conversations.rename", "agent.chat.conversations.delete", "agent.context.compress", "agent.models.list", "agent.runtime.inspect", "agent.runtime.install", "agent.runtime.which", "agent.runtime.run", "agent.skills.list", "agent.skills.install", "agent.skills.enable", "agent.skills.disable", "agent.skills.uninstall", "agent.skills.registry.search", "agent.mcp.servers.list", "agent.mcp.servers.install", "agent.mcp.servers.enable", "agent.mcp.servers.disable", "agent.mcp.servers.uninstall", "agent.mcp.registry.search", "agent.knowledge.config.get", "agent.knowledge.config.update", "agent.knowledge.sources.list", "agent.knowledge.sources.delete", "agent.knowledge.upload.start", "agent.knowledge.upload.chunk", "agent.knowledge.upload.finish", "agent.knowledge.memory.create", "agent.knowledge.memories.list", "agent.knowledge.memories.update", "agent.knowledge.memories.delete", "agent.knowledge.search", "agent.knowledge.status", "agent.contacts.list", "agent.contacts.search", "agent.rooms.search", "agent.messages.list", "agent.messages.send", "agent.room_members.list", "agent.channel_posts.list", "agent.channel_comments.list", "agent.channel_comments.create", "agent.summarize",
+}
+
+var externalNativeActions = []string{
+	"agent.account.deprovision", "agent.backends.get", "agent.core.status.get", "agent.core.model_profiles.sync", "agent.core.model_profiles.list", "agent.core.model_profiles.get", "agent.core.model_profiles.delete", "agent.model_profiles.sync", "agent.model_profiles.list", "agent.model_profiles.get", "agent.model_profiles.delete", "agent.schedules.create", "agent.schedules.update", "agent.schedules.get", "agent.schedules.list", "agent.schedules.delete", "agent.schedules.enable", "agent.schedules.disable", "agent.schedules.run_now", "agent.schedule_runs.list", "agent.schedule_runs.get", "agent.core.tasks.get", "agent.core.tasks.list", "agent.core.tasks.cancel", "agent.core.tasks.retry", "agent.core.tasks.events", "agent.core.schedules.create", "agent.core.schedules.get", "agent.core.schedules.list", "agent.core.schedules.update", "agent.core.schedules.pause", "agent.core.schedules.resume", "agent.core.schedules.trigger", "agent.core.schedules.delete", "agent.core.confirmations.get", "agent.core.confirmations.list", "agent.core.confirmations.confirm", "agent.core.confirmations.reject", "agent.core.confirmations.acknowledge_extension_execution_uncertain", "agent.core.mcp.discover", "agent.core.mcp.get", "agent.core.mcp.list", "agent.core.mcp.inspect", "agent.core.mcp.install", "agent.core.mcp.update", "agent.core.mcp.remove", "agent.core.mcp.list_tools", "agent.core.mcp.execute", "agent.core.skills.discover", "agent.core.skills.get", "agent.core.skills.list", "agent.core.skills.inspect", "agent.core.skills.install", "agent.core.skills.update", "agent.core.skills.remove", "agent.core.skills.execute", "agent.core.aws.credentials.create", "agent.core.aws.credentials.update", "agent.core.aws.credentials.delete", "agent.core.aws.credentials.list", "agent.core.aws.credentials.test", "agent.chat.turn.stop", "agent.chat.turns.list", "agent.voice.session.create", "agent.voice.session.start", "agent.voice.session.transcript", "agent.voice.session.interrupt", "agent.voice.session.end", "agent.voice.session.stream", "agent.execution.v2.projects.analyze", "agent.execution.v2.analyses.get", "agent.execution.v2.targets.list", "agent.execution.v2.targets.get", "agent.execution.v2.targets.import", "agent.execution.v2.targets.reserve", "agent.execution.v2.targets.observe", "agent.execution.v2.plans.create", "agent.execution.v2.plans.revise", "agent.execution.v2.plans.get", "agent.execution.v2.plans.list", "agent.execution.v2.deployments.list", "agent.execution.v2.deployments.get", "agent.execution.v2.deployments.events", "agent.execution.v2.runs.create", "agent.execution.v2.runs.get", "agent.execution.v2.runs.list", "agent.execution.v2.runs.cancel", "agent.execution.v2.runs.retry", "agent.execution.v2.runs.reconcile", "agent.execution.v2.runs.events", "agent.execution.v2.confirmations.get", "agent.execution.v2.confirmations.list", "agent.execution.v2.confirmations.confirm", "agent.execution.v2.confirmations.reject", "agent.execution.v2.artifacts.get", "agent.execution.v2.service_bindings.list", "agent.execution.v2.service_bindings.get", "agent.execution.v2.service_bindings.invoke", "agent.execution.v2.secrets.create", "agent.execution.v2.secrets.get", "agent.execution.v2.secrets.list", "agent.execution.v2.secrets.revoke",
 }

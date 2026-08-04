@@ -7,10 +7,9 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/YingSuiAI/dirextalk-message-server/internal/agentstream"
 	actionbase "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/action"
-	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentturns"
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/plugins"
-	"github.com/YingSuiAI/dirextalk-message-server/p2p/nativeagent"
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/serviceapi"
 )
 
@@ -21,6 +20,7 @@ type connection struct {
 	streamMu       sync.Mutex
 	streamCancels  map[string]context.CancelFunc
 	durableStreams map[string]bool
+	durableParams  map[string]map[string]any
 }
 
 func newConnection(sessionID string, record Ticket) *connection {
@@ -78,6 +78,7 @@ func (c *connection) finishStream(id string) {
 	defer c.streamMu.Unlock()
 	delete(c.streamCancels, strings.TrimSpace(id))
 	delete(c.durableStreams, strings.TrimSpace(id))
+	delete(c.durableParams, strings.TrimSpace(id))
 }
 
 func (c *connection) markDurableStream(id string) {
@@ -92,6 +93,30 @@ func (c *connection) markDurableStream(id string) {
 		}
 		c.durableStreams[strings.TrimSpace(id)] = true
 	}
+}
+
+func (c *connection) setDurableStreamParams(id string, params map[string]any) {
+	if c == nil {
+		return
+	}
+	c.streamMu.Lock()
+	defer c.streamMu.Unlock()
+	if _, ok := c.streamCancels[strings.TrimSpace(id)]; !ok {
+		return
+	}
+	if c.durableParams == nil {
+		c.durableParams = map[string]map[string]any{}
+	}
+	c.durableParams[strings.TrimSpace(id)] = cloneMap(params)
+}
+
+func (c *connection) durableStreamParams(id string) map[string]any {
+	if c == nil {
+		return nil
+	}
+	c.streamMu.Lock()
+	defer c.streamMu.Unlock()
+	return cloneMap(c.durableParams[strings.TrimSpace(id)])
 }
 
 func (c *connection) durableStream(id string) bool {
@@ -112,6 +137,7 @@ func (c *connection) cancelStream(id string) bool {
 	if ok {
 		delete(c.streamCancels, strings.TrimSpace(id))
 		delete(c.durableStreams, strings.TrimSpace(id))
+		delete(c.durableParams, strings.TrimSpace(id))
 	}
 	c.streamMu.Unlock()
 	if ok {
@@ -131,6 +157,7 @@ func (c *connection) cancelAllStreams() {
 	}
 	c.streamCancels = map[string]context.CancelFunc{}
 	c.durableStreams = map[string]bool{}
+	c.durableParams = map[string]map[string]any{}
 	c.streamMu.Unlock()
 	for _, cancel := range cancels {
 		cancel()
@@ -294,6 +321,7 @@ func (m *Module) startNativeAgentStream(ctx context.Context, client *connection,
 	}
 	if turnID := actionbase.String(params["turn_id"]); turnID != "" {
 		client.markDurableStream(id)
+		client.setDurableStreamParams(id, params)
 		durable, ok := m.agent.(DurableAgentStreamPort)
 		if !ok {
 			client.finishStream(id)
@@ -303,16 +331,16 @@ func (m *Module) startNativeAgentStream(ctx context.Context, client *connection,
 		}
 		go func() {
 			defer client.finishStream(id)
-			err := durable.DurableStream(streamCtx, client.record.UserID, runnerAction, params, func(event agentturns.StreamEvent) error {
+			err := durable.DurableStream(streamCtx, client.record.UserID, runnerAction, params, func(event agentstream.StreamEvent) error {
 				wireAction := nativeAgentStreamAction(runnerAction)
 				switch event.Kind {
-				case agentturns.EventAccepted:
+				case agentstream.EventAccepted:
 					return client.sendBlocking(streamCtx, map[string]any{
 						"type": "server.native_agent_stream.accepted", "id": id,
 						"action": wireAction, "turn_id": event.TurnID,
 						"conversation_id": event.ConversationID, "state": string(event.Turn.State),
 					})
-				case agentturns.EventError:
+				case agentstream.EventError:
 					message := actionbase.String(event.Data["error"])
 					if message == "" {
 						message = event.Event
@@ -343,7 +371,7 @@ func (m *Module) startNativeAgentStream(ctx context.Context, client *connection,
 			}
 			status := http.StatusBadGateway
 			code := ""
-			if errors.Is(err, agentturns.ErrTurnIDReused) {
+			if errors.Is(err, agentstream.ErrTurnIDReused) {
 				status = http.StatusConflict
 				code = "M_TURN_ID_REUSED"
 			} else if strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "after_seq") {
@@ -365,7 +393,7 @@ func (m *Module) startNativeAgentStream(ctx context.Context, client *connection,
 		defer client.finishStream(id)
 		wireAction := nativeAgentStreamAction(runnerAction)
 		doneSent := false
-		err := m.agent.Stream(streamCtx, runnerAction, params, func(event nativeagent.Event) error {
+		err := m.agent.Stream(streamCtx, runnerAction, params, func(event agentstream.Event) error {
 			eventName := strings.TrimSpace(event.Event)
 			if eventName == "" {
 				eventName = "message"
@@ -412,7 +440,7 @@ func nativeAgentStreamAction(action string) string {
 }
 
 func durableStreamConversationID(params map[string]any) string {
-	return nativeagent.ConversationID(params)
+	return agentstream.ConversationID(params)
 }
 
 func (m *Module) cancelNativeAgentStream(client *connection, frame map[string]any) {
@@ -422,9 +450,20 @@ func (m *Module) cancelNativeAgentStream(client *connection, frame map[string]an
 		return
 	}
 	durable := client.durableStream(id)
+	durableParams := client.durableStreamParams(id)
 	if !client.cancelStream(id) {
 		client.send(nativeAgentStreamError(id, "", http.StatusNotFound, "stream is not active"))
 		return
+	}
+	if durable {
+		if controller, ok := m.agent.(interface {
+			CancelExternal(context.Context, string, map[string]any) (map[string]any, error)
+		}); ok {
+			if _, err := controller.CancelExternal(context.WithoutCancel(context.Background()), "agent.chat.turn.stop", durableParams); err != nil {
+				client.send(nativeAgentStreamError(id, "agent.chat.stream", http.StatusBadGateway, err.Error()))
+				return
+			}
+		}
 	}
 	response := map[string]any{
 		"type": "server.native_agent_stream.cancelled",

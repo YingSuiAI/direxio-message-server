@@ -508,7 +508,7 @@ func TestClientVersionReportRejectsConnectedOwnerWSAfterDeviceSwitch(t *testing.
 }
 
 func TestClientVersionReportUsesNarrowDeviceCASWithoutLosingConcurrentPortalFields(t *testing.T) {
-	service := NewService(Config{ServerName: "example.com"})
+	service := NewService(withTestExternalAgent(Config{ServerName: "example.com"}))
 	service.mu.Lock()
 	initial := service.portalStateLocked()
 	service.mu.Unlock()
@@ -553,8 +553,11 @@ func TestClientVersionReportUsesNarrowDeviceCASWithoutLosingConcurrentPortalFiel
 	store.mu.Lock()
 	durable := store.state
 	store.mu.Unlock()
-	if durable.Profile.DisplayName != "Concurrent Profile" || durable.AgentConfig.SystemPrompt != "Concurrent Agent Config" {
+	if durable.Profile.DisplayName != "Concurrent Profile" {
 		t.Fatalf("narrow report lost concurrent portal fields: %#v", durable)
+	}
+	if durable.AgentConfig.SystemPrompt != "" {
+		t.Fatalf("Native Agent config must remain external, got local projection: %#v", durable.AgentConfig)
 	}
 	if durable.ClientBuild.Version != "v2.3.4" || durable.ClientBuild.BuildNumber != "42" {
 		t.Fatalf("narrow report did not persist client build: %#v", durable.ClientBuild)

@@ -2,10 +2,15 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"net/http"
+	"strings"
 
+	"github.com/YingSuiAI/dirextalk-message-server/internal/agentgateway"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/dirextalkdomain"
 	actionbase "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/action"
+	"github.com/google/uuid"
 )
 
 const (
@@ -69,12 +74,19 @@ func (m *Module) createMatrixSession(ctx context.Context, params map[string]any)
 	return session.Response(), nil
 }
 
-func (m *Module) getConfig(context.Context, map[string]any) (any, *actionbase.Error) {
+func (m *Module) getConfig(ctx context.Context, _ map[string]any) (any, *actionbase.Error) {
 	account, err := m.accountPort()
 	if err != nil {
 		return nil, err
 	}
-	return configResponse(account.Config()), nil
+	if m == nil || m.runner == nil {
+		return nil, actionbase.StatusError(http.StatusBadGateway, "external native agent runtime is not configured")
+	}
+	remote, invokeErr := m.runner.Invoke(ctx, actionConfigGet, map[string]any{})
+	if invokeErr != nil {
+		return nil, configGatewayError(invokeErr)
+	}
+	return configResponseWithNative(account.Config(), remote), nil
 }
 
 func (m *Module) updateConfig(ctx context.Context, params map[string]any) (any, *actionbase.Error) {
@@ -82,43 +94,116 @@ func (m *Module) updateConfig(ctx context.Context, params map[string]any) (any, 
 	if err != nil {
 		return nil, err
 	}
+	return m.updateExternalConfig(ctx, account, params)
+}
 
-	values := actionbase.Params(params)
-	disableAgent := false
-	config, actionErr := account.UpdateConfig(ctx, func(current dirextalkdomain.AgentConfig) dirextalkdomain.AgentConfig {
-		if displayName := values.String("display_name"); displayName != "" {
-			current.DisplayName = displayName
-		}
-		if _, ok := params["avatar_url"]; ok {
-			current.AvatarURL = values.String("avatar_url")
-		}
-		if contextWindow := values.Int64("context_window"); contextWindow > 0 {
-			current.ContextWindow = contextWindow
-		}
-		if _, ok := params["enabled"]; ok {
-			current.Enabled = values.Bool("enabled")
-			disableAgent = !current.Enabled
-		}
-		if model := values.String("model"); model != "" {
-			current.Model = model
-		}
-		if systemPrompt := values.String("system_prompt"); systemPrompt != "" {
-			current.SystemPrompt = systemPrompt
-		}
-		if _, ok := params["mcp_blocked_room_ids"]; ok {
-			current.MCPBlockedRoomIDs = values.Strings("mcp_blocked_room_ids")
-		}
-		return NormalizeConfig(current)
-	})
-	if actionErr != nil {
-		return nil, actionErr
+// updateExternalConfig keeps the public ProductCore config action stable while
+// splitting ownership: Native fields are committed by dirextalk-agent, and
+// Online identity is committed by message-server only after that remote write
+// succeeds. A failed Matrix sync therefore leaves a retryable remote config,
+// never a silently divergent local Native projection.
+func (m *Module) updateExternalConfig(ctx context.Context, account AccountPort, params map[string]any) (any, *actionbase.Error) {
+	if m == nil || m.runner == nil {
+		return nil, actionbase.StatusError(http.StatusBadGateway, "external native agent runtime is not configured")
 	}
-	if disableAgent {
+	params = cloneMap(params)
+	nativeParams := nativeConfigUpdateParams(params)
+	operationID := configOperationID(m.currentOwnerID(), params, nativeParams)
+	var remote map[string]any
+	if hasNativeConfigUpdate(params) {
+		nativeParams["operation_id"] = operationID
+		nativeParams["idempotency_key"] = operationID
+		var invokeErr error
+		remote, invokeErr = m.runner.Invoke(ctx, actionConfigUpdate, nativeParams)
+		if invokeErr != nil {
+			return nil, configGatewayError(invokeErr)
+		}
+	} else {
+		var invokeErr error
+		remote, invokeErr = m.runner.Invoke(ctx, actionConfigGet, map[string]any{})
+		if invokeErr != nil {
+			return nil, configGatewayError(invokeErr)
+		}
+	}
+
+	config := account.Config()
+	if OnlineIdentityUpdateRequested(params) || hasMCPBlockedRoomUpdate(params) {
+		var actionErr *actionbase.Error
+		config, actionErr = account.UpdateConfig(ctx, func(current dirextalkdomain.AgentConfig) dirextalkdomain.AgentConfig {
+			return ApplyOnlineConfigUpdate(current, params)
+		})
+		if actionErr != nil {
+			return nil, actionErr
+		}
+		if OnlineIdentityUpdateRequested(params) {
+			syncer, ok := account.(interface {
+				SyncOnlineIdentity(context.Context, dirextalkdomain.AgentIdentityConfig) *actionbase.Error
+			})
+			if ok {
+				if actionErr := syncer.SyncOnlineIdentity(ctx, OnlineAgentIdentity(config)); actionErr != nil {
+					return nil, actionErr
+				}
+			}
+		}
+	}
+	if enabled, ok := params["enabled"]; ok && !actionbase.Bool(enabled) {
 		if actionErr := account.PublishOffline(ctx); actionErr != nil {
 			return nil, actionErr
 		}
 	}
-	return configResponse(config), nil
+	return configResponseWithNative(config, remote), nil
+}
+
+func hasMCPBlockedRoomUpdate(params map[string]any) bool {
+	_, ok := params["mcp_blocked_room_ids"]
+	return ok
+}
+
+func hasNativeConfigUpdate(params map[string]any) bool {
+	for _, key := range []string{"display_name", "avatar_url", "native_agent_identity", "context_window", "enabled", "model", "system_prompt", "mcp_blocked_room_ids"} {
+		if _, ok := params[key]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func nativeConfigUpdateParams(params map[string]any) map[string]any {
+	out := make(map[string]any)
+	for _, key := range []string{"display_name", "avatar_url", "native_agent_identity", "context_window", "enabled", "model", "system_prompt", "mcp_blocked_room_ids", "expected_revision"} {
+		if value, ok := params[key]; ok {
+			out[key] = value
+		}
+	}
+	return out
+}
+
+func configOperationID(owner string, original, native map[string]any) string {
+	if value, ok := original["operation_id"].(string); ok {
+		if parsed, err := uuid.Parse(strings.TrimSpace(value)); err == nil {
+			return parsed.String()
+		}
+	}
+	canonical, err := json.Marshal(map[string]any{"owner_id": strings.TrimSpace(owner), "config": native})
+	if err == nil {
+		return uuid.NewSHA1(uuid.NameSpaceOID, canonical).String()
+	}
+	return uuid.New().String()
+}
+
+func configGatewayError(err error) *actionbase.Error {
+	if errors.Is(err, agentgateway.ErrUnsupportedAction) {
+		return actionbase.StatusError(http.StatusNotImplemented, err.Error())
+	}
+	message := strings.ToLower(strings.TrimSpace(err.Error()))
+	switch {
+	case strings.Contains(message, "conflict"):
+		return actionbase.StatusError(http.StatusConflict, err.Error())
+	case strings.Contains(message, "invalid") || strings.Contains(message, "required"):
+		return actionbase.BadRequest(err.Error())
+	default:
+		return actionbase.StatusError(http.StatusBadGateway, err.Error())
+	}
 }
 
 func (m *Module) accountPort() (AccountPort, *actionbase.Error) {
@@ -129,13 +214,41 @@ func (m *Module) accountPort() (AccountPort, *actionbase.Error) {
 }
 
 func configResponse(config dirextalkdomain.AgentConfig) map[string]any {
+	config = NormalizeConfig(config)
 	return map[string]any{
-		"display_name":         config.DisplayName,
-		"avatar_url":           config.AvatarURL,
+		"display_name": config.DisplayName,
+		"avatar_url":   config.AvatarURL,
+		"native_agent_identity": map[string]any{
+			"display_name": NativeAgentIdentity(config).DisplayName,
+			"avatar_url":   NativeAgentIdentity(config).AvatarURL,
+		},
+		"online_agent_identity": map[string]any{
+			"display_name": OnlineAgentIdentity(config).DisplayName,
+			"avatar_url":   OnlineAgentIdentity(config).AvatarURL,
+		},
 		"context_window":       config.ContextWindow,
 		"enabled":              config.Enabled,
 		"model":                config.Model,
 		"system_prompt":        config.SystemPrompt,
 		"mcp_blocked_room_ids": append([]string(nil), config.MCPBlockedRoomIDs...),
 	}
+}
+
+func configResponseWithNative(config dirextalkdomain.AgentConfig, remote map[string]any) map[string]any {
+	response := configResponse(config)
+	if remote == nil {
+		return response
+	}
+	for _, key := range []string{"revision", "display_name", "avatar_url", "context_window", "enabled", "model", "system_prompt", "mcp_blocked_room_ids"} {
+		if value, ok := remote[key]; ok {
+			response[key] = value
+		}
+	}
+	if identity, ok := remote["native_agent_identity"].(map[string]any); ok {
+		response["native_agent_identity"] = identity
+	}
+	// The top-level aliases are Native Agent fields. Online identity remains
+	// sourced from message-server's account record and is never overwritten by
+	// an Agent response.
+	return response
 }

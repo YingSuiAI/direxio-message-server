@@ -145,7 +145,7 @@ func TestMCPSearchRoomsUsesMatrixMemberCountWhenProductCountIsStale(t *testing.T
 }
 
 func TestMCPBlockedRoomsAreFilteredFromRoomSearch(t *testing.T) {
-	service := NewService(Config{ServerName: "example.com"})
+	service := NewService(withTestExternalAgent(Config{ServerName: "example.com"}))
 	mustHandle[groupRecord](t, service, "groups.create", map[string]any{
 		"room_id": "!visible:example.com",
 		"name":    "Visible Group",
@@ -240,7 +240,7 @@ func TestMCPContactsSearchMatchesNamePeerAndDomain(t *testing.T) {
 
 func TestMCPMessagesSendUsesTransportAndReturnsConciseResult(t *testing.T) {
 	transport := &recordingTransport{eventID: "$mcp:event", ts: 1710000000000}
-	service := NewServiceWithTransport(Config{ServerName: "example.com"}, transport)
+	service := NewServiceWithTransport(withTestExternalAgent(Config{ServerName: "example.com"}), transport)
 	service.profile.DisplayName = "Owner"
 	mustSaveJoinedMCPRoom(t, service, "!room:example.com")
 
@@ -271,7 +271,7 @@ func TestMCPMessagesSendMarksGatewayReplies(t *testing.T) {
 		eventID: "$mcp:event", ts: 1710000000000,
 		roomMembers: []memberRecord{{RoomID: "!agents:example.com", UserID: "@agent:example.com", Membership: "join"}},
 	}
-	service := NewServiceWithTransport(Config{ServerName: "example.com"}, transport)
+	service := NewServiceWithTransport(withTestExternalAgent(Config{ServerName: "example.com"}), transport)
 	service.agentRoomID = "!agents:example.com"
 
 	mustInvokeMCP[map[string]any](t, service, dirextalkmcp.ActionMessagesSend, map[string]any{
@@ -294,7 +294,7 @@ func TestMCPMessagesSendMarksGatewayReplies(t *testing.T) {
 
 func TestMCPMessagesSendRejectsOwnerSendToAgentRoom(t *testing.T) {
 	transport := &recordingTransport{eventID: "$mcp:event", ts: 1710000000000}
-	service := NewServiceWithTransport(Config{ServerName: "example.com"}, transport)
+	service := NewServiceWithTransport(withTestExternalAgent(Config{ServerName: "example.com"}), transport)
 	service.agentRoomID = "!agents:example.com"
 
 	_, apiErr := service.invokeDirextalkMCP(context.Background(), dirextalkmcp.ActionMessagesSend, map[string]any{
@@ -311,7 +311,7 @@ func TestMCPMessagesSendRejectsOwnerSendToAgentRoom(t *testing.T) {
 
 func TestMCPMessagesRejectBlockedRooms(t *testing.T) {
 	transport := &recordingTransport{eventID: "$mcp:event", ts: 1710000000000}
-	service := NewServiceWithTransport(Config{ServerName: "example.com"}, transport)
+	service := NewServiceWithTransport(withTestExternalAgent(Config{ServerName: "example.com"}), transport)
 	service.SetMatrixMessageReader(&fakeMCPMessageReader{messages: []mcpMessageSummary{
 		{EventID: "$secret", OriginServerTS: 1710000000000, CreatedAt: "2024-03-09T16:00:00Z", Sender: "Alice", Msg: "secret", SenderMXID: "@alice:example.com"},
 	}})
@@ -979,7 +979,7 @@ func TestMCPRoomMembersRejectsBlockedRooms(t *testing.T) {
 		recordingTransport: &recordingTransport{},
 		creators:           map[string]string{"!blocked:example.com": "@actual-creator:example.com"},
 	}
-	service := NewServiceWithTransport(Config{ServerName: "example.com"}, transport)
+	service := NewServiceWithTransport(withTestExternalAgent(Config{ServerName: "example.com"}), transport)
 	group := mustHandle[groupRecord](t, service, "groups.create", map[string]any{
 		"room_id": "!blocked:example.com",
 		"name":    "Blocked Group",
@@ -1235,7 +1235,7 @@ func TestMCPChannelCommentsPaginationUsesStableSnapshot(t *testing.T) {
 }
 
 func TestMCPChannelContentRejectsBlockedRooms(t *testing.T) {
-	service := NewServiceWithTransport(Config{ServerName: "example.com"}, &recordingTransport{
+	service := NewServiceWithTransport(withTestExternalAgent(Config{ServerName: "example.com"}), &recordingTransport{
 		eventID: "$post:event",
 		ts:      1710000000000,
 	})

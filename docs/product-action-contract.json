@@ -93,6 +93,11 @@
       "transport": "http_and_ws_request"
     },
     {
+      "name": "agent.account.deprovision",
+      "auth": "owner",
+      "transport": "http_only"
+    },
+    {
       "name": "agent.matrix_session.create",
       "auth": "agent",
       "transport": "http_only"

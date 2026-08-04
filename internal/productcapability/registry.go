@@ -2,6 +2,7 @@ package productcapability
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	capv1 "github.com/YingSuiAI/dirextalk-capability-api/gen/go/dirextalk/capability/v1"
@@ -31,10 +32,19 @@ func NewRegistry() *Registry {
 
 // Register 注册一个 capability
 func (r *Registry) Register(provider *Provider) error {
+	if provider == nil || provider.Descriptor == nil || provider.Handler == nil {
+		return fmt.Errorf("provider, descriptor and handler are required")
+	}
+	capabilityID := provider.Descriptor.CapabilityId
+	if capabilityID == "" {
+		return fmt.Errorf("capability_id is required")
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-
-	r.capabilities[provider.Descriptor.CapabilityId] = provider
+	if _, exists := r.capabilities[capabilityID]; exists {
+		return fmt.Errorf("capability %q is already registered", capabilityID)
+	}
+	r.capabilities[capabilityID] = provider
 	return nil
 }
 
@@ -57,4 +67,17 @@ func (r *Registry) List() []*capv1.CapabilityDescriptor {
 		descriptors = append(descriptors, provider.Descriptor)
 	}
 	return descriptors
+}
+
+func (r *Registry) Operation(capabilityID, operationID string) (*capv1.OperationDescriptor, bool) {
+	provider, ok := r.Get(capabilityID)
+	if !ok || provider == nil || provider.Descriptor == nil {
+		return nil, false
+	}
+	for _, operation := range provider.Descriptor.Operations {
+		if operation != nil && operation.OperationId == operationID {
+			return operation, true
+		}
+	}
+	return nil, false
 }

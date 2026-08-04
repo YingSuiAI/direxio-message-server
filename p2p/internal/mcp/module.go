@@ -77,6 +77,7 @@ type Config struct {
 	BeginAccountOperation func(context.Context) (context.Context, func())
 	AccountDeprovisioned  func() bool
 	AgentRoomName         string
+	PreparedMatrixStore   dirextalktransport.PreparedMatrixMutationStore
 	Now                   func() time.Time
 }
 
@@ -90,6 +91,7 @@ type Module struct {
 	members       MemberStore
 	social        *socialmodule.Module
 	matrix        MatrixPort
+	preparedStore dirextalktransport.PreparedMatrixMutationStore
 	config        Config
 	service       *dirextalkmcp.Service
 }
@@ -104,6 +106,7 @@ func New(deps Dependencies, cfg Config) *Module {
 		members:       deps.Members,
 		social:        deps.Social,
 		matrix:        deps.Matrix,
+		preparedStore: cfg.PreparedMatrixStore,
 		config:        cfg,
 	}
 	module.service = dirextalkmcp.NewServiceWithConfig(dirextalkmcp.Config{
@@ -111,6 +114,17 @@ func New(deps Dependencies, cfg Config) *Module {
 		RoomAuthorizer: module,
 	})
 	return module
+}
+
+// DurableMatrixMutationReady reports whether the optional crash-safe write
+// port is wired. Product Capability registration uses this to omit write
+// descriptors instead of advertising an unsafe SendMessage fallback.
+func (m *Module) DurableMatrixMutationReady() bool {
+	if m == nil || m.preparedStore == nil || m.matrix == nil {
+		return false
+	}
+	_, ok := m.matrix.(dirextalktransport.PreparedMessagePort)
+	return ok
 }
 
 // Service returns the shared registry/schema/invocation service used by both

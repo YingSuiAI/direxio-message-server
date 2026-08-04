@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/YingSuiAI/dirextalk-message-server/internal/agentstream"
 	actionbase "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/action"
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/plugins"
-	"github.com/YingSuiAI/dirextalk-message-server/p2p/nativeagent"
 )
 
 type pluginStreamPortStub struct {
@@ -43,9 +43,9 @@ func (agentStreamPortStub) Stream(
 	_ context.Context,
 	_ string,
 	_ map[string]any,
-	emit func(nativeagent.Event) error,
+	emit func(agentstream.Event) error,
 ) error {
-	return emit(nativeagent.Event{Event: "delta", Data: map[string]any{"text": "agent"}})
+	return emit(agentstream.Event{Event: "delta", Data: map[string]any{"text": "agent"}})
 }
 
 func TestPluginAndAgentStreamsPreserveFramesAndSharedIDNamespace(t *testing.T) {

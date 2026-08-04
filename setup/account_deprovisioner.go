@@ -107,6 +107,17 @@ func resetPostgresDatabase(ctx context.Context, txn *sql.Tx) error {
 SELECT string_agg(format('%I.%I', schemaname, tablename), ', ')
 FROM pg_tables
 WHERE schemaname = 'public'
+
+-- Agent owns its Core v1 tables in the same PostgreSQL database only when a
+-- deployment deliberately shares the physical database. Account deletion is
+-- a message-server operation and must never truncate those Agent-owned tables;
+-- the Agent volume/service is destroyed separately by the deployment runbook.
+-- The shared schema ledger is infrastructure metadata rather than account
+-- data. Keeping it is required because the tables remain in place and the
+-- supervised message-server process starts again after deprovisioning.
+AND tablename <> 'db_migrations'
+AND tablename NOT LIKE 'agent\_%' ESCAPE '\'
+AND tablename NOT LIKE 'core\_%' ESCAPE '\'
 `).Scan(&tables); err != nil {
 		return err
 	}

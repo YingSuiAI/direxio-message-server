@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strings"
 	"testing"
 
 	"github.com/YingSuiAI/dirextalk-message-server/internal/releasecontrol"
@@ -56,7 +55,7 @@ func TestAccountDeleteRequiresExplicitConfirmation(t *testing.T) {
 
 func TestAccountDeleteLeavesContactsDissolvesOwnedRoomsAndDeprovisions(t *testing.T) {
 	transport := &recordingTransport{}
-	service := NewServiceWithTransport(Config{ServerName: "example.com"}, transport)
+	service := NewServiceWithTransport(Config{ServerName: "example.com", NativeAgentRunner: &externalDeprovisionRunner{}}, transport)
 	deactivator := &recordingAccountDeactivator{}
 	deprovisioner := &recordingAccountDeprovisioner{}
 	releaseController := &recordingReleaseController{}
@@ -126,10 +125,10 @@ func TestAccountDeleteLeavesContactsDissolvesOwnedRoomsAndDeprovisions(t *testin
 	}
 }
 
-func TestAccountDeleteDoesNotDeprovisionWhenCriticalLeaveFails(t *testing.T) {
+func TestAccountDeleteKeepsMonotonicFenceWhenCriticalLeaveFails(t *testing.T) {
 	ctx := context.Background()
 	transport := &failingLeaveTransport{err: errors.New("leave failed")}
-	service := NewServiceWithTransport(Config{ServerName: "example.com"}, transport)
+	service := NewServiceWithTransport(Config{ServerName: "example.com", NativeAgentRunner: &externalDeprovisionRunner{}}, transport)
 	deprovisioner := &recordingAccountDeprovisioner{}
 	releaseController := &recordingReleaseController{}
 	service.releaseController = releaseController
@@ -145,10 +144,10 @@ func TestAccountDeleteDoesNotDeprovisionWhenCriticalLeaveFails(t *testing.T) {
 	if deprovisioner.calls != 0 {
 		t.Fatalf("deprovision must not run after critical leave failure")
 	}
-	assertDesiredStates(t, releaseController, releasecontrol.DesiredStateDeprovisioned, releasecontrol.DesiredStateRunning)
+	assertDesiredStates(t, releaseController, releasecontrol.DesiredStateDeprovisioned)
 }
 
-func TestAccountDeleteRestoresRunningAfterEveryFailedStage(t *testing.T) {
+func TestAccountDeleteNeverReopensAfterAnyDestructiveStageFails(t *testing.T) {
 	tests := []struct {
 		name      string
 		transport Transport
@@ -169,7 +168,7 @@ func TestAccountDeleteRestoresRunningAfterEveryFailedStage(t *testing.T) {
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
 			controller := &recordingReleaseController{}
-			service := NewServiceWithTransport(Config{ServerName: "example.com", ReleaseController: controller}, testCase.transport)
+			service := NewServiceWithTransport(Config{ServerName: "example.com", NativeAgentRunner: &externalDeprovisionRunner{}, ReleaseController: controller}, testCase.transport)
 			service.SetAccountDeactivator(&recordingAccountDeactivator{})
 			service.SetAccountDeprovisioner(&recordingAccountDeprovisioner{})
 			bootstrapService(t, service)
@@ -181,34 +180,40 @@ func TestAccountDeleteRestoresRunningAfterEveryFailedStage(t *testing.T) {
 			if _, apiErr := service.Handle(context.Background(), "portal.account.delete", map[string]any{"confirm": "delete_account"}); apiErr == nil {
 				t.Fatal("expected account deletion failure")
 			}
-			assertDesiredStates(t, controller, releasecontrol.DesiredStateDeprovisioned, releasecontrol.DesiredStateRunning)
+			assertDesiredStates(t, controller, releasecontrol.DesiredStateDeprovisioned)
 		})
 	}
 }
 
-func TestAccountDeleteReturnsSafeStructuredErrorWhenRunningRestoreFails(t *testing.T) {
-	controller := &recordingReleaseController{desiredErrors: map[releasecontrol.DesiredState]error{
-		releasecontrol.DesiredStateRunning: errors.New("restore failed with secret-token"),
-	}}
-	service := NewServiceWithTransport(Config{ServerName: "example.com", ReleaseController: controller}, &nthLeaveFailureTransport{failAt: 1})
-	service.SetAccountDeprovisioner(&recordingAccountDeprovisioner{})
+func TestAccountDeleteExplicitStandaloneModeAllowsMissingUpdater(t *testing.T) {
+	controller := &recordingReleaseController{desiredErr: errors.New("updater unavailable")}
+	service := NewServiceWithTransport(Config{
+		ServerName:                       "example.com",
+		NativeAgentRunner:                &externalDeprovisionRunner{},
+		ReleaseController:                controller,
+		AllowAccountDeleteWithoutUpdater: true,
+	}, &recordingTransport{})
+	deprovisioner := &recordingAccountDeprovisioner{}
+	service.SetAccountDeactivator(&recordingAccountDeactivator{})
+	service.SetAccountDeprovisioner(deprovisioner)
 	bootstrapService(t, service)
 	mustSeedAccountDeleteState(t, service)
 
-	_, apiErr := service.Handle(context.Background(), "portal.account.delete", map[string]any{"confirm": "delete_account"})
-	if apiErr == nil || apiErr.Status != http.StatusServiceUnavailable || apiErr.Code != "account_delete_watchdog_restore_failed" {
-		t.Fatalf("expected structured watchdog restoration failure, got %#v", apiErr)
+	result, apiErr := service.Handle(context.Background(), "portal.account.delete", map[string]any{"confirm": "delete_account"})
+	if apiErr != nil {
+		t.Fatalf("standalone account deletion failed: %#v", apiErr)
 	}
-	if strings.Contains(apiErr.Error, "secret-token") || strings.Contains(apiErr.Error, "leave failed") {
-		t.Fatalf("account deletion restoration error leaked details: %#v", apiErr)
+	value, ok := result.(map[string]any)
+	if !ok || value["status"] != "deprovisioned" || deprovisioner.calls != 1 {
+		t.Fatalf("standalone account deletion result=%#v calls=%d", result, deprovisioner.calls)
 	}
-	assertDesiredStates(t, controller, releasecontrol.DesiredStateDeprovisioned, releasecontrol.DesiredStateRunning)
+	assertDesiredStates(t, controller, releasecontrol.DesiredStateDeprovisioned)
 }
 
 func TestAccountDeleteStopsBeforeDestructiveWorkWhenDesiredStateFails(t *testing.T) {
 	transport := &recordingTransport{}
 	controller := &recordingReleaseController{desiredErr: errors.New("updater unavailable with secret-token")}
-	service := NewServiceWithTransport(Config{ServerName: "example.com", ReleaseController: controller}, transport)
+	service := NewServiceWithTransport(Config{ServerName: "example.com", NativeAgentRunner: &externalDeprovisionRunner{}, ReleaseController: controller}, transport)
 	deactivator := &recordingAccountDeactivator{}
 	deprovisioner := &recordingAccountDeprovisioner{}
 	service.SetAccountDeactivator(deactivator)

@@ -25,8 +25,6 @@ func (s *Service) actionHandlers() map[string]actionHandler {
 		s.collectActionHandlerModule("sync", s.registerSyncActions),
 		{name: "conversations", handlers: s.conversationModule.Handlers()},
 		{name: "agent", handlers: s.agentModule.Handlers()},
-		{name: "embedded-schedules", handlers: s.scheduleModule.Handlers()},
-		{name: "agent-embedded", handlers: s.agentEmbedded.Handlers()},
 		{name: "plugins", handlers: s.pluginsModule.Handlers()},
 		{name: "contacts", handlers: s.contactsModule.Handlers()},
 		{name: "members", handlers: s.membersModule.Handlers()},

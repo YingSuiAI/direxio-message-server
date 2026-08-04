@@ -47,6 +47,7 @@ func TestAccountDeleteWaitsForInFlightProductWriteBeforeReset(t *testing.T) {
 	}
 	service := newService(Config{
 		ServerName:        "example.com",
+		NativeAgentRunner: &externalDeprovisionRunner{},
 		ReleaseController: &recordingReleaseController{},
 	}, store, nil, portalState{}, false)
 	service.SetAccountDeactivator(&recordingAccountDeactivator{})
@@ -116,13 +117,8 @@ func TestDeprovisionedAccountRejectsQueuedProductMCPAndProjectionWork(t *testing
 	); mcpErr == nil || mcpErr.Status != http.StatusUnauthorized {
 		t.Fatalf("queued MCP invocation was not rejected after deprovision: %#v", mcpErr)
 	}
-	if err := (nativeAgentConfigStore{service: service}).Save(context.Background(), map[string]any{
-		"model": "stale-model",
-	}); err == nil {
-		t.Fatal("queued Native Agent config write was not rejected after deprovision")
-	}
 	if _, found, err := service.portalStore().LoadPortal(context.Background()); err != nil || found {
-		t.Fatalf("Native Agent config write repopulated portal state: found=%v err=%v", found, err)
+		t.Fatalf("deprovisioned portal state was unexpectedly repopulated: found=%v err=%v", found, err)
 	}
 
 	event := trustedStateEvent(t, "!group:example.com", "@peer:remote.example", DirextalkRoomProfileEventType, "", map[string]any{

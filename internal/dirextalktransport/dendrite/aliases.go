@@ -21,6 +21,15 @@ type SendStateEventRequest = dirextalktransport.SendStateEventRequest
 type CreateRoomResult = dirextalktransport.CreateRoomResult
 type SendMessageRequest = dirextalktransport.SendMessageRequest
 type SendMessageResult = dirextalktransport.SendMessageResult
+type PreparedMessage = dirextalktransport.PreparedMessage
+type MatrixEventDisposition = dirextalktransport.MatrixEventDisposition
+
+const (
+	MatrixEventAccepted = dirextalktransport.MatrixEventAccepted
+	MatrixEventRejected = dirextalktransport.MatrixEventRejected
+	MatrixEventUnknown  = dirextalktransport.MatrixEventUnknown
+)
+
 type InviteUserRequest = dirextalktransport.InviteUserRequest
 type JoinRoomRequest = dirextalktransport.JoinRoomRequest
 type JoinRoomResult = dirextalktransport.JoinRoomResult

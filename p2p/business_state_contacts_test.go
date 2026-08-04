@@ -159,7 +159,7 @@ func TestDeletedContactRequestRestoresOriginalRoomAfterReload(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	service, err := NewServiceWithStore(ctx, Config{ServerName: "example.com"}, store)
+	service, err := NewServiceWithStore(ctx, withTestExternalAgent(Config{ServerName: "example.com"}), store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +182,7 @@ func TestDeletedContactRequestRestoresOriginalRoomAfterReload(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reloadedStore.Close()
-	reloaded, err := NewServiceWithStore(ctx, Config{ServerName: "example.com"}, reloadedStore)
+	reloaded, err := NewServiceWithStore(ctx, withTestExternalAgent(Config{ServerName: "example.com"}), reloadedStore)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +220,7 @@ func TestContactReplacementAfterReloadRemovesOldDirectConversation(t *testing.T)
 		t.Fatal(err)
 	}
 	defer store.Close()
-	service, err := NewServiceWithStore(ctx, Config{ServerName: "example.com"}, store)
+	service, err := NewServiceWithStore(ctx, withTestExternalAgent(Config{ServerName: "example.com"}), store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +236,7 @@ func TestContactReplacementAfterReloadRemovesOldDirectConversation(t *testing.T)
 		t.Fatal(err)
 	}
 	defer reloadedStore.Close()
-	reloaded, err := NewServiceWithStore(ctx, Config{ServerName: "example.com"}, reloadedStore)
+	reloaded, err := NewServiceWithStore(ctx, withTestExternalAgent(Config{ServerName: "example.com"}), reloadedStore)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,7 +277,7 @@ func TestContactRemarkUpdatePersistsAfterReload(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	service, err := NewServiceWithStore(ctx, Config{ServerName: "example.com"}, store)
+	service, err := NewServiceWithStore(ctx, withTestExternalAgent(Config{ServerName: "example.com"}), store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -308,7 +308,7 @@ func TestContactRemarkUpdatePersistsAfterReload(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reloadedStore.Close()
-	reloaded, err := NewServiceWithStore(ctx, Config{ServerName: "example.com"}, reloadedStore)
+	reloaded, err := NewServiceWithStore(ctx, withTestExternalAgent(Config{ServerName: "example.com"}), reloadedStore)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -21,6 +21,7 @@ func (m *Module) roomMembersList(ctx context.Context, params map[string]any) (an
 	}
 	status := fallback(dirextalkmcp.TrimString(params["status"]), dirextalkmcp.TrimString(params["membership"]))
 	role := dirextalkmcp.TrimString(params["role"])
+	userID := dirextalkmcp.TrimString(params["user_id"])
 	name := roomID
 	knownRoom := false
 	roomOwnerMXID := ""
@@ -106,6 +107,15 @@ func (m *Module) roomMembersList(ctx context.Context, params map[string]any) (an
 			summaries = directMembers
 			name = fallback(directName, name)
 		}
+	}
+	if userID != "" {
+		filtered := summaries[:0]
+		for _, summary := range summaries {
+			if memberSummaryMXID(summary) == userID {
+				filtered = append(filtered, summary)
+			}
+		}
+		summaries = filtered
 	}
 	summaries = canonicalizeAndSortMemberSummaries(summaries, roomOwnerMXID)
 	summaries = filterMemberSummaries(summaries, status, role)

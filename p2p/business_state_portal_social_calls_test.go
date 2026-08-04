@@ -12,7 +12,7 @@ import (
 )
 
 func TestFavoriteAddIsIdempotentByEventAndRoom(t *testing.T) {
-	service := NewService(Config{ServerName: "example.com"})
+	service := NewService(withTestExternalAgent(Config{ServerName: "example.com"}))
 	bootstrapService(t, service)
 
 	first := mustHandle[favoriteRecord](t, service, "favorites.add", map[string]any{
@@ -56,7 +56,7 @@ func TestStoredFavoriteAddIsIdempotentByEventAndRoom(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	service, err := NewServiceWithStore(ctx, Config{ServerName: "example.com"}, store)
+	service, err := NewServiceWithStore(ctx, withTestExternalAgent(Config{ServerName: "example.com"}), store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestStoredFavoriteAddIsIdempotentByEventAndRoom(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reloadedStore.Close()
-	reloaded, err := NewServiceWithStore(ctx, Config{ServerName: "example.com"}, reloadedStore)
+	reloaded, err := NewServiceWithStore(ctx, withTestExternalAgent(Config{ServerName: "example.com"}), reloadedStore)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +206,7 @@ func TestPortalStatusReportsStorageAndProjectorMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	databaseService, err := NewServiceWithStore(ctx, Config{ServerName: "example.com"}, store)
+	databaseService, err := NewServiceWithStore(ctx, withTestExternalAgent(Config{ServerName: "example.com"}), store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,7 +271,7 @@ func TestPortalPasswordSetupAndAgentActions(t *testing.T) {
 }
 
 func TestAgentConfigContactsFavoritesAndReports(t *testing.T) {
-	service := NewService(Config{ServerName: "example.com"})
+	service := NewService(withTestExternalAgent(Config{ServerName: "example.com"}))
 	bootstrapService(t, service)
 
 	cfg := mustHandle[map[string]any](t, service, "agent.config.update", map[string]any{

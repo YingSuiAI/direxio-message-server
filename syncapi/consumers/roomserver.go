@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/YingSuiAI/dirextalk-message-server/internal/fulltext"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/sqlutil"
@@ -272,6 +273,10 @@ func (s *OutputRoomEventConsumer) onNewRoomEvent(
 
 	pduPos, err := s.db.WriteEvent(ctx, ev, addsStateEvents, msg.AddsStateEventIDs, msg.RemovesStateEventIDs, msg.TransactionID, false, msg.HistoryVisibility)
 	if err != nil {
+		if consumerShutdownError(ctx, err) {
+			log.WithError(err).Debug("roomserver output log: stopping while writing event")
+			return nil
+		}
 		// panic rather than continue with an inconsistent database
 		log.WithFields(log.Fields{
 			"event_id":   ev.EventID(),
@@ -306,6 +311,23 @@ func (s *OutputRoomEventConsumer) onNewRoomEvent(
 	s.notifier.OnNewEvent(ev, ev.RoomID().String(), nil, types.StreamingToken{PDUPosition: pduPos})
 
 	return nil
+}
+
+// consumerShutdownError identifies the expected database/transport failures
+// when process shutdown races an in-flight JetStream delivery. These failures
+// must not panic a test or production process after the owning context has
+// already been cancelled.
+func consumerShutdownError(ctx context.Context, err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, sql.ErrConnDone) || errors.Is(err, sql.ErrTxDone) {
+		return true
+	}
+	if ctx != nil && ctx.Err() != nil {
+		return true
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "database is closed")
 }
 
 func (s *OutputRoomEventConsumer) onOldRoomEvent(

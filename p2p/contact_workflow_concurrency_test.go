@@ -135,7 +135,7 @@ func TestProjectorSnapshotCannotOverwriteCompletedContactReplacement(t *testing.
 		snapshotRead:    make(chan struct{}),
 		releaseSnapshot: make(chan struct{}),
 	}
-	service, err := NewServiceWithStore(context.Background(), Config{ServerName: "example.com"}, store)
+	service, err := NewServiceWithStore(context.Background(), withTestExternalAgent(Config{ServerName: "example.com"}), store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +274,7 @@ func TestOwnerDirectJoinProjectionAtomicFailureReplaysWithoutPartialAccept(t *te
 		MemoryStore: p2pstorage.NewMemoryStore(),
 		failNext:    true,
 	}
-	service, err := NewServiceWithStore(context.Background(), Config{ServerName: "example.com"}, store)
+	service, err := NewServiceWithStore(context.Background(), withTestExternalAgent(Config{ServerName: "example.com"}), store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,12 +333,12 @@ func TestDirectJoinProjectionsCannotRestoreConcurrentlyDeletedContactAcrossServi
 				mutationEntered: make(chan struct{}),
 				releaseMutation: make(chan struct{}),
 			}
-			projectorService, err := NewServiceWithStore(context.Background(), Config{ServerName: "example.com"}, store)
+			projectorService, err := NewServiceWithStore(context.Background(), withTestExternalAgent(Config{ServerName: "example.com"}), store)
 			if err != nil {
 				t.Fatal(err)
 			}
 			bootstrapService(t, projectorService)
-			deleteService, err := NewServiceWithStore(context.Background(), Config{ServerName: "example.com"}, store)
+			deleteService, err := NewServiceWithStore(context.Background(), withTestExternalAgent(Config{ServerName: "example.com"}), store)
 			if err != nil {
 				t.Fatal(err)
 			}

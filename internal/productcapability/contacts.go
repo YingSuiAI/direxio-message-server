@@ -60,8 +60,8 @@ type Contact struct {
 
 func (c *ContactsCapability) listContacts(ctx context.Context, input []byte) ([]byte, error) {
 	var req struct {
-		Limit  int    `json:"limit"`
-		Offset int    `json:"offset"`
+		Limit   int    `json:"limit"`
+		Offset  int    `json:"offset"`
 		OwnerID string `json:"owner_id"`
 	}
 	if err := json.Unmarshal(input, &req); err != nil {

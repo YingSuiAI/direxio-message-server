@@ -251,7 +251,7 @@ func (s *joinRequestProjectionInsertRaceStore) LookupMember(ctx context.Context,
 
 func TestProjectJoinRequestStateInsertDoesNotOverwriteConcurrentGeneration(t *testing.T) {
 	store := &joinRequestProjectionInsertRaceStore{MemoryStore: p2pstorage.NewMemoryStore()}
-	service, err := NewServiceWithStore(context.Background(), Config{ServerName: "example.com"}, store)
+	service, err := NewServiceWithStore(context.Background(), withTestExternalAgent(Config{ServerName: "example.com"}), store)
 	if err != nil {
 		t.Fatal(err)
 	}

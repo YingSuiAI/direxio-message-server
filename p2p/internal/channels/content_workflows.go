@@ -249,6 +249,27 @@ func (m *ContentModule) CreateComment(ctx context.Context, raw map[string]any) (
 		}
 	}
 	eventID := m.eventID(commentID)
+	authorMXID := owner.MXID
+	authorName := owner.DisplayName
+	senderMXID := owner.MXID
+	operation, hasOperation := dirextalktransport.CapabilityOperationContextFrom(ctx)
+	if hasOperation {
+		// Product capability mutations are trusted Agent-originated work.  The
+		// Matrix event and the durable channel author must carry the service
+		// identity, never the authenticated owner, so a delegated Agent action
+		// cannot be misrepresented as a human-authored comment.
+		senderMXID = strings.TrimSpace(owner.AgentMXID)
+		if senderMXID == "" {
+			return nil, actionbase.InternalError(errors.New("agent Matrix identity is unavailable"))
+		}
+		authorMXID = senderMXID
+		authorName = fallback(owner.AgentDisplayName, senderMXID)
+		// Product Capability retries must rebuild the same logical comment row;
+		// bind its ID to the immutable operation UUID instead of generating a
+		// second random comment after a Matrix crash window.
+		commentID = "comment_" + strings.ReplaceAll(operation.OperationID, "-", "")
+		eventID = m.eventID(commentID)
+	}
 	originServerTS := now.UnixMilli()
 	roomID, actionErr := m.roomIDForChannel(ctx, channelID, fallback(params.String("room_id"), post.RoomID))
 	if actionErr != nil {
@@ -265,10 +286,25 @@ func (m *ContentModule) CreateComment(ctx context.Context, raw map[string]any) (
 		content["reply_to_comment_id"] = replyToCommentID
 		content["reply_to_author_mxid"] = replyToAuthorMXID
 		content["mentions_json"] = mentionsJSON
-		result, err := matrix.SendMessage(ctx, dirextalktransport.SendMessageRequest{
-			SenderMXID: owner.MXID, RoomID: roomID, MessageType: messageType,
-			Timestamp: now, Content: content,
-		})
+		if hasOperation {
+			content["io.dirextalk.agent_gateway"] = true
+			content["io.dirextalk.gateway_source"] = "native_agent"
+		}
+		request := dirextalktransport.SendMessageRequest{
+			SenderMXID: senderMXID, RoomID: roomID, MessageType: messageType,
+			Timestamp: now, Content: content, LogicalID: commentID, PostID: postID,
+		}
+		var result dirextalktransport.SendMessageResult
+		var err error
+		if hasOperation {
+			prepared, preparedOK := matrix.(dirextalktransport.PreparedMessagePort)
+			if !preparedOK || m.config.PreparedMatrixStore == nil {
+				return nil, m.transportError(errors.New("durable Matrix mutation is unavailable"))
+			}
+			result, err = dirextalktransport.ExecutePreparedMatrixMutation(ctx, prepared, m.config.PreparedMatrixStore, operation, "product.channel_comments.v1", "create", request)
+		} else {
+			result, err = matrix.SendMessage(ctx, request)
+		}
 		if err != nil {
 			return nil, m.transportError(err)
 		}
@@ -277,7 +313,7 @@ func (m *ContentModule) CreateComment(ctx context.Context, raw map[string]any) (
 	}
 	comment := Comment{
 		CommentID: commentID, PostID: postID, ChannelID: channelID, EventID: eventID,
-		AuthorMXID: owner.MXID, AuthorName: owner.DisplayName, Body: body,
+		AuthorMXID: authorMXID, AuthorName: authorName, Body: body,
 		MessageType: messageType, MediaJSON: mediaJSON, ReplyToCommentID: replyToCommentID,
 		ReplyToAuthorMXID: replyToAuthorMXID, MentionsJSON: mentionsJSON,
 		OriginServerTS: originServerTS,
@@ -286,7 +322,14 @@ func (m *ContentModule) CreateComment(ctx context.Context, raw map[string]any) (
 		return nil, actionbase.InternalError(errors.New("channel content store is not configured"))
 	}
 	if err := m.store.InsertChannelComment(ctx, commentRecord(comment)); err != nil {
-		return nil, actionbase.InternalError(err)
+		// The Matrix event may already have been committed when the process
+		// crashed before this logical row. Replaying the same operation is
+		// idempotent when the existing row carries the exact event/identity.
+		existing, found, lookupErr := m.store.GetChannelCommentByID(ctx, comment.CommentID, comment.ChannelID)
+		if lookupErr != nil || !found || existing.EventID != comment.EventID {
+			return nil, actionbase.InternalError(err)
+		}
+		comment = commentFromRecord(existing)
 	}
 	if err := m.attachCommentOperation(ctx, &comment, actionCommentsCreate, "ok", roomID); err != nil {
 		return nil, actionbase.InternalError(err)

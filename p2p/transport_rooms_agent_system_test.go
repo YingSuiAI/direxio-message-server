@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/YingSuiAI/dirextalk-message-server/internal/pushrules"
+	agentmodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agent"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
 )
@@ -96,7 +97,7 @@ func TestServiceUsesTransportForRooms(t *testing.T) {
 	}
 }
 
-func TestEnsureAgentRoomCreatesRealRoomForLegacyID(t *testing.T) {
+func TestEnsureAgentRoomCreatesRealRoomWithOnlineIdentityForLegacyID(t *testing.T) {
 	transport := &recordingTransport{roomID: "!agents-real:example.com"}
 	service := NewServiceWithTransport(Config{ServerName: "example.com"}, transport)
 
@@ -126,8 +127,8 @@ func TestEnsureAgentRoomCreatesRealRoomForLegacyID(t *testing.T) {
 	if statusState, ok := initialStateOfType(req.InitialState, DirextalkAgentStatusEventType); ok {
 		t.Fatalf("agent status state must be sent after join, not as owner-created initial state: %#v", statusState)
 	}
-	if len(transport.joinRequests) != 1 || transport.joinRequests[0].UserMXID != "@agent:example.com" || transport.joinRequests[0].DisplayName != "Agent" {
-		t.Fatalf("expected agent to join created room, got %#v", transport.joinRequests)
+	if len(transport.joinRequests) != 1 || transport.joinRequests[0].UserMXID != "@agent:example.com" || transport.joinRequests[0].DisplayName != agentmodule.DefaultOnlineAgentDisplayName {
+		t.Fatalf("expected Online Agent to join created room once with its Matrix identity, got %#v", transport.joinRequests)
 	}
 	if len(transport.stateEvents) != 1 {
 		t.Fatalf("expected agent to publish status after joining created room, got %#v", transport.stateEvents)
@@ -316,7 +317,7 @@ func TestReportSubmitCreatesSystemNotificationMessage(t *testing.T) {
 
 func TestAgentConfigUpdatePublishesAgentRoomStatusState(t *testing.T) {
 	transport := &recordingTransport{}
-	service := NewServiceWithTransport(Config{ServerName: "example.com"}, transport)
+	service := NewServiceWithTransport(withTestExternalAgent(Config{ServerName: "example.com"}), transport)
 	service.agentRoomID = "!agents-real:example.com"
 	bootstrapService(t, service)
 
@@ -337,7 +338,7 @@ func TestAgentConfigUpdatePublishesAgentRoomStatusState(t *testing.T) {
 
 func TestAgentConfigEnableDoesNotPublishOnlineState(t *testing.T) {
 	transport := &recordingTransport{}
-	service := NewServiceWithTransport(Config{ServerName: "example.com"}, transport)
+	service := NewServiceWithTransport(withTestExternalAgent(Config{ServerName: "example.com"}), transport)
 	service.agentRoomID = "!agents-real:example.com"
 	service.agentConfig.Enabled = false
 	bootstrapService(t, service)

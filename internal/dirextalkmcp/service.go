@@ -137,13 +137,13 @@ var capabilityTools = []Tool{
 		Action:      ActionMessagesList,
 		Name:        "dirextalk_messages_list",
 		Description: "List ordinary messages in an allowed room with optional RFC3339 UTC time range and cursor pagination.",
-		InputSchema: objectSchema(map[string]any{"room_id": stringSchema(), "from_time": stringSchema(), "to_time": stringSchema(), "cursor": stringSchema(), "limit": numberSchema()}),
+		InputSchema: objectSchema(map[string]any{"room_id": stringSchema(), "from_time": stringSchema(), "to_time": stringSchema(), "cursor": stringSchema(), "limit": numberSchema()}, "room_id"),
 	},
 	{
 		Action:      ActionMessagesSend,
 		Name:        "dirextalk_messages_send",
 		Description: "Send a Matrix message through Dirextalk transport.",
-		InputSchema: objectSchema(map[string]any{"room_id": stringSchema(), "msg": stringSchema(), "agent_gateway": boolSchema()}),
+		InputSchema: objectSchema(map[string]any{"room_id": stringSchema(), "msg": stringSchema(), "agent_gateway": boolSchema()}, "room_id", "msg"),
 		Write:       true,
 	},
 	{
@@ -156,25 +156,29 @@ var capabilityTools = []Tool{
 		Action:      ActionChannelPostsList,
 		Name:        "dirextalk_channel_posts_list",
 		Description: "List channel posts with optional RFC3339 UTC time range and cursor pagination.",
-		InputSchema: objectSchema(map[string]any{"room_id": stringSchema(), "from_time": stringSchema(), "to_time": stringSchema(), "cursor": stringSchema(), "limit": numberSchema()}),
+		InputSchema: objectSchema(map[string]any{"room_id": stringSchema(), "from_time": stringSchema(), "to_time": stringSchema(), "cursor": stringSchema(), "limit": numberSchema()}, "room_id"),
 	},
 	{
 		Action:      ActionChannelCommentsList,
 		Name:        "dirextalk_channel_comments_list",
 		Description: "List channel comments for a post with optional RFC3339 UTC time range and cursor pagination.",
-		InputSchema: objectSchema(map[string]any{"post_id": stringSchema(), "from_time": stringSchema(), "to_time": stringSchema(), "cursor": stringSchema(), "limit": numberSchema()}),
+		InputSchema: objectSchema(map[string]any{"post_id": stringSchema(), "from_time": stringSchema(), "to_time": stringSchema(), "cursor": stringSchema(), "limit": numberSchema()}, "post_id"),
 	},
 	{
 		Action:      ActionChannelCommentsCreate,
 		Name:        "dirextalk_channel_comments_create",
 		Description: "Create a channel comment through Dirextalk transport.",
-		InputSchema: objectSchema(map[string]any{"post_id": stringSchema(), "msg": stringSchema()}),
+		InputSchema: objectSchema(map[string]any{"post_id": stringSchema(), "msg": stringSchema()}, "post_id", "msg"),
 		Write:       true,
 	},
 }
 
-func objectSchema(properties map[string]any) map[string]any {
-	return map[string]any{"type": "object", "properties": properties}
+func objectSchema(properties map[string]any, required ...string) map[string]any {
+	schema := map[string]any{"type": "object", "properties": properties}
+	if len(required) > 0 {
+		schema["required"] = append([]string(nil), required...)
+	}
+	return schema
 }
 
 func stringSchema() map[string]any { return map[string]any{"type": "string"} }

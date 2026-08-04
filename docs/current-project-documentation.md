@@ -280,6 +280,7 @@ Matrix Client-Server 写入生命周期：
 Portal/Profile：
 
 - 默认启动时自动初始化 portal owner、owner token、agent token、默认密码和 owner profile。
+- `P2P_PORTAL_PASSWORD_FILE` 可指向 mode 0400 的受保护密码文件；配置该文件时优先使用其内容，文件缺失或权限不安全不会回退到 plaintext 环境值。
 - `P2P_PORTAL_PASSWORD` 可覆盖默认密码。
 - `P2P_PORTAL_CREDENTIALS_FILE` 用于启动、密码变更和 session token 变更后的 credential JSON 写出。
 - `portal.bootstrap`、`portal.auth`、`portal.password` 创建新的 portal owner Matrix session 后，会删除该 owner 的其他 Matrix devices，只保留本次登录 device；旧设备后续 Matrix 请求应收到 `M_UNKNOWN_TOKEN` 并回到手动登录。`agent.matrix_session.create` 是本地 bridge bootstrap action，可由 owner `access_token` 或 `agent_token` 调用，返回本地 `@agent:<server>` 的 Matrix session，不删除用户手机 device。

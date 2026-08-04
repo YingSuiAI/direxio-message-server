@@ -20,11 +20,11 @@ func TestServicePrunesP2PEventsWhenRetentionMaxRowsIsConfigured(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	service, err := NewServiceWithStore(ctx, Config{
+	service, err := NewServiceWithStore(ctx, withTestExternalAgent(Config{
 		ServerName:                    "example.com",
 		P2PEventRetentionMaxRows:      3,
 		P2PEventRetentionPruneOnWrite: true,
-	}, store)
+	}), store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +59,7 @@ func TestDatabaseStorePreservesKickedChannelMemberAutoReject(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	service, err := NewServiceWithStore(ctx, Config{ServerName: "example.com"}, store)
+	service, err := NewServiceWithStore(ctx, withTestExternalAgent(Config{ServerName: "example.com"}), store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func TestDatabaseStorePreservesKickedChannelMemberAutoReject(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reloadedStore.Close()
-	reloaded, err := NewServiceWithStore(ctx, Config{ServerName: "example.com"}, reloadedStore)
+	reloaded, err := NewServiceWithStore(ctx, withTestExternalAgent(Config{ServerName: "example.com"}), reloadedStore)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func TestDatabaseStoreRestoresDeletedContactRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	service, err := NewServiceWithStore(ctx, Config{ServerName: "example.com"}, store)
+	service, err := NewServiceWithStore(ctx, withTestExternalAgent(Config{ServerName: "example.com"}), store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestDatabaseStoreRestoresDeletedContactRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reloadedStore.Close()
-	reloaded, err := NewServiceWithStore(ctx, Config{ServerName: "example.com"}, reloadedStore)
+	reloaded, err := NewServiceWithStore(ctx, withTestExternalAgent(Config{ServerName: "example.com"}), reloadedStore)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +160,7 @@ func TestDatabaseStoreRestoresContactRequestRemarkAfterReload(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	service, err := NewServiceWithStore(ctx, Config{ServerName: "example.com"}, store)
+	service, err := NewServiceWithStore(ctx, withTestExternalAgent(Config{ServerName: "example.com"}), store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +179,7 @@ func TestDatabaseStoreRestoresContactRequestRemarkAfterReload(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reloadedStore.Close()
-	reloaded, err := NewServiceWithStore(ctx, Config{ServerName: "example.com"}, reloadedStore)
+	reloaded, err := NewServiceWithStore(ctx, withTestExternalAgent(Config{ServerName: "example.com"}), reloadedStore)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +200,7 @@ func TestDatabaseStoreRecallChannelPostRemovesPostAfterReload(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	service, err := NewServiceWithStore(ctx, Config{ServerName: "example.com"}, store)
+	service, err := NewServiceWithStore(ctx, withTestExternalAgent(Config{ServerName: "example.com"}), store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +221,7 @@ func TestDatabaseStoreRecallChannelPostRemovesPostAfterReload(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reloadedStore.Close()
-	reloaded, err := NewServiceWithStore(ctx, Config{ServerName: "example.com"}, reloadedStore)
+	reloaded, err := NewServiceWithStore(ctx, withTestExternalAgent(Config{ServerName: "example.com"}), reloadedStore)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +235,7 @@ func TestDatabaseStoreRecallChannelPostRemovesPostAfterReload(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer againStore.Close()
-	again, err := NewServiceWithStore(ctx, Config{ServerName: "example.com"}, againStore)
+	again, err := NewServiceWithStore(ctx, withTestExternalAgent(Config{ServerName: "example.com"}), againStore)
 	if err != nil {
 		t.Fatal(err)
 	}

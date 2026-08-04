@@ -24,6 +24,31 @@ coverage/
 *.pem
 *.key
 *.crt
+**/*.pem
+**/*.key
+**/*.token
+**/*.secret
+*.token
+*.secret
+*-token
+*-secret
+database-url
+database_url
+database-url.txt
+database_url.txt
+postgres-password
+postgres_password
+service-token
+service_token
+**/database-url
+**/database_url
+**/database-url.txt
+**/database_url.txt
+**/postgres-password
+**/postgres_password
+**/service-token
+**/service_token
+run-services-local.sh
 message-server.yaml
 bootstrap.json
 
@@ -38,3 +63,5 @@ node_modules/
 # Docker compose local data should never become build context.
 data/
 volumes/
+docker-compose*.yml
+deploy/

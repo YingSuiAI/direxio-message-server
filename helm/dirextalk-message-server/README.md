@@ -131,7 +131,7 @@ Create a folder `appservices` and place your configurations in there.  The confi
 | dendrite_config.federation_api.disable_http_keepalives | bool | `false` | Prevents Dirextalk Message Server from keeping HTTP connections open for reuse for future requests. Connections will be closed quicker but we may spend more time on TLS handshakes instead. |
 | dendrite_config.federation_api.key_perspectives | list | See value.yaml | Perspective keyservers, to use as a backup when direct key fetch requests don't succeed. |
 | dendrite_config.media_api.base_path | string | `"/data/media_store"` | The path to store media files (e.g. avatars) in |
-| dendrite_config.media_api.max_file_size_bytes | int | `10485760` | The max file size for uploaded media files |
+| dendrite_config.media_api.max_file_size_bytes | int | `52428800` | The max file size for uploaded media files |
 | dendrite_config.media_api.dynamic_thumbnails | bool | `false` |  |
 | dendrite_config.media_api.max_thumbnail_generators | int | `10` | The maximum number of simultaneous thumbnail generators to run. |
 | dendrite_config.media_api.thumbnail_sizes | list | See value.yaml | A list of thumbnail sizes to be generated for media content. |

@@ -179,6 +179,19 @@ func fallbackString(value, fallback string) string {
 }
 
 func defaultPortalPassword() string {
+	if path := strings.TrimSpace(os.Getenv("P2P_PORTAL_PASSWORD_FILE")); path != "" {
+		if info, err := os.Lstat(path); err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o077 == 0 {
+			if data, readErr := os.ReadFile(path); readErr == nil {
+				password := strings.TrimSpace(string(data))
+				if password != "" && len(password) <= 1024 && !strings.ContainsAny(password, "\x00\r\n") {
+					return password
+				}
+			}
+		}
+		// A configured file is fail-closed: do not fall back to plaintext env
+		// material when the protected file is missing or malformed.
+		return randomNumericPassword()
+	}
 	if password := strings.TrimSpace(os.Getenv("P2P_PORTAL_PASSWORD")); password != "" {
 		return password
 	}

@@ -1,0 +1,263 @@
+package p2p
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/YingSuiAI/dirextalk-message-server/internal/agentgateway"
+	"github.com/sirupsen/logrus"
+)
+
+const (
+	nativeAgentCatalogProbeTimeout = 2 * time.Second
+	nativeAgentCatalogTTL          = 20 * time.Second
+	nativeAgentCatalogProbeEvery   = 5 * time.Second
+)
+
+// nativeAgentCatalogReadiness is intentionally independent of the request
+// path. Health/readiness only trusts a recent, generation-bound catalog probe;
+// action requests still perform their own live DescribeCapabilities lookup.
+type nativeAgentCatalogReadiness struct {
+	probe       func(context.Context, []agentgateway.CatalogRequirement) error
+	requirement []agentgateway.CatalogRequirement
+	generation  func() int64
+	now         func() time.Time
+	ttl         time.Duration
+	interval    time.Duration
+	probeTO     time.Duration
+
+	mu        sync.RWMutex
+	ready     bool
+	probedGen int64
+	expiresAt time.Time
+	lastErr   error
+	probing   bool
+	cancel    context.CancelFunc
+	done      chan struct{}
+}
+
+func newNativeAgentCatalogReadiness(probe func(context.Context, []agentgateway.CatalogRequirement) error, requirements []agentgateway.CatalogRequirement, generation func() int64) *nativeAgentCatalogReadiness {
+	if probe == nil {
+		return nil
+	}
+	if generation == nil {
+		generation = func() int64 { return 0 }
+	}
+	return &nativeAgentCatalogReadiness{
+		probe:       probe,
+		requirement: append([]agentgateway.CatalogRequirement(nil), requirements...),
+		generation:  generation,
+		now:         time.Now,
+		ttl:         nativeAgentCatalogTTL,
+		interval:    nativeAgentCatalogProbeEvery,
+		probeTO:     nativeAgentCatalogProbeTimeout,
+	}
+}
+
+func (r *nativeAgentCatalogReadiness) start() {
+	if r == nil || r.probe == nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	r.mu.Lock()
+	r.cancel = cancel
+	r.done = make(chan struct{})
+	r.mu.Unlock()
+
+	// The first probe is bounded and synchronous so startup/health cannot report
+	// ready before the peer has proven the catalog. A down peer does not prevent
+	// the ProductCore process from serving unrelated product traffic.
+	r.probeNow(ctx)
+	go r.loop(ctx)
+}
+
+func (r *nativeAgentCatalogReadiness) loop(ctx context.Context) {
+	ticker := time.NewTicker(r.interval)
+	defer ticker.Stop()
+	defer func() {
+		r.mu.Lock()
+		if r.done != nil {
+			close(r.done)
+			r.done = nil
+		}
+		r.mu.Unlock()
+	}()
+	for {
+		select {
+		case <-ticker.C:
+			if ready, _ := r.readyState(); ready {
+				continue
+			}
+			r.probeNow(ctx)
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func (r *nativeAgentCatalogReadiness) probeNow(parent context.Context) {
+	if r == nil || r.probe == nil {
+		return
+	}
+	r.mu.Lock()
+	if r.probing {
+		r.mu.Unlock()
+		return
+	}
+	r.probing = true
+	r.mu.Unlock()
+	defer func() {
+		r.mu.Lock()
+		r.probing = false
+		r.mu.Unlock()
+	}()
+
+	generation := r.generation()
+	ctx, cancel := context.WithTimeout(parent, r.probeTO)
+	err := r.probe(ctx, r.requirement)
+	cancel()
+	if generation != r.generation() {
+		err = errors.New("account generation changed during native agent catalog probe")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err != nil {
+		r.ready = false
+		r.probedGen = generation
+		r.expiresAt = time.Time{}
+		r.lastErr = err
+		logrus.WithError(err).WithField("account_generation", generation).Warn("Native Agent capability catalog probe failed")
+		return
+	}
+	r.ready = true
+	r.probedGen = generation
+	r.expiresAt = r.now().Add(r.ttl)
+	r.lastErr = nil
+}
+
+func (r *nativeAgentCatalogReadiness) readyState() (bool, error) {
+	if r == nil {
+		return true, nil
+	}
+	generation := r.generation()
+	r.mu.RLock()
+	ready := r.ready && r.probedGen == generation && !r.expiresAt.IsZero() && r.now().Before(r.expiresAt)
+	err := r.lastErr
+	r.mu.RUnlock()
+	if ready {
+		return true, nil
+	}
+	if err == nil {
+		err = errors.New("native agent catalog has not passed a fresh probe")
+	}
+	return false, err
+}
+
+func (r *nativeAgentCatalogReadiness) stop() {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	cancel := r.cancel
+	done := r.done
+	r.cancel = nil
+	r.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if done != nil {
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+		}
+	}
+}
+
+func (s *Service) nativeAgentCatalogReadinessError() error {
+	if s == nil || s.nativeAgentCatalog == nil {
+		return fmt.Errorf("external native agent capability catalog is not configured")
+	}
+	if ready, _ := s.nativeAgentCatalog.readyState(); ready {
+		return nil
+	}
+	return fmt.Errorf("external native agent capability catalog is not ready")
+}
+
+// StopNativeAgentCatalogProbe is registered with the process shutdown path in
+// production and is harmless for tests or embedded mode.
+func (s *Service) StopNativeAgentCatalogProbe() {
+	if s != nil && s.nativeAgentCatalog != nil {
+		s.nativeAgentCatalog.stop()
+	}
+}
+
+func nativeAgentCatalogRequirements(extra []string) []agentgateway.CatalogRequirement {
+	base := []string{
+		"agent.account.deprovision",
+		"agent.backends.get", "agent.core.status.get", "agent.models.list",
+		"agent.config.get", "agent.config.update", "agent.config.propose_patch",
+		"agent.chat", "agent.chat.stream",
+		"agent.chat.conversations.create", "agent.chat.conversations.list", "agent.chat.conversations.get", "agent.chat.conversations.rename", "agent.chat.conversations.delete", "agent.chat.turns.list",
+		"agent.context.compress", "agent.summarize",
+		"agent.core.model_profiles.sync", "agent.core.model_profiles.list", "agent.core.model_profiles.get", "agent.core.model_profiles.delete",
+		"agent.knowledge.config.get", "agent.knowledge.config.update", "agent.knowledge.sources.list", "agent.knowledge.sources.get", "agent.knowledge.sources.delete", "agent.knowledge.upload.start", "agent.knowledge.upload.chunk", "agent.knowledge.upload.finish", "agent.knowledge.memory.create", "agent.knowledge.memories.list", "agent.knowledge.memories.get", "agent.knowledge.memories.update", "agent.knowledge.memories.delete", "agent.knowledge.search", "agent.knowledge.memory.search", "agent.knowledge.index", "agent.knowledge.status",
+		"agent.core.tasks.get", "agent.core.tasks.list", "agent.core.tasks.cancel", "agent.core.tasks.retry", "agent.core.tasks.events",
+		"agent.core.schedules.create", "agent.core.schedules.get", "agent.core.schedules.list", "agent.core.schedules.update", "agent.core.schedules.pause", "agent.core.schedules.resume", "agent.core.schedules.trigger", "agent.core.schedules.delete",
+		"agent.core.confirmations.get", "agent.core.confirmations.list", "agent.core.confirmations.confirm", "agent.core.confirmations.reject", "agent.core.confirmations.acknowledge_extension_execution_uncertain",
+	}
+	seen := make(map[string]struct{}, len(base)+len(extra))
+	requirements := make([]agentgateway.CatalogRequirement, 0, len(base)+len(extra))
+	for _, action := range append(base, extra...) {
+		action = strings.TrimSpace(action)
+		if action == "" {
+			continue
+		}
+		if _, exists := seen[action]; exists {
+			continue
+		}
+		seen[action] = struct{}{}
+		requirements = append(requirements, agentgateway.CatalogRequirement{Action: action})
+	}
+	return requirements
+}
+
+type nativeAgentCatalogProbe interface {
+	ProbeCatalog(context.Context, []agentgateway.CatalogRequirement) error
+}
+
+func (s *Service) configureNativeAgentCatalogReadiness(cfg Config) {
+	if s == nil {
+		return
+	}
+	var probe func(context.Context, []agentgateway.CatalogRequirement) error
+	currentGeneration := func() int64 {
+		return s.accountGeneration
+	}
+	if cfg.NativeAgentCatalogProbe != nil {
+		probe = cfg.NativeAgentCatalogProbe
+	} else if candidate, ok := cfg.NativeAgentRunner.(nativeAgentCatalogProbe); ok {
+		probe = func(ctx context.Context, requirements []agentgateway.CatalogRequirement) error {
+			// Account deletion/recreation advances the Service generation. Keep the
+			// gateway metadata in lockstep before a recovery probe; otherwise a
+			// healthy replacement Agent would be rejected with the old fence.
+			if cfg.NativeAgentGateway != nil {
+				cfg.NativeAgentGateway.SetAccountGeneration(currentGeneration())
+			}
+			return candidate.ProbeCatalog(ctx, requirements)
+		}
+	}
+	// Tests may inject a runner without a live gateway. Production's setup
+	// rejects a missing gateway before Service construction, so lack of a probe
+	// here means this instance has no catalog authority and must not be marked
+	// ready.
+	if probe == nil {
+		return
+	}
+	requirements := nativeAgentCatalogRequirements(cfg.NativeAgentRequiredActions)
+	s.nativeAgentCatalog = newNativeAgentCatalogReadiness(probe, requirements, currentGeneration)
+	s.nativeAgentCatalog.start()
+}
