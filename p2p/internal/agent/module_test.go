@@ -176,11 +176,12 @@ func TestRuntimeActionsUseConfiguredMCPService(t *testing.T) {
 }
 
 type recordingAccountPort struct {
-	password      string
-	session       MatrixSession
-	sessionParams map[string]any
-	config        dirextalkdomain.AgentConfig
-	published     bool
+	password       string
+	session        MatrixSession
+	sessionParams  map[string]any
+	config         dirextalkdomain.AgentConfig
+	syncedIdentity dirextalkdomain.AgentIdentityConfig
+	published      bool
 }
 
 func (p *recordingAccountPort) Password() string { return p.password }
@@ -195,6 +196,11 @@ func (p *recordingAccountPort) Config() dirextalkdomain.AgentConfig { return p.c
 func (p *recordingAccountPort) UpdateConfig(_ context.Context, mutate func(dirextalkdomain.AgentConfig) dirextalkdomain.AgentConfig) (dirextalkdomain.AgentConfig, *actionbase.Error) {
 	p.config = mutate(p.config)
 	return p.config, nil
+}
+
+func (p *recordingAccountPort) SyncOnlineIdentity(_ context.Context, identity dirextalkdomain.AgentIdentityConfig) *actionbase.Error {
+	p.syncedIdentity = identity
+	return nil
 }
 
 func (p *recordingAccountPort) PublishOffline(context.Context) *actionbase.Error {
@@ -213,10 +219,11 @@ func TestAccountHandlersPreserveSessionAndConfigContracts(t *testing.T) {
 			Homeserver:  "https://example.com",
 		},
 		config: dirextalkdomain.AgentConfig{
-			DisplayName:   "Agent",
-			ContextWindow: 30,
-			Enabled:       true,
-			Native:        map[string]any{"api_key": "must-not-return"},
+			NativeAgentIdentity: dirextalkdomain.AgentIdentityConfig{DisplayName: "Ying", AvatarURL: "mxc://ying"},
+			OnlineAgentIdentity: dirextalkdomain.AgentIdentityConfig{DisplayName: "Your Agent", AvatarURL: "mxc://online"},
+			ContextWindow:       30,
+			Enabled:             true,
+			Native:              map[string]any{"api_key": "must-not-return"},
 		},
 	}
 	module := New(Config{Account: account})
@@ -261,6 +268,14 @@ func TestAccountHandlersPreserveSessionAndConfigContracts(t *testing.T) {
 	config := updated.(map[string]any)
 	if config["display_name"] != "Ops Agent" || config["enabled"] != false || config["model"] != "local-model" || config["system_prompt"] != "concise" {
 		t.Fatalf("unexpected public config: %#v", config)
+	}
+	nativeIdentity := config["native_agent_identity"].(map[string]any)
+	onlineIdentity := config["online_agent_identity"].(map[string]any)
+	if nativeIdentity["display_name"] != "Ops Agent" || onlineIdentity["display_name"] != "Ops Agent" {
+		t.Fatalf("legacy top-level update should sync both public identities: %#v", config)
+	}
+	if account.syncedIdentity.DisplayName != "Ops Agent" {
+		t.Fatalf("legacy top-level identity update should sync online identity, got %#v", account.syncedIdentity)
 	}
 	if _, found := config["api_key"]; found || !account.published {
 		t.Fatalf("config must stay sanitized and disabling must publish offline: %#v published=%v", config, account.published)

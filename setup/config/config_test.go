@@ -137,7 +137,7 @@ media_api:
     max_idle_conns: 2
     conn_max_lifetime: -1
   base_path: ./media_store
-  max_file_size_bytes: 10485760
+  max_file_size_bytes: 52428800
   dynamic_thumbnails: false
   max_thumbnail_generators: 10
   thumbnail_sizes:

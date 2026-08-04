@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/YingSuiAI/dirextalk-message-server/internal/dirextalkdomain"
 	matrixhistory "github.com/YingSuiAI/dirextalk-message-server/internal/dirextalkmatrix"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/dirextalkmcp"
 )
@@ -1004,7 +1005,10 @@ func TestMCPMessagesListUsesAgentRoomNameAndDisplayName(t *testing.T) {
 		{RoomID: "!agents:example.com", UserID: "@owner:example.com", Membership: "join"},
 	}})
 	service.agentRoomID = "!agents:example.com"
-	service.agentConfig.DisplayName = "Codex"
+	service.agentConfig = normalizeAgentConfig(agentConfig{
+		NativeAgentIdentity: dirextalkdomain.AgentIdentityConfig{DisplayName: "Codex Native"},
+		OnlineAgentIdentity: dirextalkdomain.AgentIdentityConfig{DisplayName: "Codex Online"},
+	})
 	service.SetMatrixMessageReader(&fakeMCPMessageReader{messages: []mcpMessageSummary{
 		{EventID: "$question", OriginServerTS: 1710000000000, CreatedAt: "2024-03-09T16:00:00Z", Sender: "owner", Msg: "question", SenderMXID: "@owner:example.com"},
 		{EventID: "$answer", OriginServerTS: 1710000100000, CreatedAt: "2024-03-09T16:01:40Z", Sender: "agent", Msg: "answer", SenderMXID: "@agent:example.com"},
@@ -1017,7 +1021,7 @@ func TestMCPMessagesListUsesAgentRoomNameAndDisplayName(t *testing.T) {
 		t.Fatalf("unexpected agent room envelope: %#v", result)
 	}
 	messages := result["messages"].([]mcpMessageSummary)
-	if len(messages) != 2 || messages[0].Sender != "Codex" {
+	if len(messages) != 2 || messages[0].Sender != "Codex Online" {
 		t.Fatalf("expected agent sender display name, got %#v", messages)
 	}
 }

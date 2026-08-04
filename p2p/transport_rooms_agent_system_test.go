@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/YingSuiAI/dirextalk-message-server/internal/dirextalkdomain"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/pushrules"
 	"github.com/matrix-org/gomatrixserverlib"
 	"github.com/matrix-org/gomatrixserverlib/spec"
@@ -99,6 +100,14 @@ func TestServiceUsesTransportForRooms(t *testing.T) {
 func TestEnsureAgentRoomCreatesRealRoomForLegacyID(t *testing.T) {
 	transport := &recordingTransport{roomID: "!agents-real:example.com"}
 	service := NewServiceWithTransport(Config{ServerName: "example.com"}, transport)
+	service.agentConfig.NativeAgentIdentity = dirextalkdomain.AgentIdentityConfig{
+		DisplayName: "Ying Native",
+		AvatarURL:   "mxc://example.com/ying",
+	}
+	service.agentConfig.OnlineAgentIdentity = dirextalkdomain.AgentIdentityConfig{
+		DisplayName: "Your Online",
+		AvatarURL:   "mxc://example.com/online",
+	}
 
 	changed, err := service.ensureAgentRoom(context.Background())
 	if err != nil {
@@ -126,8 +135,17 @@ func TestEnsureAgentRoomCreatesRealRoomForLegacyID(t *testing.T) {
 	if statusState, ok := initialStateOfType(req.InitialState, DirextalkAgentStatusEventType); ok {
 		t.Fatalf("agent status state must be sent after join, not as owner-created initial state: %#v", statusState)
 	}
-	if len(transport.joinRequests) != 1 || transport.joinRequests[0].UserMXID != "@agent:example.com" || transport.joinRequests[0].DisplayName != "Agent" {
+	if len(transport.joinRequests) != 1 ||
+		transport.joinRequests[0].UserMXID != "@agent:example.com" ||
+		transport.joinRequests[0].DisplayName != "Your Online" ||
+		transport.joinRequests[0].AvatarURL != "mxc://example.com/online" {
 		t.Fatalf("expected agent to join created room, got %#v", transport.joinRequests)
+	}
+	if len(transport.profileRequests) != 1 ||
+		transport.profileRequests[0].UserMXID != "@agent:example.com" ||
+		transport.profileRequests[0].DisplayName != "Your Online" ||
+		transport.profileRequests[0].AvatarURL != "mxc://example.com/online" {
+		t.Fatalf("expected created agent room member profile repair, got %#v", transport.profileRequests)
 	}
 	if len(transport.stateEvents) != 1 {
 		t.Fatalf("expected agent to publish status after joining created room, got %#v", transport.stateEvents)
@@ -166,7 +184,14 @@ func TestEnsureAgentRoomJoinsAgentAndOwnerForExistingRealRoom(t *testing.T) {
 	transport := &recordingTransport{}
 	service := NewServiceWithTransport(Config{ServerName: "example.com"}, transport)
 	service.agentRoomID = "!agents-real:example.com"
-	service.agentConfig.DisplayName = "Codex"
+	service.agentConfig.NativeAgentIdentity = dirextalkdomain.AgentIdentityConfig{
+		DisplayName: "Ying Native",
+		AvatarURL:   "mxc://example.com/ying",
+	}
+	service.agentConfig.OnlineAgentIdentity = dirextalkdomain.AgentIdentityConfig{
+		DisplayName: "Codex Online",
+		AvatarURL:   "mxc://example.com/online",
+	}
 
 	changed, err := service.ensureAgentRoom(context.Background())
 	if err != nil {
@@ -181,8 +206,15 @@ func TestEnsureAgentRoomJoinsAgentAndOwnerForExistingRealRoom(t *testing.T) {
 	if len(transport.joinRequests) != 2 {
 		t.Fatalf("expected agent and owner to join existing room, got %#v", transport.joinRequests)
 	}
-	if transport.joinRequests[0].UserMXID != "@agent:example.com" || transport.joinRequests[0].DisplayName != "Codex" {
+	if transport.joinRequests[0].UserMXID != "@agent:example.com" ||
+		transport.joinRequests[0].DisplayName != "Codex Online" ||
+		transport.joinRequests[0].AvatarURL != "mxc://example.com/online" {
 		t.Fatalf("expected agent to join existing room first, got %#v", transport.joinRequests)
+	}
+	if len(transport.profileRequests) != 1 ||
+		transport.profileRequests[0].DisplayName != "Codex Online" ||
+		transport.profileRequests[0].AvatarURL != "mxc://example.com/online" {
+		t.Fatalf("expected existing agent room member profile to use Online identity, got %#v", transport.profileRequests)
 	}
 	if transport.joinRequests[1].UserMXID != "@owner:example.com" {
 		t.Fatalf("expected owner to join existing room, got %#v", transport.joinRequests)

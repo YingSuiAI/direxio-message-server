@@ -336,7 +336,7 @@ dendrite_config:
     # -- The path to store media files (e.g. avatars) in
     base_path: "/data/media_store"
     # -- The max file size for uploaded media files
-    max_file_size_bytes: 10485760
+    max_file_size_bytes: 52428800
     # Whether to dynamically generate thumbnails if needed.
     dynamic_thumbnails: false
     # -- The maximum number of simultaneous thumbnail generators to run.

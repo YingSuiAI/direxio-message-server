@@ -329,14 +329,14 @@ func (s *Service) ensureAgentRoom(ctx context.Context) (bool, error) {
 	ownerDisplayName := s.profile.DisplayName
 	ownerAvatarURL := s.profile.AvatarURL
 	agentMXID := s.agentMXIDLocked()
-	agentDisplayName := s.agentDisplayNameLocked()
+	agentIdentity := s.onlineAgentIdentityLocked()
 	s.mu.Unlock()
 	if s.transport == nil {
 		return false, nil
 	}
 	if !needsAgentRoomCreate(currentRoomID, s.serverName) {
 		if currentRoomID != "" {
-			if err := s.ensureAgentRoomAgentMember(ctx, currentRoomID, ownerMXID, agentMXID, agentDisplayName); err != nil {
+			if err := s.ensureAgentRoomAgentMember(ctx, currentRoomID, ownerMXID, agentMXID, agentIdentity); err != nil {
 				return false, err
 			}
 			if err := s.ensureAgentRoomOwnerMember(ctx, currentRoomID, ownerMXID, ownerDisplayName, agentMXID); err != nil {
@@ -374,7 +374,7 @@ func (s *Service) ensureAgentRoom(ctx context.Context) (bool, error) {
 	s.mu.Lock()
 	s.agentRoomID = roomID
 	s.mu.Unlock()
-	if err := s.ensureAgentRoomAgentMember(ctx, roomID, ownerMXID, agentMXID, agentDisplayName); err != nil {
+	if err := s.ensureAgentRoomAgentMember(ctx, roomID, ownerMXID, agentMXID, agentIdentity); err != nil {
 		return false, err
 	}
 	if err := s.publishAgentStatusState(ctx, roomID, agentMXID, agentMXID, false); err != nil {
@@ -431,16 +431,18 @@ func (s *Service) ensureAgentRoomPowerLevels(ctx context.Context, roomID, ownerM
 	})
 }
 
-func (s *Service) ensureAgentRoomAgentMember(ctx context.Context, roomID, ownerMXID, agentMXID, agentDisplayName string) error {
+func (s *Service) ensureAgentRoomAgentMember(ctx context.Context, roomID, ownerMXID, agentMXID string, agentIdentity dirextalkdomain.AgentIdentityConfig) error {
 	if strings.TrimSpace(roomID) == "" || strings.TrimSpace(agentMXID) == "" {
 		return nil
 	}
+	agentIdentity = agentmodule.OnlineAgentIdentity(dirextalkdomain.AgentConfig{OnlineAgentIdentity: agentIdentity})
 	if _, err := s.transport.JoinRoom(ctx, JoinRoomRequest{
 		RoomIDOrAlias: roomID,
 		UserMXID:      agentMXID,
-		DisplayName:   agentDisplayName,
+		DisplayName:   agentIdentity.DisplayName,
+		AvatarURL:     agentIdentity.AvatarURL,
 	}); err == nil {
-		return nil
+		return s.updateAgentRoomMemberProfile(ctx, roomID, agentMXID, agentIdentity)
 	}
 	if strings.TrimSpace(ownerMXID) != "" {
 		if err := s.transport.InviteUser(ctx, InviteUserRequest{
@@ -455,9 +457,13 @@ func (s *Service) ensureAgentRoomAgentMember(ctx context.Context, roomID, ownerM
 	_, err := s.transport.JoinRoom(ctx, JoinRoomRequest{
 		RoomIDOrAlias: roomID,
 		UserMXID:      agentMXID,
-		DisplayName:   agentDisplayName,
+		DisplayName:   agentIdentity.DisplayName,
+		AvatarURL:     agentIdentity.AvatarURL,
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	return s.updateAgentRoomMemberProfile(ctx, roomID, agentMXID, agentIdentity)
 }
 
 func (s *Service) ensureAgentRoomOwnerMember(ctx context.Context, roomID, ownerMXID, ownerDisplayName, agentMXID string) error {
@@ -494,7 +500,29 @@ func (s *Service) agentMXIDLocked() string {
 }
 
 func (s *Service) agentDisplayNameLocked() string {
-	return fallbackString(strings.TrimSpace(s.agentConfig.DisplayName), "Agent")
+	return s.onlineAgentIdentityLocked().DisplayName
+}
+
+func (s *Service) nativeAgentIdentityLocked() dirextalkdomain.AgentIdentityConfig {
+	return agentmodule.NativeAgentIdentity(s.agentConfig)
+}
+
+func (s *Service) onlineAgentIdentityLocked() dirextalkdomain.AgentIdentityConfig {
+	return agentmodule.OnlineAgentIdentity(s.agentConfig)
+}
+
+func (s *Service) updateAgentRoomMemberProfile(ctx context.Context, roomID, agentMXID string, identity dirextalkdomain.AgentIdentityConfig) error {
+	if s.transport == nil || strings.TrimSpace(roomID) == "" || strings.TrimSpace(agentMXID) == "" {
+		return nil
+	}
+	identity = agentmodule.OnlineAgentIdentity(dirextalkdomain.AgentConfig{OnlineAgentIdentity: identity})
+	return s.transport.UpdateMemberProfile(ctx, UpdateMemberProfileRequest{
+		RoomID:      strings.TrimSpace(roomID),
+		UserMXID:    strings.TrimSpace(agentMXID),
+		DisplayName: identity.DisplayName,
+		AvatarURL:   identity.AvatarURL,
+		Timestamp:   time.Now().UTC(),
+	})
 }
 
 func needsAgentRoomCreate(roomID, serverName string) bool {
