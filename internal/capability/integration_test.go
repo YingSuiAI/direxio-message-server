@@ -15,7 +15,7 @@ import (
 func TestEchoCapability(t *testing.T) {
 	// 创建 registry 并注册内置 capabilities
 	registry := productcapability.NewRegistry()
-	if err := productcapability.RegisterBuiltinCapabilities(registry); err != nil {
+	if err := productcapability.RegisterBuiltinCapabilities(registry, nil); err != nil {
 		t.Fatalf("Failed to register builtin capabilities: %v", err)
 	}
 
