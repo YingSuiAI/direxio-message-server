@@ -351,10 +351,11 @@ install_exact_file() {
 }
 
 existing_passwd_identity() {
-  local user=$1 uid=$2 gid=$3 line actual_uid actual_gid home shell
+  local user=$1 uid=$2 gid=$3 line account_name actual_uid_name actual_uid actual_gid home shell
   line=$(getent passwd "$user" || true)
   if [ -n "$line" ]; then
-    IFS=: read -r _ actual_uid actual_gid _ _ home shell <<<"$line"
+    IFS=: read -r account_name _ actual_uid actual_gid _ home shell <<<"$line"
+    [ "$account_name" = "$user" ] || die "user lookup returned an unexpected account: $account_name"
     [ "$actual_uid" = "$uid" ] || die "user $user exists with UID $actual_uid, expected $uid"
     [ "$actual_gid" = "$gid" ] || die "user $user exists with GID $actual_gid, expected $gid"
     [ "$home" = /nonexistent ] || die "user $user has unexpected home directory $home"
@@ -362,32 +363,36 @@ existing_passwd_identity() {
   fi
   line=$(getent passwd "$uid" || true)
   if [ -n "$line" ]; then
-    IFS=: read -r actual_uid_name actual_uid _ <<<"$line"
+    IFS=: read -r account_name _ actual_uid actual_gid _ home shell <<<"$line"
+    actual_uid_name=$account_name
     [ "$actual_uid_name" = "$user" ] && [ "$actual_uid" = "$uid" ] || \
       die "UID $uid is already assigned to another host user"
   fi
 }
 
 existing_group_identity() {
-  local group=$1 gid=$2 line actual_gid
+  local group=$1 gid=$2 line group_name actual_group_name actual_gid
   line=$(getent group "$group" || true)
   if [ -n "$line" ]; then
-    IFS=: read -r _ actual_gid _ <<<"$line"
+    IFS=: read -r group_name _ actual_gid _ <<<"$line"
+    [ "$group_name" = "$group" ] || die "group lookup returned an unexpected group: $group_name"
     [ "$actual_gid" = "$gid" ] || die "group $group exists with GID $actual_gid, expected $gid"
   fi
   line=$(getent group "$gid" || true)
   if [ -n "$line" ]; then
-    IFS=: read -r actual_group_name actual_gid _ <<<"$line"
+    IFS=: read -r group_name _ actual_gid _ <<<"$line"
+    actual_group_name=$group_name
     [ "$actual_group_name" = "$group" ] && [ "$actual_gid" = "$gid" ] || \
       die "GID $gid is already assigned to another host group"
   fi
 }
 
 verify_identity() {
-  local user=$1 uid=$2 gid=$3 group=$4 line actual_uid actual_gid home shell
+  local user=$1 uid=$2 gid=$3 group=$4 line account_name group_name actual_uid actual_gid home shell
   line=$(getent passwd "$user" || true)
   [ -n "$line" ] || die "static user was not created: $user"
-  IFS=: read -r _ actual_uid actual_gid _ _ home shell <<<"$line"
+  IFS=: read -r account_name _ actual_uid actual_gid _ home shell <<<"$line"
+  [ "$account_name" = "$user" ] || die "static user lookup returned an unexpected account: $account_name"
   [ "$actual_uid" = "$uid" ] && [ "$actual_gid" = "$gid" ] || \
     die "static user identity mismatch: $user"
   [ "$home" = /nonexistent ] && [ "$shell" = /usr/sbin/nologin ] || \
@@ -396,7 +401,8 @@ verify_identity() {
     die "static user lookup mismatch: $user"
   line=$(getent group "$group" || true)
   [ -n "$line" ] || die "static group was not created: $group"
-  IFS=: read -r _ actual_gid _ <<<"$line"
+  IFS=: read -r group_name _ actual_gid _ <<<"$line"
+  [ "$group_name" = "$group" ] || die "static group lookup returned an unexpected group: $group_name"
   [ "$actual_gid" = "$gid" ] || die "static group identity mismatch: $group"
 }
 

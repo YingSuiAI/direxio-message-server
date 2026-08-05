@@ -125,4 +125,59 @@ for failure_case in security engine; do
 done
 PATH="$runner_test_path" bash -c 'source "$1"; require_rootful_docker' _ "$runner_test_tmp/prepare-function.sh"
 
+# Exercise the real passwd/group parsers with canonical NSS records. The
+# password placeholder is the second field, so accepting it as UID/GID would
+# reject a correctly realized systemd-sysusers identity on the first host run.
+cat >"$runner_test_tmp/identity-functions.sh" <<'EOF'
+die() {
+  printf '%s\n' "$*" >&2
+  exit 1
+}
+EOF
+sed -n '/^existing_passwd_identity() {/,/^}$/p' "$script" >>"$runner_test_tmp/identity-functions.sh"
+sed -n '/^existing_group_identity() {/,/^}$/p' "$script" >>"$runner_test_tmp/identity-functions.sh"
+sed -n '/^verify_identity() {/,/^}$/p' "$script" >>"$runner_test_tmp/identity-functions.sh"
+cat >"$runner_test_tmp/bin/getent" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+kind=$1
+key=$2
+if [ "${DIREXTALK_FAKE_IDENTITY_COLLISION:-false}" = true ] && [ "$kind:$key" = passwd:65531 ]; then
+  printf 'another-runner:x:65531:65531:Unexpected:/nonexistent:/usr/sbin/nologin\n'
+  exit 0
+fi
+case "$kind:$key" in
+  passwd:dirextalk-extension-runner|passwd:65531)
+    printf 'dirextalk-extension-runner:x:65531:65531:Dirextalk Extension Runner:/nonexistent:/usr/sbin/nologin\n'
+    ;;
+  group:dirextalk-extension-runner|group:65531)
+    printf 'dirextalk-extension-runner:x:65531:\n'
+    ;;
+  *) exit 2 ;;
+esac
+EOF
+cat >"$runner_test_tmp/bin/id" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+case "$1:$2" in
+  -u:dirextalk-extension-runner|-g:dirextalk-extension-runner) printf '65531\n' ;;
+  *) exit 2 ;;
+esac
+EOF
+chmod 755 "$runner_test_tmp/bin/getent" "$runner_test_tmp/bin/id"
+PATH="$runner_test_path" bash -c '
+  source "$1"
+  existing_passwd_identity dirextalk-extension-runner 65531 65531
+  existing_group_identity dirextalk-extension-runner 65531
+  verify_identity dirextalk-extension-runner 65531 65531 dirextalk-extension-runner
+' _ "$runner_test_tmp/identity-functions.sh"
+if PATH="$runner_test_path" DIREXTALK_FAKE_IDENTITY_COLLISION=true bash -c '
+  source "$1"
+  existing_passwd_identity dirextalk-extension-runner 65531 65531
+' _ "$runner_test_tmp/identity-functions.sh" >"$runner_test_tmp/identity-collision.stdout" 2>"$runner_test_tmp/identity-collision.stderr"; then
+  echo "numeric UID collision was unexpectedly accepted" >&2
+  exit 1
+fi
+grep -Fq 'UID 65531 is already assigned to another host user' "$runner_test_tmp/identity-collision.stderr"
+
 echo "prepare-runner-cgroups fixture tests passed"
