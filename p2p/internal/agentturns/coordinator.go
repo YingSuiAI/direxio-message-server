@@ -3,7 +3,10 @@ package agentturns
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 )
@@ -140,6 +143,28 @@ func (c *Coordinator) Stop(ctx context.Context, ownerID, turnID string) (Turn, b
 
 func (c *Coordinator) List(ctx context.Context, ownerID, conversationID string, limit int) ([]Turn, error) {
 	return c.store.ListAgentTurns(ctx, strings.TrimSpace(ownerID), strings.TrimSpace(conversationID), limit)
+}
+
+// LatestConversationRevision returns the newest durable revision acknowledged
+// by a successful turn. The Message Server serializes turns per conversation,
+// so this value can repair a client cache that missed the terminal done event.
+func (c *Coordinator) LatestConversationRevision(ctx context.Context, ownerID, conversationID string) (int64, error) {
+	ownerID = strings.TrimSpace(ownerID)
+	conversationID = strings.TrimSpace(conversationID)
+	if c == nil || c.store == nil || !ValidID(ownerID) || !ValidID(conversationID) {
+		return 0, fmt.Errorf("agent conversation revision lookup is invalid")
+	}
+	event, found, err := c.store.LatestAgentConversationDone(ctx, ownerID, conversationID)
+	if err != nil {
+		return 0, err
+	}
+	if !found {
+		return 0, nil
+	}
+	if revision, ok := conversationRevision(event.Data["conversation_revision"]); ok {
+		return revision, nil
+	}
+	return 0, nil
 }
 
 func (c *Coordinator) liveFor(turn Turn, created bool) *liveTurn {
@@ -297,8 +322,8 @@ func (c *Coordinator) runJob(job *turnJob) {
 		return
 	}
 	if err != nil {
-		message := "native agent turn failed"
-		_, event, transitioned, finishErr := c.store.FinishAgentTurn(context.Background(), turn.OwnerID, turn.TurnID, StateFailed, "error", "failed", map[string]any{"error": message}, message)
+		message, data := publicRunnerFailure(err)
+		_, event, transitioned, finishErr := c.store.FinishAgentTurn(context.Background(), turn.OwnerID, turn.TurnID, StateFailed, "error", "failed", data, message)
 		if finishErr == nil && transitioned {
 			c.publish(job.live, event, true)
 		} else if finishErr != nil {
@@ -312,6 +337,51 @@ func (c *Coordinator) runJob(job *turnJob) {
 	} else if finishErr != nil {
 		c.closeLive(job.live)
 	}
+}
+
+type codedRunnerFailure interface {
+	error
+	ErrorCode() string
+}
+
+func publicRunnerFailure(err error) (string, map[string]any) {
+	message := "native agent turn failed"
+	data := map[string]any{"error": message}
+	var coded codedRunnerFailure
+	if !errors.As(err, &coded) {
+		return message, data
+	}
+	code := strings.TrimSpace(coded.ErrorCode())
+	publicMessage := strings.TrimSpace(coded.Error())
+	if !strings.HasPrefix(code, "M_AGENT_") || publicMessage == "" || len(publicMessage) > 256 {
+		return message, data
+	}
+	data["error"] = publicMessage
+	data["error_code"] = code
+	return publicMessage, data
+}
+
+func conversationRevision(value any) (int64, bool) {
+	switch revision := value.(type) {
+	case int:
+		if revision >= 0 {
+			return int64(revision), true
+		}
+	case int64:
+		if revision >= 0 {
+			return revision, true
+		}
+	case float64:
+		if revision >= 0 && revision <= math.MaxInt64 && math.Trunc(revision) == revision {
+			return int64(revision), true
+		}
+	case json.Number:
+		parsed, err := revision.Int64()
+		if err == nil && parsed >= 0 {
+			return parsed, true
+		}
+	}
+	return 0, false
 }
 
 func (c *Coordinator) publish(live *liveTurn, event Event, terminal bool) {

@@ -6,12 +6,20 @@ import (
 )
 
 const (
-	RealtimeWSTicketAction          = "realtime.ws_ticket.create"
-	AgentRuntimeProfileGetAction    = "agent.runtime.profile.get"
-	AgentRuntimeProfileUpdateAction = "agent.runtime.profile.update"
-	AgentCloudTaskCancelAction      = "agent.cloud.tasks.cancel"
-	AgentCloudPlanPrepareAction     = "agent.cloud.plans.confirmation.prepare"
-	AgentCloudPlanApproveAction     = "agent.cloud.plans.approve"
+	RealtimeWSTicketAction                 = "realtime.ws_ticket.create"
+	AgentRuntimeProfileGetAction           = "agent.runtime.profile.get"
+	AgentRuntimeProfileUpdateAction        = "agent.runtime.profile.update"
+	AgentSearchProfileGetAction            = "agent.search.profile.get"
+	AgentSearchProfileUpdateAction         = "agent.search.profile.update"
+	AgentCloudTaskOverviewAction           = "agent.cloud.tasks.overview"
+	AgentCloudTaskCancelAction             = "agent.cloud.tasks.cancel"
+	AgentCloudPlanPrepareAction            = "agent.cloud.plans.confirmation.prepare"
+	AgentCloudPlanApproveAction            = "agent.cloud.plans.approve"
+	AgentTeamPlanGetAction                 = "agent.team.plans.get"
+	AgentTeamApprovalDeviceBootstrapAction = "agent.team.approval_device.bootstrap"
+	AgentTeamPlanPrepareAction             = "agent.team.plans.approval.prepare"
+	AgentTeamPlanApproveAction             = "agent.team.plans.approve"
+	AgentTeamExecutionGetAction            = "agent.team.executions.get"
 )
 
 type ActionAuth string
@@ -63,12 +71,15 @@ var actionSpecs = []ActionSpec{
 	{Name: "agent.config.update", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
 	{Name: AgentRuntimeProfileGetAction, Auth: ActionAuthOwner, Transport: ActionTransportHTTPOnly},
 	{Name: AgentRuntimeProfileUpdateAction, Auth: ActionAuthOwner, Transport: ActionTransportHTTPOnly},
+	{Name: AgentSearchProfileGetAction, Auth: ActionAuthOwner, Transport: ActionTransportHTTPOnly},
+	{Name: AgentSearchProfileUpdateAction, Auth: ActionAuthOwner, Transport: ActionTransportHTTPOnly},
 	{Name: "agent.config.propose_patch", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
 	{Name: "agent.chat", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
 	{Name: "agent.chat.stream", Auth: ActionAuthOwner, Transport: ActionTransportWSStreamOnly},
 	{Name: "agent.chat.turn.stop", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
 	{Name: "agent.chat.turns.list", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
 	{Name: "agent.cloud.tasks.list", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
+	{Name: AgentCloudTaskOverviewAction, Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
 	{Name: "agent.cloud.tasks.get", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
 	{Name: AgentCloudTaskCancelAction, Auth: ActionAuthOwner, Transport: ActionTransportHTTPOnly},
 	{Name: "agent.cloud.plans.list", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
@@ -79,6 +90,11 @@ var actionSpecs = []ActionSpec{
 	{Name: "agent.cloud.deployments.get", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
 	{Name: "agent.cloud.workers.list", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
 	{Name: "agent.cloud.workers.get", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
+	{Name: AgentTeamPlanGetAction, Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
+	{Name: AgentTeamApprovalDeviceBootstrapAction, Auth: ActionAuthOwner, Transport: ActionTransportHTTPOnly},
+	{Name: AgentTeamPlanPrepareAction, Auth: ActionAuthOwner, Transport: ActionTransportHTTPOnly},
+	{Name: AgentTeamPlanApproveAction, Auth: ActionAuthOwner, Transport: ActionTransportHTTPOnly},
+	{Name: AgentTeamExecutionGetAction, Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
 	{Name: "agent.context.compress", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
 	{Name: "agent.models.list", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
 	{Name: "agent.runtime.inspect", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},

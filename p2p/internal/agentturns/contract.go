@@ -89,6 +89,7 @@ type Store interface {
 	GetAgentTurn(context.Context, string, string) (Turn, bool, error)
 	ListAgentTurns(context.Context, string, string, int) ([]Turn, error)
 	ListAgentTurnEvents(context.Context, string, string, int64) ([]Event, error)
+	LatestAgentConversationDone(context.Context, string, string) (Event, bool, error)
 	MarkAgentTurnRunning(context.Context, string, string) (Turn, bool, error)
 	AppendAgentTurnEvent(context.Context, string, string, string, string, map[string]any) (Event, error)
 	FinishAgentTurn(context.Context, string, string, State, string, string, map[string]any, string) (Turn, Event, bool, error)

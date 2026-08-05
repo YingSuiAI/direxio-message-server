@@ -118,6 +118,16 @@
       "transport": "http_only"
     },
     {
+      "name": "agent.search.profile.get",
+      "auth": "owner",
+      "transport": "http_only"
+    },
+    {
+      "name": "agent.search.profile.update",
+      "auth": "owner",
+      "transport": "http_only"
+    },
+    {
       "name": "agent.config.propose_patch",
       "auth": "owner",
       "transport": "http_and_ws_request"
@@ -144,6 +154,11 @@
     },
     {
       "name": "agent.cloud.tasks.list",
+      "auth": "owner",
+      "transport": "http_and_ws_request"
+    },
+    {
+      "name": "agent.cloud.tasks.overview",
       "auth": "owner",
       "transport": "http_and_ws_request"
     },
@@ -194,6 +209,31 @@
     },
     {
       "name": "agent.cloud.workers.get",
+      "auth": "owner",
+      "transport": "http_and_ws_request"
+    },
+    {
+      "name": "agent.team.plans.get",
+      "auth": "owner",
+      "transport": "http_and_ws_request"
+    },
+    {
+      "name": "agent.team.approval_device.bootstrap",
+      "auth": "owner",
+      "transport": "http_only"
+    },
+    {
+      "name": "agent.team.plans.approval.prepare",
+      "auth": "owner",
+      "transport": "http_only"
+    },
+    {
+      "name": "agent.team.plans.approve",
+      "auth": "owner",
+      "transport": "http_only"
+    },
+    {
+      "name": "agent.team.executions.get",
       "auth": "owner",
       "transport": "http_and_ws_request"
     },

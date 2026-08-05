@@ -127,6 +127,23 @@ func (m *Monolith) AddAllPublicRoutes(
 		}
 		logrus.Fatal("P2P Agent gRPC runtime profile backend is unavailable")
 	}
+	agentSearchProfileClient, err := p2pAgentSearchProfileClient(agentBackend, agentChatRunner)
+	if err != nil {
+		if agentChatRunner != nil {
+			_ = agentChatRunner.Close()
+		}
+		logrus.Fatal("P2P Agent gRPC search profile backend is unavailable")
+	}
+	agentCompletionSource, err := p2pAgentCompletionSource(
+		agentBackend,
+		agentChatRunner,
+	)
+	if err != nil {
+		if agentChatRunner != nil {
+			_ = agentChatRunner.Close()
+		}
+		logrus.Fatal("P2P Agent gRPC completion backend is unavailable")
+	}
 	if agentChatRunner != nil {
 		startAgentGRPCRunnerLifecycle(processCtx, agentChatRunner)
 	}
@@ -139,6 +156,8 @@ func (m *Monolith) AddAllPublicRoutes(
 		P2PEventRetentionPruneOnWrite:   p2pEventRetentionPruneOnWriteFromEnv(),
 		NativeAgentChatRunner:           agentChatRunner,
 		AgentRuntimeProfileClient:       agentRuntimeProfileClient,
+		AgentSearchProfileClient:        agentSearchProfileClient,
+		AgentCompletionSource:           agentCompletionSource,
 		PushRules:                       m.UserAPI,
 		ReleaseController:               releasecontrol.NewUnixController(releasecontrol.UnixControllerConfig{}),
 	}
@@ -149,6 +168,9 @@ func (m *Monolith) AddAllPublicRoutes(
 	p2pService, err := newPersistentP2PService(processCtx.Context(), p2pConfig, cm, p2pDatabaseOptions(cfg), p2pTransport)
 	if err != nil {
 		logrus.WithError(err).Fatal("P2P integrated AS persistent state is required")
+	}
+	if agentCompletionSource != nil {
+		startAgentCompletionRelayLifecycle(processCtx, p2pService)
 	}
 	p2pTransport.SetBlockedDirectMessageChecker(p2pService.BlockedDirectMessage)
 	cfg.ClientAPI.DirextalkBlockChecker = p2pService.BlockedDirectMessage
@@ -324,6 +346,47 @@ func p2pAgentRuntimeProfileClient(config p2pAgentGRPCBackendConfig, runner Agent
 	}
 	return client, nil
 }
+
+func p2pAgentSearchProfileClient(config p2pAgentGRPCBackendConfig, runner AgentGRPCRunner) (p2p.AgentSearchProfileClient, error) {
+	if !config.Enabled {
+		return nil, nil
+	}
+	client, ok := runner.(p2p.AgentSearchProfileClient)
+	if !ok || client == nil {
+		return nil, errors.New("enabled Agent gRPC backend does not support search profile configuration")
+	}
+	return client, nil
+}
+
+func p2pAgentCompletionSource(
+	config p2pAgentGRPCBackendConfig,
+	runner AgentGRPCRunner,
+) (p2p.AgentCompletionSource, error) {
+	if !config.Enabled {
+		return nil, nil
+	}
+	source, ok := runner.(p2p.AgentCompletionSource)
+	if !ok || source == nil {
+		return nil, errors.New(
+			"enabled Agent gRPC backend does not support completion events",
+		)
+	}
+	return source, nil
+}
+
+func startAgentCompletionRelayLifecycle(
+	processCtx *process.ProcessContext,
+	service *p2p.Service,
+) {
+	processCtx.ComponentStarted()
+	go func() {
+		defer processCtx.ComponentFinished()
+		if err := service.RunAgentCompletionRelay(processCtx.Context()); err != nil && processCtx.Context().Err() == nil {
+			logrus.Warn("P2P Agent completion relay stopped")
+		}
+	}()
+}
+
 func startAgentGRPCRunnerLifecycle(processCtx *process.ProcessContext, runner AgentGRPCRunner) {
 	processCtx.ComponentStarted()
 	go func() {

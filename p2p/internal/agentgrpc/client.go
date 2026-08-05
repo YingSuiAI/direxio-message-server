@@ -18,7 +18,6 @@ import (
 	"regexp"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	agentv1 "github.com/YingSuiAI/dirextalk-agent/api/gen/dirextalk/agent/v1"
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/nativeagent"
@@ -63,13 +62,16 @@ type Config struct {
 // Runner implements the Message Server NativeAgentRunner contract over the
 // versioned Agent RuntimeService gRPC API.
 type Runner struct {
-	connection    *grpc.ClientConn
-	runtime       agentv1.RuntimeServiceClient
-	tasks         agentv1.TaskServiceClient
-	cloud         agentv1.CloudControlServiceClient
-	ownerID       string
-	chainTimeout  time.Duration
-	streamTimeout time.Duration
+	connection     *grpc.ClientConn
+	runtime        agentv1.RuntimeServiceClient
+	tasks          agentv1.TaskServiceClient
+	cloud          agentv1.CloudControlServiceClient
+	team           agentv1.TeamPlanServiceClient
+	secrets        agentv1.SecretBootstrapServiceClient
+	ownerID        string
+	serviceKeyFile string
+	chainTimeout   time.Duration
+	streamTimeout  time.Duration
 }
 
 // New validates mounted trust material and creates a TLS 1.3-only gRPC client.
@@ -116,7 +118,10 @@ func New(ctx context.Context, config Config) (*Runner, error) {
 	return &Runner{
 		connection: connection, runtime: agentv1.NewRuntimeServiceClient(connection),
 		tasks: agentv1.NewTaskServiceClient(connection), cloud: agentv1.NewCloudControlServiceClient(connection), ownerID: config.OwnerID,
-		chainTimeout: unaryTimeout, streamTimeout: streamTimeout,
+		team:           agentv1.NewTeamPlanServiceClient(connection),
+		secrets:        agentv1.NewSecretBootstrapServiceClient(connection),
+		serviceKeyFile: config.ServiceKeyFile,
+		chainTimeout:   unaryTimeout, streamTimeout: streamTimeout,
 	}, nil
 }
 
@@ -140,8 +145,14 @@ func (runner *Runner) Invoke(ctx context.Context, action string, params map[stri
 		return nil, errors.New("agent service client is unavailable")
 	}
 	action = strings.TrimSpace(action)
+	if isTeamAction(action) {
+		return runner.invokeTeamAction(ctx, action, params)
+	}
 	if isCloudAction(action) {
 		return runner.invokeCloudAction(ctx, action, params)
+	}
+	if action == "agent.models.list" {
+		return runner.invokeModelList(ctx, params)
 	}
 	if runner.runtime == nil {
 		return nil, errors.New("agent service client is unavailable")
@@ -218,7 +229,15 @@ func (runner *Runner) chatRequest(ctx context.Context, params map[string]any) (*
 	if err != nil {
 		return nil, err
 	}
-	cloudScope, err := runner.cloudDialogueScope(ctx, request.message)
+	defer request.clear()
+	cloudScope, err := runner.cloudDialogueScope(
+		ctx,
+		request.cloudConnectionID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	transientModel, err := runner.bootstrapTransientModel(ctx, request.idempotencyKey, request.transientModel)
 	if err != nil {
 		return nil, err
 	}
@@ -226,6 +245,7 @@ func (runner *Runner) chatRequest(ctx context.Context, params map[string]any) (*
 		IdempotencyKey: request.idempotencyKey, OwnerId: runner.ownerID, ConversationId: request.conversationID,
 		Message: request.message, MemoryDisabled: request.memoryDisabled, ExpectedConversationRevision: request.expectedRevision,
 		CloudDialogueScope: cloudScope,
+		TransientModel:     transientModel,
 	}, nil
 }
 
@@ -234,7 +254,15 @@ func (runner *Runner) streamChatRequest(ctx context.Context, params map[string]a
 	if err != nil {
 		return nil, err
 	}
-	cloudScope, err := runner.cloudDialogueScope(ctx, request.message)
+	defer request.clear()
+	cloudScope, err := runner.cloudDialogueScope(
+		ctx,
+		request.cloudConnectionID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	transientModel, err := runner.bootstrapTransientModel(ctx, request.idempotencyKey, request.transientModel)
 	if err != nil {
 		return nil, err
 	}
@@ -242,13 +270,14 @@ func (runner *Runner) streamChatRequest(ctx context.Context, params map[string]a
 		IdempotencyKey: request.idempotencyKey, OwnerId: runner.ownerID, ConversationId: request.conversationID,
 		Message: request.message, MemoryDisabled: request.memoryDisabled, ExpectedConversationRevision: request.expectedRevision,
 		CloudDialogueScope: cloudScope,
+		TransientModel:     transientModel,
 	}, nil
 }
 
-func (runner *Runner) cloudDialogueScope(ctx context.Context, message string) (*agentv1.CloudDialogueScopeV1, error) {
-	if !workerDiagnosticIntent(message) {
-		return nil, nil
-	}
+func (runner *Runner) cloudDialogueScope(
+	ctx context.Context,
+	requestedConnectionID string,
+) (*agentv1.CloudDialogueScopeV1, error) {
 	if runner == nil || runner.cloud == nil {
 		return nil, errors.New("Agent cloud connection lookup is unavailable")
 	}
@@ -256,7 +285,7 @@ func (runner *Runner) cloudDialogueScope(ctx context.Context, message string) (*
 	defer cancel()
 	pageToken := ""
 	seenTokens := map[string]struct{}{}
-	activeConnectionID := ""
+	activeConnectionIDs := make(map[string]struct{})
 	for page := 0; page < maxCloudLookupPages; page++ {
 		response, err := runner.cloud.ListCloudConnections(lookupCtx, &agentv1.ListCloudConnectionsRequest{
 			OwnerId: runner.ownerID, PageSize: 100, PageToken: pageToken,
@@ -276,17 +305,29 @@ func (runner *Runner) cloudDialogueScope(ctx context.Context, message string) (*
 			if parseErr != nil || parsed == uuid.Nil || parsed.String() != connectionID {
 				return nil, errors.New("Agent cloud connection response is invalid")
 			}
-			if activeConnectionID != "" && activeConnectionID != connectionID {
-				return nil, errors.New("multiple active Agent cloud connections require an explicit selection")
-			}
-			activeConnectionID = connectionID
+			activeConnectionIDs[connectionID] = struct{}{}
 		}
 		next := strings.TrimSpace(response.GetNextPageToken())
 		if next == "" {
-			if activeConnectionID == "" {
-				return nil, errors.New("an active Agent cloud connection is required")
+			if requestedConnectionID != "" {
+				if _, active := activeConnectionIDs[requestedConnectionID]; !active {
+					return nil, errors.New(
+						"selected Agent cloud connection is not active",
+					)
+				}
+				return &agentv1.CloudDialogueScopeV1{
+					CloudConnectionId: requestedConnectionID,
+				}, nil
 			}
-			return &agentv1.CloudDialogueScopeV1{CloudConnectionId: activeConnectionID}, nil
+			if len(activeConnectionIDs) != 1 {
+				return nil, nil
+			}
+			for connectionID := range activeConnectionIDs {
+				return &agentv1.CloudDialogueScopeV1{
+					CloudConnectionId: connectionID,
+				}, nil
+			}
+			return nil, nil
 		}
 		if _, duplicate := seenTokens[next]; duplicate {
 			return nil, errors.New("Agent cloud connection response is invalid")
@@ -297,42 +338,22 @@ func (runner *Runner) cloudDialogueScope(ctx context.Context, message string) (*
 	return nil, errors.New("Agent cloud connection response exceeded the page limit")
 }
 
-func workerDiagnosticIntent(message string) bool {
-	const currentUserMarker = "\nUser message:\n"
-	if index := strings.LastIndex(message, currentUserMarker); index >= 0 {
-		message = message[index+len(currentUserMarker):]
-	}
-	normalized := strings.ToLower(strings.TrimSpace(message))
-	if normalized == "" || utf8.RuneCountInString(normalized) > 2048 {
-		return false
-	}
-	if !containsAny(normalized, "worker", "工作节点") ||
-		!containsAny(normalized, "diagnostic", "diagnose", "control-plane", "control plane", "noop", "no-op", "诊断", "验收", "验证", "测试") {
-		return false
-	}
-	return !containsAny(
-		normalized,
-		"openclaw", "hermes", "qdrant", "postgres", "mysql", "redis", "mongodb", "ollama",
-		"安装", "部署软件", "知识库", "数据库", "模型训练", "训练模型", "微调", "编译", "构建",
-		"do not", "don't", "dont", "cancel", "stop", "不要", "别启动", "取消", "停止",
-	)
-}
-
-func containsAny(value string, candidates ...string) bool {
-	for _, candidate := range candidates {
-		if strings.Contains(value, candidate) {
-			return true
-		}
-	}
-	return false
-}
-
 type chatRequestFields struct {
-	idempotencyKey   string
-	conversationID   string
-	message          string
-	memoryDisabled   bool
-	expectedRevision int64
+	idempotencyKey    string
+	conversationID    string
+	message           string
+	cloudConnectionID string
+	memoryDisabled    bool
+	expectedRevision  int64
+	transientModel    *transientModelCredential
+}
+
+func (fields *chatRequestFields) clear() {
+	if fields == nil {
+		return
+	}
+	fields.transientModel.clear()
+	fields.transientModel = nil
 }
 
 func (*Runner) requestFields(params map[string]any) (chatRequestFields, error) {
@@ -352,21 +373,35 @@ func (*Runner) requestFields(params map[string]any) (chatRequestFields, error) {
 	if message == "" {
 		return chatRequestFields{}, errors.New("invalid agent chat parameters: prompt is required")
 	}
+	cloudConnectionID := stringParam(params, "cloud_connection_id")
+	if cloudConnectionID != "" &&
+		!canonicalUUID(cloudConnectionID) {
+		return chatRequestFields{}, errors.New(
+			"invalid agent chat parameters: cloud_connection_id must be a canonical UUID",
+		)
+	}
 	expectedRevision, err := nonnegativeInt64(params["expected_conversation_revision"])
 	if err != nil {
 		return chatRequestFields{}, errors.New("invalid agent chat parameters: expected_conversation_revision must be a non-negative integer")
 	}
 	memoryDisabled, _ := params["memory_disabled"].(bool)
+	transientModel, err := parseTransientModelCredential(params)
+	if err != nil {
+		return chatRequestFields{}, err
+	}
 	return chatRequestFields{
 		idempotencyKey: idempotencyKey, conversationID: stringParam(params, "conversation_id"), message: message,
-		memoryDisabled: memoryDisabled, expectedRevision: expectedRevision,
+		cloudConnectionID: cloudConnectionID,
+		memoryDisabled:    memoryDisabled, expectedRevision: expectedRevision,
+		transientModel: transientModel,
 	}, nil
 }
 
 func validateLegacyCompatibilityEnvelope(params map[string]any) error {
 	for key, value := range params {
 		switch key {
-		case "prompt", "message", "owner_id", "conversation_id", "idempotency_key":
+		case "prompt", "message", "owner_id", "conversation_id",
+			"idempotency_key", "cloud_connection_id":
 			if _, ok := value.(string); !ok {
 				return errUnrepresentableChatParameters
 			}
@@ -385,11 +420,14 @@ func validateLegacyCompatibilityEnvelope(params map[string]any) error {
 					return errUnrepresentableChatParameters
 				}
 			}
-		case "model_profile_id", "model_profile":
-			// P3-R1 stores the selected immutable profile in Agent runtime config.
-			// Reject legacy request-scoped profiles at the Message Server boundary
-			// so model credentials never enter the remote Chat path.
-			return errUnrepresentableChatParameters
+		case "model_profile_id", "api_key":
+			if _, ok := value.(string); !ok {
+				return errUnrepresentableChatParameters
+			}
+		case "model_profile":
+			if _, ok := value.(map[string]any); !ok {
+				return errUnrepresentableChatParameters
+			}
 		case "cloud_dialogue_mode", "knowledge_enabled":
 			enabled, ok := value.(bool)
 			if !ok || enabled {
@@ -403,7 +441,7 @@ func validateLegacyCompatibilityEnvelope(params map[string]any) error {
 			if !ok || len(attachments) != 0 {
 				return errUnrepresentableChatParameters
 			}
-		case "embedding_profile", "cloud_connection_id", "cloud_recipe_id", "cloud_recipe_revision",
+		case "embedding_profile", "cloud_recipe_id", "cloud_recipe_revision",
 			"messages", "system_prompt", "enabled_tools":
 			return errUnrepresentableChatParameters
 		default:
@@ -563,11 +601,66 @@ func sanitizeRPCError(ctx context.Context, err error) error {
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return ctxErr
 	}
-	code := status.Code(err)
+	grpcStatus, _ := status.FromError(err)
+	code := grpcStatus.Code()
 	if code == codes.OK {
 		code = codes.Unknown
 	}
+	if code == codes.FailedPrecondition &&
+		grpcStatus.Message() == "another approval device is already linked" {
+		return codedRunnerError{
+			message: "approval device relink required",
+			code:    "M_AGENT_APPROVAL_DEVICE_RELINK_REQUIRED",
+		}
+	}
+	if code == codes.PermissionDenied &&
+		grpcStatus.Message() == "model provider rejected the supplied credential" {
+		return codedRunnerError{
+			message: "Model provider rejected the API key.",
+			code:    "M_AGENT_MODEL_CREDENTIAL_REJECTED",
+		}
+	}
+	if code == codes.FailedPrecondition &&
+		grpcStatus.Message() == "model provider rejected the selected model or request" {
+		return codedRunnerError{
+			message: "Model provider rejected the selected model or request.",
+			code:    "M_AGENT_MODEL_REQUEST_REJECTED",
+		}
+	}
+	if code == codes.ResourceExhausted &&
+		grpcStatus.Message() == "model provider rate limit is temporarily exhausted" {
+		return codedRunnerError{
+			message: "Model provider rate limit is temporarily exhausted.",
+			code:    "M_AGENT_MODEL_RATE_LIMITED",
+		}
+	}
+	if code == codes.Unavailable &&
+		grpcStatus.Message() == "model provider is unavailable" {
+		return codedRunnerError{
+			message: "Model provider is temporarily unavailable.",
+			code:    "M_AGENT_MODEL_UNAVAILABLE",
+		}
+	}
+	if code == codes.Aborted {
+		return codedRunnerError{
+			message: "Agent conversation changed; please retry",
+			code:    "M_AGENT_CONVERSATION_OUT_OF_DATE",
+		}
+	}
 	return fmt.Errorf("agent service request failed (%s)", strings.ToLower(code.String()))
+}
+
+type codedRunnerError struct {
+	message string
+	code    string
+}
+
+func (err codedRunnerError) Error() string {
+	return err.message
+}
+
+func (err codedRunnerError) ErrorCode() string {
+	return err.code
 }
 
 func stringParam(params map[string]any, key string) string {

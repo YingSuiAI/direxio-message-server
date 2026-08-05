@@ -313,21 +313,22 @@ func (m *Module) startNativeAgentStream(ctx context.Context, client *connection,
 					})
 				case agentturns.EventError:
 					message := actionbase.String(event.Data["error"])
+					errorCode := actionbase.String(event.Data["error_code"])
 					if message == "" {
 						message = event.Event
 					}
-					status := http.StatusBadGateway
-					if event.Event == "stopped" {
-						status = http.StatusConflict
-					} else if event.Event == "interrupted" {
-						status = http.StatusServiceUnavailable
-					}
-					return client.sendBlocking(streamCtx, map[string]any{
+					status := nativeAgentTurnErrorStatus(event.Event, errorCode)
+					frame := map[string]any{
 						"type": "server.native_agent_stream.error", "id": id,
 						"action": strings.TrimSuffix(action, ".stream"), "ok": false, "status": status,
 						"error": message, "event": event.Event, "turn_id": event.TurnID,
 						"conversation_id": event.ConversationID, "seq": event.Seq, "data": event.Data,
-					})
+					}
+					if errorCode != "" {
+						frame["code"] = errorCode
+						frame["error_code"] = errorCode
+					}
+					return client.sendBlocking(streamCtx, frame)
 				default:
 					return client.sendBlocking(streamCtx, map[string]any{
 						"type": "server.native_agent_stream.event", "id": id,
@@ -358,6 +359,16 @@ func (m *Module) startNativeAgentStream(ctx context.Context, client *connection,
 			frame["seq"] = int64(0)
 			_ = client.sendBlocking(ctx, frame)
 		}()
+		return
+	}
+	if err := client.sendBlocking(streamCtx, map[string]any{
+		"type":   "server.native_agent_stream.accepted",
+		"id":     id,
+		"action": strings.TrimSuffix(action, ".stream"),
+		"state":  "running",
+	}); err != nil {
+		client.finishStream(id)
+		cancel()
 		return
 	}
 	go func() {
@@ -400,6 +411,23 @@ func (m *Module) startNativeAgentStream(ctx context.Context, client *connection,
 			})
 		}
 	}()
+}
+
+func nativeAgentTurnErrorStatus(event, errorCode string) int {
+	switch strings.TrimSpace(event) {
+	case "stopped":
+		return http.StatusConflict
+	case "interrupted":
+		return http.StatusServiceUnavailable
+	}
+	switch strings.TrimSpace(errorCode) {
+	case "M_AGENT_CONVERSATION_OUT_OF_DATE":
+		return http.StatusConflict
+	case "M_AGENT_MODEL_CREDENTIAL_INVALID":
+		return http.StatusBadRequest
+	default:
+		return http.StatusBadGateway
+	}
 }
 
 func durableStreamConversationID(params map[string]any) string {

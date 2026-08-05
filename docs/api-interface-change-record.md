@@ -1,6 +1,64 @@
 # API Interface Change Record
 
-Last updated: 2026-07-21
+Last updated: 2026-08-02
+
+## 2026-08-02 Native Agent Task Overview And Search Profile
+
+Added owner `agent.cloud.tasks.overview` over HTTP or owner WS. It accepts
+only optional `recent_limit` from 1 through 20 and returns the Agent's exact,
+single-snapshot task aggregate: total, active, awaiting-approval, running,
+waiting-user, completed and attention counts, exact execution/outcome buckets,
+bounded recent task summaries, and `as_of`. Message Server binds owner identity,
+validates that all buckets sum to the total, and rejects malformed upstream
+status combinations instead of deriving a count by paging task lists.
+
+Added owner-only, HTTP-only and no-store `agent.search.profile.get/update`.
+Get accepts no parameters. Update accepts exactly canonical UUID
+`idempotency_key`, catalog `profile_id`, nonnegative `expected_revision`, and
+optional `max_results` from 1 through 50 plus `timeout_seconds` from 1 through
+60. The response is the de-secreted
+`{available, configured, revision, available_profile_ids, profile}` shape;
+`profile` contains only `profile_id`, provider, HTTPS base URL and bounded
+limits. Clients cannot submit or read provider credentials, credential
+references, custom endpoints, or arbitrary config JSON. Search configuration
+requires an existing model runtime config and preserves every unrelated Agent
+setting through one revision-fenced update.
+
+## 2026-08-01 Remote Native Agent Turn Payload Boundary
+
+The realtime WebSocket now applies an explicit bounded 1 MiB client-message
+read limit. This replaces the WebSocket library's implicit 32 KiB default so
+authenticated control frames cannot be disconnected merely because a bounded
+request exceeds that library default. The limit remains finite and matches the
+existing Product API JSON request ceiling.
+
+Remote Native Agent clients send only the current prompt, `conversation_id`,
+`expected_conversation_revision`, stable `idempotency_key`, and stable
+`turn_id`. They do not upload `conversation_context` on every turn: the Agent's
+runtime conversation and message stores are the authoritative history, while
+client history is a display/offline cache. Legacy local-Agent clients may
+continue building local context because no independent Agent runtime owns it.
+
+When `server.ready` advertises `native_agent_turns=1`, clients may resume a
+disconnected stream with the same `turn_id` and `after_seq`. This resumes the
+persisted logical turn instead of creating a second model request.
+
+## 2026-07-31 Realtime Heartbeat And Native Stream Acknowledgement
+
+`server.ready` now advertises `heartbeat_ack=1` and
+`native_agent_stream_ack=1`. A client may send `client.ping` with an optional
+`id`; the server replies with `server.pong` and echoes that `id`. Clients use
+the advertised heartbeat interval to keep the connection active and may
+reconnect after repeated missing acknowledgements. Clients must not require a
+pong from older servers that do not advertise `heartbeat_ack=1`.
+
+Every accepted non-durable `client.native_agent_stream` now emits
+`server.native_agent_stream.accepted` with the stream `id`, normalized action,
+and `state="running"` before the first runtime event. Existing durable turns
+retain their persisted accepted frame and turn identity. Clients that observe
+`native_agent_stream_ack=1` may reconnect and replay the same request once
+after an acknowledgement timeout, but must preserve the original
+`idempotency_key`; they must not create a second logical Agent request.
 
 ## 2026-07-18: Agent-owned immutable runtime model profile
 
@@ -927,3 +985,38 @@ Hardening follow-up: client reports now carry the authenticated portal device/se
 Same-device password-rotation follow-up: `portal.password` serializes its access-token/session-generation mutation and portal persistence with `client.version.report` validation/CAS. The lock is released before Matrix-session refresh, preventing both stale-report persistence and recursive mutex acquisition without changing the public action envelope.
 
 Watchdog follow-up: `release.v1.status` now includes an additive `watchdog` object with `status`, derived `degraded`, optional RFC3339 `cooldown_until` / `last_observed_at`, and stable `error_code`. The backend allowlists these fields from the Unix updater response, normalizes timestamps, derives `degraded` from the allowlisted status, and never forwards repair attempt history, service/image input, control data, or updater-only fields. Older or unavailable updater responses map to `watchdog.status="unknown"` with no repair operation inferred by the client.
+
+## 2026-07-30 - Native Agent Team Plan v3 approval and result actions
+
+Added five protected owner actions for the Central Agent's temporary Worker
+flow:
+
+- `agent.team.plans.get` reads one immutable Plan revision over HTTP or owner
+  WS. Its additive `execution_id` is empty while approved-plan
+  materialization is pending and becomes the durable execution identity after
+  materialization, so clients can recover after a restart or an ambiguous
+  approval response.
+- `agent.team.approval_device.bootstrap` is HTTP-only and installs the
+  authenticated owner's first Ed25519 approval device. The Message Server
+  verifies the canonical public-key-derived ID and injects the configured
+  owner. Exact same-device retries are safe; it cannot replace, rotate, or
+  revoke an existing device.
+- `agent.team.plans.approval.prepare` is HTTP-only and creates the
+  device-signing challenge plus the de-secreted launch authorization.
+- `agent.team.plans.approve` is HTTP-only and submits the exact v2 Ed25519
+  approval envelope. It returns the approved Plan and stable `execution_id`.
+- `agent.team.executions.get` reads execution status and the completed,
+  device-safe role report over HTTP or owner WS.
+
+The Message Server always injects the configured owner into Team gRPC
+requests. Caller-provided owner fields and unknown fields are rejected before
+the RPC. The bootstrap response omits the submitted public key and returns
+only its ID, active status, revision, and expiry. Public DTOs expose the
+reviewed Pi runtime, role, schedule, budget,
+automatic-destruction policy, execution state, verified final summaries,
+deliverables, tests, risks, token usage, and content digests. They omit model
+credential references, provider credentials, AWS account/control
+coordinates, image pull coordinates, object-storage references, and raw
+Worker output. A completed Team execution reports `cleanup_verified=true`
+because the Agent finalizer reaches completed only after every role has
+verified result evidence and successful resource cleanup.

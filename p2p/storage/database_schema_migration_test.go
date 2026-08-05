@@ -94,6 +94,28 @@ func TestDatabaseStoreCreatesBusinessIndexes(t *testing.T) {
 	if messageTableCount != 0 {
 		t.Fatalf("p2p_messages table must not be created after Matrix-source migration")
 	}
+	var cursorTableCount int
+	if err := store.DB().QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM information_schema.tables
+		WHERE table_schema='public'
+		  AND table_name='p2p_agent_event_cursors'
+	`).Scan(&cursorTableCount); err != nil || cursorTableCount != 1 {
+		t.Fatalf(
+			"Agent event cursor table count=%d error=%v",
+			cursorTableCount,
+			err,
+		)
+	}
+	if err := store.SaveAgentEventCursor(ctx, "test-source", 12); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveAgentEventCursor(ctx, "test-source", 11); err != nil {
+		t.Fatal(err)
+	}
+	if cursor, err := store.LoadAgentEventCursor(ctx, "test-source"); err != nil || cursor != 12 {
+		t.Fatalf("Agent event cursor=%d error=%v", cursor, err)
+	}
 }
 
 func TestDatabaseMembershipMigrationCanonicalizesJoinedToJoin(t *testing.T) {

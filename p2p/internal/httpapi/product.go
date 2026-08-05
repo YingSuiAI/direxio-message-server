@@ -97,7 +97,9 @@ func ProductHandler(port ProductPort) http.HandlerFunc {
 func sensitiveHTTPAction(action string) bool {
 	switch action {
 	case serviceapi.AgentRuntimeProfileGetAction,
-		serviceapi.AgentRuntimeProfileUpdateAction:
+		serviceapi.AgentRuntimeProfileUpdateAction,
+		serviceapi.AgentSearchProfileGetAction,
+		serviceapi.AgentSearchProfileUpdateAction:
 		return true
 	default:
 		return false

@@ -13,6 +13,7 @@ import (
 	actionbase "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/action"
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentturns"
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/nativeagent"
+	"github.com/sirupsen/logrus"
 )
 
 // Runner is the stable Native Agent runtime boundary exposed by p2p.Config.
@@ -30,6 +31,7 @@ type Config struct {
 	// on Runner until their public contracts are migrated.
 	ChatRunner      Runner
 	RuntimeProfiles RuntimeProfileClient
+	SearchProfiles  SearchProfileClient
 	DataDir         string
 	Store           nativeagent.ConfigStore
 	MCP             *dirextalkmcp.Service
@@ -43,6 +45,7 @@ type Module struct {
 	runner          Runner
 	chatRunner      Runner
 	runtimeProfiles RuntimeProfileClient
+	searchProfiles  SearchProfileClient
 	account         AccountPort
 	turns           *agentturns.Coordinator
 	turnErr         error
@@ -64,14 +67,14 @@ func New(cfg Config) *Module {
 	}
 	turns, turnErr := agentturns.NewCoordinator(context.Background(), cfg.Turns)
 	return &Module{
-		runner: runner, chatRunner: chatRunner, runtimeProfiles: cfg.RuntimeProfiles, account: cfg.Account,
+		runner: runner, chatRunner: chatRunner, runtimeProfiles: cfg.RuntimeProfiles, searchProfiles: cfg.SearchProfiles, account: cfg.Account,
 		turns: turns, turnErr: turnErr, ownerID: cfg.OwnerID,
 	}
 }
 
 // Handlers returns the complete Agent ProductCore action surface.
 func (m *Module) Handlers() map[string]actionbase.Handler {
-	handlers := make(map[string]actionbase.Handler, len(runtimeActions)+len(remoteAgentActions)+9)
+	handlers := make(map[string]actionbase.Handler, len(runtimeActions)+len(remoteAgentActions)+11)
 	for _, action := range runtimeActions {
 		handlers[action] = m.invoke(action)
 	}
@@ -84,6 +87,8 @@ func (m *Module) Handlers() map[string]actionbase.Handler {
 	handlers[actionConfigUpdate] = m.updateConfig
 	handlers[actionRuntimeProfileGet] = m.getRuntimeProfile
 	handlers[actionRuntimeProfileUpdate] = m.updateRuntimeProfile
+	handlers[actionSearchProfileGet] = m.getSearchProfile
+	handlers[actionSearchProfileUpdate] = m.updateSearchProfile
 	handlers["agent.chat.stream"] = streamOnly
 	handlers["agent.chat.turn.stop"] = m.stopTurn
 	handlers["agent.chat.turns.list"] = m.listTurns
@@ -121,8 +126,17 @@ func (m *Module) DurableStream(ctx context.Context, ownerID, action string, para
 		Action: strings.TrimSpace(action), Digest: digest, AfterSeq: actionbase.Int64(params["after_seq"]),
 	}
 	runParams := cloneMap(params)
+	delete(runParams, "turn_id")
 	delete(runParams, "after_seq")
 	return m.turns.Stream(ctx, request, func(runCtx context.Context, runtimeEmit func(agentturns.RuntimeEvent) error) error {
+		latestRevision, revisionErr := m.turns.LatestConversationRevision(runCtx, request.OwnerID, request.ConversationID)
+		if revisionErr != nil {
+			return fmt.Errorf("reconcile agent conversation revision: %w", revisionErr)
+		}
+		requestedRevision := actionbase.Int64(runParams["expected_conversation_revision"])
+		if requestedRevision >= 0 && latestRevision > requestedRevision {
+			runParams["expected_conversation_revision"] = latestRevision
+		}
 		return m.chatRunner.Stream(runCtx, request.Action, runParams, func(event nativeagent.Event) error {
 			return runtimeEmit(agentturns.RuntimeEvent{Event: event.Event, Data: event.Data})
 		})
@@ -198,10 +212,32 @@ func (m *Module) invoke(action string) actionbase.Handler {
 		}
 		result, err := runner.Invoke(ctx, strings.TrimSpace(action), cloneMap(params))
 		if err != nil {
+			logrus.WithFields(logrus.Fields{
+				"action": action,
+				"error":  err,
+			}).Warn("Native Agent action failed")
+			var coded interface{ ErrorCode() string }
+			if errors.As(err, &coded) {
+				code := strings.TrimSpace(coded.ErrorCode())
+				if code != "" {
+					return nil, actionbase.CodedError(
+						runnerErrorStatus(code),
+						code,
+						err.Error(),
+					)
+				}
+			}
 			return nil, actionbase.StatusError(http.StatusBadGateway, err.Error())
 		}
 		return result, nil
 	}
+}
+
+func runnerErrorStatus(code string) int {
+	if strings.TrimSpace(code) == "M_AGENT_MODEL_CREDENTIAL_INVALID" {
+		return http.StatusBadRequest
+	}
+	return http.StatusBadGateway
 }
 
 func (m *Module) runnerForAction(action string) Runner {
@@ -209,7 +245,10 @@ func (m *Module) runnerForAction(action string) Runner {
 		return nil
 	}
 	action = strings.TrimSpace(action)
-	if action == "agent.chat" || strings.HasPrefix(action, "agent.cloud.") {
+	if action == "agent.chat" ||
+		action == "agent.models.list" ||
+		strings.HasPrefix(action, "agent.cloud.") ||
+		strings.HasPrefix(action, "agent.team.") {
 		return m.chatRunner
 	}
 	return m.runner
@@ -289,6 +328,7 @@ var runtimeActions = []string{
 
 var remoteAgentActions = []string{
 	"agent.cloud.tasks.list",
+	"agent.cloud.tasks.overview",
 	"agent.cloud.tasks.get",
 	"agent.cloud.tasks.cancel",
 	"agent.cloud.plans.list",
@@ -299,4 +339,9 @@ var remoteAgentActions = []string{
 	"agent.cloud.deployments.get",
 	"agent.cloud.workers.list",
 	"agent.cloud.workers.get",
+	"agent.team.plans.get",
+	"agent.team.approval_device.bootstrap",
+	"agent.team.plans.approval.prepare",
+	"agent.team.plans.approve",
+	"agent.team.executions.get",
 }

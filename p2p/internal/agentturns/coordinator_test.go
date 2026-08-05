@@ -85,6 +85,41 @@ func TestCoordinatorDurableLifecycleAndReplay(t *testing.T) {
 	assertEventSequence(t, otherOwner, []string{"accepted", "done"})
 }
 
+func TestCoordinatorReadsLatestDurableConversationRevision(t *testing.T) {
+	store := p2pstorage.NewMemoryStore()
+	coordinator, err := agentturns.NewCoordinator(context.Background(), store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := agentturns.RequestDigest("agent.chat.stream", map[string]any{"prompt": "completed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.ReserveAgentTurn(context.Background(), agentturns.Candidate{
+		OwnerID: "owner", TurnID: "completed-turn", ConversationID: "conversation", Action: "agent.chat.stream", Digest: digest,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, changed, err := store.MarkAgentTurnRunning(context.Background(), "owner", "completed-turn"); err != nil || !changed {
+		t.Fatalf("mark running = (%v, %v)", changed, err)
+	}
+	if _, _, changed, err := store.FinishAgentTurn(
+		context.Background(), "owner", "completed-turn", agentturns.StateSucceeded,
+		"runtime", "done", map[string]any{"conversation_revision": int64(24)}, "",
+	); err != nil || !changed {
+		t.Fatalf("finish turn = (%v, %v)", changed, err)
+	}
+
+	revision, err := coordinator.LatestConversationRevision(context.Background(), "owner", "conversation")
+	if err != nil || revision != 24 {
+		t.Fatalf("latest revision = (%d, %v), want 24", revision, err)
+	}
+	revision, err = coordinator.LatestConversationRevision(context.Background(), "owner", "another-conversation")
+	if err != nil || revision != 0 {
+		t.Fatalf("missing conversation revision = (%d, %v), want 0", revision, err)
+	}
+}
+
 func TestCoordinatorStopIsSoleDurableCancellation(t *testing.T) {
 	store := p2pstorage.NewMemoryStore()
 	coordinator, err := agentturns.NewCoordinator(context.Background(), store)

@@ -23,11 +23,24 @@ func (*testAgentGRPCRunner) Stream(context.Context, string, map[string]any, func
 	return nil
 }
 func (*testAgentGRPCRunner) Close() error { return nil }
+func (*testAgentGRPCRunner) WatchTeamCompletionEvents(
+	context.Context,
+	int64,
+	func(p2p.AgentCompletionSourceEvent) error,
+) error {
+	return nil
+}
 func (*testAgentGRPCRunner) GetRuntimeProfile(context.Context) (p2p.AgentRuntimeProfileState, error) {
 	return p2p.AgentRuntimeProfileState{}, nil
 }
 func (*testAgentGRPCRunner) UpdateRuntimeProfile(context.Context, p2p.AgentRuntimeProfileUpdate) (p2p.AgentRuntimeProfileState, error) {
 	return p2p.AgentRuntimeProfileState{}, nil
+}
+func (*testAgentGRPCRunner) GetSearchProfile(context.Context) (p2p.AgentSearchProfileState, error) {
+	return p2p.AgentSearchProfileState{}, nil
+}
+func (*testAgentGRPCRunner) UpdateSearchProfile(context.Context, p2p.AgentSearchProfileUpdate) (p2p.AgentSearchProfileState, error) {
+	return p2p.AgentSearchProfileState{}, nil
 }
 
 type chatOnlyAgentGRPCRunner struct{}
@@ -167,6 +180,14 @@ func TestP2PAgentGRPCBackendBuildsChatOnlyRunnerWithTrustedOwner(t *testing.T) {
 	if err != nil || runtimeProfileClient != wantRunner {
 		t.Fatalf("remote runtime profile client=%v err=%v", runtimeProfileClient, err)
 	}
+	searchProfileClient, err := p2pAgentSearchProfileClient(config, runner)
+	if err != nil || searchProfileClient != wantRunner {
+		t.Fatalf("remote search profile client=%v err=%v", searchProfileClient, err)
+	}
+	completionSource, err := p2pAgentCompletionSource(config, runner)
+	if err != nil || completionSource != wantRunner {
+		t.Fatalf("remote completion source=%v err=%v", completionSource, err)
+	}
 	if received.Target != "dns:///agent.internal:7443" || received.CAFile != caFile || received.ServerName != "agent.internal" ||
 		received.ServiceKeyFile != serviceKeyFile || received.OwnerID != "dirextalk-project:example.com" {
 		t.Fatalf("Agent dial config=%#v", received)
@@ -181,6 +202,12 @@ func TestP2PAgentGRPCBackendBuildsChatOnlyRunnerWithTrustedOwner(t *testing.T) {
 	}
 	if _, err = p2pAgentRuntimeProfileClient(config, &chatOnlyAgentGRPCRunner{}); err == nil {
 		t.Fatal("enabled Agent backend accepted a Runner without runtime profile capability")
+	}
+	if _, err = p2pAgentSearchProfileClient(config, &chatOnlyAgentGRPCRunner{}); err == nil {
+		t.Fatal("enabled Agent backend accepted a Runner without search profile capability")
+	}
+	if _, err = p2pAgentCompletionSource(config, &chatOnlyAgentGRPCRunner{}); err == nil {
+		t.Fatal("enabled Agent backend accepted a Runner without completion events")
 	}
 }
 

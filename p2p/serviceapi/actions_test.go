@@ -9,8 +9,8 @@ func TestActionSpecsReturnsStableOrderedCopy(t *testing.T) {
 	first := ActionSpecs()
 	second := ActionSpecs()
 
-	if len(first) != 163 {
-		t.Fatalf("ActionSpecs() returned %d actions, want 163", len(first))
+	if len(first) != 171 {
+		t.Fatalf("ActionSpecs() returned %d actions, want 171", len(first))
 	}
 	if !reflect.DeepEqual(first, second) {
 		t.Fatal("ActionSpecs() did not preserve action order")
@@ -34,10 +34,47 @@ func TestAgentRuntimeProfileActionsAreOwnerHTTPOnly(t *testing.T) {
 	}
 }
 
+func TestAgentSearchProfileActionsAreOwnerHTTPOnly(t *testing.T) {
+	for _, action := range []string{AgentSearchProfileGetAction, AgentSearchProfileUpdateAction} {
+		spec, ok := ActionSpecFor(action)
+		if !ok || spec.Auth != ActionAuthOwner || spec.Transport != ActionTransportHTTPOnly {
+			t.Fatalf("%s spec=%#v found=%v", action, spec, ok)
+		}
+	}
+	overview, ok := ActionSpecFor(AgentCloudTaskOverviewAction)
+	if !ok || overview.Auth != ActionAuthOwner || overview.Transport != ActionTransportHTTPAndWS {
+		t.Fatalf("%s spec=%#v found=%v", AgentCloudTaskOverviewAction, overview, ok)
+	}
+}
+
 func TestAgentCloudMutationsAreOwnerHTTPOnly(t *testing.T) {
 	for _, action := range []string{AgentCloudTaskCancelAction, AgentCloudPlanPrepareAction, AgentCloudPlanApproveAction} {
 		spec, ok := ActionSpecFor(action)
 		if !ok || spec.Auth != ActionAuthOwner || spec.Transport != ActionTransportHTTPOnly {
+			t.Fatalf("%s spec=%#v found=%v", action, spec, ok)
+		}
+	}
+}
+
+func TestAgentTeamActionsHaveOwnerOnlyTransportBoundaries(t *testing.T) {
+	for _, action := range []string{
+		AgentTeamApprovalDeviceBootstrapAction,
+		AgentTeamPlanPrepareAction,
+		AgentTeamPlanApproveAction,
+	} {
+		spec, ok := ActionSpecFor(action)
+		if !ok || spec.Auth != ActionAuthOwner ||
+			spec.Transport != ActionTransportHTTPOnly {
+			t.Fatalf("%s spec=%#v found=%v", action, spec, ok)
+		}
+	}
+	for _, action := range []string{
+		AgentTeamPlanGetAction,
+		AgentTeamExecutionGetAction,
+	} {
+		spec, ok := ActionSpecFor(action)
+		if !ok || spec.Auth != ActionAuthOwner ||
+			spec.Transport != ActionTransportHTTPAndWS {
 			t.Fatalf("%s spec=%#v found=%v", action, spec, ok)
 		}
 	}

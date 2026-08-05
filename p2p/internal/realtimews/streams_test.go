@@ -67,10 +67,12 @@ func TestPluginAndAgentStreamsPreserveFramesAndSharedIDNamespace(t *testing.T) {
 	module.startNativeAgentStream(ctx, connection, map[string]any{
 		"id": "agent-happy", "action": "agent.chat", "params": map[string]any{"prompt": "hello"},
 	})
+	agentAccepted := nextOutbound(t, connection)
 	agentDelta := nextOutbound(t, connection)
 	agentDone := nextOutbound(t, connection)
-	if agentDelta["type"] != "server.native_agent_stream.event" || agentDelta["event"] != "delta" || agentDone["event"] != "done" {
-		t.Fatalf("agent frames = %#v / %#v", agentDelta, agentDone)
+	if agentAccepted["type"] != "server.native_agent_stream.accepted" || agentAccepted["state"] != "running" ||
+		agentDelta["type"] != "server.native_agent_stream.event" || agentDelta["event"] != "delta" || agentDone["event"] != "done" {
+		t.Fatalf("agent frames = %#v / %#v / %#v", agentAccepted, agentDelta, agentDone)
 	}
 
 	module.startPluginStream(ctx, connection, map[string]any{
@@ -90,6 +92,15 @@ func TestPluginAndAgentStreamsPreserveFramesAndSharedIDNamespace(t *testing.T) {
 	cancelled := nextOutbound(t, connection)
 	if cancelled["type"] != "server.plugin_stream.cancelled" || cancelled["ok"] != true {
 		t.Fatalf("cancelled frame = %#v", cancelled)
+	}
+}
+
+func TestNativeAgentTurnErrorStatusDistinguishesInvalidCredential(t *testing.T) {
+	if got := nativeAgentTurnErrorStatus("failed", "M_AGENT_MODEL_CREDENTIAL_INVALID"); got != http.StatusBadRequest {
+		t.Fatalf("invalid credential status = %d", got)
+	}
+	if got := nativeAgentTurnErrorStatus("failed", "M_AGENT_MODEL_CREDENTIAL_REJECTED"); got != http.StatusBadGateway {
+		t.Fatalf("provider credential rejection status = %d", got)
 	}
 }
 

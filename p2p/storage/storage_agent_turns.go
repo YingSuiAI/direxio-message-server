@@ -99,6 +99,24 @@ func (s *DatabaseStore) ListAgentTurnEvents(ctx context.Context, ownerID, turnID
 	return events, rows.Err()
 }
 
+func (s *DatabaseStore) LatestAgentConversationDone(ctx context.Context, ownerID, conversationID string) (agentturns.Event, bool, error) {
+	event, err := scanAgentTurnEvent(s.db.QueryRowContext(ctx, `
+		SELECT event.owner_id, event.turn_id, event.conversation_id, event.seq,
+		       event.kind, event.event_name, event.data_json, event.created_at
+		FROM p2p_native_agent_turn_events AS event
+		JOIN p2p_native_agent_turns AS turn
+		  ON turn.owner_id = event.owner_id AND turn.turn_id = event.turn_id
+		WHERE turn.owner_id = $1 AND turn.conversation_id = $2
+		  AND turn.state = 'succeeded' AND event.event_name = 'done'
+		ORDER BY turn.created_at DESC, turn.turn_id DESC, event.seq DESC
+		LIMIT 1
+	`, ownerID, conversationID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return agentturns.Event{}, false, nil
+	}
+	return event, err == nil, err
+}
+
 func (s *DatabaseStore) MarkAgentTurnRunning(ctx context.Context, ownerID, turnID string) (agentturns.Turn, bool, error) {
 	turn, err := scanAgentTurn(s.db.QueryRowContext(ctx, `
 		UPDATE p2p_native_agent_turns SET state = 'running', updated_at = $3

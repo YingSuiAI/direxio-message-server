@@ -185,6 +185,50 @@ func TestRealtimeWSAcceptsTicketAndReplaysEvents(t *testing.T) {
 	}
 }
 
+func TestRealtimeWSAdvertisesAndAcknowledgesHeartbeat(t *testing.T) {
+	service := NewService(Config{ServerName: "example.com"})
+	router := newP2PTestRouter(service)
+	server := httptest.NewServer(router)
+	defer server.Close()
+	conn := dialRealtimeWS(t, server.URL, mustCreateRealtimeWSTicket(t, router, service.AccessToken()))
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	writeRealtimeFrame(t, conn, map[string]any{"type": "client.hello"})
+	ready := readRealtimeFrame(t, conn)
+	if ready["type"] != "server.ready" || ready["heartbeat_ack"] != float64(1) || ready["native_agent_stream_ack"] != float64(1) {
+		t.Fatalf("expected realtime acknowledgement capabilities, got %#v", ready)
+	}
+	writeRealtimeFrame(t, conn, map[string]any{"type": "client.ping", "id": "heartbeat-1"})
+	pong := readRealtimeFrame(t, conn)
+	if pong["type"] != "server.pong" || pong["id"] != "heartbeat-1" {
+		t.Fatalf("expected matching heartbeat acknowledgement, got %#v", pong)
+	}
+}
+
+func TestRealtimeWSAcceptsClientMessagesLargerThanLibraryDefault(t *testing.T) {
+	service := NewService(Config{ServerName: "example.com"})
+	router := newP2PTestRouter(service)
+	server := httptest.NewServer(router)
+	defer server.Close()
+	conn := dialRealtimeWS(t, server.URL, mustCreateRealtimeWSTicket(t, router, service.AccessToken()))
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	writeRealtimeFrame(t, conn, map[string]any{"type": "client.hello"})
+	if got := readRealtimeFrame(t, conn); got["type"] != "server.ready" {
+		t.Fatalf("expected ready, got %#v", got)
+	}
+	writeRealtimeFrame(t, conn, map[string]any{
+		"type":   "client.request",
+		"id":     "large-request-1",
+		"action": "contacts.list",
+		"params": map[string]any{"context": strings.Repeat("x", 40<<10)},
+	})
+	response := readRealtimeResponse(t, conn, "large-request-1")
+	if response["ok"] != true || response["action"] != "contacts.list" {
+		t.Fatalf("expected large request to reach ProductCore, got %#v", response)
+	}
+}
+
 func TestRealtimeWSStreamsLiveEventsAndTracksClientState(t *testing.T) {
 	service := NewService(Config{ServerName: "example.com"})
 	router := newP2PTestRouter(service)

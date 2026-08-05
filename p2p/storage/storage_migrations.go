@@ -833,6 +833,18 @@ func (s *DatabaseStore) migrate(ctx context.Context) error {
 			return err
 		},
 	})
+	m.AddMigrations(sqlutil.Migration{
+		Version: "p2p: agent completion relay cursor v78",
+		Up: func(ctx context.Context, txn *sql.Tx) error {
+			return execMigrationStatements(ctx, txn, []string{
+				`CREATE TABLE IF NOT EXISTS p2p_agent_event_cursors (
+					source TEXT PRIMARY KEY NOT NULL CHECK (source <> ''),
+					after_seq BIGINT NOT NULL DEFAULT 0 CHECK (after_seq >= 0),
+					updated_at TIMESTAMPTZ NOT NULL
+				)`,
+			})
+		},
+	})
 	return m.Up(ctx)
 }
 

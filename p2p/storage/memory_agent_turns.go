@@ -72,6 +72,29 @@ func (s *MemoryStore) ListAgentTurnEvents(_ context.Context, ownerID, turnID str
 	return events, nil
 }
 
+func (s *MemoryStore) LatestAgentConversationDone(_ context.Context, ownerID, conversationID string) (agentturns.Event, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var latest agentturns.Event
+	found := false
+	for key, turn := range s.agentTurns {
+		if turn.OwnerID != ownerID || turn.ConversationID != conversationID || turn.State != agentturns.StateSucceeded {
+			continue
+		}
+		for _, event := range s.agentTurnEvents[key] {
+			if event.Event != "done" || found && !event.CreatedAt.After(latest.CreatedAt) {
+				continue
+			}
+			latest = event
+			found = true
+		}
+	}
+	if found {
+		latest.Data = cloneAnyMap(latest.Data)
+	}
+	return latest, found, nil
+}
+
 func (s *MemoryStore) MarkAgentTurnRunning(_ context.Context, ownerID, turnID string) (agentturns.Turn, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

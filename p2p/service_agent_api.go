@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	agentmodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agent"
+	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcompletion"
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentgrpc"
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/nativeagent"
 )
@@ -29,6 +30,13 @@ type AgentRuntimeProfileClient = agentmodule.RuntimeProfileClient
 type AgentRuntimeProfileState = agentmodule.RuntimeProfileState
 type AgentRuntimeProfile = agentmodule.RuntimeProfile
 type AgentRuntimeProfileUpdate = agentmodule.RuntimeProfileUpdate
+type AgentSearchProfileClient = agentmodule.SearchProfileClient
+type AgentSearchProfileState = agentmodule.SearchProfileState
+type AgentSearchProfile = agentmodule.SearchProfile
+type AgentSearchProfileUpdate = agentmodule.SearchProfileUpdate
+type AgentCompletionSource = agentcompletion.Source
+type AgentCompletionSourceEvent = agentcompletion.SourceEvent
+type AgentCompletion = agentcompletion.Completion
 type AgentGRPCConfig struct {
 	Target         string
 	CAFile         string
@@ -46,6 +54,15 @@ func NewAgentGRPCChatRunner(ctx context.Context, config AgentGRPCConfig) (Closab
 		Target: config.Target, CAFile: config.CAFile, ServerName: config.ServerName,
 		ServiceKeyFile: config.ServiceKeyFile, OwnerID: config.OwnerID,
 	})
+}
+
+// RunAgentCompletionRelay blocks until ctx is canceled. It is started by the
+// monolith lifecycle only when the remote Agent backend is enabled.
+func (s *Service) RunAgentCompletionRelay(ctx context.Context) error {
+	if s == nil || s.agentCompletionRelay == nil {
+		return fmt.Errorf("Agent completion relay is unavailable")
+	}
+	return s.agentCompletionRelay.Run(ctx)
 }
 
 // serviceAgentAccountPort retains Service-owned locking, Matrix sessions and

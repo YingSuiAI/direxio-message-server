@@ -16,6 +16,7 @@ import (
 
 const (
 	actionCloudTasksList              = "agent.cloud.tasks.list"
+	actionCloudTasksOverview          = "agent.cloud.tasks.overview"
 	actionCloudTasksGet               = "agent.cloud.tasks.get"
 	actionCloudTasksCancel            = "agent.cloud.tasks.cancel"
 	actionCloudPlansList              = "agent.cloud.plans.list"
@@ -37,7 +38,7 @@ var (
 
 func isCloudAction(action string) bool {
 	switch strings.TrimSpace(action) {
-	case actionCloudTasksList, actionCloudTasksGet, actionCloudTasksCancel,
+	case actionCloudTasksList, actionCloudTasksOverview, actionCloudTasksGet, actionCloudTasksCancel,
 		actionCloudPlansList, actionCloudPlansGet, actionCloudPlanConfirmation, actionCloudPlanApprove,
 		actionCloudDeploymentsList, actionCloudDeploymentsGet, actionCloudWorkersList, actionCloudWorkersGet:
 		return true
@@ -50,6 +51,8 @@ func (runner *Runner) invokeCloudAction(ctx context.Context, action string, para
 	switch action {
 	case actionCloudTasksList:
 		return runner.listCloudTasks(ctx, params)
+	case actionCloudTasksOverview:
+		return runner.getCloudTaskOverview(ctx, params)
 	case actionCloudTasksGet:
 		return runner.getCloudTask(ctx, params)
 	case actionCloudTasksCancel:
@@ -73,6 +76,103 @@ func (runner *Runner) invokeCloudAction(ctx context.Context, action string, para
 	default:
 		return nil, errors.New("agent service action is not supported")
 	}
+}
+
+func (runner *Runner) getCloudTaskOverview(ctx context.Context, params map[string]any) (map[string]any, error) {
+	if runner.tasks == nil {
+		return nil, errors.New("agent task service is unavailable")
+	}
+	if err := allowActionParams(params, "recent_limit"); err != nil {
+		return nil, err
+	}
+	recentLimit := int64(5)
+	if params != nil && params["recent_limit"] != nil {
+		parsed, err := nonnegativeInt64(params["recent_limit"])
+		if err != nil || parsed < 1 || parsed > 20 {
+			return nil, errors.New("invalid agent cloud parameters: recent_limit must be between 1 and 20")
+		}
+		recentLimit = parsed
+	}
+	callContext, cancel := context.WithTimeout(ctx, runner.chainTimeout)
+	defer cancel()
+	response, err := runner.tasks.GetTaskOverview(callContext, &agentv1.GetTaskOverviewRequest{
+		OwnerId: runner.ownerID, RecentLimit: int32(recentLimit),
+	})
+	if err != nil {
+		return nil, sanitizeRPCError(callContext, err)
+	}
+	if response == nil || response.GetTotalCount() < 0 || len(response.GetStatusCounts()) > 48 ||
+		len(response.GetRecentTasks()) > int(recentLimit) {
+		return nil, errors.New("agent service returned an invalid task overview response")
+	}
+	asOf, err := requiredTimestamp(response.GetAsOf())
+	if err != nil {
+		return nil, errors.New("agent service returned an invalid task overview response")
+	}
+	counts := make([]map[string]any, 0, len(response.GetStatusCounts()))
+	seen := make(map[string]struct{}, len(response.GetStatusCounts()))
+	var total, active, awaitingApproval, running, waitingUser, completed, attention int64
+	for _, remote := range response.GetStatusCounts() {
+		if remote == nil || remote.GetCount() < 1 {
+			return nil, errors.New("agent service returned an invalid task overview response")
+		}
+		execution, ok := executionStatus(remote.GetExecutionStatus())
+		if !ok {
+			return nil, errors.New("agent service returned an invalid task overview response")
+		}
+		outcome, ok := outcomeStatus(remote.GetOutcomeStatus())
+		if !ok {
+			return nil, errors.New("agent service returned an invalid task overview response")
+		}
+		key := execution + "\x00" + outcome
+		if _, duplicate := seen[key]; duplicate {
+			return nil, errors.New("agent service returned an invalid task overview response")
+		}
+		seen[key] = struct{}{}
+		count := remote.GetCount()
+		if total > response.GetTotalCount()-count {
+			return nil, errors.New("agent service returned an invalid task overview response")
+		}
+		total += count
+		if outcome == "pending" {
+			active += count
+			switch execution {
+			case "awaiting_approval":
+				awaitingApproval += count
+			case "queued", "running", "verifying":
+				running += count
+			case "waiting_user":
+				waitingUser += count
+				attention += count
+			}
+		} else {
+			completed += count
+			if outcome == "failed" || outcome == "timed_out" || outcome == "interrupted" {
+				attention += count
+			}
+		}
+		counts = append(counts, map[string]any{
+			"execution_status": execution, "outcome_status": outcome, "count": count,
+		})
+	}
+	if total != response.GetTotalCount() {
+		return nil, errors.New("agent service returned an invalid task overview response")
+	}
+	recent := make([]map[string]any, 0, len(response.GetRecentTasks()))
+	for _, remote := range response.GetRecentTasks() {
+		item, mapErr := runner.mapTask(remote)
+		if mapErr != nil {
+			return nil, errors.New("agent service returned an invalid task overview response")
+		}
+		recent = append(recent, item)
+	}
+	return map[string]any{
+		"total_count": response.GetTotalCount(), "active_count": active,
+		"awaiting_approval_count": awaitingApproval, "running_count": running,
+		"waiting_user_count": waitingUser, "completed_count": completed,
+		"attention_count": attention, "status_counts": counts,
+		"recent_tasks": recent, "as_of": asOf,
+	}, nil
 }
 
 func (runner *Runner) listCloudTasks(ctx context.Context, params map[string]any) (map[string]any, error) {
@@ -545,7 +645,7 @@ func mapTaskStep(remote *agentv1.Step, taskID string) (map[string]any, error) {
 		remote.GetLeaseEpoch() < 0 || remote.GetRevision() < 1 {
 		return nil, errors.New("agent service returned an invalid task response")
 	}
-	dependencies := append([]string(nil), remote.GetDependsOnStepIds()...)
+	dependencies := append([]string{}, remote.GetDependsOnStepIds()...)
 	for _, dependency := range dependencies {
 		if !canonicalUUID(dependency) {
 			return nil, errors.New("agent service returned an invalid task response")
@@ -929,7 +1029,8 @@ func publicTextList(values []string, maxItems, maxRunes int) ([]string, error) {
 	if len(values) > maxItems {
 		return nil, errors.New("too many values")
 	}
-	result := append([]string(nil), values...)
+	result := make([]string, len(values))
+	copy(result, values)
 	for _, value := range result {
 		if !safePublicText(value, maxRunes, false) {
 			return nil, errors.New("invalid value")

@@ -1,15 +1,19 @@
 package agentgrpc
 
 import (
+	"bytes"
 	"context"
+	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"net"
 	"os"
@@ -20,6 +24,7 @@ import (
 	"time"
 
 	agentv1 "github.com/YingSuiAI/dirextalk-agent/api/gen/dirextalk/agent/v1"
+	transientmodelsdk "github.com/YingSuiAI/dirextalk-agent/sdk/transientmodel"
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/nativeagent"
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
@@ -75,8 +80,12 @@ func TestRunnerChatUsesTLS13MountedAuthenticationAndBoundOwner(t *testing.T) {
 		request.GetMessage() != "hello" || !request.GetMemoryDisabled() || request.GetExpectedConversationRevision() != 7 {
 		t.Fatalf("unexpected request mapping: %#v", request)
 	}
-	if request.GetCloudDialogueScope() != nil {
-		t.Fatal("ordinary chat unexpectedly enabled cloud dialogue")
+	if request.GetCloudDialogueScope().GetCloudConnectionId() !=
+		testCloudConnectionID {
+		t.Fatalf(
+			"ordinary chat cloud scope = %#v",
+			request.GetCloudDialogueScope(),
+		)
 	}
 	if _, err := uuid.Parse(request.GetIdempotencyKey()); err != nil {
 		t.Fatalf("generated idempotency key is not a UUID: %q", request.GetIdempotencyKey())
@@ -99,7 +108,9 @@ func TestRunnerChatUsesTLS13MountedAuthenticationAndBoundOwner(t *testing.T) {
 	}
 }
 
-func TestRunnerBindsServerReadCloudConnectionForWorkerDiagnosticOnly(t *testing.T) {
+func TestRunnerBindsUnambiguousCloudConnectionForCentralJudgement(
+	t *testing.T,
+) {
 	t.Parallel()
 	server := startRuntimeServer(t)
 	runner := newTestRunner(t, server, Config{UnaryTimeout: time.Second})
@@ -145,48 +156,113 @@ func TestRunnerBindsServerReadCloudConnectionForWorkerDiagnosticOnly(t *testing.
 	server.cloud.mu.Lock()
 	listCount := len(server.cloud.listRequests)
 	server.cloud.mu.Unlock()
-	if request.GetCloudDialogueScope() != nil || listCount != 0 {
-		t.Fatal("real workload was routed through the diagnostic profile")
+	if request.GetCloudDialogueScope().GetCloudConnectionId() !=
+		testCloudConnectionID ||
+		listCount != 1 {
+		t.Fatalf(
+			"heavy task scope=%#v lookups=%d",
+			request.GetCloudDialogueScope(),
+			listCount,
+		)
 	}
 }
 
-func TestRunnerFailsBeforeChatWhenDiagnosticConnectionIsAmbiguous(t *testing.T) {
+func TestRunnerRequiresExplicitSelectionForAmbiguousCloudConnections(
+	t *testing.T,
+) {
 	t.Parallel()
 	server := startRuntimeServer(t)
+	selectedConnectionID :=
+		"cccccccc-cccc-4ccc-8ccc-cccccccccccc"
 	server.cloud.mu.Lock()
 	server.cloud.connections = append(server.cloud.connections, &agentv1.CloudConnection{
-		ConnectionId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", OwnerId: "owner-from-config", Status: "active",
+		ConnectionId: selectedConnectionID, OwnerId: "owner-from-config", Status: "active",
 	})
 	server.cloud.mu.Unlock()
 	runner := newTestRunner(t, server, Config{})
 	_, err := runner.Invoke(context.Background(), "agent.chat", map[string]any{
 		"prompt": "Verify the Worker control-plane diagnostic",
 	})
-	if err == nil || err.Error() != "multiple active Agent cloud connections require an explicit selection" {
-		t.Fatalf("ambiguous connection error = %v", err)
+	if err != nil {
+		t.Fatal(err)
 	}
 	server.service.mu.Lock()
 	request := server.service.chatRequest
+	server.service.chatRequest = nil
 	server.service.mu.Unlock()
-	if request != nil {
-		t.Fatal("ambiguous diagnostic request reached RuntimeService")
+	if request.GetCloudDialogueScope() != nil {
+		t.Fatalf(
+			"ambiguous connection was selected implicitly: %#v",
+			request.GetCloudDialogueScope(),
+		)
+	}
+	_, err = runner.Invoke(
+		context.Background(),
+		"agent.chat",
+		map[string]any{
+			"prompt":              "Implement the approved heavy task.",
+			"cloud_connection_id": selectedConnectionID,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.service.mu.Lock()
+	request = server.service.chatRequest
+	server.service.mu.Unlock()
+	if request.GetCloudDialogueScope().GetCloudConnectionId() !=
+		selectedConnectionID {
+		t.Fatalf(
+			"explicit cloud scope = %#v",
+			request.GetCloudDialogueScope(),
+		)
 	}
 }
 
-func TestWorkerDiagnosticIntentUsesOnlyCurrentReplyText(t *testing.T) {
+func TestRunnerCloudDialogueAllowsNoConnectionAndRejectsInactiveSelection(
+	t *testing.T,
+) {
 	t.Parallel()
-	if !workerDiagnosticIntent("Quoted message from Agent:\n测试 Worker 安装 OpenClaw\n\nUser message:\n启动 Worker 诊断") {
-		t.Fatal("current diagnostic intent was hidden by quoted workload text")
+	server := startRuntimeServer(t)
+	server.cloud.mu.Lock()
+	server.cloud.connections = nil
+	server.cloud.mu.Unlock()
+	runner := newTestRunner(t, server, Config{})
+	if _, err := runner.Invoke(
+		context.Background(),
+		"agent.chat",
+		map[string]any{"prompt": "hello"},
+	); err != nil {
+		t.Fatal(err)
 	}
-	if workerDiagnosticIntent("Quoted message from Agent:\n启动 Worker 诊断\n\nUser message:\n不要执行") {
-		t.Fatal("quoted diagnostic text activated cloud dialogue")
+	server.service.mu.Lock()
+	request := server.service.chatRequest
+	server.service.chatRequest = nil
+	server.service.mu.Unlock()
+	if request.GetCloudDialogueScope() != nil {
+		t.Fatalf(
+			"missing connection produced cloud scope: %#v",
+			request.GetCloudDialogueScope(),
+		)
 	}
-	if workerDiagnosticIntent("Do not run the Worker diagnostic") ||
-		workerDiagnosticIntent("不要启动 Worker 诊断") {
-		t.Fatal("negated diagnostic intent activated cloud dialogue")
+	_, err := runner.Invoke(
+		context.Background(),
+		"agent.chat",
+		map[string]any{
+			"prompt":              "Implement the heavy task.",
+			"cloud_connection_id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+		},
+	)
+	if err == nil ||
+		err.Error() !=
+			"selected Agent cloud connection is not active" {
+		t.Fatalf("inactive connection error = %v", err)
 	}
-	if workerDiagnosticIntent(strings.Repeat("a", 2049) + " Worker diagnostic") {
-		t.Fatal("oversized text activated cloud dialogue")
+	server.service.mu.Lock()
+	request = server.service.chatRequest
+	server.service.mu.Unlock()
+	if request != nil {
+		t.Fatal("inactive connection request reached RuntimeService")
 	}
 }
 
@@ -207,6 +283,10 @@ func TestRunnerCloudTaskFacadeBindsOwnerAndRedactsInternalReferences(t *testing.
 	steps, ok := result["steps"].([]map[string]any)
 	if !ok || len(steps) != 1 || steps[0]["checkpoint_available"] != true || steps[0]["result_available"] != true {
 		t.Fatalf("unexpected task steps: %#v", result["steps"])
+	}
+	dependencies, ok := steps[0]["depends_on_step_ids"].([]string)
+	if !ok || dependencies == nil || len(dependencies) != 0 {
+		t.Fatalf("empty task step dependencies must be encoded as []: %#v", steps[0]["depends_on_step_ids"])
 	}
 	if _, exposed := steps[0]["checkpoint_ref"]; exposed {
 		t.Fatal("checkpoint_ref crossed the ProductCore boundary")
@@ -239,6 +319,35 @@ func TestRunnerCloudTaskFacadeBindsOwnerAndRedactsInternalReferences(t *testing.
 	if cancelRequest.GetIdempotencyKey() != cancelID || cancelRequest.GetTaskId() != testCloudTaskID ||
 		cancelRequest.GetExpectedRevision() != 3 || cancelRequest.GetReason() != "user canceled" {
 		t.Fatalf("unexpected cancel request: %#v", cancelRequest)
+	}
+}
+
+func TestRunnerCloudTaskOverviewBindsOwnerAndReturnsExactAggregate(t *testing.T) {
+	t.Parallel()
+	server := startRuntimeServer(t)
+	runner := newTestRunner(t, server, Config{UnaryTimeout: time.Second})
+
+	result, err := runner.Invoke(context.Background(), actionCloudTasksOverview, map[string]any{"recent_limit": 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result["total_count"] != int64(1) || result["active_count"] != int64(1) ||
+		result["awaiting_approval_count"] != int64(1) || result["completed_count"] != int64(0) {
+		t.Fatalf("task overview = %#v", result)
+	}
+	counts, ok := result["status_counts"].([]map[string]any)
+	if !ok || len(counts) != 1 || counts[0]["execution_status"] != "awaiting_approval" || counts[0]["count"] != int64(1) {
+		t.Fatalf("task overview counts = %#v", result["status_counts"])
+	}
+	recent, ok := result["recent_tasks"].([]map[string]any)
+	if !ok || len(recent) != 1 || recent[0]["task_id"] != testCloudTaskID {
+		t.Fatalf("task overview recent = %#v", result["recent_tasks"])
+	}
+	server.tasks.mu.Lock()
+	request := server.tasks.overviewRequest
+	server.tasks.mu.Unlock()
+	if request.GetOwnerId() != "owner-from-config" || request.GetRecentLimit() != 3 {
+		t.Fatalf("task overview request = %#v", request)
 	}
 }
 
@@ -450,14 +559,11 @@ func TestRunnerFailsClosedForUnrepresentableLegacyParameters(t *testing.T) {
 		{"prompt": "hello", "knowledge_enabled": true},
 		{"prompt": "hello", "embedding_profile": map[string]any{"provider": "openai"}},
 		{"prompt": "hello", "attachments": []any{map[string]any{"name": "photo.png"}}},
-		{"prompt": "hello", "cloud_connection_id": "connection-1"},
 		{"prompt": "hello", "cloud_recipe_id": "recipe-1"},
 		{"prompt": "hello", "cloud_recipe_revision": 1},
 		{"messages": []any{map[string]any{"role": "user", "content": "hello"}}},
 		{"prompt": "hello", "system_prompt": "override"},
 		{"prompt": "hello", "enabled_tools": []any{"all"}},
-		{"prompt": "hello", "model_profile_id": "deepseek:deepseek-v4-pro"},
-		{"prompt": "hello", "model_profile": map[string]any{"api_key": modelProfileCanary}},
 	} {
 		_, err := runner.Invoke(context.Background(), "agent.chat", params)
 		if err == nil || err.Error() != "agent chat parameters cannot be represented by the remote runtime contract" {
@@ -469,6 +575,196 @@ func TestRunnerFailsClosedForUnrepresentableLegacyParameters(t *testing.T) {
 	server.service.mu.Unlock()
 	if request != nil {
 		t.Fatal("unrepresentable parameters reached the remote Agent service")
+	}
+}
+
+func TestRunnerEncryptsClientModelCredentialOutsideRuntimeChatRPC(t *testing.T) {
+	t.Parallel()
+	server := startRuntimeServer(t)
+	runner := newTestRunner(t, server, Config{})
+	requestID := "7d2f90ad-9b9a-4688-baa4-5f96b04b5efe"
+	apiKey := modelProfileCanary + "-never-in-runtime-rpc"
+	_, err := runner.Invoke(context.Background(), "agent.chat", map[string]any{
+		"idempotency_key":  requestID,
+		"prompt":           "hello",
+		"model_profile_id": "deepseek:deepseek-chat",
+		"api_key":          apiKey,
+		"model_profile": map[string]any{
+			"id": "deepseek:deepseek-chat", "provider": "deepseek", "model": "deepseek-chat",
+			"base_url": "https://api.deepseek.com", "api_key": apiKey,
+			"context_window": 64, "max_output_tokens": 4096, "temperature": 0.3,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.service.mu.Lock()
+	runtimeRequest := proto.Clone(server.service.chatRequest).(*agentv1.ChatRequest)
+	server.service.mu.Unlock()
+	server.secrets.mu.Lock()
+	createRequest := proto.Clone(server.secrets.createRequest).(*agentv1.CreateSessionRequest)
+	uploadRequest := proto.Clone(server.secrets.uploadRequest).(*agentv1.UploadEncryptedRequest)
+	server.secrets.mu.Unlock()
+	if runtimeRequest.GetTransientModel() == nil || runtimeRequest.GetTransientModel().GetProfile().GetModel() != "deepseek-chat" ||
+		runtimeRequest.GetTransientModel().GetCredentialSessionRevision() != 2 || len(runtimeRequest.GetTransientModel().GetCredentialSha256()) != sha256.Size {
+		t.Fatalf("transient model request = %#v", runtimeRequest.GetTransientModel())
+	}
+	for _, encoded := range []string{runtimeRequest.String(), createRequest.String(), uploadRequest.String()} {
+		if strings.Contains(encoded, apiKey) {
+			t.Fatal("model API key crossed an ordinary RPC or protobuf string surface")
+		}
+	}
+	if bytes.Contains(uploadRequest.GetCiphertext(), []byte(apiKey)) || len(uploadRequest.GetCiphertext()) <= len(apiKey) {
+		t.Fatal("secret bootstrap upload did not contain opaque authenticated ciphertext")
+	}
+	binding, err := transientmodelsdk.ProfileFromProto(runtimeRequest.GetTransientModel().GetProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256([]byte(apiKey))
+	expectedTarget, err := transientmodelsdk.TargetID("owner-from-config", requestID, binding, digest[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if createRequest.GetOwnerId() != "owner-from-config" || createRequest.GetPurpose() != transientmodelsdk.CredentialPurpose || createRequest.GetTargetId() != expectedTarget {
+		t.Fatalf("bootstrap binding = %#v", createRequest)
+	}
+}
+
+func TestRunnerRejectsUnsupportedTransientModelProfileFields(t *testing.T) {
+	t.Parallel()
+	server := startRuntimeServer(t)
+	runner := newTestRunner(t, server, Config{})
+	_, err := runner.Invoke(context.Background(), "agent.chat", map[string]any{
+		"idempotency_key":  "ae021176-5af7-4a20-8b54-6d425a38bc20",
+		"prompt":           "hello",
+		"model_profile_id": "deepseek:deepseek-chat",
+		"api_key":          "test-key",
+		"model_profile": map[string]any{
+			"id": "deepseek:deepseek-chat", "provider": "deepseek", "model": "deepseek-chat",
+			"base_url": "https://api.deepseek.com", "api_key": "test-key", "top_k": 40,
+		},
+	})
+	if err == nil || err.Error() != "invalid agent chat parameters: model profile is invalid" {
+		t.Fatalf("unsupported profile field error = %v", err)
+	}
+	server.service.mu.Lock()
+	defer server.service.mu.Unlock()
+	if server.service.chatRequest != nil {
+		t.Fatal("invalid transient profile reached RuntimeService")
+	}
+}
+
+func TestRunnerRejectsMalformedDeepSeekCredentialBeforeBootstrap(t *testing.T) {
+	t.Parallel()
+	server := startRuntimeServer(t)
+	runner := newTestRunner(t, server, Config{})
+	apiKey := modelProfileCanary + "`x"
+	_, err := runner.Invoke(context.Background(), "agent.chat", map[string]any{
+		"idempotency_key":  "89caf6bd-7f44-4a04-a768-fc0292268aa9",
+		"prompt":           "hello",
+		"model_profile_id": "deepseek:deepseek-chat",
+		"api_key":          apiKey,
+		"model_profile": map[string]any{
+			"id": "deepseek:deepseek-chat", "provider": "deepseek", "model": "deepseek-chat",
+			"base_url": "https://api.deepseek.com", "api_key": apiKey,
+		},
+	})
+	var coded interface{ ErrorCode() string }
+	if err == nil ||
+		err.Error() != "DeepSeek API key contains unsupported characters." ||
+		!errors.As(err, &coded) ||
+		coded.ErrorCode() != "M_AGENT_MODEL_CREDENTIAL_INVALID" {
+		t.Fatalf("malformed credential error = %v", err)
+	}
+	server.secrets.mu.Lock()
+	defer server.secrets.mu.Unlock()
+	if server.secrets.createRequest != nil || server.secrets.uploadRequest != nil {
+		t.Fatal("malformed credential reached SecretBootstrap")
+	}
+}
+
+func TestRunnerListsModelsThroughEncryptedTransientCredential(t *testing.T) {
+	t.Parallel()
+	server := startRuntimeServer(t)
+	runner := newTestRunner(t, server, Config{})
+	apiKey := modelProfileCanary + "-model-list-only"
+	result, err := runner.Invoke(context.Background(), "agent.models.list", map[string]any{
+		"provider": "deepseek", "base_url": "https://api.deepseek.com", "api_key": apiKey,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.service.mu.Lock()
+	runtimeRequest := proto.Clone(server.service.listModelsRequest).(*agentv1.ListModelsRequest)
+	server.service.mu.Unlock()
+	server.secrets.mu.Lock()
+	createRequest := proto.Clone(server.secrets.createRequest).(*agentv1.CreateSessionRequest)
+	uploadRequest := proto.Clone(server.secrets.uploadRequest).(*agentv1.UploadEncryptedRequest)
+	server.secrets.mu.Unlock()
+	if _, err := uuid.Parse(runtimeRequest.GetRequestId()); err != nil || runtimeRequest.GetOwnerId() != "owner-from-config" {
+		t.Fatalf("model list request = %#v", runtimeRequest)
+	}
+	transient := runtimeRequest.GetTransientModel()
+	if transient == nil || transient.GetProfile().GetModel() != "model-discovery" ||
+		transient.GetProfile().GetProvider() != agentv1.ModelProvider_MODEL_PROVIDER_DEEPSEEK ||
+		transient.GetCredentialSessionRevision() != 2 || len(transient.GetCredentialSha256()) != sha256.Size {
+		t.Fatalf("transient discovery binding = %#v", transient)
+	}
+	for _, encoded := range []string{runtimeRequest.String(), createRequest.String(), uploadRequest.String()} {
+		if strings.Contains(encoded, apiKey) {
+			t.Fatal("model discovery API key crossed an ordinary protobuf surface")
+		}
+	}
+	if bytes.Contains(uploadRequest.GetCiphertext(), []byte(apiKey)) {
+		t.Fatal("model discovery credential was not encrypted")
+	}
+	models, ok := result["models"].([]map[string]any)
+	if !ok || len(models) != 1 || models[0]["id"] != "deepseek-chat" || models[0]["provider"] != "deepseek" || models[0]["context_window"] != int64(65536) {
+		t.Fatalf("model list result = %#v", result)
+	}
+	server.cloud.mu.Lock()
+	defer server.cloud.mu.Unlock()
+	if len(server.cloud.listRequests) != 0 {
+		t.Fatal("model discovery unexpectedly performed a cloud connection lookup")
+	}
+}
+
+func TestRunnerRejectsUnsupportedModelDiscoveryParametersBeforeBootstrap(t *testing.T) {
+	t.Parallel()
+	server := startRuntimeServer(t)
+	runner := newTestRunner(t, server, Config{})
+	_, err := runner.Invoke(context.Background(), "agent.models.list", map[string]any{
+		"provider": "deepseek", "api_key": "test-key", "secret_ref": "mounted:forbidden",
+	})
+	if err == nil || err.Error() != "invalid agent model discovery parameters" {
+		t.Fatalf("model discovery error = %v", err)
+	}
+	server.secrets.mu.Lock()
+	defer server.secrets.mu.Unlock()
+	if server.secrets.createRequest != nil || server.secrets.uploadRequest != nil {
+		t.Fatal("invalid model discovery request reached SecretBootstrap")
+	}
+}
+
+func TestRunnerRejectsMalformedModelDiscoveryCredentialBeforeBootstrap(t *testing.T) {
+	t.Parallel()
+	server := startRuntimeServer(t)
+	runner := newTestRunner(t, server, Config{})
+	_, err := runner.Invoke(context.Background(), "agent.models.list", map[string]any{
+		"provider": "deepseek", "api_key": modelProfileCanary + "`x",
+	})
+	var coded interface{ ErrorCode() string }
+	if err == nil ||
+		err.Error() != "DeepSeek API key contains unsupported characters." ||
+		!errors.As(err, &coded) ||
+		coded.ErrorCode() != "M_AGENT_MODEL_CREDENTIAL_INVALID" {
+		t.Fatalf("model discovery error = %v", err)
+	}
+	server.secrets.mu.Lock()
+	defer server.secrets.mu.Unlock()
+	if server.secrets.createRequest != nil || server.secrets.uploadRequest != nil {
+		t.Fatal("malformed model discovery credential reached SecretBootstrap")
 	}
 }
 
@@ -498,6 +794,45 @@ func TestRunnerStreamRequiresOneTerminalDoneEvent(t *testing.T) {
 				if event.Event == "done" {
 					t.Fatalf("invalid stream emitted terminal success: %#v", events)
 				}
+			}
+		})
+	}
+}
+
+func TestSanitizeRPCErrorClassifiesConversationRevisionConflict(t *testing.T) {
+	err := sanitizeRPCError(
+		context.Background(),
+		status.Error(codes.Aborted, "expected revision or lease does not match"),
+	)
+	coded, ok := err.(interface{ ErrorCode() string })
+	if !ok || coded.ErrorCode() != "M_AGENT_CONVERSATION_OUT_OF_DATE" {
+		t.Fatalf("revision conflict = %T %v", err, err)
+	}
+	if err.Error() != "Agent conversation changed; please retry" {
+		t.Fatalf("public revision conflict message = %q", err.Error())
+	}
+}
+
+func TestSanitizeRPCErrorClassifiesModelFailures(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		grpcCode    codes.Code
+		grpcMessage string
+		wantCode    string
+	}{
+		{name: "credential", grpcCode: codes.PermissionDenied, grpcMessage: "model provider rejected the supplied credential", wantCode: "M_AGENT_MODEL_CREDENTIAL_REJECTED"},
+		{name: "request", grpcCode: codes.FailedPrecondition, grpcMessage: "model provider rejected the selected model or request", wantCode: "M_AGENT_MODEL_REQUEST_REJECTED"},
+		{name: "rate limited", grpcCode: codes.ResourceExhausted, grpcMessage: "model provider rate limit is temporarily exhausted", wantCode: "M_AGENT_MODEL_RATE_LIMITED"},
+		{name: "unavailable", grpcCode: codes.Unavailable, grpcMessage: "model provider is unavailable", wantCode: "M_AGENT_MODEL_UNAVAILABLE"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := sanitizeRPCError(context.Background(), status.Error(test.grpcCode, test.grpcMessage))
+			coded, ok := err.(interface{ ErrorCode() string })
+			if !ok || coded.ErrorCode() != test.wantCode {
+				t.Fatalf("model failure = %T %v, want code %s", err, err, test.wantCode)
 			}
 		})
 	}
@@ -543,8 +878,31 @@ type taskTestService struct {
 	task             *agentv1.Task
 	step             *agentv1.Step
 	getRequest       *agentv1.GetTaskRequest
+	overviewRequest  *agentv1.GetTaskOverviewRequest
 	listStepsRequest *agentv1.ListStepsRequest
 	cancelRequest    *agentv1.CancelTaskRequest
+	events           []*agentv1.Event
+}
+
+func (service *taskTestService) WatchEvents(
+	request *agentv1.WatchEventsRequest,
+	stream agentv1.TaskService_WatchEventsServer,
+) error {
+	service.mu.Lock()
+	events := append([]*agentv1.Event(nil), service.events...)
+	service.mu.Unlock()
+	for _, event := range events {
+		if event.GetSeq() <= request.GetAfterSeq() {
+			continue
+		}
+		if err := stream.Send(&agentv1.WatchEventsResponse{
+			Event: proto.Clone(event).(*agentv1.Event),
+		}); err != nil {
+			return err
+		}
+	}
+	<-stream.Context().Done()
+	return stream.Context().Err()
 }
 
 func (service *taskTestService) ListTasks(_ context.Context, request *agentv1.ListTasksRequest) (*agentv1.ListTasksResponse, error) {
@@ -561,6 +919,21 @@ func (service *taskTestService) GetTask(_ context.Context, request *agentv1.GetT
 	defer service.mu.Unlock()
 	service.getRequest = proto.Clone(request).(*agentv1.GetTaskRequest)
 	return &agentv1.GetTaskResponse{Task: proto.Clone(service.task).(*agentv1.Task)}, nil
+}
+
+func (service *taskTestService) GetTaskOverview(_ context.Context, request *agentv1.GetTaskOverviewRequest) (*agentv1.GetTaskOverviewResponse, error) {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	service.overviewRequest = proto.Clone(request).(*agentv1.GetTaskOverviewRequest)
+	return &agentv1.GetTaskOverviewResponse{
+		TotalCount: 1,
+		StatusCounts: []*agentv1.TaskStatusCount{{
+			ExecutionStatus: service.task.GetExecutionStatus(),
+			OutcomeStatus:   service.task.GetOutcomeStatus(), Count: 1,
+		}},
+		RecentTasks: []*agentv1.Task{proto.Clone(service.task).(*agentv1.Task)},
+		AsOf:        timestamppb.New(service.task.GetUpdatedAt().AsTime().Add(time.Second)),
+	}, nil
 }
 
 func (service *taskTestService) ListSteps(_ context.Context, request *agentv1.ListStepsRequest) (*agentv1.ListStepsResponse, error) {
@@ -701,6 +1074,7 @@ type runtimeTestService struct {
 	agentv1.UnimplementedRuntimeServiceServer
 	mu                   sync.Mutex
 	chatRequest          *agentv1.ChatRequest
+	listModelsRequest    *agentv1.ListModelsRequest
 	runtimeConfigRequest *agentv1.GetRuntimeConfigRequest
 	putRuntimeRequest    *agentv1.PutRuntimeConfigRequest
 	getCapabilities      func(*agentv1.RuntimeServiceGetCapabilitiesRequest) (*agentv1.RuntimeServiceGetCapabilitiesResponse, error)
@@ -724,6 +1098,16 @@ func (service *runtimeTestService) Chat(ctx context.Context, request *agentv1.Ch
 	}
 	service.capture(ctx, request)
 	return chatResponse(), nil
+}
+
+func (service *runtimeTestService) ListModels(_ context.Context, request *agentv1.ListModelsRequest) (*agentv1.ListModelsResponse, error) {
+	service.mu.Lock()
+	service.listModelsRequest = proto.Clone(request).(*agentv1.ListModelsRequest)
+	service.mu.Unlock()
+	return &agentv1.ListModelsResponse{Models: []*agentv1.ModelDescriptor{{
+		Id: "deepseek-chat", Name: "DeepSeek Chat", Provider: "deepseek",
+		ContextWindow: 65536, MaxOutputTokens: 8192, ReasoningModes: []string{"standard"},
+	}}}, nil
 }
 
 func (service *runtimeTestService) StreamChat(request *agentv1.StreamChatRequest, stream grpc.ServerStreamingServer[agentv1.StreamChatResponse]) error {
@@ -874,6 +1258,64 @@ func newCloudTestService() *cloudTestService {
 	}
 }
 
+type secretBootstrapTestService struct {
+	agentv1.UnimplementedSecretBootstrapServiceServer
+	mu            sync.Mutex
+	serverPublic  []byte
+	createRequest *agentv1.CreateSessionRequest
+	uploadRequest *agentv1.UploadEncryptedRequest
+	session       *agentv1.SecretBootstrapSession
+}
+
+func newSecretBootstrapTestService(t *testing.T) *secretBootstrapTestService {
+	t.Helper()
+	privateKey, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &secretBootstrapTestService{serverPublic: privateKey.PublicKey().Bytes()}
+}
+
+func (service *secretBootstrapTestService) CreateSession(_ context.Context, request *agentv1.CreateSessionRequest) (*agentv1.CreateSessionResponse, error) {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	service.createRequest = proto.Clone(request).(*agentv1.CreateSessionRequest)
+	if service.session == nil {
+		now := time.Now().UTC().Truncate(time.Microsecond)
+		service.session = &agentv1.SecretBootstrapSession{
+			SessionId: "27b65194-c9c3-4dc6-bca7-79c9a32ed4dc", OwnerId: request.GetOwnerId(),
+			Purpose: request.GetPurpose(), TargetId: request.GetTargetId(), ServerPublicKey: append([]byte(nil), service.serverPublic...),
+			CreatedAt: timestamppb.New(now), ExpiresAt: timestamppb.New(now.Add(10 * time.Minute)),
+			Status: agentv1.SecretBootstrapSessionStatus_SECRET_BOOTSTRAP_SESSION_STATUS_AWAITING_UPLOAD, Revision: 1,
+			AgentInstanceId:       "11111111-2222-4333-8444-555555555555",
+			SessionSchemaVersion:  "dirextalk.agent.secret-bootstrap.session/v1",
+			EnvelopeSchemaVersion: "dirextalk.agent.secret-bootstrap.envelope/v1",
+		}
+	}
+	session := proto.Clone(service.session).(*agentv1.SecretBootstrapSession)
+	uploadToken := []byte(nil)
+	if session.GetStatus() == agentv1.SecretBootstrapSessionStatus_SECRET_BOOTSTRAP_SESSION_STATUS_AWAITING_UPLOAD {
+		uploadToken = bytes.Repeat([]byte{0x5a}, 32)
+	}
+	return &agentv1.CreateSessionResponse{
+		SessionId: session.GetSessionId(), ServerPublicKey: append([]byte(nil), session.GetServerPublicKey()...),
+		UploadToken: uploadToken, ExpiresAt: session.GetExpiresAt(), Session: session,
+	}, nil
+}
+
+func (service *secretBootstrapTestService) UploadEncrypted(_ context.Context, request *agentv1.UploadEncryptedRequest) (*agentv1.UploadEncryptedResponse, error) {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	service.uploadRequest = proto.Clone(request).(*agentv1.UploadEncryptedRequest)
+	if service.session == nil || request.GetSessionId() != service.session.GetSessionId() || request.GetExpectedRevision() != 1 ||
+		len(request.GetUploadToken()) != 32 || len(request.GetClientPublicKey()) != 32 || len(request.GetNonce()) != 12 || len(request.GetCiphertext()) < 16 {
+		return nil, status.Error(codes.InvalidArgument, "invalid encrypted upload")
+	}
+	service.session.Status = agentv1.SecretBootstrapSessionStatus_SECRET_BOOTSTRAP_SESSION_STATUS_UPLOADED
+	service.session.Revision = 2
+	return &agentv1.UploadEncryptedResponse{Revision: 2, Session: proto.Clone(service.session).(*agentv1.SecretBootstrapSession)}, nil
+}
+
 type testRuntimeServer struct {
 	target  string
 	caFile  string
@@ -881,6 +1323,8 @@ type testRuntimeServer struct {
 	service *runtimeTestService
 	tasks   *taskTestService
 	cloud   *cloudTestService
+	team    *teamTestService
+	secrets *secretBootstrapTestService
 }
 
 func startRuntimeServer(t *testing.T) testRuntimeServer {
@@ -893,12 +1337,16 @@ func startRuntimeServer(t *testing.T) testRuntimeServer {
 	service := &runtimeTestService{}
 	tasks := newTaskTestService()
 	cloud := newCloudTestService()
+	team := newTeamTestService()
+	secrets := newSecretBootstrapTestService(t)
 	server := grpc.NewServer(grpc.Creds(credentials.NewTLS(&tls.Config{
 		Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13,
 	})))
 	agentv1.RegisterRuntimeServiceServer(server, service)
 	agentv1.RegisterTaskServiceServer(server, tasks)
 	agentv1.RegisterCloudControlServiceServer(server, cloud)
+	agentv1.RegisterTeamPlanServiceServer(server, team)
+	agentv1.RegisterSecretBootstrapServiceServer(server, secrets)
 	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(func() { server.Stop(); _ = listener.Close() })
 	dir := t.TempDir()
@@ -912,7 +1360,7 @@ func startRuntimeServer(t *testing.T) testRuntimeServer {
 	}
 	return testRuntimeServer{
 		target: listener.Addr().String(), caFile: caFile, keyFile: keyFile,
-		service: service, tasks: tasks, cloud: cloud,
+		service: service, tasks: tasks, cloud: cloud, team: team, secrets: secrets,
 	}
 }
 

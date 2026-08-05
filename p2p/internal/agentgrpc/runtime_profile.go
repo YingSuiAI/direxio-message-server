@@ -65,6 +65,11 @@ func (runner *Runner) UpdateRuntimeProfile(ctx context.Context, request agentmod
 	if current != nil {
 		spec = proto.Clone(current.GetSpec()).(*agentv1.RuntimeConfigSpec)
 		spec.ModelProfile = selectedRuntimeModelProfile(current.GetSpec().GetModelProfile(), request.ProfileID)
+		if current.GetSpec().GetModelProfile().GetProfileId() != request.ProfileID &&
+			current.GetSpec().GetSearchProfile().GetProvider() == agentv1.SearchProvider_SEARCH_PROVIDER_DEEPSEEK_NATIVE {
+			spec.SearchProfile = nil
+			spec.EnabledTools = removeSortedString(spec.GetEnabledTools(), nativeWebSearchToolName)
+		}
 	}
 	applyRuntimeProfileOverrides(spec.ModelProfile, request)
 	response, err := runner.runtime.PutRuntimeConfig(callContext, &agentv1.PutRuntimeConfigRequest{
@@ -181,7 +186,8 @@ func mapRuntimeProfileConfig(config *agentv1.RuntimeConfig, ownerID string, prof
 
 func validRuntimeNonProfileSpec(spec *agentv1.RuntimeConfigSpec) bool {
 	if spec.GetContextMessageLimit() < 1 || spec.GetContextMessageLimit() > 4096 || spec.GetMemoryMessageLimit() < 1 || spec.GetMemoryMessageLimit() > 4096 ||
-		spec.GetMaxSteps() < 1 || spec.GetMaxSteps() > 120 || len(spec.GetProjectProfile()) > 64*1024 {
+		spec.GetMaxSteps() < 1 || spec.GetMaxSteps() > 120 || len(spec.GetProjectProfile()) > 64*1024 ||
+		!validDeSecretedSearchProfile(spec.GetSearchProfile()) {
 		return false
 	}
 	for _, values := range [][]string{spec.GetEnabledTools(), spec.GetKnowledgeRefs(), spec.GetMcpServerIds(), spec.GetRecipeIds()} {
@@ -267,7 +273,25 @@ func sameRuntimeNonProfileSpec(expected, actual *agentv1.RuntimeConfigSpec) bool
 	right := proto.Clone(actual).(*agentv1.RuntimeConfigSpec)
 	left.ModelProfile = nil
 	right.ModelProfile = nil
+	if left.GetSearchProfile() == nil &&
+		right.GetSearchProfile().GetProvider() == agentv1.SearchProvider_SEARCH_PROVIDER_DEEPSEEK_NATIVE {
+		left.SearchProfile = nil
+		right.SearchProfile = nil
+		left.EnabledTools = removeSortedString(left.GetEnabledTools(), nativeWebSearchToolName)
+		right.EnabledTools = removeSortedString(right.GetEnabledTools(), nativeWebSearchToolName)
+	}
 	return proto.Equal(left, right)
+}
+
+func removeSortedString(values []string, target string) []string {
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if value != target {
+			result = append(result, value)
+		}
+	}
+	sort.Strings(result)
+	return result
 }
 
 func containsSortedString(values []string, target string) bool {

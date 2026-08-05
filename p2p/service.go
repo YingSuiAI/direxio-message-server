@@ -15,6 +15,7 @@ import (
 	"github.com/YingSuiAI/dirextalk-message-server/internal/realtime"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/releasecontrol"
 	agentmodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agent"
+	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcompletion"
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentturns"
 	blocksmodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/blocks"
 	callsmodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/calls"
@@ -59,9 +60,16 @@ type Config struct {
 	// model profile to the independent Agent. It never exposes credential
 	// references or bytes to ProductCore.
 	AgentRuntimeProfileClient AgentRuntimeProfileClient
-	NativeAgentDataDir        string
-	ReleaseController         releasecontrol.Controller
-	CentralVersionSource      releasecontrol.CentralVersionSource
+	// AgentSearchProfileClient delegates only a catalog-bound, de-secreted
+	// search profile and bounded query limits to the independent Agent.
+	AgentSearchProfileClient AgentSearchProfileClient
+	// AgentCompletionSource streams durable, report-bound Team completion
+	// events from the independent Agent. ProductCore stores its own cursor and
+	// publishes the result through the existing realtime event stream.
+	AgentCompletionSource agentcompletion.Source
+	NativeAgentDataDir    string
+	ReleaseController     releasecontrol.Controller
+	CentralVersionSource  releasecontrol.CentralVersionSource
 }
 
 const (
@@ -125,6 +133,7 @@ type Service struct {
 	contactsModule       *contactsmodule.Module
 	conversationModule   *conversationmodule.Module
 	eventsModule         *eventsmodule.Module
+	agentCompletionRelay *agentcompletion.Relay
 	groupsModule         *groupsmodule.Module
 	membersModule        *membersmodule.Module
 	pluginsModule        *pluginsmodule.Module
@@ -154,6 +163,7 @@ type AccountDeprovisioner interface {
 
 type Store interface {
 	agentturns.Store
+	agentcompletion.CursorStore
 	operationsmodule.Store
 	legacygatewaymodule.Store
 	portalStore
@@ -591,6 +601,14 @@ func newService(cfg Config, store Store, transport Transport, state portalState,
 		RetentionPruneOnWrite: cfg.P2PEventRetentionPruneOnWrite,
 		Now:                   time.Now,
 	})
+	if cfg.AgentCompletionSource != nil {
+		service.agentCompletionRelay = agentcompletion.New(
+			cfg.AgentCompletionSource,
+			service.store,
+			service.eventsModule,
+			agentcompletion.Config{Now: time.Now},
+		)
+	}
 	service.conversationModule = conversationmodule.New(service.store, serviceConversationHydrator{service: service})
 	service.channelsModule = channelsmodule.New(service.store, service.conversationModule, service.store, channelsmodule.Config{
 		NewChannelID: func() string { return "ch_" + randomToken("channel") },
@@ -825,6 +843,7 @@ func newService(cfg Config, store Store, transport Transport, state portalState,
 		Runner:          cfg.NativeAgentRunner,
 		ChatRunner:      cfg.NativeAgentChatRunner,
 		RuntimeProfiles: cfg.AgentRuntimeProfileClient,
+		SearchProfiles:  cfg.AgentSearchProfileClient,
 		DataDir:         cfg.NativeAgentDataDir,
 		Store:           nativeAgentConfigStore{service: service},
 		MCP:             service.mcpCapabilities,

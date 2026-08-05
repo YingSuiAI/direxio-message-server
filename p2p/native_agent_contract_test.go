@@ -73,7 +73,7 @@ func TestNativeAgentActionsAreOwnerOnlyAndCallNativeRuntimeDirectly(t *testing.T
 	}
 }
 
-func TestNativeAgentChatUsesDedicatedRemoteRunnerWithoutTakingOverRuntimeActions(t *testing.T) {
+func TestDedicatedRemoteRunnerOwnsChatAndModelDiscovery(t *testing.T) {
 	localRunner := &recordingNativeAgentRunner{}
 	chatRunner := &recordingNativeAgentRunner{}
 	service := NewService(Config{
@@ -88,11 +88,11 @@ func TestNativeAgentChatUsesDedicatedRemoteRunnerWithoutTakingOverRuntimeActions
 	if _, apiErr := service.Handle(context.Background(), "agent.models.list", nil); apiErr != nil {
 		t.Fatalf("local runtime action failed: %#v", apiErr)
 	}
-	if len(chatRunner.invokes) != 1 || chatRunner.invokes[0].Action != "agent.chat" {
-		t.Fatalf("Chat must use the dedicated Runner, got %#v", chatRunner.invokes)
+	if len(chatRunner.invokes) != 2 || chatRunner.invokes[0].Action != "agent.chat" || chatRunner.invokes[1].Action != "agent.models.list" {
+		t.Fatalf("Chat and model discovery must use the dedicated Runner, got %#v", chatRunner.invokes)
 	}
-	if len(localRunner.invokes) != 1 || localRunner.invokes[0].Action != "agent.models.list" {
-		t.Fatalf("non-Chat action must remain local, got %#v", localRunner.invokes)
+	if len(localRunner.invokes) != 0 {
+		t.Fatalf("model discovery must not expose credentials to the local runtime, got %#v", localRunner.invokes)
 	}
 }
 
@@ -305,6 +305,10 @@ func TestNativeAgentRealtimeStreamFramesUseDedicatedChatRunner(t *testing.T) {
 		"action": "agent.chat",
 		"params": map[string]any{"prompt": "hello"},
 	})
+	accepted := readRealtimeFrame(t, conn)
+	if accepted["type"] != "server.native_agent_stream.accepted" || accepted["id"] != "native-stream-1" || accepted["state"] != "running" {
+		t.Fatalf("expected native stream accepted frame, got %#v", accepted)
+	}
 	delta := readRealtimeFrame(t, conn)
 	if delta["type"] != "server.native_agent_stream.event" || delta["id"] != "native-stream-1" || delta["event"] != "delta" {
 		t.Fatalf("expected native stream delta frame, got %#v", delta)
@@ -446,6 +450,10 @@ func TestNativeAgentRealtimeStreamCancelAndErrorFrames(t *testing.T) {
 		"action": "agent.chat.stream",
 		"params": map[string]any{"prompt": "hold"},
 	})
+	accepted := readRealtimeFrame(t, conn)
+	if accepted["type"] != "server.native_agent_stream.accepted" || accepted["id"] != "native-cancel" {
+		t.Fatalf("expected native stream accepted frame, got %#v", accepted)
+	}
 	<-cancelRunner.started
 	writeRealtimeFrame(t, conn, map[string]any{"type": "client.native_agent_stream.cancel", "id": "native-cancel"})
 	cancelled := readRealtimeFrame(t, conn)
@@ -473,6 +481,10 @@ func TestNativeAgentRealtimeStreamCancelAndErrorFrames(t *testing.T) {
 		"action": "agent.chat.stream",
 		"params": map[string]any{"prompt": "boom"},
 	})
+	errorAccepted := readRealtimeFrame(t, errorConn)
+	if errorAccepted["type"] != "server.native_agent_stream.accepted" || errorAccepted["id"] != "native-error" {
+		t.Fatalf("expected native stream accepted frame, got %#v", errorAccepted)
+	}
 	frame := readRealtimeFrame(t, errorConn)
 	if frame["type"] != "server.native_agent_stream.error" || frame["id"] != "native-error" || int(frame["status"].(float64)) != http.StatusBadGateway {
 		t.Fatalf("expected native stream error frame, got %#v", frame)

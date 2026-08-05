@@ -122,6 +122,52 @@ func TestRunnerRuntimeProfileInitializesExplicitProductBaseline(t *testing.T) {
 	}
 }
 
+func TestRunnerRuntimeProfileAcceptsAutomaticDeepSeekNativeSearch(t *testing.T) {
+	server := startRuntimeServer(t)
+	server.service.getRuntimeConfig = func(*agentv1.GetRuntimeConfigRequest) (*agentv1.GetRuntimeConfigResponse, error) {
+		return nil, status.Error(codes.NotFound, "not configured")
+	}
+	server.service.putRuntimeConfig = func(request *agentv1.PutRuntimeConfigRequest) (*agentv1.PutRuntimeConfigResponse, error) {
+		response := validRuntimeConfigPutResponse(request)
+		response.Config.Spec.SearchProfile = deepSeekNativeSearchProfile()
+		response.Config.Spec.EnabledTools = append(response.Config.Spec.EnabledTools, nativeWebSearchToolName)
+		return response, nil
+	}
+	runner := newTestRunner(t, server, Config{})
+	state, err := runner.UpdateRuntimeProfile(context.Background(), agentmodule.RuntimeProfileUpdate{
+		IdempotencyKey: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+		ProfileID:      "deepseek-v4", ExpectedRevision: 0,
+	})
+	if err != nil || !state.Configured || state.Profile == nil || state.Profile.ProfileID != "deepseek-v4" {
+		t.Fatalf("automatic native search model update state=%#v error=%v", state, err)
+	}
+}
+
+func TestRunnerRuntimeProfileClearsBundledSearchWhenModelChanges(t *testing.T) {
+	server := startRuntimeServer(t)
+	server.service.getRuntimeConfig = func(*agentv1.GetRuntimeConfigRequest) (*agentv1.GetRuntimeConfigResponse, error) {
+		config := validRemoteRuntimeConfig("deepseek-v4", 7)
+		config.Spec.SearchProfile = deepSeekNativeSearchProfile()
+		config.Spec.EnabledTools = []string{"tool-a", nativeWebSearchToolName}
+		return &agentv1.GetRuntimeConfigResponse{Config: config}, nil
+	}
+	server.service.putRuntimeConfig = func(request *agentv1.PutRuntimeConfigRequest) (*agentv1.PutRuntimeConfigResponse, error) {
+		if request.GetSpec().GetSearchProfile() != nil ||
+			!reflect.DeepEqual(request.GetSpec().GetEnabledTools(), []string{"tool-a"}) {
+			t.Fatalf("bundled native search was retained across model change: %#v", request.GetSpec())
+		}
+		return validRuntimeConfigPutResponse(request), nil
+	}
+	runner := newTestRunner(t, server, Config{})
+	state, err := runner.UpdateRuntimeProfile(context.Background(), agentmodule.RuntimeProfileUpdate{
+		IdempotencyKey: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+		ProfileID:      "openai-default", ExpectedRevision: 7,
+	})
+	if err != nil || state.Profile == nil || state.Profile.ProfileID != "openai-default" {
+		t.Fatalf("model switch state=%#v error=%v", state, err)
+	}
+}
+
 func TestRunnerRuntimeProfileConflictAndNoopNeverMutate(t *testing.T) {
 	zeroOutputTokens := int64(0)
 	for name, request := range map[string]agentmodule.RuntimeProfileUpdate{
@@ -253,8 +299,19 @@ func TestRunnerRuntimeProfileRejectsSecretOrForeignUpstreamState(t *testing.T) {
 
 func validRuntimeCapabilities() *agentv1.RuntimeServiceGetCapabilitiesResponse {
 	return &agentv1.RuntimeServiceGetCapabilitiesResponse{Capabilities: &agentv1.RuntimeCapabilities{
-		Chat: true, StreamChat: true, RuntimeConfig: true, ModelProfileIds: []string{"deepseek-v4", "openai-default"},
+		Chat: true, StreamChat: true, RuntimeConfig: true,
+		ModelProfileIds:  []string{"deepseek-v4", "openai-default"},
+		SearchProfileIds: []string{"brave-default", "tavily-default"},
 	}}
+}
+
+func deepSeekNativeSearchProfile() *agentv1.SearchProfile {
+	return &agentv1.SearchProfile{
+		ProfileId:  "deepseek-native-default",
+		Provider:   agentv1.SearchProvider_SEARCH_PROVIDER_DEEPSEEK_NATIVE,
+		BaseUrl:    "https://api.deepseek.com/anthropic/v1/messages",
+		MaxResults: 8, TimeoutSeconds: 45,
+	}
 }
 
 func validRemoteRuntimeConfig(profileID string, revision int64) *agentv1.RuntimeConfig {
@@ -296,5 +353,25 @@ func validRuntimeConfigPutResponse(request *agentv1.PutRuntimeConfigRequest) *ag
 	response.Spec.KnowledgeRefs = append([]string(nil), request.GetSpec().GetKnowledgeRefs()...)
 	response.Spec.McpServerIds = append([]string(nil), request.GetSpec().GetMcpServerIds()...)
 	response.Spec.RecipeIds = append([]string(nil), request.GetSpec().GetRecipeIds()...)
+	if selected := request.GetSpec().GetSearchProfile(); selected != nil {
+		provider := agentv1.SearchProvider_SEARCH_PROVIDER_BRAVE
+		baseURL := "https://api.search.brave.com/res/v1/web/search"
+		if selected.GetProfileId() == "tavily-default" {
+			provider = agentv1.SearchProvider_SEARCH_PROVIDER_TAVILY
+			baseURL = "https://api.tavily.com/search"
+		}
+		maxResults := selected.GetMaxResults()
+		if maxResults == 0 {
+			maxResults = 10
+		}
+		timeoutSeconds := selected.GetTimeoutSeconds()
+		if timeoutSeconds == 0 {
+			timeoutSeconds = 20
+		}
+		response.Spec.SearchProfile = &agentv1.SearchProfile{
+			ProfileId: selected.GetProfileId(), Provider: provider, BaseUrl: baseURL,
+			MaxResults: maxResults, TimeoutSeconds: timeoutSeconds,
+		}
+	}
 	return &agentv1.PutRuntimeConfigResponse{Config: response}
 }

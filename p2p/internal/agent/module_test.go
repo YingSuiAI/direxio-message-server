@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"testing"
 
 	"github.com/YingSuiAI/dirextalk-message-server/internal/dirextalkdomain"
@@ -62,15 +64,15 @@ func TestDedicatedChatRunnerDoesNotTakeOverOtherRuntimeActions(t *testing.T) {
 		t.Fatalf("agent.chat = %#v, %v", chat, actionErr)
 	}
 	models, actionErr := module.Handlers()["agent.models.list"](context.Background(), nil)
-	if actionErr != nil || models.(map[string]any)["source"] != "local" {
+	if actionErr != nil || models.(map[string]any)["source"] != "remote" {
 		t.Fatalf("agent.models.list = %#v, %v", models, actionErr)
 	}
 	tasks, actionErr := module.Handlers()["agent.cloud.tasks.list"](context.Background(), nil)
 	if actionErr != nil || tasks.(map[string]any)["source"] != "remote" {
 		t.Fatalf("agent.cloud.tasks.list = %#v, %v", tasks, actionErr)
 	}
-	if len(remote.invokes) != 2 || remote.invokes[0] != "agent.chat" || remote.invokes[1] != "agent.cloud.tasks.list" ||
-		len(local.invokes) != 1 || local.invokes[0] != "agent.models.list" {
+	if len(remote.invokes) != 3 || remote.invokes[0] != "agent.chat" || remote.invokes[1] != "agent.models.list" || remote.invokes[2] != "agent.cloud.tasks.list" ||
+		len(local.invokes) != 0 {
 		t.Fatalf("runner routing local=%v remote=%v", local.invokes, remote.invokes)
 	}
 
@@ -81,6 +83,78 @@ func TestDedicatedChatRunnerDoesNotTakeOverOtherRuntimeActions(t *testing.T) {
 		t.Fatalf("stream routing local=%v remote=%v", local.streams, remote.streams)
 	}
 }
+
+func TestRunnerErrorCodeReachesProductActionBoundary(t *testing.T) {
+	module := New(Config{ChatRunner: &failingRunner{
+		err: testCodedRunnerError{
+			message: "approval device relink required",
+			code:    "M_AGENT_APPROVAL_DEVICE_RELINK_REQUIRED",
+		},
+	}})
+
+	_, actionErr := module.Handlers()["agent.team.approval_device.bootstrap"](
+		context.Background(),
+		nil,
+	)
+	if actionErr == nil ||
+		actionErr.Status != http.StatusBadGateway ||
+		actionErr.Code != "M_AGENT_APPROVAL_DEVICE_RELINK_REQUIRED" ||
+		actionErr.Error != "approval device relink required" {
+		t.Fatalf("coded action error = %#v", actionErr)
+	}
+}
+
+func TestInvalidModelCredentialUsesClientErrorStatus(t *testing.T) {
+	module := New(Config{ChatRunner: &failingRunner{
+		err: testCodedRunnerError{
+			message: "DeepSeek API key contains unsupported characters.",
+			code:    "M_AGENT_MODEL_CREDENTIAL_INVALID",
+		},
+	}})
+
+	_, actionErr := module.Handlers()["agent.models.list"](
+		context.Background(),
+		nil,
+	)
+	if actionErr == nil ||
+		actionErr.Status != http.StatusBadRequest ||
+		actionErr.Code != "M_AGENT_MODEL_CREDENTIAL_INVALID" ||
+		actionErr.Error != "DeepSeek API key contains unsupported characters." {
+		t.Fatalf("invalid credential action error = %#v", actionErr)
+	}
+}
+
+type failingRunner struct {
+	err error
+}
+
+func (*failingRunner) Apply(context.Context, string) error { return nil }
+
+func (runner *failingRunner) Invoke(
+	context.Context,
+	string,
+	map[string]any,
+) (map[string]any, error) {
+	return nil, runner.err
+}
+
+func (*failingRunner) Stream(
+	context.Context,
+	string,
+	map[string]any,
+	func(nativeagent.Event) error,
+) error {
+	return errors.New("not implemented")
+}
+
+type testCodedRunnerError struct {
+	message string
+	code    string
+}
+
+func (err testCodedRunnerError) Error() string { return err.message }
+
+func (err testCodedRunnerError) ErrorCode() string { return err.code }
 
 type recordingRunner struct {
 	result  map[string]any

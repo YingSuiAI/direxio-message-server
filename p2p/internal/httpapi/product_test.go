@@ -134,8 +134,11 @@ func TestProductHandlerPublicAndWSTicketDispatch(t *testing.T) {
 	}
 }
 
-func TestAgentRuntimeProfileActionsRequireOwnerHTTPAndNoStore(t *testing.T) {
-	for _, action := range []string{serviceapi.AgentRuntimeProfileGetAction, serviceapi.AgentRuntimeProfileUpdateAction} {
+func TestAgentProfileActionsRequireOwnerHTTPAndNoStore(t *testing.T) {
+	for _, action := range []string{
+		serviceapi.AgentRuntimeProfileGetAction, serviceapi.AgentRuntimeProfileUpdateAction,
+		serviceapi.AgentSearchProfileGetAction, serviceapi.AgentSearchProfileUpdateAction,
+	} {
 		t.Run(action, func(t *testing.T) {
 			port := &productPortStub{actions: map[string]bool{action: true}, handleResult: map[string]any{"available": true}}
 			unauthorized := serveProduct(t, port, `{"action":"`+action+`"}`, "")

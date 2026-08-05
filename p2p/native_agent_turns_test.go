@@ -9,12 +9,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentturns"
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/nativeagent"
 	"github.com/coder/websocket"
 )
 
 func TestNativeAgentDurableTurnDeduplicatesAndReplays(t *testing.T) {
-	runner := &durableTurnRunner{}
+	runner := &durableTurnRunner{params: make(chan map[string]any, 1)}
 	service := NewService(Config{ServerName: "example.com", NativeAgentRunner: runner})
 	router := newP2PTestRouter(service)
 	server := httptest.NewServer(router)
@@ -40,6 +41,13 @@ func TestNativeAgentDurableTurnDeduplicatesAndReplays(t *testing.T) {
 	done := readRealtimeFrame(t, conn)
 	assertDurableEventFrame(t, delta, "delta", float64(1))
 	assertDurableEventFrame(t, done, "done", float64(2))
+	runtimeParams := <-runner.params
+	if runtimeParams["turn_id"] != nil || runtimeParams["after_seq"] != nil {
+		t.Fatalf("coordinator-only params reached runtime: %#v", runtimeParams)
+	}
+	if runtimeParams["prompt"] != "hello" || runtimeParams["model_profile"] == nil {
+		t.Fatalf("runtime params lost chat inputs: %#v", runtimeParams)
+	}
 
 	replayParams := cloneTestMap(params)
 	replayParams["after_seq"] = float64(1)
@@ -66,6 +74,52 @@ func TestNativeAgentDurableTurnDeduplicatesAndReplays(t *testing.T) {
 	conflict := readRealtimeFrame(t, conn)
 	if conflict["type"] != "server.native_agent_stream.error" || conflict["status"] != float64(http.StatusConflict) || conflict["code"] != "M_TURN_ID_REUSED" {
 		t.Fatalf("turn mismatch = %#v", conflict)
+	}
+}
+
+func TestNativeAgentDurableTurnRepairsStaleClientConversationRevision(t *testing.T) {
+	runner := &durableTurnRunner{params: make(chan map[string]any, 1)}
+	service := NewService(Config{ServerName: "example.com", NativeAgentRunner: runner})
+	previousDigest, err := agentturns.RequestDigest("agent.chat.stream", map[string]any{"prompt": "previous"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownerID := service.OwnerMXID()
+	if _, err = service.store.ReserveAgentTurn(context.Background(), agentturns.Candidate{
+		OwnerID: ownerID, TurnID: "previous-turn", ConversationID: "conversation-revision", Action: "agent.chat.stream", Digest: previousDigest,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, changed, err := service.store.MarkAgentTurnRunning(context.Background(), ownerID, "previous-turn"); err != nil || !changed {
+		t.Fatalf("mark previous turn running = (%v, %v)", changed, err)
+	}
+	if _, _, changed, err := service.store.FinishAgentTurn(
+		context.Background(), ownerID, "previous-turn", agentturns.StateSucceeded,
+		"runtime", "done", map[string]any{"conversation_revision": int64(24)}, "",
+	); err != nil || !changed {
+		t.Fatalf("finish previous turn = (%v, %v)", changed, err)
+	}
+
+	router := newP2PTestRouter(service)
+	server := httptest.NewServer(router)
+	defer server.Close()
+	conn := dialRealtimeWS(t, server.URL, mustCreateRealtimeWSTicket(t, router, service.AccessToken()))
+	defer conn.Close(websocket.StatusNormalClosure, "")
+	writeRealtimeFrame(t, conn, map[string]any{"type": "client.hello"})
+	_ = readRealtimeFrame(t, conn)
+	writeRealtimeFrame(t, conn, map[string]any{
+		"type": "client.native_agent_stream", "id": "stale-revision", "action": "agent.chat",
+		"params": map[string]any{
+			"turn_id": "new-turn", "conversation_id": "conversation-revision", "prompt": "continue",
+			"expected_conversation_revision": 23,
+		},
+	})
+	assertDurableAcceptedFrame(t, readRealtimeFrame(t, conn), "stale-revision", "new-turn", "conversation-revision")
+	_ = readRealtimeFrame(t, conn)
+	_ = readRealtimeFrame(t, conn)
+	runtimeParams := <-runner.params
+	if runtimeParams["expected_conversation_revision"] != int64(24) {
+		t.Fatalf("runtime revision = %#v, want 24", runtimeParams["expected_conversation_revision"])
 	}
 }
 
@@ -236,6 +290,7 @@ type durableTurnRunner struct {
 	executions    atomic.Int32
 	started       chan struct{}
 	release       chan struct{}
+	params        chan map[string]any
 	waitForCancel bool
 	startOnce     sync.Once
 }
@@ -274,8 +329,11 @@ func (r *durableTurnRunner) Invoke(context.Context, string, map[string]any) (map
 	return map[string]any{"ok": true}, nil
 }
 
-func (r *durableTurnRunner) Stream(ctx context.Context, _ string, _ map[string]any, emit func(nativeagent.Event) error) error {
+func (r *durableTurnRunner) Stream(ctx context.Context, _ string, params map[string]any, emit func(nativeagent.Event) error) error {
 	r.executions.Add(1)
+	if r.params != nil {
+		r.params <- cloneTestMap(params)
+	}
 	if r.started != nil {
 		r.startOnce.Do(func() { close(r.started) })
 	}

@@ -31,6 +31,7 @@ func (s *MemoryStore) ResetAccountState() {
 	s.events = nil
 	s.eventSeq = make(map[int64]struct{})
 	s.eventDedupe = make(map[string]int64)
+	s.agentEventCursors = make(map[string]int64)
 	s.reports = make(map[string]reportRecord)
 	s.operations = make(map[string]operations.Record)
 	s.legacyAgentInvocations = make(map[legacyAgentInvocationKey]legacygateway.InvocationRecord)

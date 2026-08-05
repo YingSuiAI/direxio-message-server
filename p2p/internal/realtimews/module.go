@@ -28,6 +28,7 @@ const (
 	TicketTTL                = 120 * time.Second
 	BatchLimit               = 100
 	DefaultHeartbeatInterval = 25 * time.Second
+	maxClientMessageBytes    = 1 << 20
 )
 
 // Ticket is the authenticated owner snapshot bound to a one-use upgrade token.
@@ -142,6 +143,7 @@ func (m *Module) Handler() http.HandlerFunc {
 		if err != nil {
 			return
 		}
+		conn.SetReadLimit(maxClientMessageBytes)
 		record, err := m.ConsumeTicket(ticket)
 		if err != nil {
 			_ = conn.Close(websocket.StatusPolicyViolation, "M_UNKNOWN_TOKEN")
@@ -172,10 +174,12 @@ func (m *Module) Handler() http.HandlerFunc {
 		}
 		m.touchSession(sessionID)
 		if err := wsjson.Write(ctx, conn, map[string]any{
-			"type":                  "server.ready",
-			"role":                  record.Role,
-			"heartbeat_interval_ms": int64(m.heartbeat / time.Millisecond),
-			"native_agent_turns":    1,
+			"type":                    "server.ready",
+			"role":                    record.Role,
+			"heartbeat_interval_ms":   int64(m.heartbeat / time.Millisecond),
+			"heartbeat_ack":           1,
+			"native_agent_stream_ack": 1,
+			"native_agent_turns":      1,
 		}); err != nil {
 			return
 		}
