@@ -62,6 +62,26 @@ func TestKnowledgeActionSchemasPinCurrentUploadAndConfigContract(t *testing.T) {
 	}
 }
 
+func TestKnowledgeSearchSchemaRequiresQueryAndResultEnvelope(t *testing.T) {
+	spec, ok := ActionSpecFor("agent.knowledge.search")
+	if !ok || spec.Schema == nil {
+		t.Fatal("agent.knowledge.search must publish a schema")
+	}
+	if !spec.Schema.Request["query"].Required {
+		t.Fatal("knowledge search query must be required")
+	}
+	for _, field := range []string{"items", "next_cursor", "search_mode"} {
+		if !spec.Schema.Response[field].Required {
+			t.Errorf("knowledge search response.%s must be required", field)
+		}
+	}
+	for _, field := range []string{"embedding_profile_id", "embedding_profile_revision", "embedding_model", "embedding_generation", "collection_config_digest"} {
+		if _, ok := spec.Schema.Response[field]; !ok {
+			t.Errorf("knowledge search provenance field %s was removed", field)
+		}
+	}
+}
+
 func TestActionSpecsReturnsStableOrderedCopy(t *testing.T) {
 	first := ActionSpecs()
 	second := ActionSpecs()

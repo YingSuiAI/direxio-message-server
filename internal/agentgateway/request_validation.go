@@ -1,9 +1,14 @@
 package agentgateway
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
+	"math/big"
+	"reflect"
+	"regexp"
+	"sort"
 	"strings"
 
 	capv1 "github.com/YingSuiAI/dirextalk-capability-api/gen/go/dirextalk/capability/v1"
@@ -14,6 +19,13 @@ import (
 // capability INVALID_ARGUMENT response: these failures are rejected before a
 // catalog lookup, grant, or operation is created.
 var ErrInvalidActionRequest = errors.New("native agent action request is invalid")
+
+// Keep the request-side key policy aligned with the service-binding output
+// sanitizer. Chat input is not scanned for secret-looking string values, but
+// a key that names a credential or bearer must never cross the gateway.
+var catalogSensitiveKeyRE = regexp.MustCompile(`(?i)(^|[^a-z0-9])(access[_-]?token|refresh[_-]?token|client[_-]?secret|authorization|headers?|cookies?|bearer|basic|secret|token|pass(?:word|wd|phrase)|credential|api[_-]?key|private[_-]?key)([^a-z0-9]|$)`)
+
+var maxInt64Rat = new(big.Rat).SetInt64(math.MaxInt64)
 
 // InvalidActionRequestError carries only a field name and a stable reason. It
 // never includes the value of a write-only field (for example api_key).
@@ -83,6 +95,9 @@ func validateChatRequest(action string, params map[string]any) error {
 			return invalidActionRequest(action, field, "is not supported")
 		}
 	}
+	if field := firstForbiddenChatRequestKey(params); field != "" {
+		return invalidActionRequest(action, field, "is not supported")
+	}
 
 	profileID, present := params["model_profile_id"]
 	if !present {
@@ -103,6 +118,259 @@ func validateChatRequest(action string, params map[string]any) error {
 	}
 	return nil
 }
+
+// firstForbiddenChatRequestKey walks only map keys and nested map/list
+// containers. In particular, ordinary string values are never inspected for
+// secret-like content; a prompt containing "api_key" remains valid.
+func firstForbiddenChatRequestKey(value any) string {
+	return walkChatRequestKeys(reflect.ValueOf(value))
+}
+
+type chatRequestMapEntry struct {
+	key   string
+	value reflect.Value
+}
+
+func walkChatRequestKeys(value reflect.Value) string {
+	for value.IsValid() && (value.Kind() == reflect.Interface || value.Kind() == reflect.Pointer) {
+		if value.IsNil() {
+			return ""
+		}
+		value = value.Elem()
+	}
+	if !value.IsValid() {
+		return ""
+	}
+
+	switch value.Kind() {
+	case reflect.Map:
+		if value.IsNil() {
+			return ""
+		}
+		entries := make([]chatRequestMapEntry, 0, value.Len())
+		for _, key := range value.MapKeys() {
+			normalized, ok := normalizedChatRequestMapKey(key)
+			if !ok {
+				continue
+			}
+			entries = append(entries, chatRequestMapEntry{key: normalized, value: value.MapIndex(key)})
+		}
+		// Map iteration order is deliberately randomized. Stable traversal keeps
+		// the field reported to callers deterministic when several keys are bad.
+		sort.Slice(entries, func(i, j int) bool { return entries[i].key < entries[j].key })
+		for _, entry := range entries {
+			if forbiddenChatRequestKey(entry.key) {
+				return strings.ToLower(strings.TrimSpace(entry.key))
+			}
+			if nested := walkChatRequestKeys(entry.value); nested != "" {
+				return nested
+			}
+		}
+	case reflect.Slice, reflect.Array:
+		for index := 0; index < value.Len(); index++ {
+			if nested := walkChatRequestKeys(value.Index(index)); nested != "" {
+				return nested
+			}
+		}
+	}
+	return ""
+}
+
+func normalizedChatRequestMapKey(value reflect.Value) (string, bool) {
+	for value.IsValid() && value.Kind() == reflect.Interface {
+		if value.IsNil() {
+			return "", false
+		}
+		value = value.Elem()
+	}
+	if !value.IsValid() || value.Kind() != reflect.String {
+		return "", false
+	}
+	// Preserve ASCII case for camel/acronym tokenization; comparisons and
+	// returned error fields lower-case the trimmed key at the boundary.
+	return strings.TrimSpace(value.String()), true
+}
+
+func forbiddenChatRequestKey(key string) bool {
+	key = strings.TrimSpace(key)
+	normalized := strings.ToLower(key)
+	if normalized == "" {
+		return false
+	}
+	// These are server-derived profile pins. credential_version would otherwise
+	// match the broad credential policy, so only the exact normalized spellings
+	// of the immutable triple remain admissible.
+	if isServerProfilePinKey(normalized) {
+		return false
+	}
+	if isUnsupportedChatKey(key) {
+		return true
+	}
+	return sensitiveChatKey(key)
+}
+
+func isServerProfilePinKey(key string) bool {
+	switch key {
+	case "model_profile_id", "model_profile_revision", "credential_version":
+		return true
+	default:
+		return false
+	}
+}
+
+func isUnsupportedChatKey(key string) bool {
+	for _, unsupported := range []string{
+		"tool_credentials", "model_profile", "client_model_profile_id",
+		"default_profile", "default_profile_id", "default_model_profile_id", "use_default_profile",
+	} {
+		if key == unsupported {
+			return true
+		}
+	}
+	joined := strings.Join(chatRequestKeyTokens(key), "_")
+	switch joined {
+	case "tool_credentials", "model_profile", "client_model_profile_id",
+		"default_profile", "default_profile_id", "default_model_profile_id", "use_default_profile",
+		"model_profile_id", "model_profile_revision":
+		// Profile pin variants (for example clientModelProfileId) are not
+		// server-derived pins and must not become a nested escape hatch.
+		return true
+	default:
+		return false
+	}
+}
+
+func sensitiveChatKey(key string) bool {
+	if catalogSensitiveKeyRE.MatchString(key) {
+		return true
+	}
+	tokens := chatRequestKeyTokens(key)
+	for index, token := range tokens {
+		normalized := singularChatKeyToken(token)
+		if sensitiveChatKeyToken(normalized) {
+			return true
+		}
+		if index+1 < len(tokens) {
+			next := singularChatKeyToken(tokens[index+1])
+			if (normalized == "api" || normalized == "private" || normalized == "client") && (next == "key" || next == "secret") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func sensitiveChatKeyToken(token string) bool {
+	switch token {
+	case "authorization", "header", "cookie", "bearer", "basic", "secret", "token", "pass", "password", "passwd", "passphrase", "credential":
+		return true
+	case "apikey", "privatekey", "clientsecret", "accesstoken", "refreshtoken", "bearertoken":
+		return true
+	default:
+		for _, suffix := range []string{
+			"authorization", "authorizations", "header", "headers", "cookie", "cookies", "bearer", "bearers", "basic", "basics",
+			"secret", "secrets", "token", "tokens", "pass", "passes", "password", "passwords", "passwd", "passwds",
+			"passphrase", "passphrases", "credential", "credentials", "apikey", "apikeys", "privatekey", "privatekeys",
+			"clientsecret", "clientsecrets", "accesstoken", "accesstokens", "refreshtoken", "refreshtokens", "bearertoken", "bearertokens",
+		} {
+			if strings.HasSuffix(token, suffix) && len(token) > len(suffix) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+func singularChatKeyToken(token string) string {
+	switch token {
+	case "headers":
+		return "header"
+	case "cookies":
+		return "cookie"
+	case "secrets":
+		return "secret"
+	case "tokens":
+		return "token"
+	case "basics":
+		return "basic"
+	case "bearers":
+		return "bearer"
+	case "passes":
+		return "pass"
+	case "passwords":
+		return "password"
+	case "passwds":
+		return "passwd"
+	case "passphrases":
+		return "passphrase"
+	case "credentials":
+		return "credential"
+	case "authorizations":
+		return "authorization"
+	case "keys":
+		return "key"
+	case "apikeys":
+		return "apikey"
+	case "privatekeys":
+		return "privatekey"
+	case "clientsecrets":
+		return "clientsecret"
+	case "accesstokens":
+		return "accesstoken"
+	case "refreshtokens":
+		return "refreshtoken"
+	case "bearertokens":
+		return "bearertoken"
+	default:
+		return token
+	}
+}
+
+// chatRequestKeyTokens lowercases ASCII keys, splits separators, and handles
+// both lowerCamelCase and acronym-to-word transitions (APIKey, HTTPHeaders).
+// It intentionally does not inspect values.
+func chatRequestKeyTokens(key string) []string {
+	runes := []rune(strings.TrimSpace(key))
+	if len(runes) == 0 {
+		return nil
+	}
+	tokens := make([]string, 0, 4)
+	current := make([]rune, 0, len(runes))
+	flush := func() {
+		if len(current) == 0 {
+			return
+		}
+		tokens = append(tokens, strings.ToLower(string(current)))
+		current = current[:0]
+	}
+	for index, char := range runes {
+		if !isASCIIAlphaNumeric(char) {
+			flush()
+			continue
+		}
+		if isASCIIUpper(char) && len(current) > 0 {
+			previous := runes[index-1]
+			var next rune
+			if index+1 < len(runes) {
+				next = runes[index+1]
+			}
+			if isASCIILower(previous) || (isASCIIUpper(previous) && isASCIILower(next)) {
+				flush()
+			}
+		}
+		current = append(current, char)
+	}
+	flush()
+	return tokens
+}
+
+func isASCIIAlphaNumeric(char rune) bool {
+	return char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' || char >= '0' && char <= '9'
+}
+
+func isASCIIUpper(char rune) bool { return char >= 'A' && char <= 'Z' }
+
+func isASCIILower(char rune) bool { return char >= 'a' && char <= 'z' }
 
 func validateModelCatalogRequest(action string, params map[string]any) error {
 	if params == nil {
@@ -154,6 +422,9 @@ func isModelKind(value string) bool {
 
 func positiveInteger(value any) bool {
 	switch typed := value.(type) {
+	case json.Number:
+		rational, ok := new(big.Rat).SetString(strings.TrimSpace(typed.String()))
+		return ok && rational.Sign() > 0 && rational.IsInt() && rational.Cmp(maxInt64Rat) <= 0
 	case int:
 		return typed > 0
 	case int8:
@@ -165,7 +436,7 @@ func positiveInteger(value any) bool {
 	case int64:
 		return typed > 0
 	case uint:
-		return typed > 0
+		return typed > 0 && uint64(typed) <= uint64(math.MaxInt64)
 	case uint8:
 		return typed > 0
 	case uint16:
@@ -173,12 +444,12 @@ func positiveInteger(value any) bool {
 	case uint32:
 		return typed > 0
 	case uint64:
-		return typed > 0
+		return typed > 0 && typed <= uint64(math.MaxInt64)
 	case float32:
 		value := float64(typed)
-		return value > 0 && !math.IsNaN(value) && !math.IsInf(value, 0) && value <= float64(math.MaxInt64) && math.Trunc(value) == value
+		return value > 0 && !math.IsNaN(value) && !math.IsInf(value, 0) && value < float64(math.MaxInt64) && math.Trunc(value) == value
 	case float64:
-		return typed > 0 && !math.IsNaN(typed) && !math.IsInf(typed, 0) && typed <= float64(math.MaxInt64) && math.Trunc(typed) == typed
+		return typed > 0 && !math.IsNaN(typed) && !math.IsInf(typed, 0) && typed < float64(math.MaxInt64) && math.Trunc(typed) == typed
 	default:
 		return false
 	}

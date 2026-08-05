@@ -6449,7 +6449,8 @@
             "type": "string"
           },
           "query": {
-            "type": "string"
+            "type": "string",
+            "required": true
           }
         },
         "response": {
@@ -6469,13 +6470,16 @@
             "type": "integer"
           },
           "items": {
-            "type": "array"
+            "type": "array",
+            "required": true
           },
           "next_cursor": {
-            "type": "string"
+            "type": "string",
+            "required": true
           },
           "search_mode": {
-            "type": "string"
+            "type": "string",
+            "required": true
           }
         }
       }

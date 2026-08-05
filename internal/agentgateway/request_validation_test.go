@@ -1,7 +1,9 @@
 package agentgateway
 
 import (
+	"encoding/json"
 	"errors"
+	"math"
 	"net/http"
 	"strings"
 	"testing"
@@ -18,6 +20,12 @@ func TestValidateChatRequestRequiresImmutableProfilePins(t *testing.T) {
 	}
 	if err := ValidateActionRequest("agent.chat", base); err != nil {
 		t.Fatalf("complete chat request rejected: %v", err)
+	}
+	jsonNumbers := cloneParams(base)
+	jsonNumbers["model_profile_revision"] = json.Number("2")
+	jsonNumbers["credential_version"] = json.Number("3")
+	if err := ValidateActionRequest("agent.chat", jsonNumbers); err != nil {
+		t.Fatalf("JSON-number chat profile pins rejected: %v", err)
 	}
 	for _, field := range []string{"model_profile_id", "model_profile_revision", "credential_version"} {
 		params := cloneParams(base)
@@ -42,6 +50,113 @@ func TestValidateChatRequestRequiresImmutableProfilePins(t *testing.T) {
 		params["model_profile_revision"] = value
 		if err := ValidateActionRequest("agent.chat", params); !errors.Is(err, ErrInvalidActionRequest) {
 			t.Errorf("revision %#v accepted: %v", value, err)
+		}
+	}
+}
+
+func TestValidateChatRequestRejectsNestedSensitiveKeysButNotPromptValues(t *testing.T) {
+	base := map[string]any{
+		"message":                "A prompt may mention api_key, authorization, and password.",
+		"model_profile_id":       "profile-id",
+		"model_profile_revision": int64(2),
+		"credential_version":     int64(3),
+	}
+	for _, test := range []struct {
+		name string
+		key  string
+	}{
+		{name: "tool credentials", key: "tool_credentials"},
+		{name: "credentials plural", key: "credentials"},
+		{name: "aws credentials", key: "aws_credentials"},
+		{name: "aws credentials compact", key: "awsCredentials"},
+		{name: "secrets plural", key: "secrets"},
+		{name: "tokens plural", key: "tokens"},
+		{name: "model profile", key: " model_profile "},
+		{name: "model profile camel variant", key: "modelProfileId"},
+		{name: "client profile", key: "CLIENT_MODEL_PROFILE_ID"},
+		{name: "client profile camel variant", key: "clientModelProfileId"},
+		{name: "credential version camel variant", key: "credentialVersion"},
+		{name: "api key", key: " API_KEY "},
+		{name: "api key compact", key: "ApiKey"},
+		{name: "api keys plural", key: "api_keys"},
+		{name: "authorization", key: "authorization"},
+		{name: "request headers camel", key: "requestHeaders"},
+		{name: "request headers compact", key: "requestheaders"},
+		{name: "access token", key: "access_token"},
+		{name: "bearer", key: "bearer"},
+		{name: "bearer token camel", key: "bearerToken"},
+		{name: "db pass camel", key: "dbPass"},
+		{name: "user pass camel", key: "userPass"},
+		{name: "pass exact", key: "pass"},
+		{name: "db passes plural", key: "dbPasses"},
+		{name: "http basic camel", key: "httpBasic"},
+		{name: "http basic auth camel", key: "httpBasicAuth"},
+		{name: "basic exact", key: "basic"},
+		{name: "http basics plural", key: "httpBasics"},
+		{name: "headers", key: "headers"},
+		{name: "cookie", key: "cookie"},
+		{name: "password", key: "password"},
+		{name: "passwords plural", key: "passwords"},
+		{name: "passwds plural", key: "passwds"},
+		{name: "passphrases plural", key: "passphrases"},
+		{name: "authorizations plural", key: "authorizations"},
+		{name: "secret", key: "secret"},
+		{name: "private key", key: "private_key"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			params := cloneParams(base)
+			params["metadata"] = []any{
+				map[string]any{"label": "ordinary value", "nested": map[string]string{test.key: "secret-value"}},
+			}
+			err := ValidateActionRequest("agent.chat.stream", params)
+			if !errors.Is(err, ErrInvalidActionRequest) {
+				t.Fatalf("nested key %q accepted: %v", test.key, err)
+			}
+			if strings.Contains(err.Error(), "secret-value") {
+				t.Fatalf("nested key %q error leaked its value: %v", test.key, err)
+			}
+		})
+	}
+
+	for _, value := range []any{
+		"api_key",
+		[]string{"authorization", "password"},
+		map[string]any{"message": "api_key"},
+	} {
+		params := cloneParams(base)
+		params["metadata"] = value
+		if err := ValidateActionRequest("agent.chat", params); err != nil {
+			t.Errorf("ordinary value %#v was rejected: %v", value, err)
+		}
+	}
+}
+
+func TestPositiveIntegerUsesExactInt64UpperBound(t *testing.T) {
+	max := uint64(math.MaxInt64)
+	for _, value := range []any{
+		int64(math.MaxInt64),
+		max,
+		json.Number("2"),
+		json.Number("2.0"),
+		json.Number("9223372036854775807"),
+		json.Number("9223372036854775807.0"),
+	} {
+		if !positiveInteger(value) {
+			t.Errorf("valid positive integer %#v was rejected", value)
+		}
+	}
+
+	for _, value := range []any{
+		uint64(math.MaxInt64) + 1,
+		uint(max) + 1,
+		float64(math.MaxInt64),
+		float32(math.MaxInt64),
+		json.Number("9223372036854775808"),
+		json.Number("9223372036854775808.0"),
+		json.Number("1e100"),
+	} {
+		if positiveInteger(value) {
+			t.Errorf("overflowing positive integer %#v was accepted", value)
 		}
 	}
 }

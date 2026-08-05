@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/YingSuiAI/dirextalk-message-server/internal/agentgateway"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/agentstream"
 	actionbase "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/action"
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/plugins"
@@ -107,7 +108,12 @@ func (c *connection) setDurableStreamParams(id string, params map[string]any) {
 	if c.durableParams == nil {
 		c.durableParams = map[string]map[string]any{}
 	}
-	c.durableParams[strings.TrimSpace(id)] = cloneMap(params)
+	// Cancellation only needs the validated turn identity. Never retain the
+	// original chat payload (which may contain arbitrary nested values) in the
+	// connection's durable state.
+	c.durableParams[strings.TrimSpace(id)] = map[string]any{
+		"turn_id": actionbase.String(params["turn_id"]),
+	}
 }
 
 func (c *connection) durableStreamParams(id string) map[string]any {
@@ -309,6 +315,21 @@ func (m *Module) startNativeAgentStream(ctx context.Context, client *connection,
 		client.send(nativeAgentStreamError(id, action, http.StatusBadRequest, "action is not a native agent stream action"))
 		return
 	}
+	if err := agentgateway.ValidateActionRequest(runnerAction, params); err != nil {
+		client.send(nativeAgentStreamError(id, action, http.StatusBadRequest, err.Error()))
+		return
+	}
+	turnID := actionbase.String(params["turn_id"])
+	if turnID != "" {
+		if !agentstream.ValidID(turnID) {
+			client.send(nativeAgentStreamError(id, action, http.StatusBadRequest, "turn_id is invalid"))
+			return
+		}
+		if !agentstream.ValidID(durableStreamConversationID(params)) {
+			client.send(nativeAgentStreamError(id, action, http.StatusBadRequest, "conversation_id is invalid"))
+			return
+		}
+	}
 	if m.agent == nil {
 		client.send(nativeAgentStreamError(id, action, http.StatusBadGateway, "native agent runtime is not configured"))
 		return
@@ -319,7 +340,7 @@ func (m *Module) startNativeAgentStream(ctx context.Context, client *connection,
 		client.send(nativeAgentStreamError(id, action, http.StatusConflict, "stream id is already active"))
 		return
 	}
-	if turnID := actionbase.String(params["turn_id"]); turnID != "" {
+	if turnID != "" {
 		client.markDurableStream(id)
 		client.setDurableStreamParams(id, params)
 		durable, ok := m.agent.(DurableAgentStreamPort)
@@ -374,7 +395,7 @@ func (m *Module) startNativeAgentStream(ctx context.Context, client *connection,
 			if errors.Is(err, agentstream.ErrTurnIDReused) {
 				status = http.StatusConflict
 				code = "M_TURN_ID_REUSED"
-			} else if strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "after_seq") {
+			} else if errors.Is(err, agentgateway.ErrInvalidActionRequest) || strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "after_seq") {
 				status = http.StatusBadRequest
 			}
 			frame := nativeAgentStreamError(id, action, status, err.Error())
@@ -417,7 +438,11 @@ func (m *Module) startNativeAgentStream(ctx context.Context, client *connection,
 			if streamCtx.Err() != nil {
 				return
 			}
-			_ = client.sendBlocking(ctx, nativeAgentStreamError(id, action, http.StatusBadGateway, err.Error()))
+			status := http.StatusBadGateway
+			if errors.Is(err, agentgateway.ErrInvalidActionRequest) {
+				status = http.StatusBadRequest
+			}
+			_ = client.sendBlocking(ctx, nativeAgentStreamError(id, action, status, err.Error()))
 			return
 		}
 		if !doneSent {

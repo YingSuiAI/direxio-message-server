@@ -31,7 +31,7 @@ func knowledgeSchema(action string) *ActionSchema {
 	case "create":
 		s.Request = map[string]ActionFieldSchema{"title": {Type: "string"}, "content": {Type: "string", Required: true}, "tags": {Type: "array"}, "idempotency_key": {Type: "string", Required: true}}
 	case "search":
-		s.Request = map[string]ActionFieldSchema{"query": {Type: "string"}, "page_size": {Type: "integer"}, "page_token": {Type: "string"}}
+		s.Request = map[string]ActionFieldSchema{"query": {Type: "string", Required: true}, "page_size": {Type: "integer"}, "page_token": {Type: "string"}}
 	case "status":
 		s.Request = nil
 	case "memories_list":
@@ -45,7 +45,7 @@ func knowledgeSchema(action string) *ActionSchema {
 	case "create":
 		s.Response = map[string]ActionFieldSchema{"memory_id": {Type: "string"}, "title": {Type: "string"}, "content": {Type: "string"}, "tags": {Type: "array"}, "created_at": {Type: "string"}, "replayed": {Type: "boolean"}, "embedding_indexed": {Type: "boolean"}, "embedding_profile_id": {Type: "string"}, "embedding_profile_revision": {Type: "integer"}, "embedding_model": {Type: "string"}}
 	case "search":
-		s.Response = map[string]ActionFieldSchema{"items": {Type: "array"}, "next_cursor": {Type: "string"}, "search_mode": {Type: "string"}, "embedding_profile_id": {Type: "string"}, "embedding_profile_revision": {Type: "integer"}, "embedding_model": {Type: "string"}, "embedding_generation": {Type: "string"}, "collection_config_digest": {Type: "string"}}
+		s.Response = map[string]ActionFieldSchema{"items": {Type: "array", Required: true}, "next_cursor": {Type: "string", Required: true}, "search_mode": {Type: "string", Required: true}, "embedding_profile_id": {Type: "string"}, "embedding_profile_revision": {Type: "integer"}, "embedding_model": {Type: "string"}, "embedding_generation": {Type: "string"}, "collection_config_digest": {Type: "string"}}
 	case "status":
 		s.Response = map[string]ActionFieldSchema{"supported": {Type: "boolean"}, "count": {Type: "integer"}, "embedding_indexed": {Type: "integer"}, "embedding_stale": {Type: "integer"}, "embedding_profile_id": {Type: "string"}, "embedding_profile_revision": {Type: "integer"}, "embedding_model": {Type: "string"}}
 	case "memories_list":

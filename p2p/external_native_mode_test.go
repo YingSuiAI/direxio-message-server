@@ -3,6 +3,8 @@ package p2p
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/YingSuiAI/dirextalk-message-server/internal/agentstream"
@@ -27,17 +29,21 @@ func (r *externalDeprovisionRunner) Stream(context.Context, string, map[string]a
 }
 
 type externalNativeRunnerProbe struct {
-	invoked string
+	invoked     string
+	invokeCalls int
+	streamCalls int
 }
 
 func (p *externalNativeRunnerProbe) Apply(context.Context, string) error { return nil }
 
 func (p *externalNativeRunnerProbe) Invoke(_ context.Context, action string, _ map[string]any) (map[string]any, error) {
 	p.invoked = action
+	p.invokeCalls++
 	return map[string]any{"ok": true}, nil
 }
 
 func (p *externalNativeRunnerProbe) Stream(context.Context, string, map[string]any, func(agentstream.Event) error) error {
+	p.streamCalls++
 	return nil
 }
 
@@ -92,6 +98,59 @@ func TestExternalNativeAgentModeDoesNotConstructEmbeddedRuntime(t *testing.T) {
 	}
 	if probe.invoked != "agent.chat.turns.list" {
 		t.Fatalf("external turn listing did not reach Agent Core: %q", probe.invoked)
+	}
+}
+
+func TestNativeAgentSensitiveChatKeyRejectedAtHTTPProductAction(t *testing.T) {
+	const secret = "http-secret-canary"
+	probe := &externalNativeRunnerProbe{}
+	service := NewService(Config{ServerName: "example.test", NativeAgentRunner: probe})
+	router := newP2PTestRouter(service)
+	req := jsonRequest(t, PathPrefix+"query", map[string]any{
+		"action": "agent.chat",
+		"params": map[string]any{
+			"message":                "hello",
+			"model_profile_id":       "profile-id",
+			"model_profile_revision": int64(2),
+			"credential_version":     int64(3),
+			"metadata":               []any{map[string]any{"dbPass": secret}},
+		},
+	})
+	req.Header.Set("Authorization", "Bearer "+service.AccessToken())
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("sensitive HTTP ProductAction status = %d, want %d; body=%s", recorder.Code, http.StatusBadRequest, recorder.Body.String())
+	}
+	if probe.invokeCalls != 0 {
+		t.Fatalf("sensitive HTTP ProductAction reached Agent runner %d time(s)", probe.invokeCalls)
+	}
+	if strings.Contains(recorder.Body.String(), secret) {
+		t.Fatalf("sensitive HTTP ProductAction response leaked value: %s", recorder.Body.String())
+	}
+}
+
+func TestNativeAgentJSONProfilePinsAcceptedAtHTTPProductAction(t *testing.T) {
+	probe := &externalNativeRunnerProbe{}
+	service := NewService(Config{ServerName: "example.test", NativeAgentRunner: probe})
+	req := jsonRequest(t, PathPrefix+"query", map[string]any{
+		"action": "agent.chat",
+		"params": map[string]any{
+			"message":                "hello",
+			"model_profile_id":       "profile-id",
+			"model_profile_revision": int64(2),
+			"credential_version":     int64(3),
+		},
+	})
+	req.Header.Set("Authorization", "Bearer "+service.AccessToken())
+	recorder := httptest.NewRecorder()
+	newP2PTestRouter(service).ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("valid HTTP ProductAction status = %d, want 200; body=%s", recorder.Code, recorder.Body.String())
+	}
+	if probe.invokeCalls != 1 {
+		t.Fatalf("valid HTTP ProductAction runner calls = %d, want 1", probe.invokeCalls)
 	}
 }
 
