@@ -230,6 +230,38 @@ container_config_image() { "$jq_bin" -r '.[0].Config.Image // ""' "$1"; }
 container_image_id() { "$jq_bin" -r '.[0].Image // ""' "$1"; }
 container_health() { "$jq_bin" -r '.[0].State.Health.Status // ""' "$1"; }
 
+legacy_health_is_unconfigured() {
+  local file=$1
+  "$jq_bin" -e '
+    .[0].Config.Healthcheck == null and
+    .[0].State.Health == null
+  ' "$file" >/dev/null 2>&1
+}
+
+classify_legacy_health() {
+  local file=$1 health
+  health=$(container_health "$file") || return 1
+  if [ "$health" = healthy ]; then
+    printf 'healthy'
+    return 0
+  fi
+  if [ -z "$health" ] && legacy_health_is_unconfigured "$file"; then
+    printf 'unconfigured-public-probe'
+    return 0
+  fi
+  return 1
+}
+
+verify_legacy_ready() {
+  local file=$1
+  [ "$(container_state "$file")" = running ] || return 1
+  case "${legacy_health:-}" in
+    healthy) [ "$(container_health "$file")" = healthy ] ;;
+    unconfigured-public-probe) legacy_health_is_unconfigured "$file" ;;
+    *) return 1 ;;
+  esac
+}
+
 labels_hash() {
   local file=$1
   "$jq_bin" -c '.[0].Labels // {} | to_entries | sort_by(.key)' "$file" | sha256sum | awk '{print $1}'
@@ -345,6 +377,22 @@ verify_file_binding() {
   local file=$1 expected=$2 actual
   actual=$(file_binding "$file") || return 1
   [ "$actual" = "$expected" ]
+}
+
+public_ca_file_binding() {
+  if [ -z "${public_ca:-}" ]; then
+    printf 'none'
+  else
+    file_binding "$public_ca"
+  fi
+}
+
+verify_public_ca_binding() {
+  case "${public_ca_binding:-}" in
+    none) [ -z "${public_ca:-}" ] ;;
+    '') return 1 ;;
+    *) [ -n "${public_ca:-}" ] && verify_file_binding "$public_ca" "$public_ca_binding" ;;
+  esac
 }
 
 require_protected_file() {
@@ -478,7 +526,7 @@ write_transaction() {
     printf 'candidate_caddy_container_id=%s\ncandidate_caddy_project=%s\ncandidate_caddy_image=%s\ncandidate_caddy_image_id=%s\ncandidate_caddy_repo_digest=%s\n' "$candidate_id" "$edge_project" "$caddy_image" "$candidate_image_id" "$candidate_repo_digest"
     printf 'public_network_name=%s\npublic_network_id=%s\npublic_network_labels_sha256=%s\n' "$edge_network" "$network_id" "$network_labels_hash"
     printf 'caddy_data_volume=%s\ncaddy_data_volume_fingerprint_sha256=%s\ncaddy_config_volume=%s\ncaddy_config_volume_fingerprint_sha256=%s\n' "$caddy_data_volume" "$data_volume_fingerprint" "$caddy_config_volume" "$config_volume_fingerprint"
-    printf 'caddyfile_binding=%s\nedge_compose_binding=%s\n' "$caddyfile_binding" "$edge_compose_binding"
+    printf 'edge_env_binding=%s\ncaddyfile_binding=%s\nedge_compose_binding=%s\npublic_ca_binding=%s\n' "$edge_env_binding" "$caddyfile_binding" "$edge_compose_binding" "$public_ca_binding"
   } >"$body"
   chmod 400 "$body"
   {
@@ -507,15 +555,15 @@ prepare_receipt_bodies() {
     printf 'caddy_image=%s\ncaddy_data_volume=%s\ncaddy_data_volume_fingerprint_sha256=%s\ncaddy_config_volume=%s\ncaddy_config_volume_fingerprint_sha256=%s\n' "$caddy_image" "$caddy_data_volume" "$data_volume_fingerprint" "$caddy_config_volume" "$config_volume_fingerprint"
     printf 'old_caddy_container_id=%s\nold_caddy_project=%s\nold_caddy_config_image=%s\nold_caddy_image_id=%s\nold_caddy_repo_digest=%s\nold_caddy_data_volume=%s\nold_caddy_data_volume_fingerprint_sha256=%s\nold_caddy_config_volume=%s\nold_caddy_config_volume_fingerprint_sha256=%s\nold_caddy_network=%s\nold_caddy_network_id=%s\nold_caddy_http_port=80\nold_caddy_https_port=443\nold_caddy_state=stopped\n' "$legacy_id" "$legacy_project" "$legacy_config_image" "$legacy_image_id" "$legacy_repo_digest" "$caddy_data_volume" "$data_volume_fingerprint" "$caddy_config_volume" "$config_volume_fingerprint" "$edge_network" "$network_id"
     printf 'new_caddy_container_id=%s\nnew_caddy_project=%s\nnew_caddy_image=%s\nnew_caddy_image_id=%s\nnew_caddy_repo_digest=%s\nnew_caddy_data_volume=%s\nnew_caddy_data_volume_fingerprint_sha256=%s\nnew_caddy_config_volume=%s\nnew_caddy_config_volume_fingerprint_sha256=%s\nnew_caddy_network=%s\nnew_caddy_network_id=%s\nnew_caddy_http_port=80\nnew_caddy_https_port=443\n' "$candidate_id" "$edge_project" "$caddy_image" "$candidate_image_id" "$candidate_repo_digest" "$caddy_data_volume" "$data_volume_fingerprint" "$caddy_config_volume" "$config_volume_fingerprint" "$edge_network" "$network_id"
-    printf 'active_caddy_container_id=%s\nactive_caddy_project=%s\nactive_caddy_image=%s\nactive_caddy_image_id=%s\nactive_caddy_repo_digest=%s\nactive_caddy_data_volume=%s\nactive_caddy_data_volume_fingerprint_sha256=%s\nactive_caddy_config_volume=%s\nactive_caddy_config_volume_fingerprint_sha256=%s\nactive_caddy_network=%s\nactive_caddy_network_id=%s\nactive_caddy_http_port=80\nactive_caddy_https_port=443\n' "$candidate_id" "$edge_project" "$caddy_image" "$candidate_image_id" "$candidate_repo_digest" "$caddy_data_volume" "$data_volume_fingerprint" "$caddy_config_volume" "$config_volume_fingerprint" "$edge_network" "$network_id"
-    printf 'caddyfile_binding=%s\nedge_compose_binding=%s\n' "$caddyfile_binding" "$edge_compose_binding"
+    printf 'active_caddy_container_id=%s\nactive_caddy_project=%s\nactive_caddy_image=%s\nactive_caddy_image_id=%s\nactive_caddy_repo_digest=%s\nactive_caddy_data_volume=%s\nactive_caddy_data_volume_fingerprint_sha256=%s\nactive_caddy_config_volume=%s\nactive_caddy_config_volume_fingerprint_sha256=%s\nactive_caddy_network=%s\nactive_caddy_network_id=%s\nactive_caddy_network_labels_sha256=%s\nactive_caddy_http_port=80\nactive_caddy_https_port=443\n' "$candidate_id" "$edge_project" "$caddy_image" "$candidate_image_id" "$candidate_repo_digest" "$caddy_data_volume" "$data_volume_fingerprint" "$caddy_config_volume" "$config_volume_fingerprint" "$edge_network" "$network_id" "$network_labels_hash"
+    printf 'edge_env_binding=%s\ncaddyfile_binding=%s\nedge_compose_binding=%s\npublic_ca_binding=%s\n' "$edge_env_binding" "$caddyfile_binding" "$edge_compose_binding" "$public_ca_binding"
   } >"$active_body"
   {
     printf '%s\n' '# dirextalk-edge-legacy-snapshot-v1'
     printf 'receipt_kind=adopted-edge-v1\nowner_uid=%s\noperation_id=%s\nrevision=%s\n' "$(id -u)" "$operation" "$revision"
     printf 'host_name=%s\nmachine_id=%s\ndocker_engine_id=%s\n' "$probe_host_name" "$probe_machine_id" "$probe_engine_id"
     printf 'legacy_caddy_container_id=%s\nlegacy_caddy_project=%s\nlegacy_caddy_config_image=%s\nlegacy_caddy_image_id=%s\nlegacy_caddy_repo_digest=%s\nlegacy_caddy_data_volume=%s\nlegacy_caddy_data_volume_fingerprint_sha256=%s\nlegacy_caddy_config_volume=%s\nlegacy_caddy_config_volume_fingerprint_sha256=%s\nlegacy_caddy_network=%s\nlegacy_caddy_network_id=%s\nlegacy_caddy_http_port=80\nlegacy_caddy_https_port=443\nlegacy_caddy_state=stopped\n' "$legacy_id" "$legacy_project" "$legacy_config_image" "$legacy_image_id" "$legacy_repo_digest" "$caddy_data_volume" "$data_volume_fingerprint" "$caddy_config_volume" "$config_volume_fingerprint" "$edge_network" "$network_id"
-    printf 'caddyfile_binding=%s\nedge_compose_binding=%s\n' "$caddyfile_binding" "$edge_compose_binding"
+    printf 'edge_env_binding=%s\ncaddyfile_binding=%s\nedge_compose_binding=%s\npublic_ca_binding=%s\n' "$edge_env_binding" "$caddyfile_binding" "$edge_compose_binding" "$public_ca_binding"
   } >"$legacy_body"
   chmod 400 "$active_body" "$legacy_body"
 }
@@ -548,8 +596,10 @@ load_transaction() {
   [ "$(read_kv "$txn_journal" caddy_data_volume_fingerprint_sha256)" = "$data_volume_fingerprint" ] || return 1
   [ "$(read_kv "$txn_journal" caddy_config_volume)" = "$caddy_config_volume" ] || return 1
   [ "$(read_kv "$txn_journal" caddy_config_volume_fingerprint_sha256)" = "$config_volume_fingerprint" ] || return 1
+  [ "$(read_kv "$txn_journal" edge_env_binding)" = "$edge_env_binding" ] || return 1
   [ "$(read_kv "$txn_journal" caddyfile_binding)" = "$caddyfile_binding" ] || return 1
   [ "$(read_kv "$txn_journal" edge_compose_binding)" = "$edge_compose_binding" ] || return 1
+  [ "$(read_kv "$txn_journal" public_ca_binding)" = "$public_ca_binding" ] || return 1
   valid_full_container_id "$candidate_id" || fail "transaction candidate ID is not full" || return 1
   require_protected_file "$txn_dir/active.receipt" || return 1
   require_protected_file "$txn_dir/legacy.snapshot" || return 1
@@ -627,6 +677,7 @@ recover_transaction() {
 
 probe_public() {
   local curl_common=(--fail --silent --show-error --max-time 20 --resolve "${edge_domain}:443:127.0.0.1")
+  verify_public_ca_binding || fail "public CA identity changed" || return 1
   [ -z "${public_ca:-}" ] || curl_common+=(--cacert "$public_ca")
   "$curl_bin" "${curl_common[@]}" --path-as-is "https://${edge_domain}${public_health_path}" >/dev/null 2>&1 || fail "public health check failed" || return 1
   "$curl_bin" "${curl_common[@]}" --path-as-is "https://${edge_domain}${well_known_path}" >/dev/null 2>&1 || fail "public Matrix well-known check failed" || return 1
@@ -668,7 +719,11 @@ probe() {
   ensure_output_parent "$probe_receipt" || return 1
   tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/dirextalk-edge-adopt-probe.XXXXXX")
   chmod 700 "$tmp_dir"
+  edge_env_binding=$(file_binding "$edge_env") || return 1
   read_edge_env || return 1
+  verify_file_binding "$edge_env" "$edge_env_binding" || fail "edge env identity changed during probe" || return 1
+  public_ca_binding=$(public_ca_file_binding) || return 1
+  verify_public_ca_binding || fail "public CA identity changed during probe" || return 1
   valid_full_container_id "$legacy_id" || fail "legacy Caddy ID must be the full 64-character ID" || return 1
 
   identity=$(machine_identity) || return 1
@@ -687,8 +742,9 @@ probe() {
   [ "$legacy_service" = caddy ] || fail "legacy Compose service label is not caddy" || return 1
   [ "$edge_project" != "$legacy_project" ] || fail "candidate edge project must differ from legacy project" || return 1
   verify_ports_80_443 "$tmp_dir/legacy.json" || fail "legacy Caddy must own ports 80 and 443" || return 1
-  [ "$("$jq_bin" -r '.[0].State.Status // ""' "$tmp_dir/legacy.json")" = running ] || fail "legacy Caddy is not running" || return 1
-  [ "$(container_health "$tmp_dir/legacy.json")" = healthy ] || fail "legacy Caddy is not healthy" || return 1
+  [ "$(container_state "$tmp_dir/legacy.json")" = running ] || fail "legacy Caddy is not running" || return 1
+  legacy_health=$(classify_legacy_health "$tmp_dir/legacy.json") || fail "legacy Caddy health state is unsupported" || return 1
+  verify_legacy_ready "$tmp_dir/legacy.json" || fail "legacy Caddy readiness changed during probe" || return 1
   verify_volume_mounts "$tmp_dir/legacy.json" "$caddy_data_volume" "$caddy_config_volume" || fail "legacy Caddy volume bindings differ from edge env" || return 1
   "$jq_bin" -e --arg network "$edge_network" '.[0].NetworkSettings.Networks[$network] != null' "$tmp_dir/legacy.json" >/dev/null 2>&1 || fail "legacy Caddy is not attached to the public network" || return 1
 
@@ -740,12 +796,14 @@ probe() {
     printf 'caddy_config_volume=%s\n' "$caddy_config_volume"
     printf 'caddy_config_volume_fingerprint_sha256=%s\n' "$config_volume_fingerprint"
     printf 'caddy_image_candidate=%s\n' "$caddy_image"
+    printf 'edge_env_dev_inode_uid_mode_sha256=%s\n' "$edge_env_binding"
     printf 'caddyfile_dev_inode_uid_mode_sha256=%s\n' "$caddyfile_binding"
     printf 'edge_compose_dev_inode_uid_mode_sha256=%s\n' "$edge_compose_binding"
+    printf 'public_ca_dev_inode_uid_mode_sha256=%s\n' "$public_ca_binding"
     printf 'public_domain=%s\n' "$edge_domain"
     printf 'public_health_path=%s\n' "$public_health_path"
     printf 'well_known_path=%s\n' "$well_known_path"
-    printf 'legacy_http_port=80\nlegacy_https_port=443\nlegacy_state=running\nlegacy_health=healthy\n'
+    printf 'legacy_http_port=80\nlegacy_https_port=443\nlegacy_state=running\nlegacy_health=%s\n' "$legacy_health"
   } >"$body"
   chmod 400 "$body"
   atomic_write_0400 "$probe_receipt" '# dirextalk-edge-adoption-probe-v1' "$body" || return 1
@@ -779,14 +837,20 @@ read_probe() {
   caddy_config_volume=$(read_kv "$probe_receipt" caddy_config_volume) || return 1
   config_volume_fingerprint=$(read_kv "$probe_receipt" caddy_config_volume_fingerprint_sha256) || return 1
   caddy_image=$(read_kv "$probe_receipt" caddy_image_candidate) || return 1
+  edge_env_binding=$(read_kv "$probe_receipt" edge_env_dev_inode_uid_mode_sha256) || return 1
   caddyfile_binding=$(read_kv "$probe_receipt" caddyfile_dev_inode_uid_mode_sha256) || return 1
   edge_compose_binding=$(read_kv "$probe_receipt" edge_compose_dev_inode_uid_mode_sha256) || return 1
+  public_ca_binding=$(read_kv "$probe_receipt" public_ca_dev_inode_uid_mode_sha256) || return 1
   edge_domain=$(read_kv "$probe_receipt" public_domain) || return 1
   public_health_path=$(read_kv "$probe_receipt" public_health_path) || return 1
   well_known_path=$(read_kv "$probe_receipt" well_known_path) || return 1
   bound_legacy_message_stack=$legacy_message_stack
   [ "$(read_kv "$probe_receipt" legacy_state)" = running ] || fail "probe legacy state is not running" || return 1
-  [ "$(read_kv "$probe_receipt" legacy_health)" = healthy ] || fail "probe legacy health is not healthy" || return 1
+  legacy_health=$(read_kv "$probe_receipt" legacy_health) || return 1
+  case "$legacy_health" in
+    healthy|unconfigured-public-probe) ;;
+    *) fail "probe legacy health mode is invalid" || return 1 ;;
+  esac
   valid_full_container_id "$legacy_id" || fail "probe legacy ID is not full" || return 1
   valid_project "$probe_edge_project" && valid_project "$legacy_project" && valid_project "$legacy_message_stack" || return 1
   valid_token "$operation" && valid_token "$revision" || fail "probe operation/revision is invalid" || return 1
@@ -801,7 +865,10 @@ revalidate_bound_files_and_host() {
   [ "$machine_id" = "$probe_machine_id" ] || fail "machine identity changed since probe" || return 1
   engine_id=$(docker_engine_identity) || fail "Docker Engine identity unavailable" || return 1
   [ "$engine_id" = "$probe_engine_id" ] || fail "Docker Engine identity changed since probe" || return 1
+  verify_file_binding "$edge_env" "$edge_env_binding" || fail "edge env identity changed since probe" || return 1
   read_edge_env || return 1
+  verify_file_binding "$edge_env" "$edge_env_binding" || fail "edge env identity changed during revalidation" || return 1
+  verify_public_ca_binding || fail "public CA identity changed since probe" || return 1
   [ "$edge_project" = "$probe_edge_project" ] || fail "edge project changed since probe" || return 1
   [ "$edge_network" = "$bound_network" ] || fail "public network changed since probe" || return 1
   [ "${legacy_message_stack:-legacy-$legacy_project}" = "$bound_legacy_message_stack" ] || fail "legacy message stack binding changed since probe" || return 1
@@ -947,7 +1014,8 @@ rollback_exact() {
   revalidate_objects || return 1
   "$docker_bin" start "$legacy_id" >/dev/null 2>&1 || return 1
   inspect_json "$legacy_id" "$tmp_dir/legacy-restored.json" || return 1
-  verify_container_identity "$tmp_dir/legacy-restored.json" "$legacy_id" "$legacy_project" "$legacy_config_image" "$edge_network" "$caddy_data_volume" "$caddy_config_volume" true || return 1
+  verify_container_identity "$tmp_dir/legacy-restored.json" "$legacy_id" "$legacy_project" "$legacy_config_image" "$edge_network" "$caddy_data_volume" "$caddy_config_volume" false || return 1
+  verify_legacy_ready "$tmp_dir/legacy-restored.json" || return 1
   verify_public_after_switch || return 1
 }
 
@@ -958,7 +1026,8 @@ stop_legacy_exact() {
   revalidate_objects || return 1
   inspect_json "$legacy_id" "$before" || return 1
   [ "$(container_id_from_json "$before")" = "$legacy_id" ] || return 1
-  [ "$(container_state "$before")" = running ] || return 1
+  verify_legacy_ready "$before" || return 1
+  probe_public || return 1
   if "$docker_bin" stop "$legacy_id" >/dev/null 2>&1; then
     stop_status=0
   else

@@ -134,9 +134,11 @@ die() {
   exit 1
 }
 EOF
-sed -n '/^existing_passwd_identity() {/,/^}$/p' "$script" >>"$runner_test_tmp/identity-functions.sh"
-sed -n '/^existing_group_identity() {/,/^}$/p' "$script" >>"$runner_test_tmp/identity-functions.sh"
-sed -n '/^verify_identity() {/,/^}$/p' "$script" >>"$runner_test_tmp/identity-functions.sh"
+{
+  sed -n '/^existing_passwd_identity() {/,/^}$/p' "$script"
+  sed -n '/^existing_group_identity() {/,/^}$/p' "$script"
+  sed -n '/^verify_identity() {/,/^}$/p' "$script"
+} >>"$runner_test_tmp/identity-functions.sh"
 cat >"$runner_test_tmp/bin/getent" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail

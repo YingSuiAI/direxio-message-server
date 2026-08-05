@@ -71,17 +71,30 @@ case "${1:-}" in
           : >"$state/post-stop-inspect-failed"
           exit 91
         fi
+        legacy_healthcheck=''
+        legacy_state="{\"Status\":\"$status\",\"Health\":{\"Status\":\"$health\"}}"
+        if [ "${DIREXTALK_MOCK_LEGACY_NO_HEALTH:-false}" = true ]; then
+          legacy_state="{\"Status\":\"$status\"}"
+        elif [ "${DIREXTALK_MOCK_LEGACY_INCOMPLETE_HEALTH:-false}" = true ]; then
+          legacy_healthcheck=',"Healthcheck":{"Test":["CMD-SHELL","wget -q -O - http://127.0.0.1:2019/config/ >/dev/null"]}'
+          legacy_state="{\"Status\":\"$status\"}"
+        fi
         cat <<JSON
-[{"Id":"$object","Image":"$legacy_image_id","Config":{"Image":"$legacy_config_image","Labels":{"com.docker.compose.project":"legacy-message","com.docker.compose.service":"caddy"}},"NetworkSettings":{"Networks":{"$network":{}}},"Mounts":[{"Type":"volume","Name":"$data_volume","Destination":"/data"},{"Type":"volume","Name":"$config_volume","Destination":"/config"}],"HostConfig":{"PortBindings":{"80/tcp":[{"HostPort":"80"}],"443/tcp":[{"HostPort":"443"}]},"ReadonlyRootfs":true,"CapDrop":["ALL"],"SecurityOpt":["no-new-privileges:true"]},"State":{"Status":"$status","Health":{"Status":"$health"}}}]
+[{"Id":"$object","Image":"$legacy_image_id","Config":{"Image":"$legacy_config_image","Labels":{"com.docker.compose.project":"legacy-message","com.docker.compose.service":"caddy"}$legacy_healthcheck},"NetworkSettings":{"Networks":{"$network":{}}},"Mounts":[{"Type":"volume","Name":"$data_volume","Destination":"/data"},{"Type":"volume","Name":"$config_volume","Destination":"/config"}],"HostConfig":{"PortBindings":{"80/tcp":[{"HostPort":"80"}],"443/tcp":[{"HostPort":"443"}]},"ReadonlyRootfs":true,"CapDrop":["ALL"],"SecurityOpt":["no-new-privileges:true"]},"State":$legacy_state}]
 JSON
         ;;
       "$candidate_id")
         status=created; health=starting
         [ -f "$state/candidate-started" ] && status=running && health=healthy
         [ -f "$state/candidate-removed" ] && status=exited
-        [ "${DIREXTALK_MOCK_CANDIDATE_NO_HEALTH:-false}" = true ] && health=""
+        candidate_healthcheck=',"Healthcheck":{"Test":["CMD-SHELL","wget -q -O - http://127.0.0.1:2019/config/ >/dev/null"]}'
+        candidate_state="{\"Status\":\"$status\",\"Health\":{\"Status\":\"$health\"}}"
+        if [ "${DIREXTALK_MOCK_CANDIDATE_NO_HEALTH:-false}" = true ]; then
+          candidate_healthcheck=''
+          candidate_state="{\"Status\":\"$status\"}"
+        fi
         cat <<JSON
-[{"Id":"$candidate_id","Image":"$candidate_image_id","Config":{"Image":"$candidate_image","Labels":{"com.docker.compose.project":"edge-new","com.docker.compose.service":"caddy"},"Healthcheck":{"Test":["CMD-SHELL","wget -q -O - http://127.0.0.1:2019/config/ >/dev/null"]}},"NetworkSettings":{"Networks":{"$network":{}}},"Mounts":[{"Type":"volume","Name":"$data_volume","Destination":"/data"},{"Type":"volume","Name":"$config_volume","Destination":"/config"}],"HostConfig":{"PortBindings":{"80/tcp":[{"HostPort":"80"}],"443/tcp":[{"HostPort":"443"}]},"ReadonlyRootfs":true,"CapDrop":["ALL"],"SecurityOpt":["no-new-privileges:true"]},"State":{"Status":"$status","Health":{"Status":"$health"}}}]
+[{"Id":"$candidate_id","Image":"$candidate_image_id","Config":{"Image":"$candidate_image","Labels":{"com.docker.compose.project":"edge-new","com.docker.compose.service":"caddy"}$candidate_healthcheck},"NetworkSettings":{"Networks":{"$network":{}}},"Mounts":[{"Type":"volume","Name":"$data_volume","Destination":"/data"},{"Type":"volume","Name":"$config_volume","Destination":"/config"}],"HostConfig":{"PortBindings":{"80/tcp":[{"HostPort":"80"}],"443/tcp":[{"HostPort":"443"}]},"ReadonlyRootfs":true,"CapDrop":["ALL"],"SecurityOpt":["no-new-privileges:true"]},"State":$candidate_state}]
 JSON
         ;;
       *3333333333333333333333333333333333333333333333333333333333333333) printf '[{"Id":"%s","RepoDigests":["%s"]}]\n' "$legacy_image_id" "$legacy_repo_digest" ;;
@@ -197,11 +210,54 @@ snapshot=$tmp_dir/output/legacy.snapshot
 [ "$(stat -c '%a' "$snapshot")" = 400 ]
 grep -Fq '# dirextalk-edge-receipt-v1' "$active"
 grep -Fq "active_caddy_container_id=$candidate_id" "$active"
+grep -Eq '^active_caddy_network_labels_sha256=[0-9a-f]{64}$' "$active"
 grep -Fq "legacy_caddy_container_id=$legacy_id" "$snapshot"
 grep -Fq -- "stop $legacy_id" "$DIREXTALK_MOCK_LOG"
 grep -Fq -- "start $candidate_id" "$DIREXTALK_MOCK_LOG"
 [ -e "$tmp_dir/probe/.adopt-edge-committed.$operation" ]
 [ "$(stat -c '%a' "$tmp_dir/probe/.adopt-edge-committed.$operation")" = 400 ]
+
+# A running legacy Caddy without any configured Docker healthcheck can be
+# adopted only after the real public health, well-known, and TLS probes pass.
+no_health_dir=$tmp_dir/probe/legacy-no-health
+mkdir -m 700 "$no_health_dir"
+rm -f -- "$DIREXTALK_MOCK_STATE"/* "$DIREXTALK_MOCK_LOG" "$DIREXTALK_CURL_LOG"
+export DIREXTALK_MOCK_LEGACY_NO_HEALTH=true
+export DIREXTALK_MOCK_PUBLIC_FAIL=true
+if "$script" probe "$edge_env" "$legacy_id" "$no_health_dir/public-fail.receipt" legacy-no-health-public-fail rev-no-health >/dev/null 2>&1; then
+  echo "unconfigured legacy health unexpectedly bypassed the public probe" >&2
+  exit 1
+fi
+[ ! -e "$no_health_dir/public-fail.receipt" ]
+if grep -Eq '(^| )(stop|start|rm|create)( |$)' "$DIREXTALK_MOCK_LOG"; then
+  echo "failed unconfigured legacy public probe caused a Docker mutation" >&2
+  exit 1
+fi
+unset DIREXTALK_MOCK_PUBLIC_FAIL
+legacy_no_health_probe=$no_health_dir/probe.receipt
+legacy_no_health_active=$no_health_dir/active.receipt
+legacy_no_health_snapshot=$no_health_dir/legacy.snapshot
+"$script" probe "$edge_env" "$legacy_id" "$legacy_no_health_probe" legacy-no-health rev-no-health >/dev/null
+grep -Fq 'legacy_health=unconfigured-public-probe' "$legacy_no_health_probe"
+"$script" commit "$edge_env" "$legacy_no_health_probe" legacy-no-health rev-no-health "$legacy_no_health_active" "$legacy_no_health_snapshot" >/dev/null
+grep -Fq -- "stop $legacy_id" "$DIREXTALK_MOCK_LOG"
+grep -Fq -- "start $candidate_id" "$DIREXTALK_MOCK_LOG"
+unset DIREXTALK_MOCK_LEGACY_NO_HEALTH
+
+# A partially configured legacy health state is neither healthy nor truly
+# unconfigured and must fail before a receipt or mutation can be produced.
+rm -f -- "$DIREXTALK_MOCK_STATE"/* "$DIREXTALK_MOCK_LOG"
+export DIREXTALK_MOCK_LEGACY_INCOMPLETE_HEALTH=true
+if "$script" probe "$edge_env" "$legacy_id" "$no_health_dir/incomplete.receipt" legacy-incomplete-health rev-incomplete >/dev/null 2>&1; then
+  echo "partially configured legacy health unexpectedly accepted" >&2
+  exit 1
+fi
+[ ! -e "$no_health_dir/incomplete.receipt" ]
+if grep -Eq '(^| )(stop|start|rm|create)( |$)' "$DIREXTALK_MOCK_LOG"; then
+  echo "partially configured legacy health caused a Docker mutation" >&2
+  exit 1
+fi
+unset DIREXTALK_MOCK_LEGACY_INCOMPLETE_HEALTH
 
 # Crash after each receipt install leaves the protected transaction journal;
 # rerunning the same operation revalidates exact IDs and installs only the
@@ -270,6 +326,28 @@ fi
 
 rm -rf -- "$tmp_dir/probe/stale"; mkdir -m 700 "$tmp_dir/probe/stale"
 unset DIREXTALK_MOCK_REPLACED
+
+# The protected edge environment is part of the probe identity; changing a
+# valid domain/path after probe must not reach candidate creation or stop.
+rm -rf -- "$tmp_dir/probe/edge-env-tamper"; mkdir -m 700 "$tmp_dir/probe/edge-env-tamper"
+rm -f -- "$DIREXTALK_MOCK_STATE"/* "$DIREXTALK_MOCK_LOG"
+tampered_edge_env=$tmp_dir/probe/edge-env-tamper/edge.env
+cp -- "$edge_env" "$tampered_edge_env"
+chmod 400 "$tampered_edge_env"
+tampered_env_probe=$tmp_dir/probe/edge-env-tamper/probe.receipt
+"$script" probe "$tampered_edge_env" "$legacy_id" "$tampered_env_probe" edge-env-tamper rev-edge-env-tamper >/dev/null
+chmod 600 "$tampered_edge_env"
+sed -i 's/^DIREXTALK_PUBLIC_DOMAIN=.*/DIREXTALK_PUBLIC_DOMAIN=changed.example/' "$tampered_edge_env"
+chmod 400 "$tampered_edge_env"
+: >"$DIREXTALK_MOCK_LOG"
+if "$script" commit "$tampered_edge_env" "$tampered_env_probe" edge-env-tamper rev-edge-env-tamper "$tmp_dir/output/edge-env-tamper.active" "$tmp_dir/output/edge-env-tamper.snapshot" >/dev/null 2>&1; then
+  echo "changed edge env identity unexpectedly accepted" >&2
+  exit 1
+fi
+if grep -Eq '(^| )(stop|start|rm|create)( |$)' "$DIREXTALK_MOCK_LOG"; then
+  echo "changed edge env identity caused a Docker mutation" >&2
+  exit 1
+fi
 rm -f -- "$DIREXTALK_MOCK_STATE"/*
 probe_stale=$tmp_dir/probe/stale/probe.receipt
 "$script" probe "$edge_env" "$legacy_id" "$probe_stale" stale-op stale-rev >/dev/null
@@ -284,6 +362,39 @@ if grep -Fq -- "stop $legacy_id" "$DIREXTALK_MOCK_LOG"; then
   exit 1
 fi
 unset DIREXTALK_MOCK_REPLACED
+
+# A public failure after candidate creation but immediately before the exact
+# stop keeps the legacy edge running. The protected journal then drives an
+# exact candidate cleanup on retry without crossing the stop boundary.
+rm -rf -- "$tmp_dir/probe/pre-stop-public-fail"; mkdir -m 700 "$tmp_dir/probe/pre-stop-public-fail"
+rm -f -- "$DIREXTALK_MOCK_STATE"/* "$DIREXTALK_MOCK_LOG" "$DIREXTALK_CURL_LOG"
+pre_stop_probe=$tmp_dir/probe/pre-stop-public-fail/probe.receipt
+pre_stop_active=$tmp_dir/probe/pre-stop-public-fail/active.receipt
+pre_stop_snapshot=$tmp_dir/probe/pre-stop-public-fail/legacy.snapshot
+"$script" probe "$edge_env" "$legacy_id" "$pre_stop_probe" pre-stop-public-fail rev-pre-stop >/dev/null
+: >"$DIREXTALK_MOCK_LOG"
+export DIREXTALK_MOCK_PUBLIC_FAIL=true
+if "$script" commit "$edge_env" "$pre_stop_probe" pre-stop-public-fail rev-pre-stop "$pre_stop_active" "$pre_stop_snapshot" >/dev/null 2>&1; then
+  echo "pre-stop public failure unexpectedly succeeded" >&2
+  exit 1
+fi
+unset DIREXTALK_MOCK_PUBLIC_FAIL
+grep -Fq -- 'create --no-start caddy' "$DIREXTALK_MOCK_LOG"
+if grep -Fq -- "stop $legacy_id" "$DIREXTALK_MOCK_LOG"; then
+  echo "pre-stop public failure crossed the legacy stop boundary" >&2
+  exit 1
+fi
+[ -f "$tmp_dir/probe/pre-stop-public-fail/.adopt-edge-txn.pre-stop-public-fail/journal" ]
+if "$script" commit "$edge_env" "$pre_stop_probe" pre-stop-public-fail rev-pre-stop "$pre_stop_active" "$pre_stop_snapshot" >/dev/null 2>&1; then
+  echo "uncommitted pre-stop candidate recovery unexpectedly reported success" >&2
+  exit 1
+fi
+grep -Fq -- "rm -f $candidate_id" "$DIREXTALK_MOCK_LOG"
+if grep -Fq -- "stop $legacy_id" "$DIREXTALK_MOCK_LOG"; then
+  echo "pre-stop candidate recovery crossed the legacy stop boundary" >&2
+  exit 1
+fi
+[ ! -e "$tmp_dir/probe/pre-stop-public-fail/.adopt-edge-txn.pre-stop-public-fail" ]
 
 rm -rf -- "$tmp_dir/probe/failure"; mkdir -m 700 "$tmp_dir/probe/failure"
 rm -f -- "$DIREXTALK_MOCK_STATE"/*
@@ -316,6 +427,23 @@ if grep -Eq -- "stop|start|create|rm" "$DIREXTALK_MOCK_LOG"; then
   echo "invalid receipt caused a Docker mutation" >&2
   exit 1
 fi
+
+# The legacy-only exception must never weaken the candidate healthcheck gate.
+rm -rf -- "$tmp_dir/probe/candidate-no-health"; mkdir -m 700 "$tmp_dir/probe/candidate-no-health"
+rm -f -- "$DIREXTALK_MOCK_STATE"/* "$DIREXTALK_MOCK_LOG"
+candidate_no_health_probe=$tmp_dir/probe/candidate-no-health/probe.receipt
+"$script" probe "$edge_env" "$legacy_id" "$candidate_no_health_probe" candidate-no-health rev-candidate-no-health >/dev/null
+: >"$DIREXTALK_MOCK_LOG"
+export DIREXTALK_MOCK_CANDIDATE_NO_HEALTH=true
+if "$script" commit "$edge_env" "$candidate_no_health_probe" candidate-no-health rev-candidate-no-health "$tmp_dir/output/candidate-no-health.active" "$tmp_dir/output/candidate-no-health.snapshot" >/dev/null 2>&1; then
+  echo "candidate without Docker healthcheck unexpectedly accepted" >&2
+  exit 1
+fi
+if grep -Fq -- "stop $legacy_id" "$DIREXTALK_MOCK_LOG"; then
+  echo "candidate without Docker healthcheck crossed the legacy stop boundary" >&2
+  exit 1
+fi
+unset DIREXTALK_MOCK_CANDIDATE_NO_HEALTH
 
 # Edge env parsing must reject values that would be unsafe in curl URLs or
 # silently change defaults when an optional key is malformed.

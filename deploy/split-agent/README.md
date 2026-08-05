@@ -546,8 +546,17 @@ receipt binds the current UID, host/machine identity and Docker Engine ID,
 operation/revision confirmation, the exact legacy container ID, Config.Image,
 RepoDigest and image ID, Compose labels, public network object and labels,
 both Caddy volume objects, ports, reviewed Caddyfile and edge Compose file
-device/inode/UID/mode plus SHA-256, and public health, Matrix well-known, and
-TLS checks. The receipt path must not exist and is never overwritten.
+device/inode/UID/mode plus SHA-256, the same binding for the edge environment
+and optional public CA file, and public health, Matrix well-known, and TLS
+checks. The receipt path must not exist and is never overwritten.
+The legacy readiness field is one of exactly two values: `healthy` requires
+the existing Docker health status to remain healthy, while
+`unconfigured-public-probe` requires both Docker health configuration and
+state to remain absent and relies on the successful public probes. The same
+readiness mode and public endpoints are checked again immediately before the
+exact legacy container is stopped. This exception applies only to the legacy
+container; the new candidate always requires a configured, healthy Docker
+healthcheck.
 
 After reviewing the receipt, commit only with the exact operation and revision
 confirmation. The commit takes an exclusive operation lock, revalidates every
