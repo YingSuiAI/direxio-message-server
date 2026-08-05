@@ -441,7 +441,9 @@ unit_property() {
 }
 
 verify_unit_definition() {
-  local unit=$1 template=$2 user=$3 parent=$4 delegate subgroup fragment_path dropins
+  local unit=$1 template=$2 user=$3 parent=$4 delegate delegate_controllers controller
+  local subgroup fragment_path dropins
+  local -a controller_items
   fragment_path=$(unit_property "$unit" FragmentPath)
   [ "$fragment_path" = "$unit_dir/$template" ] || \
     die "$unit FragmentPath is not the repository-owned template: $unit"
@@ -453,7 +455,21 @@ verify_unit_definition() {
   [ "$(unit_property "$unit" Group)" = "$user" ] || die "$unit Group property is not fixed"
   [ "$(unit_property "$unit" Slice)" = "$parent" ] || die "$unit Slice property is not stack-bound"
   delegate=$(unit_property "$unit" Delegate)
-  [ "$delegate" = 'cpu memory pids' ] || die "$unit Delegate property is not exactly cpu memory pids"
+  [ "$delegate" = yes ] || die "$unit Delegate property is not enabled"
+  delegate_controllers=$(unit_property "$unit" DelegateControllers)
+  read -r -a controller_items <<<"$delegate_controllers"
+  [ "${#controller_items[@]}" -eq 3 ] || \
+    die "$unit DelegateControllers must contain exactly cpu memory pids"
+  for controller in "${controller_items[@]}"; do
+    case "$controller" in
+      cpu|memory|pids) ;;
+      *) die "$unit DelegateControllers contains unsupported controller $controller" ;;
+    esac
+  done
+  for controller in cpu memory pids; do
+    printf ' %s ' "$delegate_controllers" | grep -Fq " $controller " || \
+      die "$unit DelegateControllers is missing $controller"
+  done
   subgroup=$(unit_property "$unit" DelegateSubgroup)
   [ "$subgroup" = keeper ] || die "$unit DelegateSubgroup property is not keeper"
   [ "$(unit_property "$unit" LoadState)" = loaded ] || die "$unit is not loaded"

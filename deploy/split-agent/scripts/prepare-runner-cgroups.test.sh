@@ -180,4 +180,75 @@ if PATH="$runner_test_path" DIREXTALK_FAKE_IDENTITY_COLLISION=true bash -c '
 fi
 grep -Fq 'UID 65531 is already assigned to another host user' "$runner_test_tmp/identity-collision.stderr"
 
+# systemd exposes Delegate= as a boolean plus a separate controller set in
+# `systemctl show`; it does not echo the unit-file token list through the
+# Delegate property. Accept any ordering of the exact required set and reject
+# missing controllers or a disabled boolean.
+cat >"$runner_test_tmp/unit-functions.sh" <<'EOF'
+die() {
+  printf '%s\n' "$*" >&2
+  exit 1
+}
+EOF
+sed -n '/^unit_property() {/,/^}$/p' "$script" >>"$runner_test_tmp/unit-functions.sh"
+sed -n '/^verify_unit_definition() {/,/^}$/p' "$script" >>"$runner_test_tmp/unit-functions.sh"
+cat >"$runner_test_tmp/unit-template.service" <<'EOF'
+[Service]
+ExecStart=/usr/bin/sleep infinity
+EOF
+cat >"$runner_test_tmp/bin/systemctl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[ "$1" = show ]
+property=''
+for argument in "$@"; do
+  case "$argument" in --property=*) property=${argument#--property=} ;; esac
+done
+case "$property" in
+  FragmentPath) printf '%s/unit-template.service\n' "$DIREXTALK_FAKE_UNIT_DIR" ;;
+  DropInPaths) ;;
+  User|Group) printf 'dirextalk-extension-runner\n' ;;
+  Slice) printf 'd-abcdefghijklmnopqrstuvwxyz-extension.slice\n' ;;
+  Delegate) printf '%s\n' "${DIREXTALK_FAKE_DELEGATE:-yes}" ;;
+  DelegateControllers) printf '%s\n' "${DIREXTALK_FAKE_DELEGATE_CONTROLLERS:-pids cpu memory}" ;;
+  DelegateSubgroup) printf 'keeper\n' ;;
+  LoadState) printf 'loaded\n' ;;
+  *) exit 2 ;;
+esac
+EOF
+chmod 755 "$runner_test_tmp/bin/systemctl"
+PATH="$runner_test_path" DIREXTALK_FAKE_UNIT_DIR="$runner_test_tmp" bash -c '
+  source "$1"
+  unit_dir=$2
+  verify_unit_definition \
+    dirextalk-extension-runner@d-abcdefghijklmnopqrstuvwxyz.service \
+    unit-template.service dirextalk-extension-runner \
+    d-abcdefghijklmnopqrstuvwxyz-extension.slice
+' _ "$runner_test_tmp/unit-functions.sh" "$runner_test_tmp"
+for invalid_delegate_case in disabled missing; do
+  delegate=yes
+  controllers='pids cpu memory'
+  case "$invalid_delegate_case" in
+    disabled) delegate=no ;;
+    missing) controllers='cpu memory' ;;
+  esac
+  if PATH="$runner_test_path" DIREXTALK_FAKE_UNIT_DIR="$runner_test_tmp" \
+    DIREXTALK_FAKE_DELEGATE="$delegate" DIREXTALK_FAKE_DELEGATE_CONTROLLERS="$controllers" \
+    bash -c '
+      source "$1"
+      unit_dir=$2
+      verify_unit_definition \
+        dirextalk-extension-runner@d-abcdefghijklmnopqrstuvwxyz.service \
+        unit-template.service dirextalk-extension-runner \
+        d-abcdefghijklmnopqrstuvwxyz-extension.slice
+    ' _ "$runner_test_tmp/unit-functions.sh" "$runner_test_tmp" \
+    >"$runner_test_tmp/delegate-$invalid_delegate_case.stdout" \
+    2>"$runner_test_tmp/delegate-$invalid_delegate_case.stderr"; then
+    echo "invalid Delegate case was unexpectedly accepted: $invalid_delegate_case" >&2
+    exit 1
+  fi
+done
+grep -Fq 'Delegate property is not enabled' "$runner_test_tmp/delegate-disabled.stderr"
+grep -Fq 'DelegateControllers must contain exactly cpu memory pids' "$runner_test_tmp/delegate-missing.stderr"
+
 echo "prepare-runner-cgroups fixture tests passed"
