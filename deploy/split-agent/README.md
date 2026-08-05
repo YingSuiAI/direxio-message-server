@@ -118,6 +118,29 @@ manifest for audit. To remove only this exact stack, run
 `deploy/split-agent/scripts/cleanup-local.sh /absolute/path/.run/split`; add
 `--purge` only when the fresh databases and volumes may be discarded.
 
+The root host release operator may pause or resume only the three Agent runtime
+containers through the receipt-bound wrappers after installing them at a
+root-owned fixed path. A host updater integration must own both that path and
+the provisioned `OUTPUT_DIR`; neither value may come from a public request:
+
+    deploy/split-agent/scripts/stop-agent-local.sh /absolute/path/.run/split
+    deploy/split-agent/scripts/restart-agent-local.sh /absolute/path/.run/split
+
+These wrappers consume the complete `.cleanup-receipt` IDs for `agent`,
+`extension-runner`, and `core-runner` only. Stop order is Agent then both
+runners; restart order is both runners healthy then Agent healthy. A mixed
+known state is recovered through an exact stop/start sequence, while missing,
+replaced, unknown, or uninspectable identities fail closed. Exit status `0`
+means the requested mutation completed, `3` means stop found the runtime
+already stopped, and `1` means an infrastructure or identity check failed.
+Restart always performs a real stop/start boundary, including for a healthy
+runtime. The wrappers never invoke Compose, stop `message-server`, Postgres,
+or Qdrant, or remove containers/resources. They are host-side updater/release
+operations. An updater consumer must invoke them as direct argv, treat stop
+status `3` as an expected negative state, and fail on other non-zero statuses.
+Flutter and other public clients must connect to message-server and must never
+call these scripts or Docker directly.
+
 The message-server portal owner is initialized by the protected
 `portal.bootstrap` action, not by the ordinary Matrix `create-account` binary.
 Provisioning generates a separate mode 0400 portal-password file and Compose

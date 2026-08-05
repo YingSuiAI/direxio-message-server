@@ -41,7 +41,12 @@ printf '%s\n' "$*" >>"$FAKE_DOCKER_LOG"
 if [ "${1:-}" = image ] && [ "${2:-}" = inspect ]; then
   case "${3:-}" in
     *dirextalk/agent@*) printf '%s\n' "${FAKE_DOCKER_AGENT_REVISION:?}" ;;
-    *dirextalk/message-server@*) printf '%s\n' "${FAKE_DOCKER_MESSAGE_REVISION:?}" ;;
+    *dirextalk/message-server@*)
+      case "${5:-}" in
+        '{{.Config.User}}') printf '%s' "${FAKE_DOCKER_MESSAGE_USER:-}" ;;
+        *) printf '%s\n' "${FAKE_DOCKER_MESSAGE_REVISION:?}" ;;
+      esac
+      ;;
     *) exit 98 ;;
   esac
   exit 0
@@ -90,11 +95,12 @@ chmod +x "$docker_bin/docker"
 
 run_gate() {
   local agent_revision_value=${1:-$agent_revision} message_revision_value=${2:-$message_revision}
-  local missing_binary=${3:-} smoke_status=${4:-}
+  local missing_binary=${3:-} smoke_status=${4:-} message_user=${5:-}
   PATH="$docker_bin:$PATH" \
     FAKE_DOCKER_LOG="$docker_log" \
     FAKE_DOCKER_AGENT_REVISION="$agent_revision_value" \
     FAKE_DOCKER_MESSAGE_REVISION="$message_revision_value" \
+    FAKE_DOCKER_MESSAGE_USER="$message_user" \
     FAKE_DOCKER_MISSING_BINARY="$missing_binary" \
     FAKE_DOCKER_SMOKE_STATUS="$smoke_status" \
     "$script_dir/verify-production-images.sh" "$env_file" "$attestation"
@@ -106,6 +112,12 @@ grep -Fq -- 'image inspect docker.io/dirextalk/message-server@sha256:' "$docker_
 grep -Fq -- 'run --rm --entrypoint /usr/local/bin/dirextalk-agent docker.io/dirextalk/agent@sha256:' "$docker_log"
 grep -Fq -- 'run --rm --entrypoint /usr/local/bin/dirextalk-extension-runner docker.io/dirextalk/agent@sha256:' "$docker_log"
 grep -Fq -- 'run --rm --entrypoint /usr/local/bin/dirextalk-core-runner docker.io/dirextalk/agent@sha256:' "$docker_log"
+
+if output=$(run_gate "$agent_revision" "$message_revision" '' '' 65532 2>&1); then
+  echo "non-root message-server image unexpectedly accepted" >&2
+  exit 1
+fi
+printf '%s\n' "$output" | grep -Fq 'must use UID 0'
 
 if output=$(run_gate "$agent_revision" "$message_revision" /usr/local/bin/dirextalk-extension-runner 2>&1); then
   echo "missing Agent binary unexpectedly accepted" >&2

@@ -123,6 +123,15 @@ else
   die "message-server image metadata inspection failed"
 fi
 [ "$message_revision" = "$message_source_revision" ] || die "message-server image revision label does not match the attested message-server source revision"
+if message_user=$(docker image inspect "$message_image" --format '{{.Config.User}}' 2>/dev/null); then
+  :
+else
+  die "message-server image runtime-user inspection failed"
+fi
+case "$message_user" in
+  ''|0|0:0|0:) ;;
+  *) die "message-server image must use UID 0 to read the protected runtime secrets" ;;
+esac
 
 smoke_agent_binary() {
   local binary=$1 expected_status=$2 usage_marker=$3 output status

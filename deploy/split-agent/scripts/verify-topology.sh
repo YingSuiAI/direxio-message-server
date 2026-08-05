@@ -105,6 +105,10 @@ shellcheck \
   "$script_dir/build-local.sh" \
   "$script_dir/start-local.sh" \
   "$script_dir/start-local.test.sh" \
+  "$script_dir/agent-runtime-local-common.sh" \
+  "$script_dir/stop-agent-local.sh" \
+  "$script_dir/restart-agent-local.sh" \
+  "$script_dir/agent-runtime-local.test.sh" \
   "$script_dir/verify-first-fresh.sh" \
   "$script_dir/verify-first-fresh.test.sh" \
   "$script_dir/prepare-runner-cgroups.sh" \
@@ -129,6 +133,7 @@ shellcheck \
 "$script_dir/initialize-capability-ca.test.sh" >/dev/null
 "$script_dir/accept-local.test.sh" >/dev/null
 "$script_dir/start-local.test.sh" >/dev/null
+"$script_dir/agent-runtime-local.test.sh" >/dev/null
 "$script_dir/verify-first-fresh.test.sh" >/dev/null
 "$script_dir/prepare-runner-cgroups.test.sh" >/dev/null
 "$script_dir/provision-local.test.sh" >/dev/null
