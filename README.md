@@ -1,6 +1,9 @@
 # Dirextalk Message Server
 
-Dirextalk Message Server is Dirextalk's backend contract authority. It combines a Matrix-compatible homeserver, the ProductCore action API, product policy, projections, Native Agent, external MCP access, and PostgreSQL-backed runtime storage in one Go monolith.
+Dirextalk Message Server is Dirextalk's backend contract authority. It combines
+a Matrix-compatible homeserver, ProductCore actions, product policy,
+projections, external MCP access, and the authenticated proxy to the separately
+deployed Native Agent runtime in one Go service.
 
 It is based on Element Dendrite, but this repository is maintained as a Dirextalk product server rather than a general-purpose Matrix homeserver distribution.
 
@@ -17,18 +20,16 @@ Native Agent:
   remote forwarding, Matrix write orchestration, and projection reads.
 - PostgreSQL-backed P2P tables are projection/read models unless a current
   contract explicitly makes a record authoritative.
-- Native Agent and `POST /mcp` are backend-owned capabilities. They are not
-  installed, configured, or invoked through the plugin lifecycle. Native Agent
-  stores the owner-configured Tavily key encrypted; ProductCore exposes only
-  write-only update and safe configured/hint/revision state. `agent.chat` and
-  `agent.chat.stream` require the explicit model profile id, profile revision,
-  and credential version pins; chat requests do not carry inline profiles or
-  tool credentials and do not fall back to a default profile.
+- Flutter connects only to Message Server. The external `dirextalk-agent`
+  service owns Native Agent execution and data; Message Server preserves the
+  existing owner-authenticated `agent.*` actions and Native Agent WS frames.
+- `POST /mcp` and Agent Product Capability callbacks reuse Message Server's
+  product/Matrix services. They do not make Native Agent part of the plugin
+  lifecycle or create a second client-facing API.
 
 ## Runtime
 
 - Production entry point: `cmd/dirextalk-message-server`
-- Compatibility entry point: `cmd/dendrite`
 - Docker image: `dirextalk/message-server:latest`
 - Default config path in Docker: `/etc/dirextalk-message-server/message-server.yaml`
 - Default data path in Docker: `/var/dirextalk-message-server`
@@ -152,10 +153,8 @@ tooling, or Agent/MCP behavior:
 - [Generated ProductCore action contract](docs/product-action-contract.json)
 - [Current project documentation](docs/current-project-documentation.md)
 - [Current Agent and MCP contract](docs/agent-mcp-current-contract.md)
-- [Embedded Agent and Execution V2 contract](docs/agent-core-integration-development-contract.md)
+- [External Agent Core integration contract](docs/agent-core-integration-development-contract.md)
 - [Execution V2 ADR](docs/adr/2026-07-31-execution-orchestration-v2.md)
-
-For historical interface audit only, see the [API change record](docs/api-interface-change-record.md).
 
 ## Documentation
 
@@ -163,10 +162,10 @@ Current maintained docs are intentionally small. Historical Dendrite site docs, 
 
 - [Current project documentation](docs/current-project-documentation.md)
 - [Current Agent and MCP contract](docs/agent-mcp-current-contract.md)
-- [API change record (historical audit)](docs/api-interface-change-record.md)
 - [Release notes](release/RELEASE_NOTES.md)
 - [Docker image notes](docs/dirextalk-message-server.md)
 - [Push gateway contract](docs/dirextalk-push-gateway.md)
+- [Split Agent deployment](deploy/split-agent/README.md)
 
 ## License
 

@@ -1,6 +1,8 @@
 # Dirextalk Message Server
 
-Dirextalk Message Server 是 Dirextalk 的后端合约权威。在一个 Go monolith 中合并 Matrix 兼容 homeserver、ProductCore action API、产品策略、projection、Native Agent、外部 MCP 访问和 PostgreSQL-backed 运行时存储。
+Dirextalk Message Server 是 Dirextalk 的后端合约权威。一个 Go 服务同时提供
+Matrix 兼容 homeserver、ProductCore action、产品策略、projection、外部 MCP，
+并作为客户端访问独立 Native Agent runtime 的认证代理。
 
 本仓库基于 Element Dendrite，但维护目标是 Dirextalk 产品服务，而不是通用 Matrix homeserver 发行版。
 
@@ -16,17 +18,16 @@ Dirextalk Message Server 是 Dirextalk 的后端合约权威。在一个 Go mono
   Matrix 写入编排和 projection 读取。
 - PostgreSQL-backed P2P 表默认是 projection/read model，只有当前合约明确
   声明时才作为权威记录。
-- Native Agent 和 `POST /mcp` 是后端拥有的能力，不通过 plugin 生命周期安装、
-  配置或调用。Native Agent 加密保存 owner 配置的 Tavily key；ProductCore
-  只提供 write-only 更新和安全的 configured/hint/revision 状态。`agent.chat` 和
-  `agent.chat.stream` 必须携带明确的模型 profile id、profile revision、credential
-  version 三个 pin；聊天请求不携带 inline profile 或 tool credentials，也不会回退
-  到默认 profile。
+- Flutter 只连接 Message Server。外部 `dirextalk-agent` 拥有 Native Agent
+  执行和数据；Message Server 保持现有 owner-authenticated `agent.*` actions
+  和 Native Agent WS frames。
+- `POST /mcp` 与 Agent Product Capability callback 复用 Message Server 的
+  产品/Matrix 服务，但不会把 Native Agent 放入 plugin 生命周期，也不会新增
+  第二套客户端 API。
 
 ## 运行时
 
 - 生产入口：`cmd/dirextalk-message-server`
-- 兼容入口：`cmd/dendrite`
 - Docker 镜像：`dirextalk/message-server:latest`
 - Docker 默认配置路径：`/etc/dirextalk-message-server/message-server.yaml`
 - Docker 默认数据路径：`/var/dirextalk-message-server`
@@ -148,10 +149,8 @@ go test ./p2p ./internal/productpolicy -count=1
 - [生成后的 ProductCore action 合约](docs/product-action-contract.json)
 - [当前项目文档](docs/current-project-documentation.md)
 - [当前 Agent 和 MCP 合约](docs/agent-mcp-current-contract.md)
-- [Embedded Agent 与 Execution V2 合约](docs/agent-core-integration-development-contract.md)
+- [外部 Agent Core 集成合约](docs/agent-core-integration-development-contract.md)
 - [Execution V2 ADR](docs/adr/2026-07-31-execution-orchestration-v2.md)
-
-仅用于历史接口审计的 [API 变更记录](docs/api-interface-change-record.md)。
 
 ## 文档
 
@@ -159,10 +158,10 @@ go test ./p2p ./internal/productpolicy -count=1
 
 - [当前项目文档](docs/current-project-documentation.md)
 - [当前 Agent 和 MCP 合约](docs/agent-mcp-current-contract.md)
-- [API 变更记录（历史审计）](docs/api-interface-change-record.md)
 - [Release notes](release/RELEASE_NOTES.md)
 - [Docker 镜像说明](docs/dirextalk-message-server.md)
 - [Push Gateway 合约](docs/dirextalk-push-gateway.md)
+- [拆分 Agent 部署说明](deploy/split-agent/README.md)
 
 ## License
 

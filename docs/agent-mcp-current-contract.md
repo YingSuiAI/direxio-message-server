@@ -33,7 +33,7 @@ capability live.
 - `dirextalk-agent` owns Native Agent conversations, models, encrypted provider credentials, knowledge and long-term memory, tasks, schedules, Skills/MCP lifecycle, Execution V2, AWS state, and runtime data. `dirextalk-message-server` owns the Flutter-facing owner-authenticated `agent.*` actions and `client.native_agent_stream` / `server.native_agent_stream.*` frames, and proxies them to the external Agent Capability gRPC service. Flutter never connects to `dirextalk-agent` directly.
 - The message server exposes product contacts, rooms, members, messages, and channel content back to the Agent through the separate Product Capability gRPC service. A Product Capability handler must not synchronously call back into Agent. Both directions carry the authenticated owner, account generation, granted scopes, operation identity, and call-chain fence; loops fail closed.
 - Native Agent is not installed, enabled, configured, or invoked through `plugins.*`. Backend `plugins.*` actions remain for non-Agent plugins.
-- Model-backed Native Agent `agent.chat` and `agent.chat.stream` require the owner-selected `model_profile_id` together with positive `model_profile_revision` and `credential_version` pins. The message server forwards those pins unchanged; inline profiles, tool credentials, legacy client profile ids, and default-profile fallback are rejected before capability execution. Compression and other server-owned workflows retain their separately documented default behavior. Flutter configures profiles through the proxied model-profile actions and sends only profile identifiers and exact revision pins; it does not persist or send inline API keys after server-profile synchronization. Model API keys are write-only and must not be returned, logged, or injected into unrelated extension/runtime state.
+- Model-backed Native Agent `agent.chat` and `agent.chat.stream` require the owner-selected `model_profile_id` together with positive `model_profile_revision` and `credential_version` pins. The message server forwards those pins unchanged; inline profiles, tool credentials, client profile aliases, and default-profile fallback are rejected before capability execution. Compression and other server-owned workflows retain their separately documented default behavior. Flutter configures profiles through the proxied model-profile actions and sends only profile identifiers and exact revision pins; it does not persist or send inline API keys after server-profile synchronization. Model API keys are write-only and must not be returned, logged, or injected into unrelated extension/runtime state.
 - Native Agent BYOK web search uses an Agent-owned encrypted Tavily credential.
   Owners read safe state with `agent.web_search.config.get`, update it with
   revision-checked `agent.web_search.config.update`, and verify it with
@@ -41,10 +41,10 @@ capability live.
   write-only, and is never returned through config, test, chat, logs, errors,
   durable turns, or events. Readback exposes only configured state and the
   non-secret fixed hint `configured`.
-- The current Web Search provider set is exactly `tavily`. Future providers
-  extend the capability with provider-specific schemas, validation, adapters,
-  and encrypted fields; neither ProductCore nor Agent exposes an arbitrary
-  key/value credential store.
+- The current Web Search provider set is exactly `tavily`. Additional providers
+  require provider-specific schemas, validation, adapters, and encrypted
+  fields; neither ProductCore nor Agent exposes an arbitrary key/value
+  credential store.
 - Chat and stream requests do not accept `tool_credentials`; the compiled
   `web_search` Eino tool is available only from enabled, configured Agent-owned
   web-search state. This is a single credential path, not a request fallback.
@@ -107,7 +107,8 @@ capability live.
 ### Native Agent schedule chat tools
 
 - Interactive Native Agent turns expose only bounded read-only `native_agent_schedules_list`, `native_agent_schedules_get`, `native_agent_schedule_runs_list`, and `native_agent_schedule_runs_get` tools. ProductCore `agent.schedules.*` actions remain the owner-authenticated CRUD/runtime surface.
-- The former Native Agent schedule write proposal/confirmation flow (`native_agent_schedules_confirm` and its durable schedule-confirmation store) has been retired and removed. Native Agent no longer stages or confirms create, update, enable, delete, or run-now mutations, and no dormant compatibility path remains.
+- Native Agent does not stage or confirm create, update, enable, delete, or
+  run-now schedule mutations.
 - These read-only tools are separate from the restricted scheduled runner allowlist and from the Online Agent Matrix room/timeline. The scheduled runner cannot call mutation tools.
 
 ## Execution Orchestration V2 (contract and release gate)
@@ -136,8 +137,3 @@ advertised.
 - `dirextalk-deployer` creates the Agent Matrix session, writes service-scoped `dirextalk-connect` configuration, records the canonical `/mcp` endpoint and Agent bearer credential, and generates only the runtime-specific MCP artifacts allowed by the capability registry.
 - Neither consumer owns MCP business logic. They must not recreate a local MCP CLI, daemon, proxy, stdio bridge, listening port, fixed `mcp.*` product action path, or alternate endpoint.
 - Flutter reads Online Agent availability from Matrix state in `agent_room_id` and uses backend-owned `agent.*` actions and native stream frames for Native Agent. It does not call fixed `mcp.*` product actions.
-
-## Retired Legacy Matrix Gateway (Release Gate M history)
-
-- The Release Gate M Legacy Matrix Gateway adapter, public facade, runtime consumer, and reservation storage implementation have been removed. No startup switch, client path, or dormant runtime module remains in Message Server; the historical `dirextalk.agent_gateway.v1`/`io.dirextalk.agent.invoke.v1` contract is not exposed.
-- PostgreSQL migration v38 and its `p2p_legacy_agent_invocations` table DDL remain registered solely so upgraded databases can open and retain historical schema. No current runtime reads or writes that table.
