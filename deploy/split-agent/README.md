@@ -543,8 +543,9 @@ mode-0700 receipt directory, then probe the exact full legacy Caddy ID:
 
 The probe is read-only with respect to Docker. Its protected mode-0400
 receipt binds the current UID, host/machine identity and Docker Engine ID,
-operation/revision confirmation, the exact legacy container ID, Config.Image,
-RepoDigest and image ID, Compose labels, public network object and labels,
+operation/revision confirmation, the exact legacy container ID, its approved
+Docker Hub Caddy Config.Image tag, exact image ID and normalized RepoDigest,
+Compose labels, public network object and labels,
 both Caddy volume objects, ports, reviewed Caddyfile and edge Compose file
 device/inode/UID/mode plus SHA-256, the same binding for the edge environment
 and optional public CA file, and public health, Matrix well-known, and TLS

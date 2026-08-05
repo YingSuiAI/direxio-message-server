@@ -304,6 +304,23 @@ repo_digest_from_image_json() {
 
 image_id_from_image_json() { "$jq_bin" -r '.[0].Id // .[0].ID // ""' "$1"; }
 
+valid_legacy_caddy_config_image() {
+  printf '%s' "$1" | grep -Eq '^(caddy|library/caddy|docker\.io/library/caddy|index\.docker\.io/library/caddy)(:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?$' || valid_image "$1"
+}
+
+legacy_caddy_repo_digest_from_image_json() {
+  "$jq_bin" -r '
+    [
+      (.[0].RepoDigests // [])[]? |
+      select(type == "string") |
+      select(test("^(docker\\.io/)?(library/)?caddy@sha256:[0-9a-f]{64}$")) |
+      sub("^docker\\.io/"; "") |
+      sub("^library/"; "") |
+      "docker.io/library/" + .
+    ] | unique | if length == 1 then .[0] else "" end
+  ' "$1"
+}
+
 verify_image_binding() {
   local image=$1 image_file=$2 expected_id=$3 expected_repo=$4 actual_id actual_repo
   valid_image "$image" || return 1
@@ -311,6 +328,14 @@ verify_image_binding() {
   actual_repo=$(repo_digest_from_image_json "$image" "$image_file")
   [ -n "$actual_id" ] && [ "$actual_id" = "$expected_id" ] || return 1
   [ -n "$actual_repo" ] && [ "$actual_repo" = "$expected_repo" ] || return 1
+}
+
+verify_legacy_image_binding() {
+  local image_file=$1 expected_id=$2 expected_repo=$3 actual_id actual_repo
+  actual_id=$(image_id_from_image_json "$image_file")
+  actual_repo=$(legacy_caddy_repo_digest_from_image_json "$image_file")
+  [ -n "$actual_id" ] && [ "$actual_id" = "$expected_id" ] || return 1
+  [ -n "$actual_repo" ] && [ "$actual_repo" = "$expected_repo" ]
 }
 
 verify_ports_80_443() {
@@ -737,6 +762,7 @@ probe() {
   legacy_service=$("$jq_bin" -r '.[0].Config.Labels["com.docker.compose.service"] // ""' "$tmp_dir/legacy.json")
   [ -n "$legacy_config_image" ] && [ -n "$legacy_image_id" ] || fail "legacy image identity is incomplete" || return 1
   valid_safe_id "$legacy_config_image" || fail "legacy Config.Image is invalid" || return 1
+  valid_legacy_caddy_config_image "$legacy_config_image" || fail "legacy Config.Image is not an approved Docker Hub Caddy reference" || return 1
   valid_safe_id "$legacy_image_id" || fail "legacy image ID is invalid" || return 1
   valid_project "$legacy_project" || fail "legacy Compose project label is invalid" || return 1
   [ "$legacy_service" = caddy ] || fail "legacy Compose service label is not caddy" || return 1
@@ -748,8 +774,8 @@ probe() {
   verify_volume_mounts "$tmp_dir/legacy.json" "$caddy_data_volume" "$caddy_config_volume" || fail "legacy Caddy volume bindings differ from edge env" || return 1
   "$jq_bin" -e --arg network "$edge_network" '.[0].NetworkSettings.Networks[$network] != null' "$tmp_dir/legacy.json" >/dev/null 2>&1 || fail "legacy Caddy is not attached to the public network" || return 1
 
-  image_json "$legacy_config_image" "$tmp_dir/legacy-image.json" || fail "legacy image inspect failed" || return 1
-  legacy_repo_digest=$(repo_digest_from_image_json "$legacy_config_image" "$tmp_dir/legacy-image.json")
+  image_json "$legacy_image_id" "$tmp_dir/legacy-image.json" || fail "legacy image inspect failed" || return 1
+  legacy_repo_digest=$(legacy_caddy_repo_digest_from_image_json "$tmp_dir/legacy-image.json")
   [ -n "$legacy_repo_digest" ] || fail "legacy image has no bound RepoDigest" || return 1
   [ "$(image_id_from_image_json "$tmp_dir/legacy-image.json")" = "$legacy_image_id" ] || fail "legacy image ID differs from container identity" || return 1
 
@@ -893,8 +919,8 @@ revalidate_objects() {
   volume_json "$caddy_config_volume" "$tmp_dir/config-volume-pre.json" || return 1
   [ "$(volume_fingerprint_from_json "$tmp_dir/data-volume-pre.json")" = "$data_volume_fingerprint" ] || fail "Caddy data volume identity changed" || return 1
   [ "$(volume_fingerprint_from_json "$tmp_dir/config-volume-pre.json")" = "$config_volume_fingerprint" ] || fail "Caddy config volume identity changed" || return 1
-  image_json "$legacy_config_image" "$tmp_dir/legacy-image-pre.json" || return 1
-  verify_image_binding "$legacy_config_image" "$tmp_dir/legacy-image-pre.json" "$legacy_image_id" "$legacy_repo_digest" || fail "legacy image RepoDigest/image ID changed" || return 1
+  image_json "$legacy_image_id" "$tmp_dir/legacy-image-pre.json" || return 1
+  verify_legacy_image_binding "$tmp_dir/legacy-image-pre.json" "$legacy_image_id" "$legacy_repo_digest" || fail "legacy image RepoDigest/image ID changed" || return 1
 }
 
 candidate_create_and_verify() {

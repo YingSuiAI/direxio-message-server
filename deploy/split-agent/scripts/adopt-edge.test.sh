@@ -28,7 +28,7 @@ state=$DIREXTALK_MOCK_STATE
 legacy_id=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 replacement_id=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
 candidate_id=dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
-legacy_config_image=docker.io/library/caddy@sha256:3333333333333333333333333333333333333333333333333333333333333333
+legacy_config_image=caddy:2
 candidate_image=docker.io/library/caddy@sha256:4444444444444444444444444444444444444444444444444444444444444444
 network=legacy-message-public
 network_id=net-legacy-123
@@ -36,7 +36,7 @@ data_volume=caddy-data
 config_volume=caddy-config
 legacy_image_id=sha256:1111111111111111111111111111111111111111111111111111111111111111
 candidate_image_id=sha256:2222222222222222222222222222222222222222222222222222222222222222
-legacy_repo_digest=$legacy_config_image
+legacy_repo_digest=caddy@sha256:3333333333333333333333333333333333333333333333333333333333333333
 candidate_repo_digest=$candidate_image
 engine_id=engine-adoption-1
 
@@ -106,7 +106,13 @@ JSON
     [ "${2:-}" = inspect ] || exit 1
     image=${3:-}
     case "$image" in
-      "$legacy_config_image") printf '[{"Id":"%s","RepoDigests":["%s"]}]\n' "$legacy_image_id" "$legacy_repo_digest" ;;
+      "$legacy_config_image"|"$legacy_image_id")
+        if [ "${DIREXTALK_MOCK_LEGACY_NO_REPO_DIGEST:-false}" = true ]; then
+          printf '[{"Id":"%s","RepoDigests":[]}]\n' "$legacy_image_id"
+        else
+          printf '[{"Id":"%s","RepoDigests":["%s"]}]\n' "$legacy_image_id" "$legacy_repo_digest"
+        fi
+        ;;
       "$candidate_image") printf '[{"Id":"%s","RepoDigests":["%s"]}]\n' "$candidate_image_id" "$candidate_repo_digest" ;;
       *3333333333333333333333333333333333333333333333333333333333333333) printf '[{"Id":"%s","RepoDigests":["%s"]}]\n' "$legacy_image_id" "$legacy_repo_digest" ;;
       *4444444444444444444444444444444444444444444444444444444444444444) printf '[{"Id":"%s","RepoDigests":["%s"]}]\n' "$candidate_image_id" "$candidate_repo_digest" ;;
@@ -258,6 +264,21 @@ if grep -Eq '(^| )(stop|start|rm|create)( |$)' "$DIREXTALK_MOCK_LOG"; then
   exit 1
 fi
 unset DIREXTALK_MOCK_LEGACY_INCOMPLETE_HEALTH
+
+# A legacy tag is acceptable only when the exact container image object still
+# exposes one matching Docker Hub Caddy RepoDigest.
+rm -f -- "$DIREXTALK_MOCK_STATE"/* "$DIREXTALK_MOCK_LOG"
+export DIREXTALK_MOCK_LEGACY_NO_REPO_DIGEST=true
+if "$script" probe "$edge_env" "$legacy_id" "$no_health_dir/no-repo-digest.receipt" legacy-no-repo-digest rev-no-repo >/dev/null 2>&1; then
+  echo "legacy image without a RepoDigest unexpectedly accepted" >&2
+  exit 1
+fi
+[ ! -e "$no_health_dir/no-repo-digest.receipt" ]
+if grep -Eq '(^| )(stop|start|rm|create)( |$)' "$DIREXTALK_MOCK_LOG"; then
+  echo "legacy image without a RepoDigest caused a Docker mutation" >&2
+  exit 1
+fi
+unset DIREXTALK_MOCK_LEGACY_NO_REPO_DIGEST
 
 # Crash after each receipt install leaves the protected transaction journal;
 # rerunning the same operation revalidates exact IDs and installs only the
