@@ -3,10 +3,17 @@ set -euo pipefail
 
 script_dir=$(cd -- "$(dirname -- "$0")" && pwd -P)
 script=$script_dir/accept-local.sh
+provision_script=$script_dir/provision-local.sh
+provision_test=$script_dir/provision-local.test.sh
 [ -x "$script" ] || { echo "accept-local.sh must be executable" >&2; exit 1; }
+[ -x "$provision_script" ] || { echo "provision-local.sh must be executable" >&2; exit 1; }
+[ -x "$provision_test" ] || { echo "provision-local.test.sh must be executable" >&2; exit 1; }
 bash -n "$script"
+bash -n "$provision_script"
+bash -n "$provision_test"
 if command -v shellcheck >/dev/null 2>&1; then
   shellcheck -x "$script"
+  shellcheck -x "$provision_script" "$provision_test"
 fi
 
 # Contract guard: the helper must use protected files and the message-server
@@ -16,6 +23,9 @@ grep -Fq -- '--config' "$script"
 grep -Fq -- '/_p2p/query' "$script"
 grep -Fq -- '/_p2p/health' "$script"
 grep -Fq -- 'portal.account.delete' "$script"
+grep -Fq -- "account_delete_enabled=\$(env_or DIREXTALK_ACCEPTANCE_ACCOUNT_DELETE true)" "$script"
+grep -Fq -- "case \"\$account_delete_enabled\" in true|false)" "$script"
+grep -Fq -- 'DIREXTALK_ACCEPTANCE_CLEANUP_AFTER=true is incompatible with account deletion disabled' "$script"
 grep -Fq -- 'agent.knowledge.upload.start' "$script"
 grep -Fq -- 'agent.knowledge.memory.create' "$script"
 grep -Fq -- 'agent.knowledge.memories.update' "$script"
@@ -24,9 +34,64 @@ grep -Fq -- ".source_id == \$id" "$script"
 grep -Fq -- 'memory-search true' "$script"
 grep -Fq -- 'agent.messages.send' "$script"
 grep -Fq -- 'agent.core.model_profiles.sync' "$script"
+grep -Fq -- 'agent.models.list' "$script"
+grep -Fq -- 'DIREXTALK_TAVILY_API_KEY_FILE' "$script"
+grep -Fq -- 'agent.web_search.config.get' "$script"
+grep -Fq -- 'agent.web_search.config.update' "$script"
+grep -Fq -- 'agent.web_search.test' "$script"
+grep -Fq -- 'core_web_search_configs' "$script"
+grep -Fq -- 'core_web_search_replays' "$script"
+grep -Fq -- 'ACCEPT_WEB_SEARCH_OK' "$script"
+grep -Fq -- 'core_message_tool_results' "$script"
+grep -Fq -- 'DIREXTALK_MESSAGE_SERVER_NAME' "$script"
+grep -Fq -- "--resolve \"\${resolve_host}:\${https_bind}:127.0.0.1\"" "$script"
 # The literal marker is intentionally matched in the target script.
 # shellcheck disable=SC2016
-grep -Fq -- '"$tmp/request-model-sync.json") continue' "$script"
+grep -Fq -- '"$tmp/request-web-search-config-update.json") continue' "$script"
+# The raw provider catalog request is also a protected credential input.
+# shellcheck disable=SC2016
+grep -Fq -- '"$tmp/request-model-sync.json"|"$tmp/request-model-catalog.json") continue' "$script"
+
+# Account deletion remains the default disposable-account gate, but the final
+# persistent-account lane must be able to skip only the deprovision assertions.
+# Keep the test-only Qdrant sentinel cleanup unconditional in either mode.
+# shellcheck disable=SC2016
+account_guard_line=$(grep -nF -- 'if [ "$account_delete_enabled" = true ]; then' "$script" | head -n 1 | cut -d: -f1)
+account_delete_line=$(grep -nF -- "call portal.account.delete \"\$account_delete\" account-delete" "$script" | head -n 1 | cut -d: -f1)
+sentinel_anchor_line=$(grep -nF -- '# The sentinel is test-only data and must be removed in both persistent-account' "$script" | head -n 1 | cut -d: -f1)
+sentinel_delete_line=$(grep -nF -- "qdrant_http DELETE \"/collections/\$qdrant_sentinel\"" "$script" | head -n 1 | cut -d: -f1)
+[ -n "$account_guard_line" ] && [ -n "$account_delete_line" ] && [ -n "$sentinel_anchor_line" ] && [ -n "$sentinel_delete_line" ]
+[ "$account_delete_line" -gt "$account_guard_line" ] || {
+  echo "portal.account.delete is not guarded by account deletion switch" >&2
+  exit 1
+}
+[ "$account_delete_line" -lt "$sentinel_anchor_line" ] || {
+  echo "account deletion block does not end before unconditional sentinel cleanup" >&2
+  exit 1
+}
+[ "$sentinel_delete_line" -gt "$sentinel_anchor_line" ] || {
+  echo "Qdrant sentinel cleanup is not unconditional" >&2
+  exit 1
+}
+
+# Exercise the option parser before any provisioned-directory or Docker gate so
+# invalid values cannot silently select a destructive/persistent mode.
+if account_invalid_output=$(DIREXTALK_ACCEPTANCE_ACCOUNT_DELETE=maybe "$script" "$script_dir/.acceptance-missing" 2>&1); then
+  echo "invalid account deletion switch was accepted" >&2
+  exit 1
+fi
+case "$account_invalid_output" in
+  *"DIREXTALK_ACCEPTANCE_ACCOUNT_DELETE must be true or false"*) ;;
+  *) echo "invalid account deletion switch returned the wrong error" >&2; exit 1 ;;
+esac
+if cleanup_mismatch_output=$(DIREXTALK_ACCEPTANCE_ACCOUNT_DELETE=false DIREXTALK_ACCEPTANCE_CLEANUP_AFTER=true "$script" "$script_dir/.acceptance-missing" 2>&1); then
+  echo "cleanup-after was accepted with account deletion disabled" >&2
+  exit 1
+fi
+case "$cleanup_mismatch_output" in
+  *"DIREXTALK_ACCEPTANCE_CLEANUP_AFTER=true is incompatible with account deletion disabled"*) ;;
+  *) echo "cleanup-after mismatch returned the wrong error" >&2; exit 1 ;;
+esac
 if grep -Fq -- 'agent.knowledge.index' "$script"; then
   echo "accept-local.sh must not invoke the retired knowledge index action" >&2
   exit 1
@@ -47,5 +112,25 @@ if grep -Fq -- 'echo "$' "$script"; then
   echo "accept-local.sh must not echo variable-backed protected values" >&2
   exit 1
 fi
+
+# Production TLS must use the verified server name for both certificate
+# validation and SNI while pinning the connection to the message-server
+# loopback port. Keep the validator exercised with one accepted DNS name and
+# several malformed/injection-shaped values.
+eval "$(sed -n '/^validate_server_name() {/,/^}/p' "$script")"
+validate_server_name s1.dirextalk.ai
+for invalid_server_name in \
+  'https://s1.dirextalk.ai' \
+  's1.dirextalk.ai:8448' \
+  's1.dirextalk.ai/health' \
+  '*.dirextalk.ai' \
+  's1.dirextalk.ai\n--resolve attacker:8448:127.0.0.1'; do
+  if validate_server_name "$invalid_server_name"; then
+    echo "invalid production server name was accepted" >&2
+    exit 1
+  fi
+done
+
+"$provision_test" >/dev/null
 
 echo "accept-local static contract test passed"

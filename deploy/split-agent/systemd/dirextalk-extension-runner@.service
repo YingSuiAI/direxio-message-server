@@ -1,0 +1,21 @@
+[Unit]
+Description=Dirextalk isolated extension runner cgroup delegate (%i)
+RequiresMountsFor=/sys/fs/cgroup
+After=local-fs.target systemd-sysusers.service
+Before=docker.service shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=simple
+User=dirextalk-extension-runner
+Group=dirextalk-extension-runner
+Slice=%i-extension.slice
+Delegate=cpu memory pids
+DelegateSubgroup=keeper
+ExecStart=/usr/bin/sleep infinity
+Restart=always
+RestartSec=2s
+TasksMax=infinity
+
+[Install]
+WantedBy=multi-user.target

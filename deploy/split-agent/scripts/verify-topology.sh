@@ -21,46 +21,18 @@ verify_http_bind=${DIREXTALK_MESSAGE_HTTP_BIND:-18008}
 verify_https_bind=${DIREXTALK_MESSAGE_HTTPS_BIND:-18448}
 DIREXTALK_MESSAGE_HTTP_BIND="$verify_http_bind" \
 DIREXTALK_MESSAGE_HTTPS_BIND="$verify_https_bind" \
+DIREXTALK_SPLIT_FIXTURE_MODE=true \
+DIREXTALK_SPLIT_TEST_MODE=true \
   "$script_dir/provision-local.sh" "$run_dir/provision" >/dev/null 2>"$run_dir/provision.stderr"
 env_file=$run_dir/provision/.env
 rendered=$run_dir/compose.json
 production_rendered=$run_dir/production-compose.json
-profile_run_dir=$run_dir/profile
-profile_rendered=$run_dir/profile-compose.json
 
 cd "$stack_dir"
 docker compose --env-file "$env_file" -f compose.yaml -f compose.local.yaml config --quiet
 docker compose --env-file "$env_file" -f compose.yaml -f compose.local.yaml config --format json >"$rendered"
-docker compose --env-file "$env_file" --profile extensions --profile core-runner \
-  -f compose.yaml config --quiet
-docker compose --env-file "$env_file" --profile extensions --profile core-runner \
-  -f compose.yaml config --format json >"$production_rendered"
-
-# Render the opt-in profiles separately. Compose omits profile-gated services
-# from the default model, so both the disabled baseline and the full
-# acceptance shape need an explicit read-only render check. Enabling a runner
-# is a host gate: provision-local refuses the global cgroup root and requires a
-# real per-stack delegated cgroup-v2 subtree before it writes an enabled config.
-mkdir -p "$profile_run_dir"
-profile_env=$env_file
-if DIREXTALK_CORE_EXTENSION_ENABLED=true \
-  DIREXTALK_CORE_WORKLOAD_ENABLED=true \
-  DIREXTALK_EXTENSION_CGROUP_ROOT=/sys/fs/cgroup \
-  DIREXTALK_CORE_RUNNER_CGROUP_ROOT=/sys/fs/cgroup \
-  "$script_dir/provision-local.sh" "$profile_run_dir/rejected" >/dev/null 2>"$profile_run_dir/provision.stderr"; then
-  echo "global cgroup root unexpectedly accepted for runner profiles" >&2
-  exit 1
-else
-  status=$?
-  [ "$status" -eq 1 ] || {
-    echo "unexpected cgroup rejection status: $status" >&2
-    exit 1
-  }
-fi
-docker compose --env-file "$profile_env" --profile extensions --profile core-runner \
-  -f compose.yaml -f compose.local.yaml config --quiet
-docker compose --env-file "$profile_env" --profile extensions --profile core-runner \
-  -f compose.yaml -f compose.local.yaml config --format json >"$profile_rendered"
+docker compose --env-file "$env_file" -f compose.yaml config --quiet
+docker compose --env-file "$env_file" -f compose.yaml config --format json >"$production_rendered"
 
 agent_instance=$(sed -n 's/^DIREXTALK_AGENT_INSTANCE_ID=//p' "$env_file")
 message_instance=$(sed -n 's/^DIREXTALK_MESSAGE_SERVER_INSTANCE_ID=//p' "$env_file")
@@ -69,19 +41,45 @@ stack_name=$(sed -n 's/^DIREXTALK_SPLIT_STACK_NAME=//p' "$env_file")
 http_bind=$(sed -n 's/^DIREXTALK_MESSAGE_HTTP_BIND=//p' "$env_file")
 https_bind=$(sed -n 's/^DIREXTALK_MESSAGE_HTTPS_BIND=//p' "$env_file")
 client_base_url=$(sed -n 's/^DIREXTALK_MESSAGE_CLIENT_BASE_URL=//p' "$env_file")
+tls_mode=$(sed -n 's/^DIREXTALK_MESSAGE_TLS_MODE=//p' "$env_file")
+server_name=$(sed -n 's/^DIREXTALK_MESSAGE_SERVER_NAME=//p' "$env_file")
+tls_cert_file=$(sed -n 's/^DIREXTALK_MESSAGE_TLS_CERT_FILE=//p' "$env_file")
+tls_key_file=$(sed -n 's/^DIREXTALK_MESSAGE_TLS_KEY_FILE=//p' "$env_file")
 master_key_env=$(sed -n 's/^DIREXTALK_CORE_SECRET_MASTER_KEY_FILE=//p' "$env_file")
 [ -n "$agent_instance" ] && [ -n "$message_instance" ] && [ "$agent_instance" != "$message_instance" ]
 printf '%s\n' "$stack_name" | grep -Eq '^d-[a-z2-7]{26}$'
 printf '%s\n' "$http_bind" | grep -Eq '^[0-9]+$'
 printf '%s\n' "$https_bind" | grep -Eq '^[0-9]+$'
 [ "$http_bind" != "$https_bind" ]
+[ "$tls_mode" = local ]
+[ "$server_name" = localhost ]
 [ "$client_base_url" = "http://localhost:$http_bind" ]
+[ "$tls_cert_file" = "$run_dir/provision/message-tls-external-cert.pem" ]
+[ "$tls_key_file" = "$run_dir/provision/message-tls-external-key.pem" ]
 [ "$master_key_env" = "$run_dir/provision/core-secret-master-key" ]
 [ "$(stat -c '%a' "$run_dir/provision/.manifest")" = 400 ]
 printf 'stack_name=%s\n' "$stack_name" | cmp -s - <(grep '^stack_name=' "$run_dir/provision/.manifest")
 printf 'message_http_bind=%s\n' "$http_bind" | cmp -s - <(grep '^message_http_bind=' "$run_dir/provision/.manifest")
 printf 'message_https_bind=%s\n' "$https_bind" | cmp -s - <(grep '^message_https_bind=' "$run_dir/provision/.manifest")
 printf 'message_client_base_url=%s\n' "$client_base_url" | cmp -s - <(grep '^message_client_base_url=' "$run_dir/provision/.manifest")
+printf 'message_tls_mode=local\n' | cmp -s - <(grep '^message_tls_mode=' "$run_dir/provision/.manifest")
+printf 'message_server_name=localhost\n' | cmp -s - <(grep '^message_server_name=' "$run_dir/provision/.manifest")
+printf 'message_tls_cert_path=%s\n' "$tls_cert_file" | cmp -s - <(grep '^message_tls_cert_path=' "$run_dir/provision/.manifest")
+printf 'message_tls_key_path=%s\n' "$tls_key_file" | cmp -s - <(grep '^message_tls_key_path=' "$run_dir/provision/.manifest")
+for tls_file in "$tls_cert_file" "$tls_key_file"; do
+  [ -f "$tls_file" ] && [ ! -L "$tls_file" ]
+  [ "$(stat -c '%a' "$tls_file")" = 400 ]
+  [ "$(stat -c '%u' "$tls_file")" = "$(id -u)" ]
+done
+[ ! -s "$tls_cert_file" ] && [ ! -s "$tls_key_file" ]
+printf 'message_tls_cert_device=%s\n' "$(stat -c '%d' "$tls_cert_file")" | cmp -s - <(grep '^message_tls_cert_device=' "$run_dir/provision/.manifest")
+printf 'message_tls_cert_inode=%s\n' "$(stat -c '%i' "$tls_cert_file")" | cmp -s - <(grep '^message_tls_cert_inode=' "$run_dir/provision/.manifest")
+printf 'message_tls_cert_uid=%s\n' "$(stat -c '%u' "$tls_cert_file")" | cmp -s - <(grep '^message_tls_cert_uid=' "$run_dir/provision/.manifest")
+printf 'message_tls_cert_sha256=%s\n' "$(sha256sum "$tls_cert_file" | awk '{print $1}')" | cmp -s - <(grep '^message_tls_cert_sha256=' "$run_dir/provision/.manifest")
+printf 'message_tls_key_device=%s\n' "$(stat -c '%d' "$tls_key_file")" | cmp -s - <(grep '^message_tls_key_device=' "$run_dir/provision/.manifest")
+printf 'message_tls_key_inode=%s\n' "$(stat -c '%i' "$tls_key_file")" | cmp -s - <(grep '^message_tls_key_inode=' "$run_dir/provision/.manifest")
+printf 'message_tls_key_uid=%s\n' "$(stat -c '%u' "$tls_key_file")" | cmp -s - <(grep '^message_tls_key_uid=' "$run_dir/provision/.manifest")
+printf 'message_tls_key_sha256=%s\n' "$(sha256sum "$tls_key_file" | awk '{print $1}')" | cmp -s - <(grep '^message_tls_key_sha256=' "$run_dir/provision/.manifest")
 master_key="$run_dir/provision/core-secret-master-key"
 [ "$(stat -c '%a' "$master_key")" = 400 ]
 [ "$(stat -c '%s' "$master_key")" = 32 ]
@@ -94,7 +92,7 @@ printf 'product_capability_account_generation: %s\n' "$account_generation" | cmp
 grep -Fqx 'core_secret_master_key_file: /run/secrets/core_secret_master_key' "$run_dir/provision/agent-config.yaml"
 grep -Fqx 'core_secret_master_key_version: 1' "$run_dir/provision/agent-config.yaml"
 printf '%s\n' "$account_generation" | grep -Eq '^[1-9][0-9]*$'
-jq -e --arg generation "$account_generation" '.services["message-server"].environment.P2P_ACCOUNT_GENERATION == $generation' "$profile_rendered" >/dev/null
+jq -e --arg generation "$account_generation" '.services["message-server"].environment.P2P_ACCOUNT_GENERATION == $generation' "$production_rendered" >/dev/null
 
 shellcheck \
   "$script_dir/provision-local.sh" \
@@ -107,10 +105,17 @@ shellcheck \
   "$script_dir/build-local.sh" \
   "$script_dir/start-local.sh" \
   "$script_dir/start-local.test.sh" \
+  "$script_dir/verify-first-fresh.sh" \
+  "$script_dir/verify-first-fresh.test.sh" \
+  "$script_dir/prepare-runner-cgroups.sh" \
+  "$script_dir/prepare-runner-cgroups.test.sh" \
+  "$script_dir/provision-local.test.sh" \
   "$script_dir/verify-production-images.sh" \
   "$script_dir/verify-production-images.test.sh" \
   "$script_dir/verify-production-tls.sh" \
   "$script_dir/verify-production-tls.test.sh" \
+  "$script_dir/cutover-edge.sh" \
+  "$script_dir/cutover-edge.test.sh" \
   "$script_dir/verify-build-contexts.sh" \
   "$script_dir/initialize-capability-ca.sh" \
   "$script_dir/initialize-capability-ca.test.sh" \
@@ -124,13 +129,18 @@ shellcheck \
 "$script_dir/initialize-capability-ca.test.sh" >/dev/null
 "$script_dir/accept-local.test.sh" >/dev/null
 "$script_dir/start-local.test.sh" >/dev/null
+"$script_dir/verify-first-fresh.test.sh" >/dev/null
+"$script_dir/prepare-runner-cgroups.test.sh" >/dev/null
+"$script_dir/provision-local.test.sh" >/dev/null
 "$script_dir/verify-production-images.test.sh" >/dev/null
 "$script_dir/verify-production-tls.test.sh" >/dev/null
+"$script_dir/cutover-edge.test.sh" >/dev/null
 "$stack_dir/aws/validate-policy.test.sh" >/dev/null
 "$script_dir/verify-build-contexts.sh" "$agent_root" "$message_root" >/dev/null
 
 jq -e --arg http "$http_bind" --arg https "$https_bind" '
   ([.services["message-server"].ports[] | .published] | sort) == [$http, $https] and
+  ([.services["message-server"].ports[] | .host_ip] | unique) == ["127.0.0.1"] and
   ([.services | to_entries[] | select(.key != "message-server") | .value.ports // [] | length] | add // 0) == 0
 ' "$rendered" >/dev/null || {
   published=$(jq -c '[.services | to_entries[] | .value.ports // [] | .[] | .published] | sort' "$rendered")
@@ -149,7 +159,9 @@ jq -e '
 
 jq -e '
   ([.services | to_entries[] | .value.image] | all(test("@sha256:[0-9a-f]{64}$"))) and
-  ([.services | to_entries[] | .value.build // null] | all(. == null))
+  ([.services | to_entries[] | .value.build // null] | all(. == null)) and
+  (.services.agent.image == .services["extension-runner"].image) and
+  (.services.agent.image == .services["core-runner"].image)
 ' "$production_rendered" >/dev/null
 
 jq -e '
@@ -200,19 +212,17 @@ jq -e --arg agent_root "$agent_root" --arg message_root "$message_root" '
   ([.services | to_entries[] | .value.build.additional_contexts // null] | all(. == null)) and
   .services["message-server"].depends_on.agent.condition == "service_healthy" and
   .services["message-server"].depends_on.agent.required == true and
-  .services["extension-runner"] == null and
-  .services["core-runner"] == null
+  .services["extension-runner"].image == "dirextalk-agent:split-local" and
+  .services["core-runner"].image == "dirextalk-agent:split-local" and
+  .services["extension-runner"].build == null and
+  .services["core-runner"].build == null
 ' "$rendered" >/dev/null
 
 jq -e '
-  ([.services | keys[] | select(. == "extension-runner" or . == "core-runner" or . == "extension-socket-init" or . == "core-runner-socket-init")] | length) == 0
-' "$rendered" >/dev/null
-
-jq -e --arg agent_root "$agent_root" '
-  .services["extension-runner"].profiles == ["extensions"] and
-  .services["core-runner"].profiles == ["core-runner"] and
-  .services["extension-socket-init"].profiles == ["extensions"] and
-  .services["core-runner-socket-init"].profiles == ["core-runner"] and
+  .services.agent.image == .services["extension-runner"].image and
+  .services.agent.image == .services["core-runner"].image and
+  .services["extension-runner"].entrypoint == ["/usr/local/bin/dirextalk-extension-runner"] and
+  .services["core-runner"].entrypoint == ["/usr/local/bin/dirextalk-core-runner"] and
   .services["extension-runner"].network_mode == "none" and
   .services["core-runner"].network_mode == "none" and
   .services["extension-runner"].networks == null and
@@ -223,33 +233,33 @@ jq -e --arg agent_root "$agent_root" '
   .services["core-runner"].user == "65530:65530" and
   (.services["extension-runner"].group_add | index("65532")) != null and
   (.services["core-runner"].group_add | index("65532")) != null and
-  .services["extension-runner"].build.context == $agent_root and
-  .services["extension-runner"].build.dockerfile == "deploy/container/extension-runner.Containerfile" and
-  .services["core-runner"].build.context == $agent_root and
-  .services["core-runner"].build.dockerfile == "deploy/container/core-runner.Containerfile" and
+  .services["extension-runner"].build == null and
+  .services["core-runner"].build == null and
   .services["extension-runner"].build.additional_contexts == null and
   .services["core-runner"].build.additional_contexts == null and
+  ([.services["extension-runner"].volumes[], .services["core-runner"].volumes[]] | map(select(.target == "/cgroup") | .bind.create_host_path) | all(. == false)) and
   ([.services["extension-runner"].volumes[], .services["core-runner"].volumes[]] | all(.type == "volume" or (.type == "bind" and .target == "/cgroup"))) and
   ([.services["extension-runner"].volumes[], .services["core-runner"].volumes[]] | map(.source // "") | any(test("docker.sock|/var/run/docker"))) == false and
   (.services["extension-runner"].healthcheck.test[0] == "CMD") and
   (.services["core-runner"].healthcheck.test[0] == "CMD") and
   (.services["extension-runner"].depends_on["extension-socket-init"].condition == "service_completed_successfully") and
   (.services["core-runner"].depends_on["core-runner-socket-init"].condition == "service_completed_successfully")
-' "$profile_rendered" >/dev/null
+' "$rendered" >/dev/null
 
 jq -e --arg http "$http_bind" --arg https "$https_bind" '
   ([.services["message-server"].ports[] | .published] | sort) == [$http, $https] and
+  ([.services["message-server"].ports[] | .host_ip] | unique) == ["127.0.0.1"] and
   ([.services | to_entries[] | select(.key != "message-server") | .value.ports // [] | length] | add // 0) == 0
-' "$profile_rendered" >/dev/null
+' "$rendered" >/dev/null
 
 jq -e '
   (.services.agent.volumes | map(.source // "") | any(test("agent_extension_socket|core_runner_socket"))) and
   (.services.agent.volumes | map(.source // "") | any(test("agent_extension_staging|agent_extension_workspaces"))) and
   (.services.agent.depends_on["extension-runner"].condition == "service_healthy") and
-  (.services.agent.depends_on["extension-runner"].required == false) and
+  (.services.agent.depends_on["extension-runner"].required == true) and
   (.services.agent.depends_on["core-runner"].condition == "service_healthy") and
-  (.services.agent.depends_on["core-runner"].required == false)
-' "$profile_rendered" >/dev/null
+  (.services.agent.depends_on["core-runner"].required == true)
+' "$rendered" >/dev/null
 
 jq -e '
   .networks.agent_private.internal == true and

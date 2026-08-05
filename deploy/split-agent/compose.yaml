@@ -42,11 +42,11 @@ x-message-hardening: &message-hardening
 
 x-extension-runner-hardening: &extension-runner-hardening
   <<: *hardened-service
-  user: "${DIREXTALK_CORE_EXTENSION_RUNNER_UID:?set the extension runner UID}:${DIREXTALK_CORE_EXTENSION_RUNNER_UID:?set the extension runner UID}"
+  user: "65531:65531"
 
 x-core-runner-hardening: &core-runner-hardening
   <<: *hardened-service
-  user: "${DIREXTALK_CORE_WORKLOAD_RUNNER_UID:?set the Core Runner UID}:${DIREXTALK_CORE_WORKLOAD_RUNNER_UID:?set the Core Runner UID}"
+  user: "65530:65530"
 
 x-postgres-service: &postgres-service
   image: ${DIREXTALK_POSTGRES_IMAGE_IMMUTABLE:?set an immutable PostgreSQL image reference}
@@ -206,10 +206,8 @@ services:
         condition: service_started
       extension-runner:
         condition: service_healthy
-        required: false
       core-runner:
         condition: service_healthy
-        required: false
     healthcheck:
       test: ["CMD", "/usr/local/bin/dirextalk-agent", "healthcheck", "--expect-instance-id", "${DIREXTALK_AGENT_INSTANCE_ID:?set the Agent instance ID}"]
       interval: 10s
@@ -217,16 +215,14 @@ services:
       retries: 30
       start_period: 20s
 
-  # Optional isolated extension executor. The profile is intentionally not
-  # enabled by default; enabling the Core feature flag alone never starts a
-  # process. The runner has no network, database, Agent secret, or Docker
+  # Isolated extension executor. It starts with the default three-container
+  # Agent runtime. The runner has no network, database, Agent secret, or Docker
   # socket. Its only host bind is a caller-provisioned delegated cgroup-v2
   # subtree.
   extension-runner:
-    image: ${DIREXTALK_EXTENSION_RUNNER_IMAGE_IMMUTABLE:?set an immutable extension runner image reference}
-    <<: *extension-runner-hardening
-    profiles: ["extensions"]
+    <<: [*agent-image, *extension-runner-hardening]
     restart: unless-stopped
+    entrypoint: ["/usr/local/bin/dirextalk-extension-runner"]
     cgroup_parent: ${DIREXTALK_EXTENSION_CGROUP_PARENT:-${DIREXTALK_SPLIT_STACK_NAME:?set a unique split stack name}-extension.slice}
     group_add: ["65532"]
     command:
@@ -251,9 +247,11 @@ services:
       - type: bind
         source: ${DIREXTALK_EXTENSION_CGROUP_ROOT:?set a delegated cgroup-v2 subtree for the extension runner}
         target: /cgroup
+        bind:
+          create_host_path: false
     network_mode: "none"
     healthcheck:
-      test: ["CMD", "/usr/local/bin/dirextalk-extension-runner", "probe", "--socket", "${DIREXTALK_CORE_EXTENSION_RUNNER_SOCKET:?set the extension runner socket path}", "--runner-uid", "${DIREXTALK_CORE_EXTENSION_RUNNER_UID:?set the extension runner UID}"]
+      test: ["CMD", "/usr/local/bin/dirextalk-extension-runner", "probe", "--socket", "${DIREXTALK_CORE_EXTENSION_RUNNER_SOCKET:?set the extension runner socket path}", "--runner-uid", "65531"]
       interval: 5s
       timeout: 5s
       retries: 12
@@ -264,25 +262,23 @@ services:
 
   extension-socket-init:
     <<: *socket-init
-    profiles: ["extensions"]
     command:
       - -ec
       - >-
         install -d -m 3770 /socket;
-        chown ${DIREXTALK_CORE_EXTENSION_RUNNER_UID:?set the extension runner UID}:65532 /socket;
+        chown 65531:65532 /socket;
         chmod 3770 /socket
     volumes:
       - agent_extension_socket:/socket
 
-  # Optional isolated local workload provider. It is separate from the Agent
-  # process and is deliberately profile-gated. It has no network, database,
+  # Isolated local workload provider. It is separate from the Agent process and
+  # starts with the default three-container Agent runtime. It has no network,
   # Agent secret, Docker socket, or host filesystem access beyond the
   # delegated cgroup-v2 subtree.
   core-runner:
-    image: ${DIREXTALK_CORE_RUNNER_IMAGE_IMMUTABLE:?set an immutable Core Runner image reference}
-    <<: *core-runner-hardening
-    profiles: ["core-runner"]
+    <<: [*agent-image, *core-runner-hardening]
     restart: unless-stopped
+    entrypoint: ["/usr/local/bin/dirextalk-core-runner"]
     cgroup_parent: ${DIREXTALK_CORE_RUNNER_CGROUP_PARENT:-${DIREXTALK_SPLIT_STACK_NAME:?set a unique split stack name}-core-runner.slice}
     group_add: ["65532"]
     command:
@@ -309,6 +305,8 @@ services:
       - type: bind
         source: ${DIREXTALK_CORE_RUNNER_CGROUP_ROOT:?set a delegated cgroup-v2 subtree for Core Runner}
         target: /cgroup
+        bind:
+          create_host_path: false
     network_mode: "none"
     healthcheck:
       test: ["CMD", "/usr/local/bin/dirextalk-core-runner", "probe", "--socket", "${DIREXTALK_CORE_WORKLOAD_RUNNER_SOCKET:?set the Core Runner socket path}"]
@@ -322,12 +320,11 @@ services:
 
   core-runner-socket-init:
     <<: *socket-init
-    profiles: ["core-runner"]
     command:
       - -ec
       - >-
         install -d -m 3770 /socket;
-        chown ${DIREXTALK_CORE_WORKLOAD_RUNNER_UID:?set the Core Runner UID}:65532 /socket;
+        chown 65530:65532 /socket;
         chmod 3770 /socket
     volumes:
       - core_runner_socket:/socket
@@ -392,8 +389,8 @@ services:
       - --tls-key
       - /etc/dirextalk-message-server/server.key
     ports:
-      - "${DIREXTALK_MESSAGE_HTTP_BIND:?set DIREXTALK_MESSAGE_HTTP_BIND in the protected stack .env}:8008"
-      - "${DIREXTALK_MESSAGE_HTTPS_BIND:?set DIREXTALK_MESSAGE_HTTPS_BIND in the protected stack .env}:8448"
+      - "127.0.0.1:${DIREXTALK_MESSAGE_HTTP_BIND:?set DIREXTALK_MESSAGE_HTTP_BIND in the protected stack .env}:8008"
+      - "127.0.0.1:${DIREXTALK_MESSAGE_HTTPS_BIND:?set DIREXTALK_MESSAGE_HTTPS_BIND in the protected stack .env}:8448"
     expose: ["50053"]
     volumes:
       - message_server_config:/etc/dirextalk-message-server:ro

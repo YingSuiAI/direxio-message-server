@@ -34,9 +34,12 @@ base_url=$(env_or DIREXTALK_ACCEPTANCE_BASE_URL https://openrouter.ai/api/v1)
 compose_mode=$(env_or DIREXTALK_ACCEPTANCE_COMPOSE_MODE local)
 timeout_seconds=$(env_or DIREXTALK_ACCEPTANCE_TIMEOUT 180)
 cleanup_after=$(env_or DIREXTALK_ACCEPTANCE_CLEANUP_AFTER false)
+account_delete_enabled=$(env_or DIREXTALK_ACCEPTANCE_ACCOUNT_DELETE true)
 
 case "$compose_mode" in local|production) ;; *) die "DIREXTALK_ACCEPTANCE_COMPOSE_MODE must be local or production" ;; esac
 case "$cleanup_after" in true|false) ;; *) die "DIREXTALK_ACCEPTANCE_CLEANUP_AFTER must be true or false" ;; esac
+case "$account_delete_enabled" in true|false) ;; *) die "DIREXTALK_ACCEPTANCE_ACCOUNT_DELETE must be true or false" ;; esac
+[ "$account_delete_enabled" = true ] || [ "$cleanup_after" = false ] || die "DIREXTALK_ACCEPTANCE_CLEANUP_AFTER=true is incompatible with account deletion disabled"
 case "$timeout_seconds" in ''|*[!0-9]*) die "DIREXTALK_ACCEPTANCE_TIMEOUT must be decimal seconds" ;; esac
 [ "$timeout_seconds" -ge 10 ] 2>/dev/null && [ "$timeout_seconds" -le 600 ] 2>/dev/null || die "DIREXTALK_ACCEPTANCE_TIMEOUT must be between 10 and 600"
 
@@ -65,6 +68,11 @@ read_pair() {
 stack_name=$(read_pair "$manifest" stack_name)
 env_stack=$(read_pair "$env_file" DIREXTALK_SPLIT_STACK_NAME)
 [ "$stack_name" = "$env_stack" ] || die "stack identity differs between .manifest and .env"
+manifest_compose_mode=$(read_pair "$manifest" compose_mode)
+env_compose_mode=$(read_pair "$env_file" DIREXTALK_SPLIT_COMPOSE_MODE)
+case "$manifest_compose_mode" in local|production) ;; *) die "manifest compose mode is invalid" ;; esac
+[ "$env_compose_mode" = "$manifest_compose_mode" ] || die "compose mode differs between .manifest and .env"
+[ "$compose_mode" = "$manifest_compose_mode" ] || die "DIREXTALK_ACCEPTANCE_COMPOSE_MODE differs from the provisioned stack"
 printf '%s\n' "$stack_name" | grep -Eq '^d-[a-z2-7]{26}$' || die "stack identity is not a fresh namespace"
 manifest_qdrant=$(read_pair "$manifest" resource.volume.agent_qdrant)
 [ "$manifest_qdrant" = "$stack_name-agent-qdrant" ] || die "manifest Qdrant volume is not owned by this fresh stack"
@@ -75,16 +83,33 @@ case "$http_bind" in ''|*[!0-9]*) die "invalid HTTP host bind" ;; esac
 case "$https_bind" in ''|*[!0-9]*) die "invalid HTTPS host bind" ;; esac
 [ "$http_bind" != "$https_bind" ] || die "HTTP and HTTPS host binds must differ"
 http_base=http://127.0.0.1:$http_bind
-https_base=https://127.0.0.1:$https_bind
+
+validate_server_name() {
+  local value=$1
+  printf '%s\n' "$value" | grep -Eq '^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*$'
+}
+
+message_server_name=
+https_resolve_host=
+if [ "$compose_mode" = production ]; then
+  message_server_name=$(read_pair "$env_file" DIREXTALK_MESSAGE_SERVER_NAME)
+  validate_server_name "$message_server_name" || die "DIREXTALK_MESSAGE_SERVER_NAME must be a DNS host name without a scheme, port, or wildcard"
+  https_base=https://$message_server_name:$https_bind
+  https_resolve_host=$message_server_name
+else
+  https_base=https://127.0.0.1:$https_bind
+fi
 
 openrouter_key=$(read_pair "$env_file" DIREXTALK_OPENROUTER_API_KEY_FILE)
 embedding_key=$(read_pair "$env_file" DIREXTALK_EMBEDDING_API_KEY_FILE)
+tavily_key=$(read_pair "$env_file" DIREXTALK_TAVILY_API_KEY_FILE)
 portal_password=$(read_pair "$env_file" DIREXTALK_MESSAGE_PORTAL_PASSWORD_FILE)
 agent_config=$(read_pair "$env_file" DIREXTALK_AGENT_CONFIG_FILE)
 qdrant_volume=$(read_pair "$env_file" DIREXTALK_AGENT_QDRANT_VOLUME)
 [ "$qdrant_volume" = "$manifest_qdrant" ] || die ".env Qdrant volume differs from the immutable manifest"
 [ "$openrouter_key" = "$out/openrouter-api-key" ] || die "OpenRouter key path is outside the provisioned stack"
 [ "$embedding_key" = "$out/embedding-api-key" ] || die "embedding key path is outside the provisioned stack"
+[ "$tavily_key" = "$out/tavily-api-key" ] || die "Tavily key path is outside the provisioned stack"
 [ "$portal_password" = "$out/message-portal-password" ] || die "portal password path is outside the provisioned stack"
 [ "$agent_config" = "$out/agent-config.yaml" ] || die "Agent config path is outside the provisioned stack"
 
@@ -104,11 +129,13 @@ check_resource_name DIREXTALK_AGENT_EGRESS_NETWORK "$stack_name-agent-egress"
 check_secret_file() {
   local label=$1 file=$2
   [ -f "$file" ] && [ ! -L "$file" ] || die "$label is not a regular non-symlink file"
+  [ "$(stat -c '%u' "$file" 2>/dev/null || true)" = "$(id -u)" ] || die "$label has the wrong owner"
   [ "$(stat -c '%a' "$file" 2>/dev/null || true)" = 400 ] || die "$label must be mode 0400"
   [ -s "$file" ] || die "$label is empty"
 }
 check_secret_file "OpenRouter key file" "$openrouter_key"
 check_secret_file "embedding key file" "$embedding_key"
+check_secret_file "Tavily key file" "$tavily_key"
 check_secret_file "portal password file" "$portal_password"
 [ -f "$agent_config" ] && [ ! -L "$agent_config" ] || die "Agent config is not a regular file"
 [ "$(stat -c '%a' "$agent_config" 2>/dev/null || true)" = 400 ] || die "Agent config must be mode 0400"
@@ -170,6 +197,9 @@ assert_secret_absent() {
   if [ -s "$file" ] && grep -F -q -f "$embedding_key" "$file"; then
     die "embedding key appeared in an output file"
   fi
+  if [ -s "$file" ] && grep -F -q -f "$tavily_key" "$file"; then
+    die "Tavily key appeared in an output file"
+  fi
 }
 assert_clean_response() {
   local file=$1
@@ -229,7 +259,7 @@ call() {
 }
 
 health_check() {
-  local base=$1 name=$2 insecure=$3 status='' request_ok=false elapsed=0
+  local base=$1 name=$2 insecure=$3 resolve_host=${4:-} status='' request_ok=false elapsed=0
   local response=$tmp/health-$name.json error=$tmp/health-$name.err
   new_file "$response"
   new_file "$error"
@@ -238,6 +268,12 @@ health_check() {
     request_ok=false
     if [ "$insecure" = true ]; then
       if status=$(curl --insecure --silent --show-error --connect-timeout 10 --max-time "$timeout_seconds" \
+        --output "$response" --write-out '%{http_code}' --stderr "$error" "$base/_p2p/health"); then
+        request_ok=true
+      fi
+    elif [ -n "$resolve_host" ]; then
+      if status=$(curl --silent --show-error --connect-timeout 10 --max-time "$timeout_seconds" \
+        --resolve "${resolve_host}:${https_bind}:127.0.0.1" \
         --output "$response" --write-out '%{http_code}' --stderr "$error" "$base/_p2p/health"); then
         request_ok=true
       fi
@@ -258,7 +294,7 @@ health_check() {
 health_check "$http_base" http false
 https_insecure=true
 [ "$compose_mode" = production ] && https_insecure=false
-health_check "$https_base" https "$https_insecure"
+health_check "$https_base" https "$https_insecure" "$https_resolve_host"
 
 topology=$tmp/compose.json
 topology_error=$tmp/compose.err
@@ -342,6 +378,23 @@ qdrant_http() {
   fi
 }
 
+db_query() {
+  local service=$1 user=$2 database=$3 sql=$4 target=$5 secret
+  local error=$tmp/db-$service.err
+  case "$service" in
+    agent-postgres) secret=agent_postgres_password ;;
+    message-postgres) secret=message_postgres_password ;;
+    *) die "unsupported database service $service" ;;
+  esac
+  new_file "$target"
+  new_file "$error"
+  if run_compose exec -T "$service" sh -ec 'password=$(cat "$1"); shift; PGPASSWORD="$password" psql -At -U "$1" -d "$2" -c "$3"' sh "/run/secrets/$secret" "$user" "$database" "$sql" >"$target" 2>"$error"; then
+    :
+  else
+    die "database query failed for $service"
+  fi
+}
+
 # A non-Agent sentinel proves deprovision deletes only the configured base and
 # base__stage_* collections, rather than clearing unrelated Qdrant data.
 qdrant_sentinel="split_acceptance_unrelated_$(uuid4 | tr -d '-')"
@@ -353,6 +406,42 @@ new_file "$params"
 printf '%s\n' '{}' >"$params"
 call agent.core.status.get "$params" core-status
 jq -e 'type=="object"' "$last_response" >/dev/null || die "Agent status response is not an object"
+
+call agent.web_search.config.get "$params" web-search-config-get
+jq -e '.provider == "tavily" and (.api_key_configured // false) == false and ((.revision // -1) >= 0)' "$last_response" >/dev/null || \
+  die "web search config.get did not return the fresh unconfigured Tavily state"
+web_search_revision=$(jq -r '.revision' "$last_response")
+web_search_update=$tmp/web-search-config-update.params.json
+web_search_update_key=$(uuid4)
+jq -n --rawfile api_key "$tavily_key" --arg idem "$web_search_update_key" --argjson revision "$web_search_revision" \
+  '{idempotency_key:$idem,expected_revision:$revision,enabled:true,provider:"tavily",api_key:($api_key|rtrimstr("\n")|rtrimstr("\r"))}' >"$web_search_update"
+chmod 400 "$web_search_update"
+call agent.web_search.config.update "$web_search_update" web-search-config-update
+jq -e '.enabled == true and .provider == "tavily" and .api_key_configured == true and ((.revision // 0) > 0)' "$last_response" >/dev/null || \
+  die "web search config.update did not configure Tavily"
+web_search_updated_revision=$(jq -r '.revision' "$last_response")
+[ "$web_search_updated_revision" -gt "$web_search_revision" ] 2>/dev/null || die "web search config.update did not advance revision"
+call agent.web_search.config.get "$params" web-search-config-safe-get
+jq -e --argjson revision "$web_search_updated_revision" \
+  '.enabled == true and .provider == "tavily" and .api_key_configured == true and .revision == $revision and ((has("api_key") | not))' \
+  "$last_response" >/dev/null || die "web search config.get did not preserve the configured safe projection"
+call agent.web_search.test "$params" web-search-test
+jq -e --argjson revision "$web_search_updated_revision" \
+  '.ok == true and .provider == "tavily" and (.result_count // -1) >= 0 and .enabled == true and .api_key_configured == true and .revision == $revision' \
+  "$last_response" >/dev/null || die "web search test did not succeed with the stored Tavily credential"
+
+model_catalog_params=$tmp/model-catalog.params.json
+new_file "$model_catalog_params"
+jq -n --rawfile api_key "$openrouter_key" --arg provider "$provider" --arg base "$base_url" \
+  '{provider:$provider,base_url:$base,model_kind:"conversation",api_key:($api_key|rtrimstr("\n")|rtrimstr("\r"))}' \
+  >"$model_catalog_params"
+chmod 400 "$model_catalog_params"
+call agent.models.list "$model_catalog_params" model-catalog
+jq -e '
+  (.models | type == "array" and length > 0) and
+  (.providers | type == "array" and length > 0) and
+  all(.models[]; (.id | type == "string" and length > 0) and (.provider | type == "string" and length > 0))
+' "$last_response" >/dev/null || die "OpenRouter model catalog returned no canonical conversation models"
 
 chat_profile=$(uuid4)
 embedding_profile=$(uuid4)
@@ -387,6 +476,16 @@ chat_internal=$(jq -r --arg id "$chat_profile" '.profiles[] | select(.client_pro
 embed_internal=$(jq -r --arg id "$embedding_profile" '.profiles[] | select(.client_profile_id==$id) | .profile_id' "$last_response" | head -n 1)
 printf '%s\n' "$chat_internal" | grep -Eiq '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' || die "chat profile response has no internal profile id"
 printf '%s\n' "$embed_internal" | grep -Eiq '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' || die "embedding profile response has no internal profile id"
+stored_catalog_params=$tmp/stored-model-catalog.params.json
+new_file "$stored_catalog_params"
+jq -n --arg client_profile "$chat_profile" \
+  '{client_model_profile_id:$client_profile,model_kind:"conversation"}' >"$stored_catalog_params"
+chmod 400 "$stored_catalog_params"
+call agent.models.list "$stored_catalog_params" stored-model-catalog
+jq -e '
+  (.models | type == "array" and length > 0) and
+  all(.models[]; (.id | type == "string" and length > 0) and (.provider | type == "string" and length > 0))
+' "$last_response" >/dev/null || die "stored OpenRouter profile model catalog returned no canonical conversation models"
 config_params=$tmp/config.params.json
 printf '%s\n' '{}' >"$config_params"
 chmod 400 "$config_params"
@@ -409,6 +508,31 @@ call agent.chat "$chat_params" chat-replay
 jq -r '.text' "$last_response" >"$tmp/chat-text-2"
 chmod 400 "$tmp/chat-text-2"
 cmp -s "$tmp/chat-text-1" "$tmp/chat-text-2" || die "identical turn replay returned different text"
+
+db_query agent-postgres dirextalk_agent dirextalk_agent \
+  "SELECT count(*) FROM core_message_tool_results WHERE result_json->>'tool_name'='web_search' AND COALESCE((result_json->>'is_error')::boolean,false)=false;" \
+  "$tmp/web-search-tool-before.count"
+web_search_tool_before=$(tr -d '[:space:]' <"$tmp/web-search-tool-before.count")
+case "$web_search_tool_before" in ''|*[!0-9]*) die "could not read the pre-chat Web Search tool count" ;; esac
+web_search_turn_id=$(uuid4)
+web_search_chat_params=$tmp/web-search-chat.params.json
+new_file "$web_search_chat_params"
+jq -n --arg turn "$web_search_turn_id" \
+  '{turn_id:$turn,message:"You must use the web_search tool to search the live web for the official OpenAI homepage. Do not answer from memory. After the tool succeeds, reply with ACCEPT_WEB_SEARCH_OK followed by one https:// source URL from the tool result."}' \
+  >"$web_search_chat_params"
+chmod 400 "$web_search_chat_params"
+call agent.chat "$web_search_chat_params" web-search-chat
+jq -e '.text|type=="string" and contains("ACCEPT_WEB_SEARCH_OK")' "$last_response" >/dev/null || \
+  die "Native Agent Web Search chat did not return the acceptance marker"
+jq -r '.text' "$last_response" | grep -Eq 'https://[^[:space:]]+' || \
+  die "Native Agent Web Search chat returned no source URL"
+db_query agent-postgres dirextalk_agent dirextalk_agent \
+  "SELECT count(*) FROM core_message_tool_results WHERE result_json->>'tool_name'='web_search' AND COALESCE((result_json->>'is_error')::boolean,false)=false;" \
+  "$tmp/web-search-tool-after.count"
+web_search_tool_after=$(tr -d '[:space:]' <"$tmp/web-search-tool-after.count")
+case "$web_search_tool_after" in ''|*[!0-9]*) die "could not read the post-chat Web Search tool count" ;; esac
+[ "$web_search_tool_after" -gt "$web_search_tool_before" ] 2>/dev/null || \
+  die "Native Agent chat did not persist a successful Web Search tool result"
 
 contacts_params=$tmp/contacts.params.json
 printf '%s\n' '{"limit":100}' >"$contacts_params"
@@ -587,6 +711,14 @@ call agent.knowledge.search "$memory_search" memory-search-after-restart
 jq -e --arg id "$memory_id" --arg phrase "$new_memory_phrase" 'any(.items[]?; (.source_id == $id) and ((.snippet // .content // "") | contains($phrase)))' "$last_response" >/dev/null || die "updated memory was not recalled after Agent restart"
 call agent.knowledge.search "$search_params" knowledge-search-after-restart
 jq -e --arg sid "$source_id" 'any(.items[]?; .source_id == $sid)' "$last_response" >/dev/null || die "knowledge source was not searchable after Agent restart"
+call agent.web_search.config.get "$params" web-search-config-after-restart
+jq -e --argjson revision "$web_search_updated_revision" \
+  '.enabled == true and .provider == "tavily" and .api_key_configured == true and .revision == $revision and ((has("api_key") | not))' \
+  "$last_response" >/dev/null || die "web search config was not preserved after Agent restart"
+call agent.web_search.test "$params" web-search-test-after-restart
+jq -e --argjson revision "$web_search_updated_revision" \
+  '.ok == true and .provider == "tavily" and (.result_count // -1) >= 0 and .enabled == true and .api_key_configured == true and .revision == $revision' \
+  "$last_response" >/dev/null || die "web search test did not succeed after Agent restart"
 
 sources_params=$tmp/sources.params.json
 jq -n '{page_size:100}' >"$sources_params"
@@ -624,90 +756,82 @@ if [ "$last_status" = 200 ] && jq -e --arg id "$memory_id" 'any(.items[]?; .sour
   die "deleted long-term memory remains searchable"
 fi
 
-account_delete=$tmp/account-delete.params.json
-account_delete_key=$(uuid4)
-jq -n --arg idem "$account_delete_key" '{confirm:"delete_account",idempotency_key:$idem}' >"$account_delete"
-chmod 400 "$account_delete"
-pre_delete_agent_container=$agent_container
-pre_delete_restart_count=$(docker inspect -f '{{.RestartCount}}' "$pre_delete_agent_container" 2>"$tmp/agent-restart-before.err" || true)
-case "$pre_delete_restart_count" in ''|*[!0-9]*) die "could not read Agent restart count before account deletion" ;; esac
-call portal.account.delete "$account_delete" account-delete
-jq -e '(.status // "") as $s | (.account_deleted // false) == true or ($s == "deprovisioned" or $s == "deleted" or $s == "completed")' "$last_response" >/dev/null || die "account deletion did not return a completed/deprovisioned status"
+if [ "$account_delete_enabled" = true ]; then
+  account_delete=$tmp/account-delete.params.json
+  account_delete_key=$(uuid4)
+  jq -n --arg idem "$account_delete_key" '{confirm:"delete_account",idempotency_key:$idem}' >"$account_delete"
+  chmod 400 "$account_delete"
+  pre_delete_agent_container=$agent_container
+  pre_delete_restart_count=$(docker inspect -f '{{.RestartCount}}' "$pre_delete_agent_container" 2>"$tmp/agent-restart-before.err" || true)
+  case "$pre_delete_restart_count" in ''|*[!0-9]*) die "could not read Agent restart count before account deletion" ;; esac
+  call portal.account.delete "$account_delete" account-delete
+  jq -e '(.status // "") as $s | (.account_deleted // false) == true or ($s == "deprovisioned" or $s == "deleted" or $s == "completed")' "$last_response" >/dev/null || die "account deletion did not return a completed/deprovisioned status"
 
-# Account deprovision seals the Agent but does not stop its process. Observe two
-# complete image healthcheck intervals so a crash-loop, a late background write,
-# or post-purge Knowledge/Qdrant recovery cannot pass on a transient sample.
-for health_interval in 1 2; do
-  sleep 16
-  post_delete_agent_container=$(run_compose ps -q agent 2>"$tmp/agent-ps-after-delete-$health_interval.err" || true)
-  [ "$post_delete_agent_container" = "$pre_delete_agent_container" ] || die "Agent container identity changed after account deletion"
-  post_delete_health=$(docker inspect -f '{{.State.Health.Status}}' "$post_delete_agent_container" 2>"$tmp/agent-health-after-delete-$health_interval.err" || true)
-  [ "$post_delete_health" = healthy ] || die "Agent did not remain healthy after account deletion"
-  post_delete_restart_count=$(docker inspect -f '{{.RestartCount}}' "$post_delete_agent_container" 2>"$tmp/agent-restart-after-delete-$health_interval.err" || true)
-  [ "$post_delete_restart_count" = "$pre_delete_restart_count" ] || die "Agent restarted after account deletion"
-done
+  # Account deprovision seals the Agent but does not stop its process. Observe two
+  # complete image healthcheck intervals so a crash-loop, a late background write,
+  # or post-purge Knowledge/Qdrant recovery cannot pass on a transient sample.
+  for health_interval in 1 2; do
+    sleep 16
+    post_delete_agent_container=$(run_compose ps -q agent 2>"$tmp/agent-ps-after-delete-$health_interval.err" || true)
+    [ "$post_delete_agent_container" = "$pre_delete_agent_container" ] || die "Agent container identity changed after account deletion"
+    post_delete_health=$(docker inspect -f '{{.State.Health.Status}}' "$post_delete_agent_container" 2>"$tmp/agent-health-after-delete-$health_interval.err" || true)
+    [ "$post_delete_health" = healthy ] || die "Agent did not remain healthy after account deletion"
+    post_delete_restart_count=$(docker inspect -f '{{.RestartCount}}' "$post_delete_agent_container" 2>"$tmp/agent-restart-after-delete-$health_interval.err" || true)
+    [ "$post_delete_restart_count" = "$pre_delete_restart_count" ] || die "Agent restarted after account deletion"
+  done
 
-# The deleted owner session must not retain an ordinary Agent capability path.
-# Rejection may occur at message-server authorization or at the sealed Agent
-# lifecycle boundary; either is valid, but a successful response is not.
-call agent.core.status.get "$params" core-status-after-account-delete true
-case "$last_status" in
-  400|401|403|409|412|428) ;;
-  *) die "ordinary Agent capability remained accessible after account deletion" ;;
-esac
-
-db_query() {
-  local service=$1 user=$2 database=$3 sql=$4 target=$5 secret
-  local error=$tmp/db-$service.err
-  case "$service" in
-    agent-postgres) secret=agent_postgres_password ;;
-    message-postgres) secret=message_postgres_password ;;
-    *) die "unsupported database service $service" ;;
+  # The deleted owner session must not retain an ordinary Agent capability path.
+  # Rejection may occur at message-server authorization or at the sealed Agent
+  # lifecycle boundary; either is valid, but a successful response is not.
+  call agent.core.status.get "$params" core-status-after-account-delete true
+  case "$last_status" in
+    400|401|403|409|412|428) ;;
+    *) die "ordinary Agent capability remained accessible after account deletion" ;;
   esac
-  new_file "$target"
-  new_file "$error"
-  if run_compose exec -T "$service" sh -ec 'password=$(cat "$1"); shift; PGPASSWORD="$password" psql -At -U "$1" -d "$2" -c "$3"' sh "/run/secrets/$secret" "$user" "$database" "$sql" >"$target" 2>"$error"; then
+
+  db_query agent-postgres dirextalk_agent dirextalk_agent 'SELECT count(*) FROM core_model_profiles;' "$tmp/core-model-profiles.count"
+  db_query agent-postgres dirextalk_agent dirextalk_agent 'SELECT count(*) FROM core_knowledge_sources;' "$tmp/core-knowledge-sources.count"
+  db_query agent-postgres dirextalk_agent dirextalk_agent 'SELECT count(*) FROM core_conversation_turns;' "$tmp/core-conversation-turns.count"
+  db_query agent-postgres dirextalk_agent dirextalk_agent 'SELECT (SELECT count(*) FROM core_web_search_configs) || '\''|'\'' || (SELECT count(*) FROM core_web_search_replays);' "$tmp/core-web-search.count"
+  db_query agent-postgres dirextalk_agent dirextalk_agent 'SELECT count(*) FROM agent_account_deprovisions WHERE state = '\''completed'\'';' "$tmp/account-deprovisions.count"
+  db_query agent-postgres dirextalk_agent dirextalk_agent 'SELECT count(*) || '\''|'\'' || count(*) FILTER (WHERE state = '\''completed'\'') || '\''|'\'' || count(*) FILTER (WHERE state <> '\''completed'\'') FROM agent_account_deprovisions;' "$tmp/account-deprovisions-shape.count"
+  db_query agent-postgres dirextalk_agent dirextalk_agent 'SELECT count(*) FROM agent_capability_operations WHERE capability_id <> '\''agent.account.v1'\'' OR operation_name <> '\''deprovision_account'\'';' "$tmp/non-deprovision-operations.count"
+  [ "$(tr -d '[:space:]' <"$tmp/core-model-profiles.count")" = 0 ] || die "Agent model profile rows survived account deletion"
+  [ "$(tr -d '[:space:]' <"$tmp/core-knowledge-sources.count")" = 0 ] || die "Agent knowledge source rows survived account deletion"
+  [ "$(tr -d '[:space:]' <"$tmp/core-conversation-turns.count")" = 0 ] || die "Agent conversation rows survived account deletion"
+  [ "$(tr -d '[:space:]' <"$tmp/core-web-search.count")" = '0|0' ] || die "Agent web search config or replay rows survived account deletion"
+  [ "$(tr -d '[:space:]' <"$tmp/account-deprovisions.count")" -ge 1 ] 2>/dev/null || die "Agent deprovision ledger has no completed row"
+  [ "$(tr -d '[:space:]' <"$tmp/account-deprovisions-shape.count")" = '1|1|0' ] || die "Agent deprovision ledger is not one exact completed receipt"
+  [ "$(tr -d '[:space:]' <"$tmp/non-deprovision-operations.count")" = 0 ] || die "ordinary capability operation rows survived account deletion"
+
+  # Audit every current/future Agent-owned business table. The protected
+  # instance/schema metadata and minimal deprovision/capability ledgers are the
+  # only exclusions, matching CoreDeprovisionStore's ownership boundary.
+  agent_business_audit='DO $audit$ DECLARE item record; row_count bigint; BEGIN FOR item IN SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=current_schema() AND c.relkind='\''r'\'' AND (left(c.relname,5)='\''core_'\'' OR left(c.relname,6)='\''agent_'\'') AND c.relname NOT IN ('\''agent_instance_metadata'\'','\''agent_schema_migrations'\'','\''agent_capability_operations'\'','\''agent_capability_operation_events'\'','\''agent_account_deprovisions'\'') ORDER BY c.relname LOOP EXECUTE format('\''SELECT count(*) FROM %I'\'',item.relname) INTO row_count; IF row_count <> 0 THEN RAISE EXCEPTION '\''Agent business table % retained % rows after deprovision'\'',item.relname,row_count; END IF; END LOOP; END $audit$;'
+  db_query agent-postgres dirextalk_agent dirextalk_agent "$agent_business_audit" "$tmp/agent-business-audit.out"
+
+  qdrant_check=$tmp/qdrant-check.err
+  new_file "$qdrant_check"
+  if run_compose run --rm --no-deps -v "$qdrant_volume:/mnt/qdrant:ro" --entrypoint sh message-postgres \
+    -ec 'needle=$1; [ ! -e "/mnt/qdrant/collections/$needle" ] || exit 7; if grep -R -F -q -- "$needle" /mnt/qdrant; then exit 7; else status=$?; [ "$status" -eq 1 ] && exit 0; exit "$status"; fi' sh "$collection" >"$tmp/qdrant-check.out" 2>"$qdrant_check"; then
     :
   else
-    die "database cleanup query failed for $service"
+    qdrant_status=$?
+    [ "$qdrant_status" -eq 7 ] || die "Qdrant cleanup inspection failed"
+    die "Qdrant collection data survived account deletion"
   fi
-}
-db_query agent-postgres dirextalk_agent dirextalk_agent 'SELECT count(*) FROM core_model_profiles;' "$tmp/core-model-profiles.count"
-db_query agent-postgres dirextalk_agent dirextalk_agent 'SELECT count(*) FROM core_knowledge_sources;' "$tmp/core-knowledge-sources.count"
-db_query agent-postgres dirextalk_agent dirextalk_agent 'SELECT count(*) FROM core_conversation_turns;' "$tmp/core-conversation-turns.count"
-db_query agent-postgres dirextalk_agent dirextalk_agent 'SELECT count(*) FROM agent_account_deprovisions WHERE state = '\''completed'\'';' "$tmp/account-deprovisions.count"
-db_query agent-postgres dirextalk_agent dirextalk_agent 'SELECT count(*) || '\''|'\'' || count(*) FILTER (WHERE state = '\''completed'\'') || '\''|'\'' || count(*) FILTER (WHERE state <> '\''completed'\'') FROM agent_account_deprovisions;' "$tmp/account-deprovisions-shape.count"
-db_query agent-postgres dirextalk_agent dirextalk_agent 'SELECT count(*) FROM agent_capability_operations WHERE capability_id <> '\''agent.account.v1'\'' OR operation_name <> '\''deprovision_account'\'';' "$tmp/non-deprovision-operations.count"
-[ "$(tr -d '[:space:]' <"$tmp/core-model-profiles.count")" = 0 ] || die "Agent model profile rows survived account deletion"
-[ "$(tr -d '[:space:]' <"$tmp/core-knowledge-sources.count")" = 0 ] || die "Agent knowledge source rows survived account deletion"
-[ "$(tr -d '[:space:]' <"$tmp/core-conversation-turns.count")" = 0 ] || die "Agent conversation rows survived account deletion"
-[ "$(tr -d '[:space:]' <"$tmp/account-deprovisions.count")" -ge 1 ] 2>/dev/null || die "Agent deprovision ledger has no completed row"
-[ "$(tr -d '[:space:]' <"$tmp/account-deprovisions-shape.count")" = '1|1|0' ] || die "Agent deprovision ledger is not one exact completed receipt"
-[ "$(tr -d '[:space:]' <"$tmp/non-deprovision-operations.count")" = 0 ] || die "ordinary capability operation rows survived account deletion"
 
-# Audit every current/future Agent-owned business table. The protected
-# instance/schema metadata and minimal deprovision/capability ledgers are the
-# only exclusions, matching CoreDeprovisionStore's ownership boundary.
-agent_business_audit='DO $audit$ DECLARE item record; row_count bigint; BEGIN FOR item IN SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=current_schema() AND c.relkind='\''r'\'' AND (left(c.relname,5)='\''core_'\'' OR left(c.relname,6)='\''agent_'\'') AND c.relname NOT IN ('\''agent_instance_metadata'\'','\''agent_schema_migrations'\'','\''agent_capability_operations'\'','\''agent_capability_operation_events'\'','\''agent_account_deprovisions'\'') ORDER BY c.relname LOOP EXECUTE format('\''SELECT count(*) FROM %I'\'',item.relname) INTO row_count; IF row_count <> 0 THEN RAISE EXCEPTION '\''Agent business table % retained % rows after deprovision'\'',item.relname,row_count; END IF; END LOOP; END $audit$;'
-db_query agent-postgres dirextalk_agent dirextalk_agent "$agent_business_audit" "$tmp/agent-business-audit.out"
-
-qdrant_check=$tmp/qdrant-check.err
-new_file "$qdrant_check"
-if run_compose run --rm --no-deps -v "$qdrant_volume:/mnt/qdrant:ro" --entrypoint sh message-postgres \
-  -ec 'needle=$1; [ ! -e "/mnt/qdrant/collections/$needle" ] || exit 7; if grep -R -F -q -- "$needle" /mnt/qdrant; then exit 7; else status=$?; [ "$status" -eq 1 ] && exit 0; exit "$status"; fi' sh "$collection" >"$tmp/qdrant-check.out" 2>"$qdrant_check"; then
-  :
-else
-  qdrant_status=$?
-  [ "$qdrant_status" -eq 7 ] || die "Qdrant cleanup inspection failed"
-  die "Qdrant collection data survived account deletion"
+  qdrant_http GET /collections '' "$tmp/qdrant-collections-after-delete.json"
+  jq -e --arg base "$collection" --arg sentinel "$qdrant_sentinel" '
+    (.status == "ok") and
+    (any(.result.collections[]?; .name == $sentinel)) and
+    (all(.result.collections[]?; (.name != $base) and ((.name | startswith($base + "__stage_")) | not)))
+  ' "$tmp/qdrant-collections-after-delete.json" >/dev/null || die "Qdrant base/stage cleanup or unrelated-collection isolation failed"
 fi
 
-qdrant_http GET /collections '' "$tmp/qdrant-collections-after-delete.json"
-jq -e --arg base "$collection" --arg sentinel "$qdrant_sentinel" '
-  (.status == "ok") and
-  (any(.result.collections[]?; .name == $sentinel)) and
-  (all(.result.collections[]?; (.name != $base) and ((.name | startswith($base + "__stage_")) | not)))
-' "$tmp/qdrant-collections-after-delete.json" >/dev/null || die "Qdrant base/stage cleanup or unrelated-collection isolation failed"
+# The sentinel is test-only data and must be removed in both persistent-account
+# and disposable-account modes. It is deliberately outside the account-delete
+# assertions because production acceptance retains the account state.
 qdrant_http DELETE "/collections/$qdrant_sentinel" '' "$tmp/qdrant-sentinel-delete.json"
 jq -e '.status == "ok" and .result == true' "$tmp/qdrant-sentinel-delete.json" >/dev/null || die "could not remove Qdrant sentinel collection"
 
@@ -738,7 +862,10 @@ find "$out" "$tmp" -type f -print0 | while IFS= read -r -d '' file; do
   case "$file" in
     # model-sync is the protected transport envelope derived from model_params;
     # it is an input containing the same API keys, not an observable output.
-    "$openrouter_key"|"$embedding_key"|"$portal_password"|"$auth_file"|"$session_file"|"$model_params"|"$tmp/request-model-sync.json") continue ;;
+    # These are protected request inputs containing credentials, not observable
+    # responses or stack output. Every other file is scanned for every key.
+    "$openrouter_key"|"$embedding_key"|"$tavily_key"|"$portal_password"|"$auth_file"|"$session_file"|"$model_params"|"$model_catalog_params"|"$web_search_update"|"$tmp/request-web-search-config-update.json") continue ;;
+    "$tmp/request-model-sync.json"|"$tmp/request-model-catalog.json") continue ;;
   esac
   assert_secret_absent "$file"
   if grep -Eiq 'sk-or-v1-[A-Za-z0-9_-]{8,}|Bearer[[:space:]]+[A-Za-z0-9._-]{16,}' "$file"; then
@@ -750,4 +877,9 @@ if [ "$cleanup_after" = true ]; then
   "$deploy_dir/scripts/cleanup-local.sh" --purge "$out" >"$tmp/cleanup.out" 2>"$tmp/cleanup.err" || die "post-acceptance cleanup failed"
 fi
 
-echo "split local acceptance passed: bootstrap, HTTP+HTTPS health, model sync/chat replay, Product capability exact-once, Knowledge/memory indexing+restart+delete, account deprovision, DB/network isolation and secret canary"
+if [ "$account_delete_enabled" = true ]; then
+  account_delete_summary='account deprovision'
+else
+  account_delete_summary='account deletion skipped; model/Tavily/conversation state retained'
+fi
+echo "split local acceptance passed: bootstrap, HTTP+HTTPS health, live model catalog plus stored-profile catalog, model sync/chat replay, Tavily credential/config/test plus real Web Search chat/restart, Product capability exact-once, Knowledge/memory indexing+restart+delete, $account_delete_summary, DB/network isolation and secret canary"

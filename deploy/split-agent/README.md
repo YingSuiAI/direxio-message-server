@@ -14,9 +14,9 @@ This directory is the fresh-data deployment boundary for the split architecture:
   volumes, and private database networks. Account deletion may wipe either
   database; this harness does not attempt a historical migration.
 - Native Agent Core is the only service that owns model, Knowledge, memory,
-  task, schedule, extension, and workload state. The optional extension and
-  Core workload runners are separate profile-gated containers; the default
-  stack does not create or start them.
+  task, schedule, extension, and workload state. The extension and Core
+  workload runners are separate isolated containers, and the default stack
+  starts all three Agent runtime containers from one image.
 - Qdrant is reachable only from the Agent private network. Agent egress is
   separate and is used only for configured OpenRouter/embedding HTTPS calls.
 - A dedicated non-internal `message_public` bridge is attached only to
@@ -47,22 +47,50 @@ Provision a new output directory for every run. Do not reuse a directory or
 Compose volume namespace. The provisioner performs a read-only Docker inspect
 gate over every derived network/volume and the Compose project label; an
 existing resource is a hard failure, even when the output directory is new.
+Because the default Compose shape always starts the Agent, extension-runner,
+and Core-runner containers, complete the root-owned host preparation in the
+section below first and load its generated env file before provisioning.
 Each run receives a fresh random account generation shared by message-server,
 Agent Capability, and Product Capability peer metadata:
 
     cd /home/adam/dirextalk/dirextalk-message-server
     export DIREXTALK_MESSAGE_HTTP_BIND=${DIREXTALK_MESSAGE_HTTP_BIND:-18008}
     export DIREXTALK_MESSAGE_HTTPS_BIND=${DIREXTALK_MESSAGE_HTTPS_BIND:-18448}
+    # First run the root-owned host preparation shown below, then load its env:
+    # sudo /usr/local/libexec/dirextalk/split-agent/scripts/prepare-runner-cgroups.sh "$STACK" > /tmp/dirextalk-runner-cgroups.env
+    # set -a; . /tmp/dirextalk-runner-cgroups.env; set +a
     deploy/split-agent/scripts/provision-local.sh \
       /absolute/path/.run/split-20260804 \
       /absolute/path/openrouter.key \
-      /absolute/path/embedding.key
+      /absolute/path/embedding.key \
+      /absolute/path/tavily.key \
+      /absolute/path/portal-password
 
-The second and third arguments are protected source files. A missing argument
-creates a mode 0400 empty placeholder; replace that file before model or
-Knowledge acceptance. The provisioner also creates disposable certs/tokens,
-two PostgreSQL URLs, UUIDs, the non-secret Agent YAML, and a path-only .env.
-Secret values are never copied to .env or printed.
+The second, third, and fourth arguments are provider-key source files. A
+missing argument creates a mode 0400 empty placeholder; replace that file
+before model, Knowledge, or Web Search acceptance. The optional fifth argument
+is a portal-password source: it must be a current-user-owned regular
+non-symlink mode 0400 file containing exactly one 8-digit line. When omitted,
+provisioning generates an 8-digit decimal initial password from
+cryptographically secure random bytes. In either case the resulting mode 0400
+`message-portal-password` file is where the provisioner writes the initial
+password; the value never enters
+argv, environment, `.env`, logs, or stdout. The provisioner also creates
+disposable certs/tokens, two PostgreSQL URLs, UUIDs, the non-secret Agent YAML,
+and a path-only `.env`.
+
+For an external-TLS first provision, set
+`DIREXTALK_MESSAGE_TLS_MODE=external`,
+`DIREXTALK_MESSAGE_SERVER_NAME`,
+`DIREXTALK_MESSAGE_TLS_CERT_SOURCE_FILE`, and
+`DIREXTALK_MESSAGE_TLS_KEY_SOURCE_FILE` in the environment. Both TLS source
+files must be current-user-owned regular non-symlinks with mode 0400. The
+provisioner copies them through descriptor-bound reads, validates the host and
+certificate/key pair, and records only the output paths and file identities in
+`.env`/`.manifest`; source paths and key material are not emitted. External
+clients use `https://<DIREXTALK_MESSAGE_SERVER_NAME>`. Local mode keeps the
+client URL at `http://localhost:<DIREXTALK_MESSAGE_HTTP_BIND>` and creates
+empty protected TLS placeholders for the local initializer.
 
 Start the baseline stack through the protected environment helper:
 
@@ -72,11 +100,16 @@ Start the baseline stack through the protected environment helper:
 The helper revalidates the mode-0400 `.env` and manifest identities, their
 owner, instance/generation bindings, and every declared Docker resource. It
 refuses occupied host ports or any existing project container, network, or
-volume before building, then rechecks them immediately before startup. It builds
-the Agent image first from the sibling Agent repository, builds message-server
-second, starts only the message-server dependency graph with `--no-build`, and
-waits for both Agent and message-server health. It never cleans an existing or
-partially started stack; use the separately authorized cleanup command below.
+volume before building, then rechecks them immediately before startup. Before
+any build or Docker create, it also requires both configured `/cgroup` sources
+to be existing delegated cgroup-v2 subtrees owned by their corresponding
+runner UIDs and verifies the Docker Engine uses the systemd cgroup driver. It
+builds the Agent image first from the
+sibling Agent repository, builds message-server second, starts the complete
+Agent/message-server dependency graph with `--no-build`, and waits for Agent,
+both isolated runners, and message-server health. It never cleans an existing
+or partially started stack; use the separately authorized cleanup command
+below.
 
 Each provisioned stack has a 128-bit generated namespace (`d-` plus 26
 lower-case Base32 characters) and a mode 0400 `.manifest` binding every
@@ -123,11 +156,10 @@ process's argv/environment.
 
 Build and render without starting the stack:
 
-Each consumer resolves the public capability-api v1.0.3 module. Agent and its
-optional runners build from the sibling Agent context with Dockerfiles owned by
-that repository; message-server builds from this repository with its local
-Dockerfile. No capability-api build context or temporary `go.mod` replace is
-used:
+Each consumer resolves the public capability-api v1.0.3 module. The Agent and
+both bundled runner containers consume one image built from the sibling Agent
+context; message-server builds from this repository with its local Dockerfile.
+No capability-api build context or temporary `go.mod` replace is used:
 
     deploy/split-agent/scripts/build-local.sh \
       /absolute/path/.run/split-20260804/.env \
@@ -145,101 +177,131 @@ used:
       -f deploy/split-agent/compose.local.yaml \
       config --quiet
 
-The local override also builds the optional runner images from the sibling
-Agent checkout using `deploy/container/extension-runner.Containerfile` and
-`deploy/container/core-runner.Containerfile` from that checkout:
-
-    docker compose \
-      --env-file /absolute/path/.run/split-20260804/.env \
-      -f deploy/split-agent/compose.yaml \
-      -f deploy/split-agent/compose.local.yaml \
-      --profile extensions --profile core-runner \
-      build extension-runner core-runner
-
-The profile services are not included in the baseline `build`/`up` model.
-Keep both feature flags false unless the corresponding runner readiness gate
-has passed. To exercise the isolated acceptance lane, provision with explicit
-delegated cgroup roots and enable both flags:
+The runner services have explicit entrypoints for bundled binaries and resolve
+the exact same local Agent image; no runner-specific image or local tag exists.
+Run the root-owned host-preparation sequence below first, then source its
+generated `KEY=VALUE` output. Do not construct cgroup paths from `STACK`:
+provisioning must consume the exact `ControlGroup` roots returned by the
+helper. With that environment loaded, enable both runtime flags:
 
     export STACK=d-$(head -c 16 /dev/urandom | base32 | tr '[:upper:]' '[:lower:]' | tr -d '=[:space:]')
+    # After the host-preparation sequence below:
+    # set -a; . /tmp/dirextalk-runner-cgroups.env; set +a
     DIREXTALK_CORE_EXTENSION_ENABLED=true \
     DIREXTALK_CORE_WORKLOAD_ENABLED=true \
     DIREXTALK_SPLIT_STACK_NAME="$STACK" \
-    DIREXTALK_EXTENSION_CGROUP_ROOT="/sys/fs/cgroup/${STACK}-extension" \
-    DIREXTALK_CORE_RUNNER_CGROUP_ROOT="/sys/fs/cgroup/${STACK}-core-runner" \
     deploy/split-agent/scripts/provision-local.sh \
       /absolute/path/.run/split-20260804-runners \
       /absolute/path/openrouter.key \
       /absolute/path/embedding.key
 
-Then render and start only the explicit profiles:
+Then render and start the complete split runtime:
 
     docker compose \
       --env-file /absolute/path/.run/split-20260804-runners/.env \
-      --profile extensions --profile core-runner \
       -f deploy/split-agent/compose.yaml \
       -f deploy/split-agent/compose.local.yaml \
       config --quiet
 
     docker compose \
       --env-file /absolute/path/.run/split-20260804-runners/.env \
-      --profile extensions --profile core-runner \
       -f deploy/split-agent/compose.yaml \
       -f deploy/split-agent/compose.local.yaml \
       up -d
 
-The runner profile services use `network_mode: none`, fixed UIDs `65531`
+The runner services use `network_mode: none`, fixed image-ABI UIDs `65531`
 (extension) and `65530` (Core workload), a private Unix-domain socket volume,
 and only a caller-supplied delegated cgroup-v2 subtree bind-mounted at
 `/cgroup`. They receive no Docker socket, PostgreSQL network, database URL,
-Agent secret, or other host filesystem mount. Socket init jobs are profile
-dependencies and must complete before either runner becomes healthy; Core's
-own health/readiness gate must pass before clients are accepted.
+Agent secret, or other host filesystem mount. Socket init jobs must complete
+before either runner becomes healthy; Core's own health/readiness gate must
+pass before clients are accepted. The provisioner always emits these exact UIDs
+in `.env` and `agent-config.yaml`; setting
+`DIREXTALK_CORE_EXTENSION_RUNNER_UID` or
+`DIREXTALK_CORE_WORKLOAD_RUNNER_UID` to any other value is rejected. These
+variables are metadata for the bundled image ABI, not build-time customization
+knobs.
 
-### Delegating cgroup-v2 without sudo
+### Delegating cgroup-v2 on the host (Ubuntu 24.04+, systemd 254+)
 
-On a native Linux host, or a WSL distribution with a running user systemd
-instance and cgroup-v2, a user-owned delegated subtree can be created without
-sudo. Run this once per fresh stack (the commands deliberately use unique
-unit names):
+The production runner contract requires Ubuntu 24.04 or newer, systemd 254 or
+newer, a unified cgroup-v2 mount, and a rootful Docker daemon configured with
+`CgroupDriver=systemd`. Per-user systemd delegation is not supported. The
+repository-owned helper installs the fixed users/groups and the
+two persistent template units, then starts the exact stack instances. It never
+stops or replaces a same-name unit and refuses an existing file whose contents
+or ownership differ.
 
     export STACK=d-$(head -c 16 /dev/urandom | base32 | tr '[:upper:]' '[:lower:]' | tr -d '=[:space:]')
-    export EXT_SLICE="${STACK}-extension.slice"
-    export CORE_SLICE="${STACK}-core-runner.slice"
-    systemctl --user daemon-reload
-    systemd-run --user --unit="${STACK}-extension-delegate.service" \
-      --property="Slice=${EXT_SLICE}" --property=Delegate=yes \
-      --property=Type=oneshot --property=RemainAfterExit=yes \
-      /usr/bin/sleep infinity
-    systemd-run --user --unit="${STACK}-core-runner-delegate.service" \
-      --property="Slice=${CORE_SLICE}" --property=Delegate=yes \
-      --property=Type=oneshot --property=RemainAfterExit=yes \
-      /usr/bin/sleep infinity
-    EXT_CGROUP=$(systemctl --user show -p ControlGroup --value \
-      "${STACK}-extension-delegate.service")
-    CORE_CGROUP=$(systemctl --user show -p ControlGroup --value \
-      "${STACK}-core-runner-delegate.service")
-    test -n "$EXT_CGROUP" && test -n "$CORE_CGROUP"
-    export DIREXTALK_EXTENSION_CGROUP_ROOT="/sys/fs/cgroup${EXT_CGROUP}"
-    export DIREXTALK_CORE_RUNNER_CGROUP_ROOT="/sys/fs/cgroup${CORE_CGROUP}"
-    test -f "$DIREXTALK_EXTENSION_CGROUP_ROOT/cgroup.controllers"
-    test -f "$DIREXTALK_CORE_RUNNER_CGROUP_ROOT/cgroup.controllers"
+    sudo install -d -o root -g root -m 0755 /usr/local/libexec/dirextalk/split-agent/scripts
+    sudo install -d -o root -g root -m 0755 /usr/local/libexec/dirextalk/split-agent/systemd
+    sudo install -d -o root -g root -m 0755 /usr/local/libexec/dirextalk/split-agent/sysusers.d
+    sudo install -o root -g root -m 0755 deploy/split-agent/scripts/prepare-runner-cgroups.sh /usr/local/libexec/dirextalk/split-agent/scripts/prepare-runner-cgroups.sh
+    sudo install -o root -g root -m 0644 deploy/split-agent/systemd/*.service /usr/local/libexec/dirextalk/split-agent/systemd/
+    sudo install -o root -g root -m 0644 deploy/split-agent/sysusers.d/dirextalk-split-agent.conf /usr/local/libexec/dirextalk/split-agent/sysusers.d/
+    sudo /usr/local/libexec/dirextalk/split-agent/scripts/prepare-runner-cgroups.sh "$STACK" > /tmp/dirextalk-runner-cgroups.env
+    chmod 400 /tmp/dirextalk-runner-cgroups.env
+    # Inspect the generated env file, then load it for provisioning.
+    set -a; . /tmp/dirextalk-runner-cgroups.env; set +a
+    export DIREXTALK_SPLIT_STACK_NAME="$STACK"
+    export DIREXTALK_CORE_EXTENSION_ENABLED=true
+    export DIREXTALK_CORE_WORKLOAD_ENABLED=true
 
-Use the resulting two absolute paths in the runner-profile provision command.
-Provisioning rejects `/sys/fs/cgroup` and the top-level system/user/global
-slice paths. Each path must contain the fresh stack identity, be a real
-cgroup-v2 directory with non-empty `cgroup.controllers`, writable
-`cgroup.subtree_control`/`cgroup.procs`, and be owned by the provisioning user.
-The Docker daemon must use the systemd cgroup driver (`docker info
---format '{{.CgroupDriver}}'` should report `systemd`) and the daemon must be
-able to bind these user-owned paths. WSL installations without user systemd,
-without cgroup-v2, or with a rootful daemon that cannot grant the runner UIDs
-write access must leave both profiles disabled; do not bind-mount the host
-`/sys/fs/cgroup` root as a substitute. Stop the transient delegation after
-acceptance with:
+After loading that root-owned preparation receipt, the explicit first-fresh
+consumer wrapper runs the real provision -> Compose start -> acceptance path.
+It rejects fixture mode, requires a brand-new output directory, and leaves the
+accepted stack running for inspection; cleanup remains a separate authorized
+step:
 
-    systemctl --user stop "${STACK}-extension-delegate.service" \
-      "${STACK}-core-runner-delegate.service"
+    DIREXTALK_FIRST_FRESH_AUTHORIZED=true \
+      deploy/split-agent/scripts/verify-first-fresh.sh \
+      --execute-first-fresh /absolute/path/to/new-run \
+      /absolute/path/openrouter.key \
+      /absolute/path/embedding.key \
+      /absolute/path/tavily.key \
+      /absolute/path/portal-password \
+      openai/gpt-4o-mini openai/text-embedding-3-small
+
+The same consumer wrapper is the production Docker Hub path. Set
+`DIREXTALK_FIRST_FRESH_COMPOSE_MODE=production`, provide the two application
+digests, the protected image-attestation source, and the external TLS inputs.
+Production provisioning records that mode in both `.env` and `.manifest`.
+`start-local.sh` then renders `compose.yaml` alone, verifies the protected TLS
+and attestation identities, pulls every digest-pinned public image, runs the
+three-binary Agent smoke gate, and starts with `--no-build --pull never`.
+Neither the Agent nor message-server Git checkout is required on the target
+host:
+
+    DIREXTALK_FIRST_FRESH_AUTHORIZED=true \
+    DIREXTALK_FIRST_FRESH_COMPOSE_MODE=production \
+    DIREXTALK_CORE_EXTENSION_ENABLED=true \
+    DIREXTALK_CORE_WORKLOAD_ENABLED=true \
+    DIREXTALK_MESSAGE_SERVER_IMAGE_IMMUTABLE=docker.io/dirextalk/message-server@sha256:<digest> \
+    DIREXTALK_AGENT_IMAGE_IMMUTABLE=docker.io/dirextalk/agent@sha256:<digest> \
+    DIREXTALK_IMAGE_ATTESTATION_SOURCE_FILE=/absolute/path/image-attestation \
+    DIREXTALK_MESSAGE_TLS_MODE=external \
+    DIREXTALK_MESSAGE_SERVER_NAME=s1.dirextalk.ai \
+    DIREXTALK_MESSAGE_TLS_CERT_SOURCE_FILE=/absolute/path/server.crt \
+    DIREXTALK_MESSAGE_TLS_KEY_SOURCE_FILE=/absolute/path/server.key \
+      deploy/split-agent/scripts/verify-first-fresh.sh \
+      --execute-first-fresh /absolute/path/to/new-run \
+      /absolute/path/openrouter.key \
+      /absolute/path/embedding.key \
+      /absolute/path/tavily.key \
+      /absolute/path/portal-password \
+      openai/gpt-4o-mini openai/text-embedding-3-small
+
+The helper must be executed from this root-owned release path; it rejects a
+user-owned checkout, symlinked asset, or group/world-writable parent before
+touching users, units, or cgroups. The helper prints only `KEY=VALUE` lines. In addition to the two canonical
+`/cgroup` roots, the output binds each exact systemd instance, template
+`FragmentPath` and SHA-256, parent slice, and `ControlGroup`; `provision-local`
+and `start-local` must preserve those bindings in the stack manifest. The
+extension subtree is owned by UID/GID `65531` and the Core runner subtree by
+UID/GID `65530`. Both roots must expose `cpu`, `memory`, and `pids`, and their
+`cgroup.subtree_control` and `cgroup.procs` files must be writable by the
+corresponding runner identity. Never bind `/sys/fs/cgroup` itself or a generic
+system/user/global slice.
 
 Only the local override builds sibling Agent sources, directly through the
 Agent repository's Dockerfiles. Both consumer module graphs use the public
@@ -294,15 +356,17 @@ The provisioner writes these protected files outside Git:
   secret volume, and referenced by `core_secret_master_key_file`; message-server,
   runners, `.env`, argv, and images never receive the key bytes. The manifest
   binds its device/inode/UID so cleanup refuses a replacement file;
-- openrouter-api-key and embedding-api-key: protected host files used by the
-  acceptance helper. They are intentionally not mounted into the Agent
-  process because Core v1 stores model credentials through the authenticated
-  model profile API; no runtime component reads these files directly.
+- openrouter-api-key, embedding-api-key, and tavily-api-key: protected host
+  files used by the acceptance helper. They are intentionally not mounted into
+  the Agent process because Core v1 stores model and Web Search credentials
+  through authenticated typed APIs; no runtime component reads these files
+  directly.
 
 Agent secret-init copies only Agent runtime credentials into a UID-owned named
-volume with mode 0400. The acceptance helper reads the two model key files
-from the protected host directory and sends them once through the authenticated
-API; no model key value is placed in Compose YAML, Agent mounts, or logs.
+volume with mode 0400. The acceptance helper reads the three provider key files
+from the protected host directory and sends them once through authenticated
+typed APIs; no provider key value is placed in Compose YAML, Agent mounts, or
+logs.
 
 ## Model, embedding, Knowledge, and memory acceptance
 
@@ -319,10 +383,13 @@ files. The embedding profile request must use the exact generated
 core_knowledge_embedding_profile_id from agent-config.yaml; the chat profile
 may use a separate UUID. Then run:
 
-1. model profile create/list/get (read responses must not return key bytes);
+1. live provider model catalog before save, model profile create/list/get, and
+   a second model catalog read through the stored client profile (responses
+   must be non-empty and must not return key bytes);
 2. model connection test for chat and embedding;
 3. one chat request through message-server, followed by an identical
-   idempotency retry;
+   idempotency retry, plus a live Tavily-backed `web_search` tool turn whose
+   persisted successful tool result is verified independently;
 4. Knowledge source upload, index task completion, semantic search, restart,
    and delete;
 5. long-term memory create, search/list, restart recall, and delete.
@@ -345,21 +412,37 @@ acceptance lane (never pass key values as arguments):
 The model IDs can also be supplied with
 `DIREXTALK_ACCEPTANCE_CHAT_MODEL` and
 `DIREXTALK_ACCEPTANCE_EMBEDDING_MODEL`. The helper reads the protected
-`openrouter-api-key`, `embedding-api-key`, and portal-password files, and all
-request/session/response/log files are mode 0400 under a mode-0700 temporary
-workspace. It talks only to message-server `/_p2p/query` and `/_p2p/health`;
-it never calls an Agent or Qdrant listener directly and never prints a token.
+`openrouter-api-key`, `embedding-api-key`, `tavily-api-key`, and
+portal-password files, and all request/session/response/log files are mode
+0400 under a mode-0700 temporary workspace. It talks only to message-server
+`/_p2p/query` and `/_p2p/health`; it never calls an Agent or Qdrant listener
+directly and never prints a token.
 
 The lane verifies both health listeners, Compose port/network isolation,
-OpenRouter chat and embedding profile sync, automatic Knowledge embedding
-binding, native chat plus identical-turn replay, Product contacts and
+OpenRouter live/stored-profile model catalogs, chat and embedding profile sync,
+stored Tavily configuration/test
+across Agent restart, a real Native Agent chat that persists a successful
+Tavily `web_search` tool result, automatic Knowledge embedding binding, native
+chat plus identical-turn replay, Product contacts and
 prepared-message exact-once replay, forged-owner rejection, Knowledge upload
 and automatic indexing/search, long-term memory update/re-index/search,
-Agent restart recall, source/memory deletion, final `portal.account.delete`,
-database-role/table isolation, Qdrant cleanup, and a key/log/config canary.
-There is intentionally no `agent.knowledge.index` workaround: a binding
-mismatch is a hard contract failure. Account deletion is the final public
-action; post-delete checks use only Compose exec and private volumes.
+Agent restart recall, source/memory deletion, database-role/table isolation,
+Qdrant cleanup, and a key/log/config canary. By default it also performs the
+final `portal.account.delete` and verifies the sealed Agent, deprovision ledger,
+business-table purge, and base/stage Qdrant cleanup; post-delete checks use only
+Compose exec and private volumes. There is intentionally no
+`agent.knowledge.index` workaround: a binding mismatch is a hard contract
+failure.
+
+For the final persistent-account acceptance, set
+`DIREXTALK_ACCEPTANCE_ACCOUNT_DELETE=false`. This keeps the configured model
+profiles, Tavily configuration, and conversation records while still deleting
+the temporary Knowledge source and long-term memory created by the lane and its
+unrelated Qdrant sentinel. The account-delete, post-delete health/rejection,
+database purge, deprovision-ledger, and base/stage Qdrant assertions are then
+skipped. `DIREXTALK_ACCEPTANCE_ACCOUNT_DELETE` defaults to `true`; setting
+`DIREXTALK_ACCEPTANCE_CLEANUP_AFTER=true` while account deletion is disabled is
+rejected, so a persistent acceptance cannot accidentally purge its namespace.
 
 Set `DIREXTALK_ACCEPTANCE_CLEANUP_AFTER=true` to purge the exact disposable
 namespace after a successful run. The helper does not create AWS resources or
@@ -391,27 +474,37 @@ rejects `local-relative-replace`.
 
 Use compose.yaml alone with a reviewed .env containing:
 
-- immutable digest-pinned application images for message-server and Agent;
-- immutable digest-pinned extension-runner and Core workload-runner images
-  (required in the rendered production model even when their profiles stay
-  disabled);
+- immutable digest-pinned application images for message-server and Agent; the
+  extension-runner and Core workload-runner containers resolve the exact same
+  Agent digest;
 - immutable digest-pinned PostgreSQL and Qdrant images;
 - a unique stack name and unique network/volume names;
 - a protected output directory with mode 0700 and secret files mode 0400;
 - fresh message-server/Agent instance IDs and the generated positive account
   generation pair (never copy these values into a replacement stack).
 
-Before a production render, create a mode 0400 image attestation containing
-the exact seven digest references and the released capability-api v1.0.3
-revision, then run:
+Before a production render, create a mode 0400
+`# dirextalk-image-attestation-v2` file containing the exact five digest
+references, `capability_api_version=v1.0.3`,
+`capability_api_source=published`, and the full lowercase Git commits in
+`message_source_revision` and `agent_source_revision`, then run:
 
     deploy/split-agent/scripts/verify-production-images.sh \
       /absolute/path/.run/split/.env \
       /absolute/path/release/image-attestation
 
+The image gate inspects both immutable application digests and requires each
+`org.opencontainers.image.revision` label to match its repository-specific
+attested revision. It runs `docker run --rm --entrypoint` smoke checks against
+the Agent digest for `/usr/local/bin/dirextalk-agent`,
+`/usr/local/bin/dirextalk-extension-runner`, and
+`/usr/local/bin/dirextalk-core-runner`; a missing binary, unexpected exit, or
+metadata mismatch blocks the production render.
+
 Production also requires `DIREXTALK_MESSAGE_TLS_MODE=external`, a trusted
 certificate whose SAN/CN matches `DIREXTALK_MESSAGE_SERVER_NAME`, a matching
-private key (mode 0400), and a certificate with at least seven days remaining:
+certificate and private key (each mode 0400), and a certificate with at least
+seven days remaining:
 
     deploy/split-agent/scripts/verify-production-tls.sh \
       /absolute/path/.run/split/.env
@@ -425,3 +518,97 @@ Run config --quiet before any migration or service start. The migration services
 use the exact same application image as their serving process. A rollback is a
 fresh deployment with a matching image and a newly provisioned namespace;
 never attach a newer image to an old namespace in this harness.
+
+## Guarded public-edge cutover
+
+Public TLS termination is a separate, tracked Compose project in
+`edge-compose.yaml`. It contains only one Caddy service: the service is
+digest-pinned through `DIREXTALK_CADDY_IMAGE_IMMUTABLE`, read-only, drops all
+Linux capabilities, enables `no-new-privileges`, publishes host ports 80/443,
+and joins only the fresh message-server `message_public` network. Caddy data
+and config are explicitly named external volumes. The Caddyfile is a reviewed,
+mode-0400 regular file and must reverse-proxy to `message-server:8008` or
+`message-server:8448`.
+
+`adopt-edge.sh` is the one-shot first-edge adoption procedure. It is followed
+by `cutover-edge.sh` for later fresh-stack switches; adoption is not a
+cutover compatibility fallback. Prepare a mode-0400 edge environment and a
+mode-0700 receipt directory, then probe the exact full legacy Caddy ID:
+
+    deploy/split-agent/scripts/adopt-edge.sh probe \
+      /absolute/path/.run/legacy-edge.env \
+      0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
+      /absolute/path/.run/edge-adoption/probe.receipt \
+      edge-adopt-20260805 revision-1
+
+The probe is read-only with respect to Docker. Its protected mode-0400
+receipt binds the current UID, host/machine identity and Docker Engine ID,
+operation/revision confirmation, the exact legacy container ID, Config.Image,
+RepoDigest and image ID, Compose labels, public network object and labels,
+both Caddy volume objects, ports, reviewed Caddyfile and edge Compose file
+device/inode/UID/mode plus SHA-256, and public health, Matrix well-known, and
+TLS checks. The receipt path must not exist and is never overwritten.
+
+After reviewing the receipt, commit only with the exact operation and revision
+confirmation. The commit takes an exclusive operation lock, revalidates every
+probe-bound identity, renders and pre-creates a digest-pinned hardened Caddy
+candidate in a distinct edge project on the same network and volumes, and
+binds its full immutable container ID before stopping the legacy ID:
+
+    deploy/split-agent/scripts/adopt-edge.sh commit \
+      /absolute/path/.run/legacy-edge.env \
+      /absolute/path/.run/edge-adoption/probe.receipt \
+      edge-adopt-20260805 revision-1 \
+      /absolute/path/.run/edge-adoption/active.receipt \
+      /absolute/path/.run/edge-adoption/legacy.snapshot
+
+Only the exact legacy ID is stopped and only the exact candidate ID is
+started. The candidate must expose 80/443, retain the recorded network and
+volume object identities, use the digest-pinned image/RepoDigest, expose a
+usable healthcheck command, and satisfy read-only-rootfs, capability-drop,
+and no-new-privileges checks before the legacy stop boundary. Failure verifies
+the candidate identity before removing it, re-inspects the exact legacy ID
+before starting it, and verifies public health/TLS after rollback. No
+Compose `down`, volume deletion, or name-based mutation is used. A successful
+commit writes a separate mode-0400 legacy snapshot and a compliant
+`# dirextalk-edge-receipt-v1` active receipt, preserves the stopped legacy
+container, marks the operation consumed, and rejects replay or receipt
+collisions.
+
+For subsequent fresh-stack switches, `cutover-edge.sh` takes four protected
+paths:
+
+    deploy/split-agent/scripts/cutover-edge.sh \
+      /absolute/path/.run/new-split/.env \
+      /absolute/path/.run/new-edge.env \
+      /absolute/path/.run/edge/active.receipt \
+      /absolute/path/.run/edge/cutover.receipt
+
+The new message stack must already be healthy and its host HTTP/HTTPS ports
+must be loopback-only. The edge environment names the new edge Compose project,
+public domain, fresh message public network, immutable Caddy image, reviewed
+Caddyfile, and the existing external Caddy data/config volumes. The active
+receipt records the exact current Caddy container ID, immutable image, Compose
+project, network, ports, and mounts; its owner is checked against the current
+UID and the path must be mode 0400 and non-symlink.
+
+Before stopping anything, the helper renders both Compose files and verifies
+the fresh message-server/Agent container and network identities, host health,
+and TLS. It then re-inspects the exact recorded old Caddy ID immediately before
+stopping it, starts the new edge with `up -d --wait caddy`, and checks public
+health, Matrix well-known, and certificate validation. A failed cutover removes
+or stops only a newly verified Caddy container and starts the exact old ID;
+unknown same-name replacements are never stopped or removed. The helper never
+runs a stack-wide teardown, deletes a volume, or touches either database. A
+mode-0400 receipt is atomically created only after all checks pass; an existing
+output receipt is rejected so prior audit evidence cannot be overwritten. The
+helper also binds the host/machine and Docker Engine identity plus every
+control-file device/inode/UID/mode/SHA-256 and revalidates them immediately
+before a stop/start/remove mutation. Rollback re-inspects the exact recorded
+old ID before attempting its start, and receipt temporary files are created
+with unpredictable names inside the private receipt directory.
+
+Run the mock boundary checks before a production change:
+
+    deploy/split-agent/scripts/adopt-edge.test.sh
+    deploy/split-agent/scripts/cutover-edge.test.sh

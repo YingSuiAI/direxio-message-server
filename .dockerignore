@@ -48,7 +48,6 @@ service_token
 **/postgres_password
 **/service-token
 **/service_token
-run-services-local.sh
 message-server.yaml
 bootstrap.json
 

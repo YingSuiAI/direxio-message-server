@@ -19,22 +19,13 @@ services:
         REVISION: ${DIREXTALK_AGENT_BUILD_REVISION:-working-tree}
     image: ${DIREXTALK_AGENT_IMAGE_LOCAL:-dirextalk-agent:split-local}
 
-  # Runner images are owned by the Agent repository. They remain profile-gated
-  # and are not built or started by the baseline stack.
+  # The bundled runner binaries use the exact same local Agent image as the
+  # main process; no runner-specific build context or image tag exists.
   extension-runner:
-    build:
-      context: ${DIREXTALK_AGENT_BUILD_CONTEXT:?set the sibling dirextalk-agent source path}
-      dockerfile: deploy/container/extension-runner.Containerfile
-      args:
-        VERSION: ${DIREXTALK_AGENT_BUILD_VERSION:-local}
-        REVISION: ${DIREXTALK_AGENT_BUILD_REVISION:-working-tree}
-    image: ${DIREXTALK_EXTENSION_RUNNER_IMAGE_LOCAL:-dirextalk-extension-runner:split-local}
+    image: ${DIREXTALK_AGENT_IMAGE_LOCAL:-dirextalk-agent:split-local}
 
   core-runner:
-    build:
-      context: ${DIREXTALK_AGENT_BUILD_CONTEXT:?set the sibling dirextalk-agent source path}
-      dockerfile: deploy/container/core-runner.Containerfile
-    image: ${DIREXTALK_CORE_RUNNER_IMAGE_LOCAL:-dirextalk-core-runner:split-local}
+    image: ${DIREXTALK_AGENT_IMAGE_LOCAL:-dirextalk-agent:split-local}
 
   message-server:
     build:

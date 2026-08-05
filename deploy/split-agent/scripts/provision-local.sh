@@ -5,15 +5,17 @@ set -euo pipefail
 # directories is forbidden because Core v1 accepts fresh data only.
 #
 # Usage:
-#   provision-local.sh OUTPUT_DIR [OPENROUTER_KEY_FILE] [EMBEDDING_KEY_FILE]
+#   provision-local.sh OUTPUT_DIR [OPENROUTER_KEY_FILE] [EMBEDDING_KEY_FILE] [TAVILY_KEY_FILE] [PORTAL_PASSWORD_FILE]
 #
 # Secret source files are copied with mode 0400. Values never enter .env,
 # Compose YAML, or command output. Missing sources become protected empty
 # placeholders so topology/image checks can still run; model acceptance must
-# replace them first.
+# replace them first. A supplied portal-password source is stricter: it must be
+# a current-UID-owned regular non-symlink mode-0400 file containing one
+# 8-digit line.
 
 usage() {
-  echo "usage: $0 OUTPUT_DIR [OPENROUTER_KEY_FILE] [EMBEDDING_KEY_FILE]" >&2
+  echo "usage: $0 OUTPUT_DIR [OPENROUTER_KEY_FILE] [EMBEDDING_KEY_FILE] [TAVILY_KEY_FILE] [PORTAL_PASSWORD_FILE]" >&2
   exit 2
 }
 
@@ -40,6 +42,12 @@ validate_safe_value() {
   printf '%s\n' "$value" | grep -Eq "$pattern" || die "$name contains unsafe characters"
 }
 
+validate_server_name() {
+  local name=$1 value=$2
+  printf '%s\n' "$value" | grep -Eq '^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*$' || \
+    die "$name must be a DNS host name without a scheme, port, or wildcard"
+}
+
 validate_host_port() {
   local name=$1 value=$2
   case "$value" in
@@ -57,12 +65,12 @@ validate_vector_dimension() {
   [ "$value" -le 65536 ] 2>/dev/null || die "$name must be at most 65536"
 }
 
-validate_uid() {
-  local name=$1 value=$2
-  case "$value" in
-    ''|*[!0-9]*|0*) die "$name must be a positive decimal UID" ;;
-  esac
-  [ "$value" != "65532" ] || die "$name must differ from the Agent UID 65532"
+validate_fixed_runner_uid() {
+  local name=$1 expected=$2 value
+  if [ -n "${!name+x}" ]; then
+    value=${!name}
+    [ "$value" = "$expected" ] || die "$name is fixed at $expected for the bundled runner image; custom runner UIDs are unsupported"
+  fi
 }
 
 validate_absolute_path() {
@@ -93,8 +101,43 @@ validate_cgroup_parent() {
   printf '%s\n' "$value" | grep -Eq '^[A-Za-z0-9]([A-Za-z0-9_.-]*[A-Za-z0-9])?\.slice$' || die "$name must be a safe systemd slice name"
 }
 
+validate_target_write_access() {
+  local name=$1 path=$2 expected_uid=$3 expected_gid=$4 metadata status owner_uid owner_gid mode permissions acl
+  if metadata=$(stat -c '%u %g %a' -- "$path" 2>/dev/null); then
+    :
+  else
+    status=$?
+    die "$name metadata check failed (status $status): $path"
+  fi
+  read -r owner_uid owner_gid mode <<<"$metadata"
+  [ -n "$owner_uid" ] && [ -n "$owner_gid" ] && [ -n "$mode" ] || die "$name metadata is incomplete: $path"
+  permissions=$((8#$mode))
+  if [ "$owner_uid" = "$expected_uid" ] && (( permissions & 0200 )); then
+    (( permissions & 0002 )) && die "$name must not be world-writable: $path"
+    return 0
+  fi
+  if [ "$owner_gid" = "$expected_gid" ] && (( permissions & 0020 )); then
+    (( permissions & 0002 )) && die "$name must not be world-writable: $path"
+    return 0
+  fi
+  (( permissions & 0002 )) && die "$name must not be world-writable: $path"
+  if command -v getfacl >/dev/null 2>&1; then
+    if acl=$(getfacl -cp -- "$path" 2>/dev/null); then
+      if printf '%s\n' "$acl" | awk -F: -v uid="$expected_uid" -v gid="$expected_gid" '
+        $1 == "mask" && $2 == "" { mask = $3 }
+        $1 == "user" && $2 == uid && $3 ~ /w/ { user_write = 1 }
+        $1 == "group" && $2 == gid && $3 ~ /w/ { group_write = 1 }
+        END { if ((user_write || group_write) && mask ~ /w/) exit 0; exit 1 }
+      '; then
+        return 0
+      fi
+    fi
+  fi
+  die "$name is not writable by runner UID/GID $expected_uid:$expected_gid: $path"
+}
+
 validate_delegated_cgroup_root() {
-  local name=$1 value=$2 marker=$3 parent=$4 fs_type owner current_uid canonical
+  local name=$1 value=$2 marker=$3 parent=$4 expected_owner=$5 fs_type owner canonical controllers subtree required
   case "$value" in
     /sys/fs/cgroup|/sys/fs/cgroup/|/sys/fs/cgroup/system.slice|/sys/fs/cgroup/user.slice|/sys/fs/cgroup/global.slice)
       die "$name must be a per-stack delegated subtree, not the cgroup root or a system/user/global slice" ;;
@@ -113,11 +156,62 @@ validate_delegated_cgroup_root() {
   fs_type=$(stat -fc '%T' "$value" 2>/dev/null || true)
   [ "$fs_type" = cgroup2fs ] || die "$name is not on a cgroup-v2 filesystem: $value"
   [ -s "$value/cgroup.controllers" ] || die "$name has no delegated controllers: $value"
-  [ -f "$value/cgroup.subtree_control" ] && [ -w "$value/cgroup.subtree_control" ] || die "$name subtree control is not writable: $value"
-  [ -f "$value/cgroup.procs" ] && [ -w "$value/cgroup.procs" ] || die "$name process control is not writable: $value"
-  owner=$(stat -c '%u' "$value" 2>/dev/null || true)
-  current_uid=$(id -u)
-  [ "$owner" = "$current_uid" ] || die "$name must be owned by the provisioning user ($current_uid), got $owner: $value"
+  controllers=$(tr '\n' ' ' <"$value/cgroup.controllers" 2>/dev/null || true)
+  for required in cpu memory pids; do
+    printf ' %s ' "$controllers" | grep -Fq " $required " || \
+      die "$name does not expose controller $required: $value"
+  done
+  [ -f "$value/cgroup.subtree_control" ] || die "$name subtree control is missing: $value"
+  [ -f "$value/cgroup.procs" ] || die "$name process control is missing: $value"
+  subtree=$(tr '\n' ' ' <"$value/cgroup.subtree_control" 2>/dev/null || true)
+  for required in cpu memory pids; do
+    printf ' %s ' "$subtree" | grep -Fq " $required " || \
+      die "$name has not enabled controller $required in subtree_control: $value"
+  done
+  owner=$(stat -c '%u:%g' "$value" 2>/dev/null || true)
+  [ "$owner" = "$expected_owner:$expected_owner" ] || die "$name must be owned by runner UID/GID $expected_owner, got $owner: $value"
+  validate_target_write_access "$name delegated root" "$value" "$expected_owner" "$expected_owner"
+  validate_target_write_access "$name subtree control" "$value/cgroup.subtree_control" "$expected_owner" "$expected_owner"
+  validate_target_write_access "$name process control" "$value/cgroup.procs" "$expected_owner" "$expected_owner"
+}
+
+validate_runner_control_group() {
+  local name=$1 value=$2 stack=$3 parent=$4 unit=$5
+  printf '%s\n' "$value" | grep -Eq '^/[^/[:space:]][^[:space:]]*$' || die "$name must be an absolute systemd ControlGroup path"
+  case "$value" in
+    *'//'|*'/../'*|*'/./'*) die "$name must be canonical without path traversal" ;;
+    *"/$parent/$unit"|*"/$parent/$unit/"*) ;;
+    *) die "$name must contain exact stack parent/unit ($stack/$parent/$unit)" ;;
+  esac
+}
+
+validate_runner_fragment() {
+  local name=$1 value=$2 expected=$3 hash_name=$4 expected_hash=$5 actual_hash
+  [ "$value" = "$expected" ] || die "$name must be the repository-owned template path: $value"
+  printf '%s\n' "$expected_hash" | grep -Eq '^[0-9a-f]{64}$' || die "$hash_name must be a lowercase SHA-256"
+  actual_hash=$(sha256sum -- "$expected" | awk '{print $1}')
+  [ "$actual_hash" = "$expected_hash" ] || die "$hash_name does not match installed repository template"
+}
+
+validate_root_owned_asset() {
+  local name=$1 path=$2 current parent mode permissions
+  [ -f "$path" ] && [ ! -L "$path" ] || die "$name must be a root-owned immutable regular file"
+  [ "$(stat -c '%u:%g' -- "$path")" = 0:0 ] || die "$name must be root-owned"
+  mode=$(stat -c '%a' -- "$path")
+  permissions=$((8#$mode))
+  (( (permissions & 18) == 0 )) || die "$name must not be group/world writable"
+  current=${path%/*}
+  while :; do
+    [ -d "$current" ] && [ ! -L "$current" ] || die "$name parent must be a regular directory: $current"
+    [ "$(stat -c '%u:%g' -- "$current")" = 0:0 ] || die "$name parent must be root-owned: $current"
+    mode=$(stat -c '%a' -- "$current")
+    permissions=$((8#$mode))
+    (( (permissions & 18) == 0 )) || die "$name parent must not be group/world writable: $current"
+    [ "$current" = / ] && break
+    parent=${current%/*}
+    [ -n "$parent" ] || parent=/
+    current=$parent
+  done
 }
 
 validate_immutable_image() {
@@ -147,15 +241,34 @@ require_fresh_docker_namespace() {
 }
 
 [ "$#" -ge 1 ] || usage
+[ "$#" -le 5 ] || usage
 out_input=$1
 openrouter_source=
 [ "$#" -ge 2 ] && openrouter_source=$2
 embedding_source=$openrouter_source
 [ "$#" -ge 3 ] && embedding_source=$3
+tavily_source=
+[ "$#" -ge 4 ] && tavily_source=$4
+portal_password_source=
+[ "$#" -ge 5 ] && portal_password_source=$5
 
 core_extension_enabled=$(parse_bool DIREXTALK_CORE_EXTENSION_ENABLED "${DIREXTALK_CORE_EXTENSION_ENABLED:-false}")
 core_workload_enabled=$(parse_bool DIREXTALK_CORE_WORKLOAD_ENABLED "${DIREXTALK_CORE_WORKLOAD_ENABLED:-false}")
+runner_fixture_mode=$(parse_bool DIREXTALK_SPLIT_FIXTURE_MODE "${DIREXTALK_SPLIT_FIXTURE_MODE:-false}")
+compose_mode=${DIREXTALK_SPLIT_COMPOSE_MODE:-local}
+case "$compose_mode" in
+  local|production) ;;
+  *) die "DIREXTALK_SPLIT_COMPOSE_MODE must be local or production" ;;
+esac
+if [ "$compose_mode" = production ]; then
+  [ "$core_extension_enabled" = true ] || die "production requires DIREXTALK_CORE_EXTENSION_ENABLED=true"
+  [ "$core_workload_enabled" = true ] || die "production requires DIREXTALK_CORE_WORKLOAD_ENABLED=true"
+fi
+if [ "$runner_fixture_mode" = true ] && [ "${DIREXTALK_SPLIT_TEST_MODE:-false}" != true ]; then
+  die "DIREXTALK_SPLIT_FIXTURE_MODE requires explicit DIREXTALK_SPLIT_TEST_MODE=true"
+fi
 core_aws_enabled=$(parse_bool DIREXTALK_CORE_AWS_ENABLED "${DIREXTALK_CORE_AWS_ENABLED:-false}")
+core_aws_ssm_enabled=$(parse_bool DIREXTALK_CORE_AWS_SSM_ENABLED "${DIREXTALK_CORE_AWS_SSM_ENABLED:-false}")
 core_knowledge_vector_dimension=${DIREXTALK_CORE_KNOWLEDGE_VECTOR_DIMENSION:-1536}
 validate_vector_dimension DIREXTALK_CORE_KNOWLEDGE_VECTOR_DIMENSION "$core_knowledge_vector_dimension"
 core_aws_ssm_credential_reference=${DIREXTALK_CORE_AWS_SSM_CREDENTIAL_REFERENCE:-00000000-0000-4000-8000-000000000001}
@@ -171,13 +284,46 @@ message_https_bind=${DIREXTALK_MESSAGE_HTTPS_BIND:-8448}
 validate_host_port DIREXTALK_MESSAGE_HTTP_BIND "$message_http_bind"
 validate_host_port DIREXTALK_MESSAGE_HTTPS_BIND "$message_https_bind"
 [ "$message_http_bind" != "$message_https_bind" ] || die "DIREXTALK_MESSAGE_HTTP_BIND and DIREXTALK_MESSAGE_HTTPS_BIND must differ"
-message_client_base_url=http://localhost:$message_http_bind
+message_tls_mode=${DIREXTALK_MESSAGE_TLS_MODE:-local}
+case "$message_tls_mode" in
+  local|external) ;;
+  *) die "DIREXTALK_MESSAGE_TLS_MODE must be local or external" ;;
+esac
+if [ "$compose_mode" = production ] && [ "$message_tls_mode" != external ]; then
+  die "production requires DIREXTALK_MESSAGE_TLS_MODE=external"
+fi
+if [ "$message_tls_mode" = external ]; then
+  message_server_name=${DIREXTALK_MESSAGE_SERVER_NAME:-}
+  [ -n "$message_server_name" ] || die "DIREXTALK_MESSAGE_SERVER_NAME is required for external TLS"
+  validate_server_name DIREXTALK_MESSAGE_SERVER_NAME "$message_server_name"
+  message_tls_cert_source=${DIREXTALK_MESSAGE_TLS_CERT_SOURCE_FILE:-}
+  message_tls_key_source=${DIREXTALK_MESSAGE_TLS_KEY_SOURCE_FILE:-}
+  [ -n "$message_tls_cert_source" ] || die "DIREXTALK_MESSAGE_TLS_CERT_SOURCE_FILE is required for external TLS"
+  [ -n "$message_tls_key_source" ] || die "DIREXTALK_MESSAGE_TLS_KEY_SOURCE_FILE is required for external TLS"
+  validate_absolute_path DIREXTALK_MESSAGE_TLS_CERT_SOURCE_FILE "$message_tls_cert_source"
+  validate_absolute_path DIREXTALK_MESSAGE_TLS_KEY_SOURCE_FILE "$message_tls_key_source"
+  message_client_base_url=https://$message_server_name
+else
+  message_server_name=localhost
+  message_tls_cert_source=
+  message_tls_key_source=
+  [ -z "${DIREXTALK_MESSAGE_TLS_CERT_SOURCE_FILE:-}" ] || \
+    die "DIREXTALK_MESSAGE_TLS_CERT_SOURCE_FILE is only valid with external TLS"
+  [ -z "${DIREXTALK_MESSAGE_TLS_KEY_SOURCE_FILE:-}" ] || \
+    die "DIREXTALK_MESSAGE_TLS_KEY_SOURCE_FILE is only valid with external TLS"
+  if [ -n "${DIREXTALK_MESSAGE_SERVER_NAME:-}" ] && [ "$DIREXTALK_MESSAGE_SERVER_NAME" != localhost ]; then
+    die "DIREXTALK_MESSAGE_SERVER_NAME must be localhost for local TLS"
+  fi
+  message_client_base_url=http://localhost:$message_http_bind
+fi
 if [ -n "${DIREXTALK_MESSAGE_CLIENT_BASE_URL:-}" ]; then
   validate_safe_value DIREXTALK_MESSAGE_CLIENT_BASE_URL "$DIREXTALK_MESSAGE_CLIENT_BASE_URL" '^https?://[A-Za-z0-9._:-]+$'
   [ "$DIREXTALK_MESSAGE_CLIENT_BASE_URL" = "$message_client_base_url" ] || \
     die "DIREXTALK_MESSAGE_CLIENT_BASE_URL must be derived from DIREXTALK_MESSAGE_HTTP_BIND ($message_client_base_url)"
 fi
-if [ "$core_aws_enabled" = true ]; then
+
+if [ "$core_aws_ssm_enabled" = true ]; then
+  [ "$core_aws_enabled" = true ] || die "DIREXTALK_CORE_AWS_SSM_ENABLED requires DIREXTALK_CORE_AWS_ENABLED=true"
   validate_uuid DIREXTALK_CORE_AWS_SSM_CREDENTIAL_REFERENCE "$core_aws_ssm_credential_reference"
   validate_safe_value DIREXTALK_CORE_AWS_SSM_REGION "$core_aws_ssm_region" '^[a-z0-9-]{1,32}$'
   validate_safe_value DIREXTALK_CORE_AWS_SSM_ACCOUNT_ID "$core_aws_ssm_account_id" '^[0-9]{12}$'
@@ -191,17 +337,32 @@ extension_runner_socket=${DIREXTALK_CORE_EXTENSION_RUNNER_SOCKET:-/run/dirextalk
 workload_runner_socket=${DIREXTALK_CORE_WORKLOAD_RUNNER_SOCKET:-/run/dirextalk-core-runner/runner.sock}
 extension_runner_dir=${extension_runner_socket%/*}
 workload_runner_dir=${workload_runner_socket%/*}
-extension_runner_uid=${DIREXTALK_CORE_EXTENSION_RUNNER_UID:-65531}
-workload_runner_uid=${DIREXTALK_CORE_WORKLOAD_RUNNER_UID:-65530}
+extension_runner_uid=65531
+workload_runner_uid=65530
+validate_fixed_runner_uid DIREXTALK_CORE_EXTENSION_RUNNER_UID "$extension_runner_uid"
+validate_fixed_runner_uid DIREXTALK_CORE_WORKLOAD_RUNNER_UID "$workload_runner_uid"
 validate_socket DIREXTALK_CORE_EXTENSION_RUNNER_SOCKET "$extension_runner_socket"
 validate_socket DIREXTALK_CORE_WORKLOAD_RUNNER_SOCKET "$workload_runner_socket"
-validate_uid DIREXTALK_CORE_EXTENSION_RUNNER_UID "$extension_runner_uid"
-validate_uid DIREXTALK_CORE_WORKLOAD_RUNNER_UID "$workload_runner_uid"
 
 script_dir=$(cd "$(dirname "$0")" && pwd -P)
 split_deploy_dir=$(cd "$script_dir/.." && pwd -P)
-message_root=$(cd "$script_dir/../../.." && pwd -P)
-agent_root=$(cd "$message_root/../dirextalk-agent" && pwd -P)
+if [ "$compose_mode" = local ]; then
+  message_root=$(cd "$script_dir/../../.." && pwd -P)
+  agent_root=$(cd "$message_root/../dirextalk-agent" && pwd -P)
+  agent_build_version=local
+  agent_build_revision=working-tree
+  message_build_version=local
+  message_build_revision=working-tree
+else
+  # Production consumes only this root-owned deployment bundle plus immutable
+  # public images.  It must not require either Git checkout on the target host.
+  message_root=$split_deploy_dir
+  agent_root=$split_deploy_dir
+  agent_build_version=production-attested
+  agent_build_revision=production-attested
+  message_build_version=production-attested
+  message_build_revision=production-attested
+fi
 
 case "$out_input" in
   /*) out=$(readlink -m -- "$out_input") ;;
@@ -245,15 +406,277 @@ write_raw_secret() {
   [ "$(wc -c <"$target")" -eq "$bytes" ] || die "failed to generate exact-size protected key: $target"
 }
 
+generate_portal_password() {
+  local random32
+  # Reject the short tail of the 32-bit range so decimal conversion does not
+  # introduce modulo bias while retaining the backend's 8-digit contract.
+  while :; do
+    if random32=$(od -An -N4 -tu4 /dev/urandom | tr -d '[:space:]'); then
+      :
+    else
+      die "failed to read cryptographically secure randomness for portal password"
+    fi
+    case "$random32" in
+      ''|*[!0-9]*) die "cryptographically secure portal password source was malformed" ;;
+    esac
+    if [ "$random32" -lt 4200000000 ] 2>/dev/null; then
+      printf -v portal_password_value '%08d' "$((random32 % 100000000))"
+      return
+    fi
+  done
+}
+
+read_portal_password_source() {
+  local source=$1 portal_fd status
+  local before_type before_device before_inode before_uid before_mode before_metadata
+  local fd_type fd_device fd_inode fd_uid fd_mode fd_metadata
+  local after_type after_device after_inode after_uid after_mode after_metadata
+  local portal_password_hex portal_password_value_read byte offset
+  local current_uid
+
+  [ -f "$source" ] || die "portal password source must be a regular non-symlink file"
+  [ ! -L "$source" ] || die "portal password source must be a regular non-symlink file"
+  current_uid=$(id -u) || die "cannot determine current UID for portal password source"
+  if before_metadata=$(stat -c '%d %i %u %a' -- "$source" 2>/dev/null); then
+    :
+  else
+    status=$?
+    die "portal password source metadata check failed (status $status)"
+  fi
+  read -r before_device before_inode before_uid before_mode <<<"$before_metadata"
+  [ -n "$before_device" ] && [ -n "$before_inode" ] && [ -n "$before_uid" ] && [ -n "$before_mode" ] || \
+    die "portal password source metadata is incomplete"
+  if before_type=$(stat -c '%F' -- "$source" 2>/dev/null); then
+    :
+  else
+    status=$?
+    die "portal password source type check failed (status $status)"
+  fi
+  [ "$before_type" = "regular file" ] || die "portal password source must be a regular non-symlink file"
+  [ "$before_uid" = "$current_uid" ] || die "portal password source must be owned by the provisioning user"
+  [ "$before_mode" = 400 ] || die "portal password source must have mode 0400"
+
+  if exec {portal_fd}<"$source"; then
+    :
+  else
+    status=$?
+    die "portal password source could not be opened (status $status)"
+  fi
+  if fd_metadata=$(stat -Lc '%d %i %u %a' -- "/proc/self/fd/$portal_fd" 2>/dev/null); then
+    :
+  else
+    status=$?
+    exec {portal_fd}<&-
+    die "portal password source opened-FD metadata check failed (status $status)"
+  fi
+  read -r fd_device fd_inode fd_uid fd_mode <<<"$fd_metadata"
+  if fd_type=$(stat -Lc '%F' -- "/proc/self/fd/$portal_fd" 2>/dev/null); then
+    :
+  else
+    status=$?
+    exec {portal_fd}<&-
+    die "portal password source opened-FD type check failed (status $status)"
+  fi
+  if [ "$fd_type" != "$before_type" ] || [ "$fd_device" != "$before_device" ] || [ "$fd_inode" != "$before_inode" ] || \
+    [ "$fd_uid" != "$before_uid" ] || [ "$fd_mode" != "$before_mode" ]; then
+    exec {portal_fd}<&-
+    die "portal password source changed before the protected read"
+  fi
+
+  if portal_password_hex=$(od -An -v -tx1 <&"$portal_fd" | tr -d '[:space:]'); then
+    :
+  else
+    status=$?
+    exec {portal_fd}<&-
+    die "portal password source could not be read (status $status)"
+  fi
+  case "${#portal_password_hex}" in
+    16) ;;
+    18) [ "${portal_password_hex:16:2}" = 0a ] || {
+      exec {portal_fd}<&-
+      die "portal password source must contain exactly one 8-digit line"
+    } ;;
+    *)
+      exec {portal_fd}<&-
+      die "portal password source must contain exactly one 8-digit line"
+      ;;
+  esac
+  portal_password_value_read=
+  for offset in 0 2 4 6 8 10 12 14; do
+    byte=${portal_password_hex:offset:2}
+    case "$byte" in
+      3[0-9]) portal_password_value_read="${portal_password_value_read}${byte:1:1}" ;;
+      *)
+        exec {portal_fd}<&-
+        die "portal password source must contain exactly one 8-digit line"
+        ;;
+    esac
+  done
+
+  [ -f "$source" ] || {
+    exec {portal_fd}<&-
+    die "portal password source was replaced after the protected read"
+  }
+  [ ! -L "$source" ] || {
+    exec {portal_fd}<&-
+    die "portal password source was replaced after the protected read"
+  }
+  if after_metadata=$(stat -c '%d %i %u %a' -- "$source" 2>/dev/null); then
+    :
+  else
+    status=$?
+    exec {portal_fd}<&-
+    die "portal password source post-read metadata check failed (status $status)"
+  fi
+  read -r after_device after_inode after_uid after_mode <<<"$after_metadata"
+  if after_type=$(stat -c '%F' -- "$source" 2>/dev/null); then
+    :
+  else
+    status=$?
+    exec {portal_fd}<&-
+    die "portal password source post-read type check failed (status $status)"
+  fi
+  if [ "$after_type" != "$before_type" ] || [ "$after_device" != "$before_device" ] || [ "$after_inode" != "$before_inode" ] || \
+    [ "$after_uid" != "$before_uid" ] || [ "$after_mode" != "$before_mode" ]; then
+    exec {portal_fd}<&-
+    die "portal password source was replaced after the protected read"
+  fi
+  exec {portal_fd}<&-
+  portal_password_value=$portal_password_value_read
+}
+
 copy_secret_or_empty() {
   local source=$1 target=$2 label=$3
-  if [ -n "$source" ]; then
-    [ -f "$source" ] && [ ! -L "$source" ] || die "$label source must be a regular non-symlink file"
-    install -m 0400 "$source" "$target"
-  else
+  local source_fd path_fd status current_uid
+  local fd_metadata fd_device fd_inode fd_uid fd_mode fd_type
+  local path_metadata path_device path_inode path_uid path_mode path_type
+
+  if [ -z "$source" ]; then
+    umask 077
     : >"$target"
     chmod 400 "$target"
     echo "warning: $label is an empty protected placeholder; replace it before model acceptance" >&2
+    return
+  fi
+
+  # The shell performs the path opens so source values never become argv for
+  # helper processes. Validate the opened descriptor and then compare a fresh
+  # descriptor for the named path before and after the protected copy.
+  [ -f "$source" ] || die "$label source must be a regular non-symlink file"
+  [ ! -L "$source" ] || die "$label source must be a regular non-symlink file"
+  current_uid=$(id -u) || die "cannot determine current UID for $label source"
+  if exec {source_fd}<"$source"; then
+    :
+  else
+    status=$?
+    die "$label source could not be opened (status $status)"
+  fi
+  if fd_metadata=$(stat -Lc '%d %i %u %a' -- "/proc/self/fd/$source_fd" 2>/dev/null); then
+    :
+  else
+    status=$?
+    exec {source_fd}<&-
+    die "$label source opened-FD metadata check failed (status $status)"
+  fi
+  read -r fd_device fd_inode fd_uid fd_mode <<<"$fd_metadata"
+  if fd_type=$(stat -Lc '%F' -- "/proc/self/fd/$source_fd" 2>/dev/null); then
+    :
+  else
+    status=$?
+    exec {source_fd}<&-
+    die "$label source opened-FD type check failed (status $status)"
+  fi
+  [ "$fd_type" = "regular file" ] || {
+    exec {source_fd}<&-
+    die "$label source must be a regular non-symlink file"
+  }
+  [ "$fd_uid" = "$current_uid" ] || {
+    exec {source_fd}<&-
+    die "$label source must be owned by the provisioning user"
+  }
+  [ "$fd_mode" = 400 ] || {
+    exec {source_fd}<&-
+    die "$label source must have mode 0400"
+  }
+
+  [ -f "$source" ] && [ ! -L "$source" ] || {
+    exec {source_fd}<&-
+    die "$label source changed before the protected read"
+  }
+  if exec {path_fd}<"$source"; then
+    :
+  else
+    status=$?
+    exec {source_fd}<&-
+    die "$label source could not be reopened (status $status)"
+  fi
+  if path_metadata=$(stat -Lc '%d %i %u %a' -- "/proc/self/fd/$path_fd" 2>/dev/null); then
+    :
+  else
+    status=$?
+    exec {path_fd}<&-
+    exec {source_fd}<&-
+    die "$label source reopened-FD metadata check failed (status $status)"
+  fi
+  read -r path_device path_inode path_uid path_mode <<<"$path_metadata"
+  if path_type=$(stat -Lc '%F' -- "/proc/self/fd/$path_fd" 2>/dev/null); then
+    :
+  else
+    status=$?
+    exec {path_fd}<&-
+    exec {source_fd}<&-
+    die "$label source reopened-FD type check failed (status $status)"
+  fi
+  exec {path_fd}<&-
+  if [ "$path_type" != "$fd_type" ] || [ "$path_device" != "$fd_device" ] || [ "$path_inode" != "$fd_inode" ] || \
+    [ "$path_uid" != "$fd_uid" ] || [ "$path_mode" != "$fd_mode" ]; then
+    exec {source_fd}<&-
+    die "$label source changed before the protected read"
+  fi
+
+  umask 077
+  if cat <&"$source_fd" >"$target"; then
+    :
+  else
+    status=$?
+    exec {source_fd}<&-
+    die "$label source could not be copied (status $status)"
+  fi
+  chmod 400 "$target"
+
+  [ -f "$source" ] && [ ! -L "$source" ] || {
+    exec {source_fd}<&-
+    die "$label source was replaced after the protected read"
+  }
+  if exec {path_fd}<"$source"; then
+    :
+  else
+    status=$?
+    exec {source_fd}<&-
+    die "$label source could not be reopened after the protected read (status $status)"
+  fi
+  if path_metadata=$(stat -Lc '%d %i %u %a' -- "/proc/self/fd/$path_fd" 2>/dev/null); then
+    :
+  else
+    status=$?
+    exec {path_fd}<&-
+    exec {source_fd}<&-
+    die "$label source post-read metadata check failed (status $status)"
+  fi
+  read -r path_device path_inode path_uid path_mode <<<"$path_metadata"
+  if path_type=$(stat -Lc '%F' -- "/proc/self/fd/$path_fd" 2>/dev/null); then
+    :
+  else
+    status=$?
+    exec {path_fd}<&-
+    exec {source_fd}<&-
+    die "$label source post-read type check failed (status $status)"
+  fi
+  exec {path_fd}<&-
+  exec {source_fd}<&-
+  if [ "$path_type" != "$fd_type" ] || [ "$path_device" != "$fd_device" ] || [ "$path_inode" != "$fd_inode" ] || \
+    [ "$path_uid" != "$fd_uid" ] || [ "$path_mode" != "$fd_mode" ]; then
+    die "$label source was replaced after the protected read"
   fi
 }
 
@@ -265,7 +688,12 @@ account_generation=$((16#$generation_hex + 1))
 agent_password=$(openssl rand -hex 24)
 message_password=$(openssl rand -hex 24)
 message_registration_shared_secret=$(openssl rand -hex 32)
-message_portal_password=$(openssl rand -hex 24)
+if [ -n "$portal_password_source" ]; then
+  read_portal_password_source "$portal_password_source"
+else
+  generate_portal_password
+fi
+message_portal_password=$portal_password_value
 
 command -v base32 >/dev/null 2>&1 || die "base32 is required to create a high-entropy fresh stack namespace"
 stack_nonce=$(head -c 16 /dev/urandom | base32 | tr '[:upper:]' '[:lower:]' | tr -d '=[:space:]')
@@ -280,21 +708,61 @@ extension_cgroup_root=${DIREXTALK_EXTENSION_CGROUP_ROOT:-/sys/fs/cgroup/$stack_n
 core_runner_cgroup_root=${DIREXTALK_CORE_RUNNER_CGROUP_ROOT:-/sys/fs/cgroup/$stack_name-core-runner}
 extension_cgroup_parent=${DIREXTALK_EXTENSION_CGROUP_PARENT:-$stack_name-extension.slice}
 workload_cgroup_parent=${DIREXTALK_CORE_RUNNER_CGROUP_PARENT:-$stack_name-core-runner.slice}
+extension_runner_unit=${DIREXTALK_EXTENSION_RUNNER_UNIT:-dirextalk-extension-runner@${stack_name}.service}
+core_runner_unit=${DIREXTALK_CORE_RUNNER_UNIT:-dirextalk-core-runner@${stack_name}.service}
+extension_fragment_path=${DIREXTALK_EXTENSION_RUNNER_FRAGMENT_PATH:-/etc/systemd/system/dirextalk-extension-runner@.service}
+core_fragment_path=${DIREXTALK_CORE_RUNNER_FRAGMENT_PATH:-/etc/systemd/system/dirextalk-core-runner@.service}
+extension_fragment_sha256=${DIREXTALK_EXTENSION_RUNNER_FRAGMENT_SHA256:-$(sha256sum -- "$split_deploy_dir/systemd/dirextalk-extension-runner@.service" | awk '{print $1}')}
+core_fragment_sha256=${DIREXTALK_CORE_RUNNER_FRAGMENT_SHA256:-$(sha256sum -- "$split_deploy_dir/systemd/dirextalk-core-runner@.service" | awk '{print $1}')}
+runner_prep_helper_path=${DIREXTALK_RUNNER_PREP_HELPER_PATH:-$script_dir/prepare-runner-cgroups.sh}
+runner_prep_helper_sha256=${DIREXTALK_RUNNER_PREP_HELPER_SHA256:-$(sha256sum -- "$runner_prep_helper_path" | awk '{print $1}')}
+runner_prep_machine_id=${DIREXTALK_RUNNER_PREP_MACHINE_ID:-unknown}
+runner_prep_docker_engine_id=${DIREXTALK_RUNNER_PREP_DOCKER_ENGINE_ID:-unknown}
+extension_control_group=${DIREXTALK_EXTENSION_CONTROL_GROUP:-/system.slice/${extension_cgroup_parent}/${extension_runner_unit}}
+core_control_group=${DIREXTALK_CORE_RUNNER_CONTROL_GROUP:-/system.slice/${workload_cgroup_parent}/${core_runner_unit}}
+extension_runner_user=dirextalk-extension-runner
+core_runner_user=dirextalk-core-runner
+runner_host_prepared=true
+if [ "$runner_fixture_mode" = false ]; then
+  [ -n "${DIREXTALK_EXTENSION_RUNNER_FRAGMENT_SHA256:-}" ] || die "DIREXTALK_EXTENSION_RUNNER_FRAGMENT_SHA256 must come from prepare-runner-cgroups.sh"
+  [ -n "${DIREXTALK_CORE_RUNNER_FRAGMENT_SHA256:-}" ] || die "DIREXTALK_CORE_RUNNER_FRAGMENT_SHA256 must come from prepare-runner-cgroups.sh"
+  [ "$extension_cgroup_parent" = "$stack_name-extension.slice" ] || die "extension runner parent slice must be stack-bound"
+  [ "$workload_cgroup_parent" = "$stack_name-core-runner.slice" ] || die "Core runner parent slice must be stack-bound"
+  [ "$extension_runner_unit" = "dirextalk-extension-runner@${stack_name}.service" ] || die "extension runner unit is not stack-bound"
+  [ "$core_runner_unit" = "dirextalk-core-runner@${stack_name}.service" ] || die "Core runner unit is not stack-bound"
+  validate_runner_control_group DIREXTALK_EXTENSION_CONTROL_GROUP "$extension_control_group" "$stack_name" "$extension_cgroup_parent" "$extension_runner_unit"
+  validate_runner_control_group DIREXTALK_CORE_RUNNER_CONTROL_GROUP "$core_control_group" "$stack_name" "$workload_cgroup_parent" "$core_runner_unit"
+  [ "$extension_cgroup_root" = "/sys/fs/cgroup${extension_control_group}" ] || die "extension cgroup root must bind its exact ControlGroup"
+  [ "$core_runner_cgroup_root" = "/sys/fs/cgroup${core_control_group}" ] || die "Core runner cgroup root must bind its exact ControlGroup"
+  [ -n "${DIREXTALK_RUNNER_PREP_HELPER_SHA256:-}" ] || die "DIREXTALK_RUNNER_PREP_HELPER_SHA256 must come from prepare-runner-cgroups.sh"
+  [ -n "${DIREXTALK_RUNNER_PREP_MACHINE_ID:-}" ] || die "DIREXTALK_RUNNER_PREP_MACHINE_ID must come from prepare-runner-cgroups.sh"
+  [ -n "${DIREXTALK_RUNNER_PREP_DOCKER_ENGINE_ID:-}" ] || die "DIREXTALK_RUNNER_PREP_DOCKER_ENGINE_ID must come from prepare-runner-cgroups.sh"
+  printf '%s\n' "$runner_prep_machine_id" | grep -Eq '^[0-9a-f]{32}$' || die "DIREXTALK_RUNNER_PREP_MACHINE_ID must be a 32-char machine-id"
+  printf '%s\n' "$runner_prep_docker_engine_id" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9_.:/+-]{0,255}$' || die "DIREXTALK_RUNNER_PREP_DOCKER_ENGINE_ID is invalid"
+  printf '%s\n' "$runner_prep_helper_sha256" | grep -Eq '^[0-9a-f]{64}$' || die "DIREXTALK_RUNNER_PREP_HELPER_SHA256 must be a lowercase SHA-256"
+  validate_root_owned_asset DIREXTALK_RUNNER_PREP_HELPER_PATH "$runner_prep_helper_path"
+  actual_runner_prep_hash=$(sha256sum -- "$runner_prep_helper_path" | awk '{print $1}')
+  [ "$actual_runner_prep_hash" = "$runner_prep_helper_sha256" ] || die "runner preparation helper hash differs from installed asset"
+  validate_runner_fragment DIREXTALK_EXTENSION_RUNNER_FRAGMENT_PATH "$extension_fragment_path" \
+    /etc/systemd/system/dirextalk-extension-runner@.service DIREXTALK_EXTENSION_RUNNER_FRAGMENT_SHA256 "$extension_fragment_sha256"
+  validate_runner_fragment DIREXTALK_CORE_RUNNER_FRAGMENT_PATH "$core_fragment_path" \
+    /etc/systemd/system/dirextalk-core-runner@.service DIREXTALK_CORE_RUNNER_FRAGMENT_SHA256 "$core_fragment_sha256"
+else
+  echo "warning: explicit runner fixture mode skips host cgroup identity checks; never use it in production" >&2
+fi
 validate_absolute_path DIREXTALK_EXTENSION_CGROUP_ROOT "$extension_cgroup_root"
 validate_absolute_path DIREXTALK_CORE_RUNNER_CGROUP_ROOT "$core_runner_cgroup_root"
 validate_cgroup_parent DIREXTALK_EXTENSION_CGROUP_PARENT "$extension_cgroup_parent"
 validate_cgroup_parent DIREXTALK_CORE_RUNNER_CGROUP_PARENT "$workload_cgroup_parent"
-if [ "$core_extension_enabled" = true ] && [ -z "${DIREXTALK_EXTENSION_CGROUP_ROOT:-}" ]; then
+if [ "$runner_fixture_mode" = false ] && [ -z "${DIREXTALK_EXTENSION_CGROUP_ROOT:-}" ]; then
   die "DIREXTALK_EXTENSION_CGROUP_ROOT must point to a delegated cgroup-v2 subtree when extensions are enabled"
 fi
-if [ "$core_workload_enabled" = true ] && [ -z "${DIREXTALK_CORE_RUNNER_CGROUP_ROOT:-}" ]; then
+if [ "$runner_fixture_mode" = false ] && [ -z "${DIREXTALK_CORE_RUNNER_CGROUP_ROOT:-}" ]; then
   die "DIREXTALK_CORE_RUNNER_CGROUP_ROOT must point to a delegated cgroup-v2 subtree when Core Runner is enabled"
 fi
-if [ "$core_extension_enabled" = true ]; then
-  validate_delegated_cgroup_root DIREXTALK_EXTENSION_CGROUP_ROOT "$extension_cgroup_root" "$stack_name" "$extension_cgroup_parent"
-fi
-if [ "$core_workload_enabled" = true ]; then
-  validate_delegated_cgroup_root DIREXTALK_CORE_RUNNER_CGROUP_ROOT "$core_runner_cgroup_root" "$stack_name" "$workload_cgroup_parent"
+if [ "$runner_fixture_mode" = false ]; then
+  validate_delegated_cgroup_root DIREXTALK_EXTENSION_CGROUP_ROOT "$extension_cgroup_root" "$stack_name" "$extension_cgroup_parent" "$extension_runner_uid"
+  validate_delegated_cgroup_root DIREXTALK_CORE_RUNNER_CGROUP_ROOT "$core_runner_cgroup_root" "$stack_name" "$workload_cgroup_parent" "$workload_runner_uid"
 fi
 
 require_fresh_docker_namespace \
@@ -323,10 +791,6 @@ message_image=$(printenv DIREXTALK_MESSAGE_SERVER_IMAGE_IMMUTABLE 2>/dev/null ||
 [ -n "$message_image" ] || message_image=registry.invalid/dirextalk-message-server@sha256:0000000000000000000000000000000000000000000000000000000000000000
 agent_image=$(printenv DIREXTALK_AGENT_IMAGE_IMMUTABLE 2>/dev/null || true)
 [ -n "$agent_image" ] || agent_image=registry.invalid/dirextalk-agent@sha256:0000000000000000000000000000000000000000000000000000000000000000
-extension_runner_image=$(printenv DIREXTALK_EXTENSION_RUNNER_IMAGE_IMMUTABLE 2>/dev/null || true)
-[ -n "$extension_runner_image" ] || extension_runner_image=registry.invalid/dirextalk-extension-runner@sha256:0000000000000000000000000000000000000000000000000000000000000000
-core_runner_image=$(printenv DIREXTALK_CORE_RUNNER_IMAGE_IMMUTABLE 2>/dev/null || true)
-[ -n "$core_runner_image" ] || core_runner_image=registry.invalid/dirextalk-core-runner@sha256:0000000000000000000000000000000000000000000000000000000000000000
 qdrant_image=$(printenv DIREXTALK_QDRANT_IMAGE_IMMUTABLE 2>/dev/null || true)
 [ -n "$qdrant_image" ] || qdrant_image=qdrant/qdrant:v1.18.3@sha256:0bd98fa7977f1e75694779359ca4e212822e5a71334e28421182f72f209d5286
 for image_pair in \
@@ -334,13 +798,18 @@ for image_pair in \
   DIREXTALK_UTILITY_IMAGE_IMMUTABLE:$utility_image \
   DIREXTALK_MESSAGE_SERVER_IMAGE_IMMUTABLE:$message_image \
   DIREXTALK_AGENT_IMAGE_IMMUTABLE:$agent_image \
-  DIREXTALK_EXTENSION_RUNNER_IMAGE_IMMUTABLE:$extension_runner_image \
-  DIREXTALK_CORE_RUNNER_IMAGE_IMMUTABLE:$core_runner_image \
   DIREXTALK_QDRANT_IMAGE_IMMUTABLE:$qdrant_image; do
   image_name=${image_pair%%:*}
   image_value=${image_pair#*:}
   validate_immutable_image "$image_name" "$image_value"
 done
+if [ "$compose_mode" = production ]; then
+  case "$message_image:$agent_image" in
+    *registry.invalid*|*sha256:0000000000000000000000000000000000000000000000000000000000000000*)
+      die "production application images must be non-placeholder Docker Hub digests"
+      ;;
+  esac
+fi
 
 write_secret "$out/agent-postgres-password" "$agent_password"
 write_secret "$out/message-postgres-password" "$message_password"
@@ -355,17 +824,82 @@ core_secret_master_key_uid=$(stat -c '%u' "$out/core-secret-master-key")
 
 # Keep TLS source paths explicit and path-only. Local mode intentionally starts
 # with empty protected placeholders; message-server-init generates the
-# disposable certificate/key in its fresh config volume. Production replaces
-# these files with a provisioned pair and runs verify-production-tls.sh before
-# enabling external mode. Neither certificate nor key material is interpolated
-# into Compose or written to the manifest.
+# disposable certificate/key in its fresh config volume. External mode copies
+# a caller-provided, protected pair through descriptor-bound reads before
+# validating it. Neither source path nor certificate/key material is written to
+# Compose or the manifest.
 message_tls_cert_file=$out/message-tls-external-cert.pem
 message_tls_key_file=$out/message-tls-external-key.pem
+image_attestation_source=${DIREXTALK_IMAGE_ATTESTATION_SOURCE_FILE:-}
+image_attestation_file=$out/image-attestation
+if [ "$compose_mode" = production ]; then
+  [ -n "$image_attestation_source" ] || die "DIREXTALK_IMAGE_ATTESTATION_SOURCE_FILE is required for production"
+  validate_absolute_path DIREXTALK_IMAGE_ATTESTATION_SOURCE_FILE "$image_attestation_source"
+elif [ -n "$image_attestation_source" ]; then
+  die "DIREXTALK_IMAGE_ATTESTATION_SOURCE_FILE is only valid for production"
+fi
 
 copy_secret_or_empty "$openrouter_source" "$out/openrouter-api-key" "OpenRouter API key"
 copy_secret_or_empty "$embedding_source" "$out/embedding-api-key" "embedding API key"
-copy_secret_or_empty "" "$message_tls_cert_file" "external message-server TLS certificate"
-copy_secret_or_empty "" "$message_tls_key_file" "external message-server TLS private key"
+copy_secret_or_empty "$tavily_source" "$out/tavily-api-key" "Tavily API key"
+copy_secret_or_empty "$message_tls_cert_source" "$message_tls_cert_file" "external message-server TLS certificate"
+copy_secret_or_empty "$message_tls_key_source" "$message_tls_key_file" "external message-server TLS private key"
+copy_secret_or_empty "$image_attestation_source" "$image_attestation_file" "production image attestation"
+
+if [ "$compose_mode" = production ]; then
+  [ -s "$image_attestation_file" ] || die "production image attestation must be non-empty"
+fi
+[ -f "$image_attestation_file" ] && [ ! -L "$image_attestation_file" ] || die "provisioned image attestation is not a regular non-symlink file"
+[ "$(stat -c '%u' -- "$image_attestation_file")" = "$(id -u)" ] || die "provisioned image attestation is not owned by the provisioning user"
+[ "$(stat -c '%a' -- "$image_attestation_file")" = 400 ] || die "provisioned image attestation must have mode 0400"
+image_attestation_device=$(stat -c '%d' -- "$image_attestation_file")
+image_attestation_inode=$(stat -c '%i' -- "$image_attestation_file")
+image_attestation_uid=$(stat -c '%u' -- "$image_attestation_file")
+image_attestation_sha256=$(sha256sum -- "$image_attestation_file" | awk '{print $1}')
+
+if [ "$message_tls_mode" = external ]; then
+  [ -s "$message_tls_cert_file" ] || die "external message-server TLS certificate must be non-empty"
+  [ -s "$message_tls_key_file" ] || die "external message-server TLS private key must be non-empty"
+  openssl x509 -in "$message_tls_cert_file" -noout >/dev/null 2>&1 || die "external message-server TLS certificate cannot be parsed"
+  openssl pkey -in "$message_tls_key_file" -noout >/dev/null 2>&1 || die "external message-server TLS private key cannot be parsed"
+  openssl x509 -in "$message_tls_cert_file" -checkend 604800 -noout >/dev/null 2>&1 || \
+    die "external message-server TLS certificate expires within seven days"
+  if cert_host_check=$(openssl x509 -in "$message_tls_cert_file" -checkhost "$message_server_name" -noout 2>/dev/null); then
+    case "$cert_host_check" in
+      *" does match certificate") ;;
+      *) die "external message-server TLS certificate SAN/CN does not match the configured server identity" ;;
+    esac
+  else
+    die "external message-server TLS certificate SAN/CN could not be checked"
+  fi
+  if cert_pub=$(openssl x509 -in "$message_tls_cert_file" -pubkey -noout 2>/dev/null | \
+    openssl pkey -pubin -outform DER 2>/dev/null | sha256sum | awk '{print $1}'); then
+    :
+  else
+    die "external message-server TLS certificate public key could not be derived"
+  fi
+  if key_pub=$(openssl pkey -in "$message_tls_key_file" -pubout 2>/dev/null | \
+    openssl pkey -pubin -outform DER 2>/dev/null | sha256sum | awk '{print $1}'); then
+    :
+  else
+    die "external message-server TLS private key public key could not be derived"
+  fi
+  [ -n "$cert_pub" ] && [ "$cert_pub" = "$key_pub" ] || die "external message-server TLS certificate and private key do not match"
+fi
+
+for message_tls_file in "$message_tls_cert_file" "$message_tls_key_file"; do
+  [ -f "$message_tls_file" ] && [ ! -L "$message_tls_file" ] || die "provisioned message-server TLS file is not a regular non-symlink file"
+  [ "$(stat -c '%u' -- "$message_tls_file")" = "$(id -u)" ] || die "provisioned message-server TLS file is not owned by the provisioning user"
+  [ "$(stat -c '%a' -- "$message_tls_file")" = 400 ] || die "provisioned message-server TLS file must have mode 0400"
+done
+message_tls_cert_device=$(stat -c '%d' -- "$message_tls_cert_file")
+message_tls_cert_inode=$(stat -c '%i' -- "$message_tls_cert_file")
+message_tls_cert_uid=$(stat -c '%u' -- "$message_tls_cert_file")
+message_tls_cert_sha256=$(sha256sum -- "$message_tls_cert_file" | awk '{print $1}')
+message_tls_key_device=$(stat -c '%d' -- "$message_tls_key_file")
+message_tls_key_inode=$(stat -c '%i' -- "$message_tls_key_file")
+message_tls_key_uid=$(stat -c '%u' -- "$message_tls_key_file")
+message_tls_key_sha256=$(sha256sum -- "$message_tls_key_file" | awk '{print $1}')
 
 knowledge_collection=$(printf '%s' "$agent_instance_id" | tr -d '-')
 cat >"$out/agent-config.yaml" <<EOF
@@ -414,6 +948,9 @@ core_workload_runner_uid: $workload_runner_uid
 core_aws_enabled: $core_aws_enabled
 core_secret_master_key_file: /run/secrets/core_secret_master_key
 core_secret_master_key_version: 1
+EOF
+if [ "$core_aws_ssm_enabled" = true ]; then
+  cat >>"$out/agent-config.yaml" <<EOF
 core_aws_ssm_readiness:
   credential_reference: $core_aws_ssm_credential_reference
   target:
@@ -429,6 +966,9 @@ core_aws_ssm_readiness:
     ec2_systemd_service: $core_aws_ssm_systemd_service
     required_instance_tags:
       $core_aws_ssm_required_tag_key: "$core_aws_ssm_required_tag_value"
+EOF
+fi
+cat >>"$out/agent-config.yaml" <<EOF
 core_knowledge_enabled: true
 core_knowledge_content_root: /var/lib/dirextalk-agent/knowledge-content
 core_knowledge_mount_root: /var/lib/dirextalk-agent/knowledge-mount
@@ -443,6 +983,7 @@ chmod 400 "$out/agent-config.yaml"
 
 cat >"$out/.env" <<EOF
 DIREXTALK_SPLIT_STACK_NAME=$stack_name
+DIREXTALK_SPLIT_COMPOSE_MODE=$compose_mode
 DIREXTALK_MESSAGE_SERVER_ENTRYPOINT_FILE=$split_deploy_dir/scripts/message-server-entrypoint.sh
 DIREXTALK_CAPABILITY_CA_INITIALIZER_FILE=$split_deploy_dir/scripts/initialize-capability-ca.sh
 DIREXTALK_MESSAGE_SERVER_INITIALIZER_FILE=$split_deploy_dir/scripts/initialize-message-server.sh
@@ -452,25 +993,22 @@ DIREXTALK_AGENT_IMAGE_IMMUTABLE=$agent_image
 DIREXTALK_POSTGRES_IMAGE_IMMUTABLE=$postgres_image
 DIREXTALK_UTILITY_IMAGE_IMMUTABLE=$utility_image
 DIREXTALK_QDRANT_IMAGE_IMMUTABLE=$qdrant_image
-DIREXTALK_EXTENSION_RUNNER_IMAGE_IMMUTABLE=$extension_runner_image
-DIREXTALK_CORE_RUNNER_IMAGE_IMMUTABLE=$core_runner_image
 DIREXTALK_AGENT_BUILD_CONTEXT=$agent_root
 DIREXTALK_MESSAGE_BUILD_CONTEXT=$message_root
-DIREXTALK_AGENT_BUILD_VERSION=local
-DIREXTALK_AGENT_BUILD_REVISION=working-tree
-DIREXTALK_MESSAGE_BUILD_VERSION=local
-DIREXTALK_MESSAGE_BUILD_REVISION=working-tree
+DIREXTALK_AGENT_BUILD_VERSION=$agent_build_version
+DIREXTALK_AGENT_BUILD_REVISION=$agent_build_revision
+DIREXTALK_MESSAGE_BUILD_VERSION=$message_build_version
+DIREXTALK_MESSAGE_BUILD_REVISION=$message_build_revision
 DIREXTALK_MESSAGE_SERVER_IMAGE_LOCAL=dirextalk-message-server:split-local
 DIREXTALK_AGENT_IMAGE_LOCAL=dirextalk-agent:split-local
-DIREXTALK_EXTENSION_RUNNER_IMAGE_LOCAL=dirextalk-extension-runner:split-local
-DIREXTALK_CORE_RUNNER_IMAGE_LOCAL=dirextalk-core-runner:split-local
+DIREXTALK_IMAGE_ATTESTATION_FILE=$image_attestation_file
 DIREXTALK_MESSAGE_SERVER_INSTANCE_ID=$message_instance_id
 DIREXTALK_AGENT_INSTANCE_ID=$agent_instance_id
 DIREXTALK_ACCOUNT_GENERATION=$account_generation
 DIREXTALK_AGENT_TLS_SERVER_NAME=dirextalk-agent
-DIREXTALK_MESSAGE_SERVER_NAME=localhost
+DIREXTALK_MESSAGE_SERVER_NAME=$message_server_name
 DIREXTALK_MESSAGE_CLIENT_BASE_URL=$message_client_base_url
-DIREXTALK_MESSAGE_TLS_MODE=local
+DIREXTALK_MESSAGE_TLS_MODE=$message_tls_mode
 DIREXTALK_MESSAGE_TLS_CERT_FILE=$message_tls_cert_file
 DIREXTALK_MESSAGE_TLS_KEY_FILE=$message_tls_key_file
 DIREXTALK_MESSAGE_HTTP_BIND=$message_http_bind
@@ -484,6 +1022,7 @@ DIREXTALK_MESSAGE_PORTAL_PASSWORD_FILE=$out/message-portal-password
 DIREXTALK_AGENT_DATABASE_URL_FILE=$out/agent-database-url
 DIREXTALK_OPENROUTER_API_KEY_FILE=$out/openrouter-api-key
 DIREXTALK_EMBEDDING_API_KEY_FILE=$out/embedding-api-key
+DIREXTALK_TAVILY_API_KEY_FILE=$out/tavily-api-key
 DIREXTALK_CORE_SECRET_MASTER_KEY_FILE=$out/core-secret-master-key
 DIREXTALK_MESSAGE_PRIVATE_NETWORK=$stack_name-message-private
 DIREXTALK_MESSAGE_PUBLIC_NETWORK=$stack_name-message-public
@@ -520,9 +1059,28 @@ DIREXTALK_EXTENSION_CGROUP_ROOT=$extension_cgroup_root
 DIREXTALK_CORE_RUNNER_CGROUP_ROOT=$core_runner_cgroup_root
 DIREXTALK_EXTENSION_CGROUP_PARENT=$extension_cgroup_parent
 DIREXTALK_CORE_RUNNER_CGROUP_PARENT=$workload_cgroup_parent
+DIREXTALK_RUNNER_HOST_PREPARED=$runner_host_prepared
+DIREXTALK_EXTENSION_RUNNER_UNIT=$extension_runner_unit
+DIREXTALK_CORE_RUNNER_UNIT=$core_runner_unit
+DIREXTALK_EXTENSION_RUNNER_FRAGMENT_PATH=$extension_fragment_path
+DIREXTALK_CORE_RUNNER_FRAGMENT_PATH=$core_fragment_path
+DIREXTALK_EXTENSION_RUNNER_FRAGMENT_SHA256=$extension_fragment_sha256
+DIREXTALK_CORE_RUNNER_FRAGMENT_SHA256=$core_fragment_sha256
+DIREXTALK_RUNNER_PREP_HELPER_PATH=$runner_prep_helper_path
+DIREXTALK_RUNNER_PREP_HELPER_SHA256=$runner_prep_helper_sha256
+DIREXTALK_RUNNER_PREP_MACHINE_ID=$runner_prep_machine_id
+DIREXTALK_RUNNER_PREP_DOCKER_ENGINE_ID=$runner_prep_docker_engine_id
+DIREXTALK_EXTENSION_CONTROL_GROUP=$extension_control_group
+DIREXTALK_CORE_RUNNER_CONTROL_GROUP=$core_control_group
+DIREXTALK_EXTENSION_RUNNER_USER=$extension_runner_user
+DIREXTALK_CORE_RUNNER_USER=$core_runner_user
 DIREXTALK_CORE_EXTENSION_ENABLED=$core_extension_enabled
 DIREXTALK_CORE_WORKLOAD_ENABLED=$core_workload_enabled
 DIREXTALK_CORE_AWS_ENABLED=$core_aws_enabled
+EOF
+if [ "$core_aws_ssm_enabled" = true ]; then
+  cat >>"$out/.env" <<EOF
+DIREXTALK_CORE_AWS_SSM_ENABLED=true
 DIREXTALK_CORE_AWS_SSM_CREDENTIAL_REFERENCE=$core_aws_ssm_credential_reference
 DIREXTALK_CORE_AWS_SSM_REGION=$core_aws_ssm_region
 DIREXTALK_CORE_AWS_SSM_ACCOUNT_ID=$core_aws_ssm_account_id
@@ -531,6 +1089,13 @@ DIREXTALK_CORE_AWS_SSM_DOCUMENT_VERSION=$core_aws_ssm_document_version
 DIREXTALK_CORE_AWS_SSM_SYSTEMD_SERVICE=$core_aws_ssm_systemd_service
 DIREXTALK_CORE_AWS_SSM_REQUIRED_TAG_KEY=$core_aws_ssm_required_tag_key
 DIREXTALK_CORE_AWS_SSM_REQUIRED_TAG_VALUE=$core_aws_ssm_required_tag_value
+EOF
+else
+  cat >>"$out/.env" <<EOF
+DIREXTALK_CORE_AWS_SSM_ENABLED=false
+EOF
+fi
+cat >>"$out/.env" <<EOF
 DIREXTALK_CORE_EXTENSION_RUNNER_SOCKET=$extension_runner_socket
 DIREXTALK_CORE_WORKLOAD_RUNNER_SOCKET=$workload_runner_socket
 DIREXTALK_CORE_EXTENSION_RUNNER_DIR=$extension_runner_dir
@@ -545,6 +1110,7 @@ cat >"$out/.manifest" <<EOF
 # dirextalk-split-manifest-v1
 stack_name=$stack_name
 stack_nonce=$stack_nonce
+compose_mode=$compose_mode
 agent_instance_id=$agent_instance_id
 message_instance_id=$message_instance_id
 account_generation=$account_generation
@@ -555,6 +1121,50 @@ core_secret_master_key_uid=$core_secret_master_key_uid
 message_http_bind=$message_http_bind
 message_https_bind=$message_https_bind
 message_client_base_url=$message_client_base_url
+message_tls_mode=$message_tls_mode
+message_server_name=$message_server_name
+message_tls_cert_path=$message_tls_cert_file
+message_tls_cert_device=$message_tls_cert_device
+message_tls_cert_inode=$message_tls_cert_inode
+message_tls_cert_uid=$message_tls_cert_uid
+message_tls_cert_sha256=$message_tls_cert_sha256
+message_tls_key_path=$message_tls_key_file
+message_tls_key_device=$message_tls_key_device
+message_tls_key_inode=$message_tls_key_inode
+message_tls_key_uid=$message_tls_key_uid
+message_tls_key_sha256=$message_tls_key_sha256
+image_attestation_path=$image_attestation_file
+image_attestation_device=$image_attestation_device
+image_attestation_inode=$image_attestation_inode
+image_attestation_uid=$image_attestation_uid
+image_attestation_sha256=$image_attestation_sha256
+runner_host_prepared=$runner_host_prepared
+core_extension_enabled=$core_extension_enabled
+core_workload_enabled=$core_workload_enabled
+runner.extension.unit=$extension_runner_unit
+runner.extension.user=$extension_runner_user
+runner.extension.group=$extension_runner_user
+runner.extension.uid=$extension_runner_uid
+runner.extension.gid=$extension_runner_uid
+runner.extension.parent=$extension_cgroup_parent
+runner.extension.root=$extension_cgroup_root
+runner.extension.control_group=$extension_control_group
+runner.extension.fragment_path=$extension_fragment_path
+runner.extension.fragment_sha256=$extension_fragment_sha256
+runner.helper.path=$runner_prep_helper_path
+runner.helper.sha256=$runner_prep_helper_sha256
+runner.machine_id=$runner_prep_machine_id
+runner.docker_engine_id=$runner_prep_docker_engine_id
+runner.core.unit=$core_runner_unit
+runner.core.user=$core_runner_user
+runner.core.group=$core_runner_user
+runner.core.uid=$workload_runner_uid
+runner.core.gid=$workload_runner_uid
+runner.core.parent=$workload_cgroup_parent
+runner.core.root=$core_runner_cgroup_root
+runner.core.control_group=$core_control_group
+runner.core.fragment_path=$core_fragment_path
+runner.core.fragment_sha256=$core_fragment_sha256
 resource.network.message_private=$stack_name-message-private
 resource.network.message_public=$stack_name-message-public
 resource.network.message_database=$stack_name-message-db
