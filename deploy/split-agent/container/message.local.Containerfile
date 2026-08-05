@@ -20,7 +20,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build --mount=type=cache,target=/g
       ./cmd/create-account
 
 FROM docker.io/library/alpine:latest@sha256:55ae5d250caebc548793f321534bc6a8ef1d116f334f18f4ada1b2daad3251b2
-RUN apk --update --no-cache add bash ca-certificates
+RUN apk --update --no-cache add bash ca-certificates openssl
 ARG VERSION=local
 ARG COMMIT=working-tree
 ARG BUILD_TIME=

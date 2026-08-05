@@ -36,8 +36,10 @@ This directory is the fresh-data deployment boundary for the split architecture:
 
 The two gRPC directions use the neutral Capability API with mTLS, one exact
 direction token per direction, instance/generation metadata, and Ed25519
-grants. The generated grant private key is mounted only in message-server;
-Agent and message-server receive the public verification key.
+grants. `message-server-init` creates the private CA and issues the initial
+certificates exactly once for each fresh stack. Its CA signing key is kept in
+an init-only volume, the grant private key is mounted only in message-server,
+and Agent receives only the issued material it requires.
 
 ## Fresh local run
 
@@ -278,18 +280,10 @@ must be supplied by the host/cloud boundary if required.
 
 The provisioner writes these protected files outside Git:
 
-- capability/ca-cert.pem: shared CA certificate;
-- capability/agent-server-cert.pem and agent-server-key.pem: Agent Core and
-  Agent Capability server identity;
-- capability/ms-client-cert.pem and ms-client-key.pem: message-server client
-  identity for MS to Agent;
-- capability/ms-server-cert.pem and ms-server-key.pem: message-server Product
-  Capability server identity;
-- capability/agent-client-cert.pem and agent-client-key.pem: Agent client
-  identity for Agent to MS;
-- capability/ms-to-agent.token and agent-to-ms.token: directional tokens;
-- capability/grant-private.key: message-server only, 64 raw Ed25519 bytes;
-- capability/grant-public.key: Agent and message-server, 32 raw public bytes;
+- Capability CA, server/client certificate pairs, directional and voice-relay
+  tokens, and Ed25519 grant keys: created in protected named volumes by
+  `message-server-init`; they are not provisioner files and never appear in
+  `.env`;
 - agent-postgres-password, message-postgres-password, and the corresponding
   database URL files;
 - core-secret-master-key: a fresh raw 32-byte mode-0400 Agent master key. The

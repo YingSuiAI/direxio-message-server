@@ -112,11 +112,16 @@ shellcheck \
   "$script_dir/verify-production-tls.sh" \
   "$script_dir/verify-production-tls.test.sh" \
   "$script_dir/verify-build-contexts.sh" \
+  "$script_dir/initialize-capability-ca.sh" \
+  "$script_dir/initialize-capability-ca.test.sh" \
+  "$script_dir/initialize-message-server.sh" \
+  "$script_dir/materialize-agent-secrets.sh" \
   "$script_dir/message-server-entrypoint.sh" \
   "$script_dir/message-server-entrypoint.test.sh" \
   "$stack_dir/aws/validate-policy.sh" \
   "$stack_dir/aws/validate-policy.test.sh"
 "$script_dir/message-server-entrypoint.test.sh" >/dev/null
+"$script_dir/initialize-capability-ca.test.sh" >/dev/null
 "$script_dir/accept-local.test.sh" >/dev/null
 "$script_dir/start-local.test.sh" >/dev/null
 "$script_dir/verify-production-images.test.sh" >/dev/null
@@ -148,8 +153,11 @@ jq -e '
 ' "$production_rendered" >/dev/null
 
 jq -e '
-  (.services["message-server-init"].command[0] | contains("__DIREXTALK_DB_DSN__")) and
-  (.services["message-server-init"].command[0] | contains("cat /run/secrets/message_database_url") | not) and
+  (.services["message-server-init"].entrypoint == ["/usr/local/bin/initialize-message-server"]) and
+  ([.services["message-server-init"].configs[] | select(.target == "/usr/local/bin/initialize-message-server" and .mode == "0555")] | length) == 1 and
+  ([.services["message-server-init"].configs[] | select(.target == "/usr/local/bin/initialize-capability-ca" and .mode == "0555")] | length) == 1 and
+  (.services["agent-secret-init"].entrypoint == ["/usr/local/bin/materialize-agent-secrets"]) and
+  ([.services["agent-secret-init"].configs[] | select(.target == "/usr/local/bin/materialize-agent-secrets" and .mode == "0555")] | length) == 1 and
   ([.services["message-server-init"].secrets[] | select(.target == "/run/secrets/message_registration_shared_secret")] | length) == 1 and
   ([.services["message-server-init"].secrets[] | select(.target == "/run/secrets/message_database_url")] | length) == 0 and
   (.services["message-server-init"].environment.MESSAGE_SERVER_TLS_MODE == "local") and
@@ -262,8 +270,11 @@ jq -e '
 ' "$rendered" >/dev/null
 
 jq -e '
-  ([.services["message-server"].secrets[] | select(.target == "/run/capability/grant-private.key")] | length) == 1 and
-  ([.services["agent-secret-init"].secrets[] | select(.target == "grant_private_key")] | length) == 0 and
+  ([.services["message-server"].volumes[] | select(.target == "/run/capability-private" and .read_only == true)] | length) == 1 and
+  ([.services["message-server"].volumes[] | select(.target == "/run/capability" and .read_only == true)] | length) == 1 and
+  ([.services["agent-secret-init"].volumes[] | select(.target == "/bootstrap/capability" and .read_only == true)] | length) == 1 and
+  (.services["agent-secret-init"].depends_on["message-server-init"].condition == "service_completed_successfully") and
+  (.services["message-server"].environment.P2P_CAPABILITY_GRANT_PRIVATE_KEY_FILE == "/run/capability-private/grant-private.key") and
   ([.services["agent-secret-init"].secrets[] | select(.target == "openrouter_api_key" or .target == "embedding_api_key")] | length) == 0 and
   ([.services.agent.secrets // [] | .[] | select(.target | test("openrouter|embedding"))] | length) == 0
 ' "$rendered" >/dev/null
@@ -273,7 +284,6 @@ for secret in \
   "$run_dir/provision/message-postgres-password" \
   "$run_dir/provision/agent-database-url" \
   "$run_dir/provision/message-database-url" \
-  "$run_dir/provision/agent-voice-relay-token" \
   "$run_dir/provision/message-registration-shared-secret" \
   "$run_dir/provision/message-portal-password" \
   "$run_dir/provision/core-secret-master-key" \
@@ -294,9 +304,6 @@ for secret in \
   "$run_dir/provision/message-postgres-password" \
   "$run_dir/provision/agent-database-url" \
   "$run_dir/provision/message-database-url" \
-  "$run_dir/provision/capability/ms-to-agent.token" \
-  "$run_dir/provision/capability/agent-to-ms.token" \
-  "$run_dir/provision/agent-voice-relay-token" \
   "$run_dir/provision/message-registration-shared-secret" \
   "$run_dir/provision/message-portal-password"; do
   value=$(cat "$secret")
@@ -310,13 +317,6 @@ for secret in \
   fi
   if grep -Fq -- "$value" "$rendered"; then
     echo "secret value rendered into Compose config: $secret" >&2
-    exit 1
-  fi
-done
-
-for rendered_file in "$env_file" "$run_dir/provision/agent-config.yaml" "$rendered"; do
-  if grep -aFf "$run_dir/provision/capability/grant-private.key" -- "$rendered_file"; then
-    echo "grant private key rendered into deployment artifact: $rendered_file" >&2
     exit 1
   fi
 done

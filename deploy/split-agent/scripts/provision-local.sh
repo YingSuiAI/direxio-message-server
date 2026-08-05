@@ -201,7 +201,6 @@ validate_uid DIREXTALK_CORE_WORKLOAD_RUNNER_UID "$workload_runner_uid"
 script_dir=$(cd "$(dirname "$0")" && pwd -P)
 split_deploy_dir=$(cd "$script_dir/.." && pwd -P)
 message_root=$(cd "$script_dir/../../.." && pwd -P)
-capability_root=$(cd "$message_root/../dirextalk-capability-api" && pwd -P)
 agent_root=$(cd "$message_root/../dirextalk-agent" && pwd -P)
 
 case "$out_input" in
@@ -218,8 +217,8 @@ else
 fi
 chmod 700 "$out"
 
-[ -x "$capability_root/scripts/generate-test-certs.sh" ] || die "Capability API cert generator is missing"
 [ -x "$split_deploy_dir/scripts/message-server-entrypoint.sh" ] || die "message-server entrypoint helper is missing or not executable"
+[ -x "$split_deploy_dir/scripts/initialize-capability-ca.sh" ] || die "Capability CA initializer is missing or not executable"
 
 uuid4() {
   local value
@@ -265,7 +264,6 @@ generation_hex=$(od -An -N6 -tx1 /dev/urandom | tr -d '[:space:]')
 account_generation=$((16#$generation_hex + 1))
 agent_password=$(openssl rand -hex 24)
 message_password=$(openssl rand -hex 24)
-voice_relay_token=$(openssl rand -hex 32)
 message_registration_shared_secret=$(openssl rand -hex 32)
 message_portal_password=$(openssl rand -hex 24)
 
@@ -311,7 +309,9 @@ require_fresh_docker_namespace \
   "$stack_name-agent-extension-staging" "$stack_name-agent-extension-workspaces" \
   "$stack_name-agent-extension-runner-workspaces" "$stack_name-agent-extension-runner-state" \
   "$stack_name-agent-knowledge-content" "$stack_name-agent-knowledge-mount" \
-  "$stack_name-agent-qdrant" "$stack_name-core-runner-socket" \
+  "$stack_name-agent-qdrant" "$stack_name-capability-authority" \
+  "$stack_name-capability-shared" "$stack_name-capability-private" \
+  "$stack_name-core-runner-socket" \
   "$stack_name-core-runner-installs" "$stack_name-core-runner-workspaces" \
   "$stack_name-core-runner-state"
 
@@ -346,7 +346,6 @@ write_secret "$out/agent-postgres-password" "$agent_password"
 write_secret "$out/message-postgres-password" "$message_password"
 write_secret "$out/agent-database-url" "postgresql://dirextalk_agent:$agent_password@agent-postgres:5432/dirextalk_agent?sslmode=disable"
 write_secret "$out/message-database-url" "postgresql://dirextalk_message_server:$message_password@message-postgres:5432/dirextalk_message_server?sslmode=disable"
-write_secret "$out/agent-voice-relay-token" "$voice_relay_token"
 write_secret "$out/message-registration-shared-secret" "$message_registration_shared_secret"
 write_secret "$out/message-portal-password" "$message_portal_password"
 write_raw_secret "$out/core-secret-master-key" 32
@@ -362,13 +361,6 @@ core_secret_master_key_uid=$(stat -c '%u' "$out/core-secret-master-key")
 # into Compose or written to the manifest.
 message_tls_cert_file=$out/message-tls-external-cert.pem
 message_tls_key_file=$out/message-tls-external-key.pem
-
-"$capability_root/scripts/generate-test-certs.sh" "$out/capability"
-for name in "$out/capability"/*; do
-  [ -f "$name" ] || continue
-  chmod 400 "$name"
-done
-chmod 444 "$out/capability/ca-cert.pem" "$out/capability/grant-public.key"
 
 copy_secret_or_empty "$openrouter_source" "$out/openrouter-api-key" "OpenRouter API key"
 copy_secret_or_empty "$embedding_source" "$out/embedding-api-key" "embedding API key"
@@ -452,6 +444,9 @@ chmod 400 "$out/agent-config.yaml"
 cat >"$out/.env" <<EOF
 DIREXTALK_SPLIT_STACK_NAME=$stack_name
 DIREXTALK_MESSAGE_SERVER_ENTRYPOINT_FILE=$split_deploy_dir/scripts/message-server-entrypoint.sh
+DIREXTALK_CAPABILITY_CA_INITIALIZER_FILE=$split_deploy_dir/scripts/initialize-capability-ca.sh
+DIREXTALK_MESSAGE_SERVER_INITIALIZER_FILE=$split_deploy_dir/scripts/initialize-message-server.sh
+DIREXTALK_AGENT_SECRET_MATERIALIZER_FILE=$split_deploy_dir/scripts/materialize-agent-secrets.sh
 DIREXTALK_MESSAGE_SERVER_IMAGE_IMMUTABLE=$message_image
 DIREXTALK_AGENT_IMAGE_IMMUTABLE=$agent_image
 DIREXTALK_POSTGRES_IMAGE_IMMUTABLE=$postgres_image
@@ -489,22 +484,7 @@ DIREXTALK_MESSAGE_PORTAL_PASSWORD_FILE=$out/message-portal-password
 DIREXTALK_AGENT_DATABASE_URL_FILE=$out/agent-database-url
 DIREXTALK_OPENROUTER_API_KEY_FILE=$out/openrouter-api-key
 DIREXTALK_EMBEDDING_API_KEY_FILE=$out/embedding-api-key
-DIREXTALK_CAPABILITY_CA_FILE=$out/capability/ca-cert.pem
-DIREXTALK_AGENT_SERVER_CERT_FILE=$out/capability/agent-server-cert.pem
-DIREXTALK_AGENT_SERVER_KEY_FILE=$out/capability/agent-server-key.pem
-DIREXTALK_AGENT_SERVICE_TOKEN_FILE=$out/capability/ms-to-agent.token
-DIREXTALK_AGENT_VOICE_RELAY_TOKEN_FILE=$out/agent-voice-relay-token
 DIREXTALK_CORE_SECRET_MASTER_KEY_FILE=$out/core-secret-master-key
-DIREXTALK_MS_TO_AGENT_TOKEN_FILE=$out/capability/ms-to-agent.token
-DIREXTALK_AGENT_TO_MS_TOKEN_FILE=$out/capability/agent-to-ms.token
-DIREXTALK_GRANT_PRIVATE_KEY_FILE=$out/capability/grant-private.key
-DIREXTALK_GRANT_PUBLIC_KEY_FILE=$out/capability/grant-public.key
-DIREXTALK_MS_CLIENT_CERT_FILE=$out/capability/ms-client-cert.pem
-DIREXTALK_MS_CLIENT_KEY_FILE=$out/capability/ms-client-key.pem
-DIREXTALK_MS_SERVER_CERT_FILE=$out/capability/ms-server-cert.pem
-DIREXTALK_MS_SERVER_KEY_FILE=$out/capability/ms-server-key.pem
-DIREXTALK_AGENT_CLIENT_CERT_FILE=$out/capability/agent-client-cert.pem
-DIREXTALK_AGENT_CLIENT_KEY_FILE=$out/capability/agent-client-key.pem
 DIREXTALK_MESSAGE_PRIVATE_NETWORK=$stack_name-message-private
 DIREXTALK_MESSAGE_PUBLIC_NETWORK=$stack_name-message-public
 DIREXTALK_MESSAGE_DATABASE_NETWORK=$stack_name-message-db
@@ -529,6 +509,9 @@ DIREXTALK_AGENT_RUNNER_STATE_VOLUME=$stack_name-agent-extension-runner-state
 DIREXTALK_AGENT_KNOWLEDGE_CONTENT_VOLUME=$stack_name-agent-knowledge-content
 DIREXTALK_AGENT_KNOWLEDGE_MOUNT_VOLUME=$stack_name-agent-knowledge-mount
 DIREXTALK_AGENT_QDRANT_VOLUME=$stack_name-agent-qdrant
+DIREXTALK_CAPABILITY_AUTHORITY_VOLUME=$stack_name-capability-authority
+DIREXTALK_CAPABILITY_SHARED_VOLUME=$stack_name-capability-shared
+DIREXTALK_CAPABILITY_PRIVATE_VOLUME=$stack_name-capability-private
 DIREXTALK_CORE_RUNNER_SOCKET_VOLUME=$stack_name-core-runner-socket
 DIREXTALK_CORE_RUNNER_INSTALL_VOLUME=$stack_name-core-runner-installs
 DIREXTALK_CORE_RUNNER_WORKSPACE_VOLUME=$stack_name-core-runner-workspaces
@@ -596,6 +579,9 @@ resource.volume.agent_runner_state=$stack_name-agent-extension-runner-state
 resource.volume.agent_knowledge_content=$stack_name-agent-knowledge-content
 resource.volume.agent_knowledge_mount=$stack_name-agent-knowledge-mount
 resource.volume.agent_qdrant=$stack_name-agent-qdrant
+resource.volume.capability_authority=$stack_name-capability-authority
+resource.volume.capability_shared=$stack_name-capability-shared
+resource.volume.capability_private=$stack_name-capability-private
 resource.volume.core_runner_socket=$stack_name-core-runner-socket
 resource.volume.core_runner_installs=$stack_name-core-runner-installs
 resource.volume.core_runner_workspaces=$stack_name-core-runner-workspaces
