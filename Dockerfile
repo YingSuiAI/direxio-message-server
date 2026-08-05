@@ -5,7 +5,9 @@
 # NOTE:
 # If you update this Dockerfile, ensure to sync your changes to the other
 # Dockerfiles in this repo (search *Dockerfile).
-FROM --platform=${BUILDPLATFORM} docker.io/library/golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS base
+ARG GO_BUILD_BASE=docker.io/library/golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2
+ARG RUNTIME_BASE=docker.io/library/alpine:latest@sha256:55ae5d250caebc548793f321534bc6a8ef1d116f334f18f4ada1b2daad3251b2
+FROM --platform=${BUILDPLATFORM} ${GO_BUILD_BASE} AS base
 RUN apk --update --no-cache add bash build-base git
 
 #
@@ -38,7 +40,7 @@ RUN --mount=target=. \
 # Builds the Dirextalk Message Server image containing the runtime binary and
 # per-instance initialization tools.
 #
-FROM docker.io/library/alpine:latest@sha256:55ae5d250caebc548793f321534bc6a8ef1d116f334f18f4ada1b2daad3251b2
+FROM ${RUNTIME_BASE}
 ARG VERSION=v0.0.0-dev+local
 ARG COMMIT=uncommitted
 ARG BUILD_TIME=
