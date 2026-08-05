@@ -172,6 +172,16 @@ func TestRealtimeWSAcceptsTicketAndReplaysEvents(t *testing.T) {
 	if ready["type"] != "server.ready" {
 		t.Fatalf("expected server.ready, got %#v", ready)
 	}
+	capabilities, ok := ready["capabilities"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected server.ready capabilities object, got %#v", ready["capabilities"])
+	}
+	if got, ok := capabilities["native_agent_turns"].(float64); !ok || got != 1 {
+		t.Fatalf("expected capabilities.native_agent_turns=1, got %#v", capabilities["native_agent_turns"])
+	}
+	if _, ok := ready["native_agent_turns"]; ok {
+		t.Fatalf("server.ready must not expose top-level native_agent_turns: %#v", ready)
+	}
 	event := readRealtimeFrame(t, conn)
 	if event["type"] != "server.event" {
 		t.Fatalf("expected server.event, got %#v", event)

@@ -177,7 +177,9 @@ func (m *Module) Handler() http.HandlerFunc {
 			"type":                  "server.ready",
 			"role":                  record.Role,
 			"heartbeat_interval_ms": int64(m.heartbeat / time.Millisecond),
-			"native_agent_turns":    1,
+			"capabilities": map[string]any{
+				"native_agent_turns": 1,
+			},
 		}); err != nil {
 			return
 		}
