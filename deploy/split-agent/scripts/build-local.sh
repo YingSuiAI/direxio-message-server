@@ -21,12 +21,16 @@ script_dir=$(cd "$(dirname "$0")" && pwd -P)
 stack_dir=$(cd "$script_dir/.." && pwd -P)
 message_root=$(cd "$stack_dir/../.." && pwd -P)
 agent_root=$(cd "$message_root/../dirextalk-agent" && pwd -P)
-capability_root=$(cd "$message_root/../dirextalk-capability-api" && pwd -P)
-"$script_dir/verify-build-contexts.sh" "$agent_root" "$message_root" "$capability_root" >/dev/null
+"$script_dir/verify-build-contexts.sh" "$agent_root" "$message_root" >/dev/null
 
-services=(message-server agent)
+services=(agent message-server)
 [ "$#" -eq 0 ] || services=("$@")
 cd "$stack_dir"
-docker compose --env-file "$env_file" -f compose.yaml -f compose.local.yaml \
-  build --pull=false "${services[@]}"
-printf 'local consumer build completed with capability-api additional context and build-stage replace\n'
+for service in "${services[@]}"; do
+  case "$service" in
+    -*|'') echo "local build: invalid service name: $service" >&2; exit 1 ;;
+  esac
+  docker compose --env-file "$env_file" -f compose.yaml -f compose.local.yaml \
+    build --pull=false "$service"
+done
+printf 'local repository-owned image build completed\n'

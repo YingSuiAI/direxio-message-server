@@ -62,6 +62,20 @@ Knowledge acceptance. The provisioner also creates disposable certs/tokens,
 two PostgreSQL URLs, UUIDs, the non-secret Agent YAML, and a path-only .env.
 Secret values are never copied to .env or printed.
 
+Start the baseline stack through the protected environment helper:
+
+    deploy/split-agent/scripts/start-local.sh \
+      /absolute/path/.run/split-20260804/.env
+
+The helper revalidates the mode-0400 `.env` and manifest identities, their
+owner, instance/generation bindings, and every declared Docker resource. It
+refuses occupied host ports or any existing project container, network, or
+volume before building, then rechecks them immediately before startup. It builds
+the Agent image first from the sibling Agent repository, builds message-server
+second, starts only the message-server dependency graph with `--no-build`, and
+waits for both Agent and message-server health. It never cleans an existing or
+partially started stack; use the separately authorized cleanup command below.
+
 Each provisioned stack has a 128-bit generated namespace (`d-` plus 26
 lower-case Base32 characters) and a mode 0400 `.manifest` binding every
 network/volume name, instance identity, and account generation. Keep the
@@ -107,14 +121,15 @@ process's argv/environment.
 
 Build and render without starting the stack:
 
-The reproducible consumer build uses the sibling capability-api checkout as a
-BuildKit additional context and applies the module replace only inside the
-ephemeral build stage. It never copies capability source or secrets into the
-final image:
+Each consumer resolves the public capability-api v1.0.3 module. Agent and its
+optional runners build from the sibling Agent context with Dockerfiles owned by
+that repository; message-server builds from this repository with its local
+Dockerfile. No capability-api build context or temporary `go.mod` replace is
+used:
 
     deploy/split-agent/scripts/build-local.sh \
       /absolute/path/.run/split-20260804/.env \
-      message-server agent
+      agent message-server
 
     docker compose \
       --env-file /absolute/path/.run/split-20260804/.env \
@@ -129,8 +144,8 @@ final image:
       config --quiet
 
 The local override also builds the optional runner images from the sibling
-Agent checkout. They use the same pinned Go 1.26.5 toolchain digest as the
-Core build (`sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2`):
+Agent checkout using `deploy/container/extension-runner.Containerfile` and
+`deploy/container/core-runner.Containerfile` from that checkout:
 
     docker compose \
       --env-file /absolute/path/.run/split-20260804/.env \
@@ -224,25 +239,22 @@ acceptance with:
     systemctl --user stop "${STACK}-extension-delegate.service" \
       "${STACK}-core-runner-delegate.service"
 
-Only the local override builds sibling sources. It supplies capability-api as
-a BuildKit additional context and applies a build-stage-only module replace;
-neither consumer checkout is modified, and capability source is not copied
-into the final image. The production compose file has no build section and
+Only the local override builds sibling Agent sources, directly through the
+Agent repository's Dockerfiles. Both consumer module graphs use the public
+capability-api v1.0.3 release with no replace. The production compose file has no build section and
 requires every image reference to end in `@sha256:<64 lowercase hex>`. The
 provisioner writes `registry.invalid/...@sha256:<64 hex>` placeholders for
 unpublished local application images; the local override replaces them with
 `*_IMAGE_LOCAL` tags. Replace all placeholder immutable refs with release
 digests before any production `up`. Production images must resolve the
-released v1.0.1 module with no replace directive; use registry digests for
+released v1.0.3 module with no replace directive; use registry digests for
 every non-local deployment.
 
-Start only after the API/runtime acceptance gate is green:
+For a fresh baseline stack, use the guarded startup sequence after the
+API/runtime acceptance gate is green:
 
-    docker compose \
-      --env-file /absolute/path/.run/split-20260804/.env \
-      -f deploy/split-agent/compose.yaml \
-      -f deploy/split-agent/compose.local.yaml \
-      up -d
+    deploy/split-agent/scripts/start-local.sh \
+      /absolute/path/.run/split-20260804/.env
 
 The message-server health endpoint is the only host-facing service check (use
 the same host-port variables written to `.env`):
@@ -376,15 +388,12 @@ missing or wildcarded. The Agent never falls back to the caller role.
 
 ## Production shape
 
-The production image gate is blocked until the neutral Capability API has a
-published and locally verified v1.0.1 release. Local development keeps a
-relative sibling replace (`../dirextalk-capability-api`) so both consumers can
-build without a machine-absolute path; this is not a production release. Both
-Go consumers must require `github.com/YingSuiAI/dirextalk-capability-api v1.0.1`
-and the release build must resolve it remotely with no replace directive,
-submodule, or workspace path. The image attestation therefore includes
-`capability_api_source=published`; the verifier explicitly reports that remote
-publication is pending and rejects `local-relative-replace`.
+The neutral Capability API is published and locally verified at v1.0.3. Both
+committed Go modules resolve this public release without a replace directive,
+submodule, workspace path, or capability-api build context. Both Go consumers
+must require `github.com/YingSuiAI/dirextalk-capability-api v1.0.3`. The image
+attestation therefore includes `capability_api_source=published`; the verifier
+rejects `local-relative-replace`.
 
 Use compose.yaml alone with a reviewed .env containing:
 
@@ -399,7 +408,7 @@ Use compose.yaml alone with a reviewed .env containing:
   generation pair (never copy these values into a replacement stack).
 
 Before a production render, create a mode 0400 image attestation containing
-the exact seven digest references and the released capability-api v1.0.1
+the exact seven digest references and the released capability-api v1.0.3
 revision, then run:
 
     deploy/split-agent/scripts/verify-production-images.sh \

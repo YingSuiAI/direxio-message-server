@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: $0 AGENT_ROOT MESSAGE_SERVER_ROOT CAPABILITY_API_ROOT" >&2
+  echo "usage: $0 AGENT_ROOT MESSAGE_SERVER_ROOT" >&2
   exit 2
 }
 
@@ -11,7 +11,7 @@ die() {
   exit 1
 }
 
-[ "$#" -eq 3 ] || usage
+[ "$#" -eq 2 ] || usage
 
 required_patterns=(
   '**/*.pem'
@@ -57,5 +57,4 @@ check_root() {
 
 check_root Agent "$1"
 check_root message-server "$2"
-check_root capability-api "$3"
 printf 'build-context secret exclusion checks passed\n'

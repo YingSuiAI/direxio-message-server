@@ -59,14 +59,14 @@ image_keys=(
 
 [ "$(sed -n '1p' "$attestation_file")" = '# dirextalk-image-attestation-v1' ] || die "attestation header is invalid"
 attestation_version=$(read_attestation_value capability_api_version)
-[ "$attestation_version" = v1.0.1 ] || die "unsupported capability API attestation version: $attestation_version"
+[ "$attestation_version" = v1.0.3 ] || die "unsupported capability API attestation version: $attestation_version"
 source_revision=$(read_attestation_value source_revision)
 printf '%s\n' "$source_revision" | grep -Eq '^[A-Za-z0-9._/-]+$' || die "source_revision contains unsafe characters"
 capability_api_source=$(read_attestation_value capability_api_source)
 case "$capability_api_source" in
   published) ;;
   local-relative-replace)
-    die "capability-api v1.0.1 remote publication is pending; local relative replace cannot pass the production image gate" ;;
+    die "local relative replace cannot pass the production image gate; published capability-api v1.0.3 is required" ;;
   *)
     die "capability_api_source must be published (local development is not a production release)" ;;
 esac

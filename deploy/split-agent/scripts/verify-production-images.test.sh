@@ -23,7 +23,7 @@ DIREXTALK_QDRANT_IMAGE_IMMUTABLE=qdrant/qdrant:v1.18.3@sha256:$digest
 EOF
 chmod 400 "$env_file"
 {
-  printf '%s\n' '# dirextalk-image-attestation-v1' 'capability_api_version=v1.0.1' 'capability_api_source=published' 'source_revision=test-revision'
+  printf '%s\n' '# dirextalk-image-attestation-v1' 'capability_api_version=v1.0.3' 'capability_api_source=published' 'source_revision=test-revision'
   while IFS='=' read -r key value; do
     printf 'image.%s=%s\n' "$key" "$value"
   done <"$env_file"
@@ -31,6 +31,14 @@ chmod 400 "$env_file"
 chmod 400 "$attestation"
 
 "$script_dir/verify-production-images.sh" "$env_file" "$attestation" >/dev/null
+
+sed -i 's/^capability_api_version=.*/capability_api_version=v1.0.1/' "$attestation"
+if output=$("$script_dir/verify-production-images.sh" "$env_file" "$attestation" 2>&1); then
+  echo "old capability API version unexpectedly accepted" >&2
+  exit 1
+fi
+printf '%s\n' "$output" | grep -Fq 'unsupported capability API attestation version: v1.0.1'
+sed -i 's/^capability_api_version=.*/capability_api_version=v1.0.3/' "$attestation"
 
 sed -i 's#image.DIREXTALK_AGENT_IMAGE_IMMUTABLE=.*#image.DIREXTALK_AGENT_IMAGE_IMMUTABLE=registry.example/dirextalk-agent@sha256:2222222222222222222222222222222222222222222222222222222222222222#' "$attestation"
 if "$script_dir/verify-production-images.sh" "$env_file" "$attestation" >/dev/null 2>&1; then
@@ -43,6 +51,6 @@ if output=$("$script_dir/verify-production-images.sh" "$env_file" "$attestation"
   echo "local relative replace unexpectedly accepted" >&2
   exit 1
 fi
-printf '%s\n' "$output" | grep -Fq 'remote publication is pending'
+printf '%s\n' "$output" | grep -Fq 'published capability-api v1.0.3 is required'
 
 printf 'production image attestation checks verified\n'

@@ -8,7 +8,7 @@ set -euo pipefail
 script_dir=$(cd "$(dirname "$0")" && pwd -P)
 stack_dir=$(cd "$script_dir/.." && pwd -P)
 message_root=$(cd "$script_dir/../../.." && pwd -P)
-capability_root=$(cd "$message_root/../dirextalk-capability-api" && pwd -P)
+agent_root=$(cd "$message_root/../dirextalk-agent" && pwd -P)
 tmp_root=$(printenv TMPDIR 2>/dev/null || true)
 [ -n "$tmp_root" ] || tmp_root=/tmp
 run_dir=$(mktemp -d "$tmp_root/dirextalk-split-verify.XXXXXX")
@@ -105,6 +105,8 @@ shellcheck \
   "$script_dir/bootstrap-local-account.sh" \
   "$script_dir/export-portal-bootstrap.sh" \
   "$script_dir/build-local.sh" \
+  "$script_dir/start-local.sh" \
+  "$script_dir/start-local.test.sh" \
   "$script_dir/verify-production-images.sh" \
   "$script_dir/verify-production-images.test.sh" \
   "$script_dir/verify-production-tls.sh" \
@@ -116,11 +118,11 @@ shellcheck \
   "$stack_dir/aws/validate-policy.test.sh"
 "$script_dir/message-server-entrypoint.test.sh" >/dev/null
 "$script_dir/accept-local.test.sh" >/dev/null
+"$script_dir/start-local.test.sh" >/dev/null
 "$script_dir/verify-production-images.test.sh" >/dev/null
 "$script_dir/verify-production-tls.test.sh" >/dev/null
 "$stack_dir/aws/validate-policy.test.sh" >/dev/null
-"$script_dir/verify-build-contexts.sh" \
-  "$message_root/../dirextalk-agent" "$message_root" "$message_root/../dirextalk-capability-api" >/dev/null
+"$script_dir/verify-build-contexts.sh" "$agent_root" "$message_root" >/dev/null
 
 jq -e --arg http "$http_bind" --arg https "$https_bind" '
   ([.services["message-server"].ports[] | .published] | sort) == [$http, $https] and
@@ -141,7 +143,8 @@ jq -e '
 ' "$rendered" >/dev/null
 
 jq -e '
-  ([.services | to_entries[] | .value.image] | all(test("@sha256:[0-9a-f]{64}$")))
+  ([.services | to_entries[] | .value.image] | all(test("@sha256:[0-9a-f]{64}$"))) and
+  ([.services | to_entries[] | .value.build // null] | all(. == null))
 ' "$production_rendered" >/dev/null
 
 jq -e '
@@ -175,9 +178,20 @@ jq -e '
   ([.services | to_entries[] | select(.key != "agent-secret-init") | .value.secrets // [] | .[] | select(.source == "core_secret_master_key" or (.target // "" | test("core_secret_master_key")))] | length) == 0
 ' "$production_rendered" >/dev/null
 
-jq -e '
+jq -e --arg agent_root "$agent_root" --arg message_root "$message_root" '
   .services["message-server"].image == "dirextalk-message-server:split-local" and
   .services.agent.image == "dirextalk-agent:split-local" and
+  .services.agent.build.context == $agent_root and
+  .services.agent.build.dockerfile == "deploy/container/agent.Containerfile" and
+  .services["agent-migrate"].build.context == $agent_root and
+  .services["agent-migrate"].build.dockerfile == "deploy/container/agent.Containerfile" and
+  .services["message-server"].build.context == $message_root and
+  .services["message-server"].build.dockerfile == "deploy/split-agent/container/message.local.Containerfile" and
+  .services["message-server-init"].build.context == $message_root and
+  .services["message-server-init"].build.dockerfile == "deploy/split-agent/container/message.local.Containerfile" and
+  ([.services | to_entries[] | .value.build.additional_contexts // null] | all(. == null)) and
+  .services["message-server"].depends_on.agent.condition == "service_healthy" and
+  .services["message-server"].depends_on.agent.required == true and
   .services["extension-runner"] == null and
   .services["core-runner"] == null
 ' "$rendered" >/dev/null
@@ -186,7 +200,7 @@ jq -e '
   ([.services | keys[] | select(. == "extension-runner" or . == "core-runner" or . == "extension-socket-init" or . == "core-runner-socket-init")] | length) == 0
 ' "$rendered" >/dev/null
 
-jq -e --arg capability_root "$capability_root" '
+jq -e --arg agent_root "$agent_root" '
   .services["extension-runner"].profiles == ["extensions"] and
   .services["core-runner"].profiles == ["core-runner"] and
   .services["extension-socket-init"].profiles == ["extensions"] and
@@ -201,8 +215,12 @@ jq -e --arg capability_root "$capability_root" '
   .services["core-runner"].user == "65530:65530" and
   (.services["extension-runner"].group_add | index("65532")) != null and
   (.services["core-runner"].group_add | index("65532")) != null and
-  .services["extension-runner"].build.additional_contexts.capability_api == $capability_root and
-  .services["core-runner"].build.additional_contexts.capability_api == $capability_root and
+  .services["extension-runner"].build.context == $agent_root and
+  .services["extension-runner"].build.dockerfile == "deploy/container/extension-runner.Containerfile" and
+  .services["core-runner"].build.context == $agent_root and
+  .services["core-runner"].build.dockerfile == "deploy/container/core-runner.Containerfile" and
+  .services["extension-runner"].build.additional_contexts == null and
+  .services["core-runner"].build.additional_contexts == null and
   ([.services["extension-runner"].volumes[], .services["core-runner"].volumes[]] | all(.type == "volume" or (.type == "bind" and .target == "/cgroup"))) and
   ([.services["extension-runner"].volumes[], .services["core-runner"].volumes[]] | map(.source // "") | any(test("docker.sock|/var/run/docker"))) == false and
   (.services["extension-runner"].healthcheck.test[0] == "CMD") and

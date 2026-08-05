@@ -1,17 +1,16 @@
-# Local-only sibling build. capability_api is a BuildKit additional context;
-# the source-tree replace is applied only inside this ephemeral build layer.
+# Local-only source build. Dependencies resolve from the committed public Go
+# module graph; no sibling source or go.mod replacement enters this build.
 # syntax=docker/dockerfile:1.7
 
 FROM docker.io/library/golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS build
 RUN apk --update --no-cache add bash build-base git
 WORKDIR /src
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . .
-COPY --from=capability_api / /opt/dirextalk-capability-api
-RUN go mod edit -replace github.com/YingSuiAI/dirextalk-capability-api=/opt/dirextalk-capability-api
 ARG TARGETOS
 ARG TARGETARCH
-RUN --mount=type=cache,target=/root/.cache/go-build \
-    --mount=type=cache,target=/go/pkg/mod \
+RUN --mount=type=cache,target=/root/.cache/go-build --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=1 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath \
     -ldflags="-s -w" \
     -o /out/ \
