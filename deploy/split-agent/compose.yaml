@@ -10,6 +10,13 @@ x-message-image: &message-image
 x-agent-image: &agent-image
   image: ${DIREXTALK_AGENT_IMAGE_IMMUTABLE:?set an immutable Agent image reference}
 
+x-hardened-service: &hardened-service
+  read_only: true
+  cap_drop: ["ALL"]
+  security_opt: ["no-new-privileges:true"]
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,nodev,mode=1777
+
 x-postgres-hardening: &postgres-hardening
   read_only: true
   cap_drop: ["ALL"]
@@ -20,44 +27,47 @@ x-postgres-hardening: &postgres-hardening
     - /run/postgresql:rw,noexec,nosuid,nodev,mode=2775
 
 x-agent-hardening: &agent-hardening
+  <<: *hardened-service
   user: "65532:65532"
-  read_only: true
-  cap_drop: ["ALL"]
-  security_opt: ["no-new-privileges:true"]
-  tmpfs:
-    - /tmp:rw,noexec,nosuid,nodev,mode=1777
 
-  # The server keeps UID 0 only for the file-based Compose secrets: the runtime
-  # entrypoint must read the protected DB DSN and capability keys before
-  # exec'ing the binary. It still runs read-only, with no ambient capabilities
-  # and with no-new-privileges; all writable state is explicitly named-volume/
-  # tmpfs data.
+# The server keeps UID 0 only for the file-based Compose secrets: the runtime
+# entrypoint must read the protected DB DSN and capability keys before exec'ing
+# the binary. All writable state is explicitly named-volume/tmpfs data.
 x-message-hardening: &message-hardening
-  read_only: true
-  cap_drop: ["ALL"]
+  <<: *hardened-service
   # Rootless Docker bind-mounts protected host files with the provisioning
   # user's host UID.  This narrowly permits reading those files while keeping
   # write, execute, and every other ambient capability dropped.
   cap_add: ["DAC_READ_SEARCH"]
-  security_opt: ["no-new-privileges:true"]
-  tmpfs:
-    - /tmp:rw,noexec,nosuid,nodev,mode=1777
 
 x-extension-runner-hardening: &extension-runner-hardening
+  <<: *hardened-service
   user: "${DIREXTALK_CORE_EXTENSION_RUNNER_UID:?set the extension runner UID}:${DIREXTALK_CORE_EXTENSION_RUNNER_UID:?set the extension runner UID}"
-  read_only: true
-  cap_drop: ["ALL"]
-  security_opt: ["no-new-privileges:true"]
-  tmpfs:
-    - /tmp:rw,noexec,nosuid,nodev,mode=1777
 
 x-core-runner-hardening: &core-runner-hardening
+  <<: *hardened-service
   user: "${DIREXTALK_CORE_WORKLOAD_RUNNER_UID:?set the Core Runner UID}:${DIREXTALK_CORE_WORKLOAD_RUNNER_UID:?set the Core Runner UID}"
-  read_only: true
+
+x-postgres-service: &postgres-service
+  image: ${DIREXTALK_POSTGRES_IMAGE_IMMUTABLE:?set an immutable PostgreSQL image reference}
+  <<: *postgres-hardening
+  restart: unless-stopped
+  healthcheck:
+    test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+    interval: 5s
+    timeout: 5s
+    retries: 30
+    start_period: 10s
+
+x-socket-init: &socket-init
+  image: ${DIREXTALK_UTILITY_IMAGE_IMMUTABLE:?set an immutable utility image reference}
+  entrypoint: ["sh"]
+  user: "0:0"
   cap_drop: ["ALL"]
+  cap_add: ["CHOWN", "FOWNER", "FSETID"]
   security_opt: ["no-new-privileges:true"]
-  tmpfs:
-    - /tmp:rw,noexec,nosuid,nodev,mode=1777
+  network_mode: "none"
+  restart: "no"
 
 x-message-capability-environment: &message-capability-environment
   P2P_PLUGIN_DOCKER_ENABLED: "false"
@@ -85,9 +95,7 @@ x-message-capability-environment: &message-capability-environment
 
 services:
   message-postgres:
-    image: ${DIREXTALK_POSTGRES_IMAGE_IMMUTABLE:?set an immutable PostgreSQL image reference}
-    <<: *postgres-hardening
-    restart: unless-stopped
+    <<: *postgres-service
     environment:
       POSTGRES_DB: dirextalk_message_server
       POSTGRES_USER: dirextalk_message_server
@@ -98,17 +106,9 @@ services:
     volumes:
       - message_postgres_data:/var/lib/postgresql
     networks: [message_database]
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
-      interval: 5s
-      timeout: 5s
-      retries: 30
-      start_period: 10s
 
   agent-postgres:
-    image: ${DIREXTALK_POSTGRES_IMAGE_IMMUTABLE:?set an immutable PostgreSQL image reference}
-    <<: *postgres-hardening
-    restart: unless-stopped
+    <<: *postgres-service
     environment:
       POSTGRES_DB: dirextalk_agent
       POSTGRES_USER: dirextalk_agent
@@ -119,12 +119,6 @@ services:
     volumes:
       - agent_postgres_data:/var/lib/postgresql
     networks: [agent_database]
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
-      interval: 5s
-      timeout: 5s
-      retries: 30
-      start_period: 10s
 
   qdrant:
     image: ${DIREXTALK_QDRANT_IMAGE_IMMUTABLE:?set an immutable Qdrant image reference}
@@ -174,8 +168,7 @@ services:
     restart: "no"
 
   agent-migrate:
-    image: ${DIREXTALK_AGENT_IMAGE_IMMUTABLE:?set an immutable Agent image reference}
-    <<: *agent-hardening
+    <<: [*agent-image, *agent-hardening]
     command: ["migrate"]
     restart: "no"
     volumes:
@@ -189,8 +182,7 @@ services:
         condition: service_healthy
 
   agent:
-    image: ${DIREXTALK_AGENT_IMAGE_IMMUTABLE:?set an immutable Agent image reference}
-    <<: *agent-hardening
+    <<: [*agent-image, *agent-hardening]
     command: ["serve"]
     restart: unless-stopped
     environment:
@@ -271,12 +263,7 @@ services:
         condition: service_completed_successfully
 
   extension-socket-init:
-    image: ${DIREXTALK_UTILITY_IMAGE_IMMUTABLE:?set an immutable utility image reference}
-    entrypoint: ["sh"]
-    user: "0:0"
-    cap_drop: ["ALL"]
-    cap_add: ["CHOWN", "FOWNER", "FSETID"]
-    security_opt: ["no-new-privileges:true"]
+    <<: *socket-init
     profiles: ["extensions"]
     command:
       - -ec
@@ -286,8 +273,6 @@ services:
         chmod 3770 /socket
     volumes:
       - agent_extension_socket:/socket
-    network_mode: "none"
-    restart: "no"
 
   # Optional isolated local workload provider. It is separate from the Agent
   # process and is deliberately profile-gated. It has no network, database,
@@ -336,12 +321,7 @@ services:
         condition: service_completed_successfully
 
   core-runner-socket-init:
-    image: ${DIREXTALK_UTILITY_IMAGE_IMMUTABLE:?set an immutable utility image reference}
-    entrypoint: ["sh"]
-    user: "0:0"
-    cap_drop: ["ALL"]
-    cap_add: ["CHOWN", "FOWNER", "FSETID"]
-    security_opt: ["no-new-privileges:true"]
+    <<: *socket-init
     profiles: ["core-runner"]
     command:
       - -ec
@@ -351,8 +331,6 @@ services:
         chmod 3770 /socket
     volumes:
       - core_runner_socket:/socket
-    network_mode: "none"
-    restart: "no"
 
   message-server-init:
     <<: *message-image
