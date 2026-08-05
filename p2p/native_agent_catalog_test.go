@@ -9,9 +9,62 @@ import (
 	"github.com/YingSuiAI/dirextalk-message-server/internal/agentgateway"
 )
 
-func TestNativeAgentCatalogReadinessRecoversAndExpires(t *testing.T) {
+func TestNativeAgentCatalogReadinessInitialFailureFailsClosed(t *testing.T) {
 	clock := time.Unix(100, 0)
-	up := false
+	readiness := newNativeAgentCatalogReadiness(func(context.Context, []agentgateway.CatalogRequirement) error {
+		return errors.New("agent down")
+	}, nil, func() int64 { return 7 })
+	readiness.now = func() time.Time { return clock }
+	readiness.ttl = 10 * time.Second
+	readiness.probeNow(context.Background())
+	if ready, _ := readiness.readyState(); ready {
+		t.Fatal("down Agent was marked ready")
+	}
+	if !readiness.expiresAt.IsZero() {
+		t.Fatalf("initial probe failure retained an expiry: %v", readiness.expiresAt)
+	}
+}
+
+func TestNativeAgentCatalogReadinessRenewsBeforeLeaseExpiry(t *testing.T) {
+	clock := time.Unix(100, 0)
+	probes := 0
+	readiness := newNativeAgentCatalogReadiness(func(context.Context, []agentgateway.CatalogRequirement) error {
+		probes++
+		return nil
+	}, nil, func() int64 { return 7 })
+	readiness.now = func() time.Time { return clock }
+	readiness.ttl = 20 * time.Second
+	readiness.interval = 5 * time.Second
+	readiness.probeTO = 2 * time.Second
+	readiness.probeNow(context.Background())
+	firstExpiry := readiness.expiresAt
+
+	clock = clock.Add(readiness.ttl - readiness.interval - readiness.probeTO)
+	if ready, _ := readiness.readyState(); !ready {
+		t.Fatal("catalog lost readiness before its lease expired")
+	}
+	if !readiness.shouldProbe() {
+		t.Fatal("catalog did not schedule a renewal within the probe safety window")
+	}
+	readiness.probeNow(context.Background())
+	if probes != 2 {
+		t.Fatalf("probe count = %d, want 2", probes)
+	}
+	if !readiness.expiresAt.After(firstExpiry) {
+		t.Fatalf("renewal did not extend expiry: before=%v after=%v", firstExpiry, readiness.expiresAt)
+	}
+	if ready, err := readiness.readyState(); !ready || err != nil {
+		t.Fatalf("renewed catalog was not ready: ready=%v err=%v", ready, err)
+	}
+	clock = readiness.expiresAt
+	if ready, _ := readiness.readyState(); ready {
+		t.Fatal("catalog remained ready after the renewed lease expired")
+	}
+}
+
+func TestNativeAgentCatalogReadinessValidLeaseSurvivesProbeFailure(t *testing.T) {
+	clock := time.Unix(100, 0)
+	up := true
 	readiness := newNativeAgentCatalogReadiness(func(context.Context, []agentgateway.CatalogRequirement) error {
 		if !up {
 			return errors.New("agent down")
@@ -21,29 +74,63 @@ func TestNativeAgentCatalogReadinessRecoversAndExpires(t *testing.T) {
 	readiness.now = func() time.Time { return clock }
 	readiness.ttl = 10 * time.Second
 	readiness.probeNow(context.Background())
-	if ready, _ := readiness.readyState(); ready {
-		t.Fatal("down Agent was marked ready")
-	}
-	up = true
+	firstExpiry := readiness.expiresAt
+
+	clock = clock.Add(time.Second)
+	up = false
 	readiness.probeNow(context.Background())
 	if ready, err := readiness.readyState(); !ready || err != nil {
-		t.Fatalf("recovered Agent remained unready: ready=%v err=%v", ready, err)
+		t.Fatalf("valid lease was revoked by a failed renewal: ready=%v err=%v", ready, err)
 	}
-	clock = clock.Add(10 * time.Second)
+	if readiness.expiresAt != firstExpiry {
+		t.Fatalf("failed renewal changed the active lease: before=%v after=%v", firstExpiry, readiness.expiresAt)
+	}
+	if readiness.lastErr == nil {
+		t.Fatal("failed renewal was not recorded")
+	}
+}
+
+func TestNativeAgentCatalogReadinessExpiredLeaseFailureFailsClosed(t *testing.T) {
+	clock := time.Unix(100, 0)
+	readiness := newNativeAgentCatalogReadiness(func(context.Context, []agentgateway.CatalogRequirement) error {
+		return nil
+	}, nil, func() int64 { return 7 })
+	readiness.now = func() time.Time { return clock }
+	readiness.ttl = 10 * time.Second
+	readiness.probeNow(context.Background())
+	clock = readiness.expiresAt
+	readiness.probe = func(context.Context, []agentgateway.CatalogRequirement) error {
+		return errors.New("agent down")
+	}
+	readiness.probeNow(context.Background())
 	if ready, _ := readiness.readyState(); ready {
-		t.Fatal("expired catalog remained trusted")
+		t.Fatal("expired catalog remained ready after a failed probe")
+	}
+	if !readiness.expiresAt.IsZero() {
+		t.Fatalf("expired lease retained expiry: %v", readiness.expiresAt)
 	}
 }
 
 func TestNativeAgentCatalogReadinessGenerationFence(t *testing.T) {
 	generation := int64(1)
+	up := false
 	readiness := newNativeAgentCatalogReadiness(func(context.Context, []agentgateway.CatalogRequirement) error {
+		if !up {
+			return nil
+		}
 		generation = 2
-		return nil
+		return errors.New("replacement Agent is not ready")
 	}, nil, func() int64 { return generation })
+	readiness.now = func() time.Time { return time.Unix(100, 0) }
+	readiness.ttl = 10 * time.Second
+	readiness.probeNow(context.Background())
+	up = true
 	readiness.probeNow(context.Background())
 	if ready, _ := readiness.readyState(); ready {
 		t.Fatal("catalog probe crossing account generation was trusted")
+	}
+	if !readiness.expiresAt.IsZero() {
+		t.Fatalf("generation-fenced probe retained expiry: %v", readiness.expiresAt)
 	}
 }
 

@@ -5,6 +5,27 @@
 > generated contract metadata, `README.md`, and maintained current docs take
 > precedence. Git history is the complete audit trail.
 
+## 2026-08-05 External Agent Core is the only Native Agent runtime
+
+`agent.backends.get` keeps its existing owner-authenticated ProductCore action
+and response envelope. `core` now represents the separately deployed
+`dirextalk-agent` service and is the only executable Native Agent backend;
+`embedded` is always a disabled diagnostic value and is never selected or used
+as a fallback. Flutter connects only to Message Server and treats completed
+discovery with an unavailable Core as an explicit retryable error.
+
+Core client capability tokens are projected from readiness-passed Agent
+registry descriptors and their actual operations. This includes the exact
+server model-profile, memory, schedule, Skills, MCP, voice, AWS, and Execution
+V2 tokens used by Flutter. A Product Capability bridge alone does not advertise
+`skills.server` or `mcp`, and the retired `planning.skills` token is no longer a
+current client gate.
+
+Message Server renews its generation-bound Agent catalog lease before expiry.
+A failed renewal may retain only the still-valid lease for the same account
+generation; initial failure, expiry, or generation change fails closed. Public
+Flutter action names and Native Agent stream frames are unchanged.
+
 ## 2026-08-02 Native Agent request-scoped BYOK web search
 
 Added owner action `agent.web_search.test` over HTTP and owner WebSocket. The

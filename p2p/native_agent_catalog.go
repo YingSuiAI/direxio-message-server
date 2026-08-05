@@ -89,7 +89,7 @@ func (r *nativeAgentCatalogReadiness) loop(ctx context.Context) {
 	for {
 		select {
 		case <-ticker.C:
-			if ready, _ := r.readyState(); ready {
+			if !r.shouldProbe() {
 				continue
 			}
 			r.probeNow(ctx)
@@ -97,6 +97,22 @@ func (r *nativeAgentCatalogReadiness) loop(ctx context.Context) {
 			return
 		}
 	}
+}
+
+func (r *nativeAgentCatalogReadiness) shouldProbe() bool {
+	if r == nil || r.probe == nil {
+		return false
+	}
+	generation := r.generation()
+	now := r.now()
+	r.mu.RLock()
+	ready := r.ready && r.probedGen == generation && !r.expiresAt.IsZero() && now.Before(r.expiresAt)
+	expiresAt := r.expiresAt
+	r.mu.RUnlock()
+	if !ready {
+		return true
+	}
+	return !now.Add(r.interval + r.probeTO).Before(expiresAt)
 }
 
 func (r *nativeAgentCatalogReadiness) probeNow(parent context.Context) {
@@ -120,15 +136,20 @@ func (r *nativeAgentCatalogReadiness) probeNow(parent context.Context) {
 	ctx, cancel := context.WithTimeout(parent, r.probeTO)
 	err := r.probe(ctx, r.requirement)
 	cancel()
-	if generation != r.generation() {
+	observedGeneration := r.generation()
+	generationChanged := generation != observedGeneration
+	if generationChanged {
 		err = errors.New("account generation changed during native agent catalog probe")
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if err != nil {
-		r.ready = false
-		r.probedGen = generation
-		r.expiresAt = time.Time{}
+		leaseValid := !generationChanged && r.ready && r.probedGen == generation && !r.expiresAt.IsZero() && r.now().Before(r.expiresAt)
+		if !leaseValid {
+			r.ready = false
+			r.expiresAt = time.Time{}
+		}
+		r.probedGen = observedGeneration
 		r.lastErr = err
 		logrus.WithError(err).WithField("account_generation", generation).Warn("Native Agent capability catalog probe failed")
 		return

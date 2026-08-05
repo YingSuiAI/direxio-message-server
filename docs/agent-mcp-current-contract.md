@@ -1,10 +1,11 @@
 # Current Agent and MCP Contract
 
 > Current code, generated contract metadata, and focused tests are the authority.
-> Detailed embedded Agent and Execution V2 requirements are recorded in
+> Detailed external Agent Core and Execution V2 requirements are recorded in
 > [`agent-core-integration-development-contract.md`](agent-core-integration-development-contract.md)
 > and [`adr/2026-07-31-execution-orchestration-v2.md`](adr/2026-07-31-execution-orchestration-v2.md).
-> Both are capability/readiness gated; there is no external Core runtime.
+> Native Agent execution and data are owned by the separately deployed
+> `dirextalk-agent` service and are capability/readiness gated.
 
 This document is the backend-owned current contract for Dirextalk Agent state, Native Agent, and external MCP access. It describes existing behavior; it does not add a compatibility surface.
 
@@ -29,9 +30,10 @@ capability live.
 
 ## Native Agent Ownership
 
-- Native Agent is owned by `dirextalk-message-server`. The backend owns native `agent.*` actions, `client.native_agent_stream` / `server.native_agent_stream.*` frames, model-provider request handling, immutable planning metadata, external MCP client wiring, orchestration, built-in Dirextalk tools, native config storage, and sanitized migration from the former hidden Agent plugin config. Local runtime CLI execution, mutable third-party Skill installation/execution, and mutable MCP server installation/execution remain unavailable.
+- `dirextalk-agent` owns Native Agent conversations, models, encrypted provider credentials, knowledge and long-term memory, tasks, schedules, Skills/MCP lifecycle, Execution V2, AWS state, and runtime data. `dirextalk-message-server` owns the Flutter-facing owner-authenticated `agent.*` actions and `client.native_agent_stream` / `server.native_agent_stream.*` frames, and proxies them to the external Agent Capability gRPC service. Flutter never connects to `dirextalk-agent` directly.
+- The message server exposes product contacts, rooms, members, messages, and channel content back to the Agent through the separate Product Capability gRPC service. A Product Capability handler must not synchronously call back into Agent. Both directions carry the authenticated owner, account generation, granted scopes, operation identity, and call-chain fence; loops fail closed.
 - Native Agent is not installed, enabled, configured, or invoked through `plugins.*`. Backend `plugins.*` actions remain for non-Agent plugins.
-- Model-backed Native Agent chat and compression resolve the owner’s default `conversation` model profile when the request omits profile configuration. Legacy inline `model_profile` requests remain supported for compatibility, but server-owned profiles are preferred and model API keys must not be persisted, returned, or injected into plugin or runtime environment state.
+- Model-backed Native Agent chat and compression resolve the owner’s Agent-owned default `conversation` model profile. Flutter configures profiles through the proxied model-profile actions and sends only profile identifiers and exact revision pins; it does not persist or send inline API keys after server-profile synchronization. Model API keys are write-only and must not be returned, logged, or injected into unrelated extension/runtime state.
 - Native Agent BYOK web search is request-scoped. The owner may call `agent.web_search.test` over HTTP or the owner WebSocket with `tool_credentials.web_search.enabled=true`, `provider=tavily`, and a Tavily `api_key`; the key is write-only and is never stored in Agent config, model profiles, durable turns, conversation memory, logs, errors, or results. The same valid request credential adds the compiled `web_search` Eino tool to that chat turn; without it, the tool is absent.
 - Web search performs one bounded HTTPS Tavily request (a local injected endpoint is only a test seam), rejects redirects, trims queries to 1,000 Unicode characters, clamps and re-enforces `max_results` to 1–10, limits provider bodies to 2 MiB, and applies a 15-second timeout. Responses contain only bounded answer/title/content previews, URLs, scores, and provider metadata. Provider bodies and credential values are not returned on errors.
 - Durable Native Agent turn digests and events are secret-free. A reconnect/resume request may subscribe to an existing turn without resending or recovering `tool_credentials`; credentials remain available only to the original in-memory request execution and are never reconstructed from durable state.
@@ -48,9 +50,10 @@ capability live.
   credential is eligible only when `verified_revision == revision`. Credential
   and model-secret readback exposes configured state and conservative display
   hints only; display masks are never accepted as replacement secret values.
-- `planning.skills` gates the read-only built-in Planning Skill catalog exposed
-  by `agent.skills.list`. These records are immutable planning metadata, not
-  locally executable or user-installable Skills.
+- `skills.server` is advertised only when the external Agent registry publishes
+  the full Skills lifecycle. `mcp` is advertised only when MCP lifecycle
+  operations are published. A product-capability bridge by itself advertises
+  neither token.
 - Supported model-provider identifiers are `openai`, `anthropic`, `deepseek`, `gemini`, `xai`, `openai_compatible`, and `openrouter`. `litellm`, `vertex`, and unknown identifiers are rejected; clients use `openai_compatible` for custom compatible endpoints.
 - `agent.models.list` preserves upstream `input_modalities` only when the
   provider explicitly returns it on the model or its `architecture`. The
@@ -73,9 +76,9 @@ capability live.
   summaries and uploaded source chunks. Managed mutations are owner-scoped,
   revision-checked, and idempotent.
 - Successful `agent.chat` responses and Native Agent stream `done` payloads may include additive `references[]` derived deterministically from the full successful built-in Dirextalk tool results from that run. Room references use `kind=room`, `room_id`, optional `room_type=direct|group|channel`, `title`, and optional `preview`; channel-post references use `kind=channel_post`, `room_id`, `channel_id`, `post_id`, `title`, and optional `preview`. References preserve tool/result order, deduplicate rooms and posts, never include message `event_id`, and are not inferred from model-authored text or third-party/runtime tool output.
-- `mcp.channel_posts.list` and the embedded `dirextalk_channel_posts_list` result envelope include both top-level `channel_id` and `room_id`, allowing a post reference to identify its product channel and Matrix room without parsing post content.
+- `mcp.channel_posts.list` and the Agent-side `dirextalk_channel_posts_list` result envelope include both top-level `channel_id` and `room_id`, allowing a post reference to identify its product channel and Matrix room without parsing post content.
 
-### Embedded Native Agent schedule chat tools
+### Native Agent schedule chat tools
 
 - Interactive Native Agent turns expose only bounded read-only `native_agent_schedules_list`, `native_agent_schedules_get`, `native_agent_schedule_runs_list`, and `native_agent_schedule_runs_get` tools. ProductCore `agent.schedules.*` actions remain the owner-authenticated CRUD/runtime surface.
 - The former Native Agent schedule write proposal/confirmation flow (`native_agent_schedules_confirm` and its durable schedule-confirmation store) has been retired and removed. Native Agent no longer stages or confirms create, update, enable, delete, or run-now mutations, and no dormant compatibility path remains.
@@ -87,17 +90,17 @@ The detailed normative contract is
 [`agent-core-integration-development-contract.md`](agent-core-integration-development-contract.md);
 the accepted architecture decision is
 [`adr/2026-07-31-execution-orchestration-v2.md`](adr/2026-07-31-execution-orchestration-v2.md).
-V2 planning is declarative and side-effect free; remote mutations use a
-server-owned typed coordinator with durable receipts and explicit uncertainty.
-The Message Server does not execute local third-party shell/code/Skills or
-expose raw SSM/SSH/AWS passthrough.
+V2 planning is declarative and side-effect free; remote mutations use the
+Agent-owned typed coordinator with durable receipts and explicit uncertainty.
+The Message Server is only the authenticated product proxy and does not execute
+third-party shell/code/Skills or expose raw SSM/SSH/AWS passthrough.
 
 Every `execution.v2.*` capability and ProductCore action is published only
 after its authenticated route, durable PostgreSQL state, typed
 executor/transport, focused tests, and explicit readiness/enablement all pass.
-The final Execution V2 schema is registered by direct-final v78, but runtime
-capability/readiness remains separately gated; action registration, schemas,
-and docs alone are not live. AWS SSM is the first production slice; SSH,
+The final Execution V2 schema is registered by the Agent migration registry,
+but runtime capability/readiness remains separately gated; action registration,
+schemas, and docs alone are not live. AWS SSM is the first production slice; SSH,
 generic HTTP, DNS, TLS, and Coding Worker remain deferred and must not be
 advertised.
 

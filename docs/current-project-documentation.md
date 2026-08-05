@@ -67,7 +67,7 @@ Action auth and transport metadata is generated from `p2p/serviceapi.ActionSpecs
 Plugin management is deprecated/inactive for the current product surface. The server may keep owner-only `plugins.*` compatibility actions for future non-Agent plugins, but clients should not treat plugin pages as current acceptance scope. `plugins.catalog.list`、`plugins.installed.list`、`plugins.install`、`plugins.enable`、`plugins.disable`、`plugins.uninstall`、`plugins.config.get`、`plugins.config.update`、`plugins.job.get`、`plugins.health`、`plugins.logs.tail`、`plugins.invoke`、`plugins.invoke.stream` 都需要 owner `access_token`；`agent_token` 不能调用这些 action。`io.dirextalk.agent` is no longer exposed through plugin catalog/list/lifecycle/config/invoke/health/logs. Ops and future non-Agent Docker plugins only appear and run when the Docker plugin runner is enabled. Non-Agent Docker plugins still must use official catalog metadata whose Docker image belongs to the `dirextalk` Docker Hub organization; digest is optional audit/rollback metadata.
 
 
-Native Agent model-profile contract: the server persists encrypted owner profiles and default roles. Chat, stream, and compression omit model fields and resolve the owner default conversation profile; inline profile/key input is legacy compatibility only. `agent.models.list` remains an explicit request-scoped lookup and does not persist profiles.
+Native Agent model-profile contract: `dirextalk-agent` persists encrypted owner profiles and default roles. Chat, stream, and compression resolve the Agent-owned default conversation profile from an exact profile/revision pin; Flutter clears its local credential snapshot after verified server readback and does not use an inline profile/key fallback. `agent.models.list` remains an explicit request-scoped lookup and does not persist profiles.
 
 Native Agent BYOK web search is a separate request-scoped capability. Owner
 clients call `agent.web_search.test` or include
@@ -78,19 +78,9 @@ durable turns, conversation memory, logs, errors, or results. Search requests
 reject redirects and are bounded to a 1,000-character query, at most 10
 server-enforced results, a 2 MiB provider body, and a 15-second timeout;
 reconnect/resume never rehydrates the key.
-当前 x1 本机部署固定使用单节点 `docker-compose.p2p.yml` 的 `message-server` 容器。非 Agent plugin 功能当前废弃/暂停维护，不作为当前部署验收项；仓库不再保留独立 Agent/plugin compose overlay，后续如重新启用非 Agent Docker plugin runner，应从单节点 `docker-compose.p2p.yml` 的当前配置重新验收。`dendrite-a`、`dendrite-b`、`dendrite-c` 只属于三节点回归环境，不作为 x1 实际服务入口，也不安装或承载插件。
+当前拆分部署以 `deploy/split-agent/compose.yaml` 为单一拓扑：message-server、外部 Agent、两套 PostgreSQL 角色/数据库、Qdrant 和隔离 runner 一起按固定镜像 digest 启动。非 Agent plugin 功能当前废弃/暂停维护，不作为当前部署验收项；`dendrite-a`、`dendrite-b`、`dendrite-c` 只属于三节点回归环境，不作为实际服务入口。
 
-Agent keyring 与 execution artifact 默认分别位于现有 Message Server 数据卷内的
-`/var/dirextalk-message-server/agent/secret-keyring.json` 和
-`/var/dirextalk-message-server/agent/artifacts`；相关环境变量仅用于覆盖默认位置，标准部署不增加独立 Agent 数据卷。
-服务启动会在 PostgreSQL migration 完成后，在数据库没有 keyring 绑定密文时幂等创建缺失的 v1 keyring；不会自动升级历史模型凭据。迁移前必须停止服务，并将
-PostgreSQL、`P2P_AGENT_SECRET_KEYRING_FILE` 指向的 keyring 以及旧模型 master-key
-文件作为同一可恢复备份集；`agent-secretctl init` 仍可作为可选预检，再通过环境变量
-`P2P_AGENT_SECRET_KEYRING_FILE`、`P2P_AGENT_SECRET_DATABASE_DSN` 和
-`P2P_AGENT_MODEL_PROFILE_KEY_FILE` 执行离线 `agent-secretctl upgrade`。升级使用行锁/CAS，
-直接把共享 nonce/ciphertext 列重封装为 v1 envelope，不清空这些列，也不写入明文。
-完成后清除旧 key 环境变量执行 `agent-secretctl verify`；回滚必须原子恢复数据库、keyring
-和旧 key，不能只回滚镜像。v110 破坏性清理要等全量节点收敛且回滚窗口结束后再安排。
+Agent master key、知识内容、extension 安装/工作区、Execution artifact 和其他大文件都位于 `dirextalk-agent` 的受保护 secret/数据卷；Message Server 不挂载、读取或迁移这些材料。当前项目只支持 fresh-state Agent schema，不存在内嵌 Agent 数据升级、双写或兼容导入。回滚必须把 Agent 镜像、Agent PostgreSQL 快照和对应数据卷作为同一恢复集。
 
 Profile read projections may include a display-only `api_key_hint` mask for
 configured non-speech credentials (for example `sk-********0420`). It is
@@ -117,7 +107,7 @@ explicitly non-text models.
 可以据此自动勾选图片输入；已保存 profile 的显式设置仍优先于一次列表查询的
 元数据。
 
-Native Agent 知识库由服务端按 owner 管理。`agent.knowledge.sources.list`、
+Native Agent 知识库由外部 Agent 按 owner 管理，Message Server 只做认证代理。`agent.knowledge.sources.list`、
 `.delete`、`agent.knowledge.upload.start`、`.chunk`、`.finish` 提供知识源
 上传和生命周期；V1 只接受合法 UTF-8 的 `text/plain`、`text/markdown`、
 `text/csv`、`application/json`，文件大小不超过 10 MiB，分片使用 canonical
@@ -132,16 +122,11 @@ base64 且每片不超过 256 KiB。上传阶段返回按字节计算的 `progre
 使用 owner 范围、revision 前置条件和幂等键。所有 action 的可校验元数据以
 `docs/product-action-contract.json` 为准。
 
-Execution V2 的最终 PostgreSQL schema 已由 direct-final v78 migration
-registered；schema、类型和 action registration 不是 runtime capability。每个
+Execution V2 的最终 PostgreSQL schema 由 Agent migration registry 管理；schema、类型和 action registration 不是 runtime capability。每个
 `execution.v2.*` 能力仍由已接线路由、executor/transport、持久化和显式
 readiness gate 独立控制，未通过 gate 时 discovery 与 action 必须保持关闭。
 
-Native Agent schedule chat tools 只保留只读的 schedule/run 查询；旧的写入
-proposal/confirmation flow 与 schedule-confirmation runtime/store 已移除。调度
-CRUD、runtime 和 materializer 仍由 ProductCore `agent.schedules.*` actions
-提供；历史 `p2p_agent_schedule_confirmations` migration/table DDL 仅为升级兼容
-保留，当前 runtime 不读写该表。
+Native Agent schedule chat tools 只保留只读的 schedule/run 查询。调度 CRUD、runtime 和 materializer 由外部 Agent 持久化，通过现有 ProductCore `agent.schedules.*` actions 代理；Message Server 不保留 schedule runtime/store。
 
 官方 Ops 插件 `io.dirextalk.ops` 面向单机私有部署运维，动作包括 `ops.status.get`、`ops.containers.list`、`ops.logs.tail`、`ops.backups.list`、`ops.backup.create`、`ops.backup.status`、`ops.backup.download_chunk`、`ops.backup.delete`、`ops.cleanup.plan`、`ops.cleanup.run`、`ops.rooms.cleanup.plan`、`ops.rooms.cleanup.run`、`ops.media.orphans.plan`、`ops.migration.export`、`ops.restore.plan`、`ops.restore.run`。Ops 是唯一允许由 Docker runner 挂载 Docker socket 和专用备份 volume 的官方插件；启用时注入 `OPS_BACKUP_ROOT`、`OPS_MAX_BACKUPS`、`OPS_MESSAGE_SERVER_CONTAINER`、`OPS_POSTGRES_CONTAINER`、`OPS_POSTGRES_USER`、`OPS_POSTGRES_PASSWORD`。备份创建可异步返回任务并通过 `ops.backup.status` 轮询进度；备份下载通过 `ops.backup.download_chunk` 分片返回，客户端本地保存文件。`ops.restore.run` 必须显式传入 `confirm="restore_backup"`，用于从已有备份包恢复 Postgres dump。第一版清理必须先 plan 后 confirm：聊天记录清理只做本地缓存、隐藏/归档计划和受控安全操作，不允许 Ops 插件直接 SQL 删除 Matrix 事件表；媒体清理默认只清缓存或明确孤儿文件，仍被消息/频道引用的媒体不删除。
 
@@ -166,11 +151,11 @@ CRUD、runtime 和 materializer 仍由 ProductCore `agent.schedules.*` actions
 - `internal/dirextalkdomain`：跨包共享的产品 value records 和纯 domain helper，例如 portal/agent config、conversation records、member/channel records、blocks、calls、favorites、reports、P2P event bounds 等；业务 response DTO 由各自的 `p2p/internal` 模块持有。
 - `internal/dirextalkplugin`：非 Agent plugin catalog/instance/job/secret record shapes；`p2p/internal/plugins` 拥有 plugin action orchestration、Docker runner 和 Native Agent/plugin 隔离规则。
 - `p2p/projector.go`、`p2p/projector_ports.go`：只保留投影公开 facade、账户生命周期门禁和 Matrix/业务模块适配；纯投影 helper 由 `internal/dirextalkprojection` 持有。
-- `p2p/internal/agentcontrol` 与 `p2p/internal/agentembedded`：Message Server
-  进程内的任务/确认/调度、远程 HTTPS MCP、AWS 凭据，以及通用 Execution
-  V2 Project/Analysis/Target/Plan/Run/Receipt/ServiceBinding 控制面。首个远程
-  Transport 是受控 AWS SSM；Message Server 不在本机执行第三方 Skill、项目
-  代码或 shell，也不暴露原始 SSM/SSH/AWS passthrough。
+- `p2p/internal/agent` 与 `internal/agentgateway`：Message Server 的 Native Agent
+  facade、action/stream adapter 和受认证 Capability gRPC client。任务、确认、
+  调度、模型、知识、Skills/MCP、AWS 与 Execution V2 均由外部 Agent 拥有；
+  Message Server 不在本机执行第三方 Skill、项目代码或 shell，也不暴露原始
+  SSM/SSH/AWS passthrough。
 - Release Gate M Legacy Matrix Gateway 的内部模块、公开 facade、consumer
   与运行时/存储实现已移除；生产 monolith 不再包含该 capability，
   也不暴露旧的 `dirextalk.agent_gateway.v1` 或
@@ -349,7 +334,7 @@ Agent/API：
 
 - Agent token 不再有动态权限表，只能通过 product body-action 访问 `agent.matrix_session.create`，并可访问标准 `POST /mcp` MCP endpoint，不能调用 `realtime.ws_ticket.create` 创建 WS ticket；其他 protected action 只认 owner `access_token`。本地 bridge 使用 `agent.matrix_session.create` 得到的 Matrix session 监听 agents room 并回写消息。
 - MCP capability 是 owner-scoped 代理能力：`agent_token` 只负责授权标准 MCP endpoint，联系人、房间、成员、消息和频道内容工具按 portal owner 视角执行，并在 Matrix 读写前校验 joined membership。标准 `POST /mcp` 使用 MCP Streamable HTTP JSON-RPC，支持 `initialize`、`tools/list`、`tools/call`，只接受 `Authorization: Bearer <agent_token>`，拒绝 query-string token，校验 `Origin`，并且不会把入站 bearer token 传给下游 capability。Native Agent 内置 Dirextalk tools 与标准 `POST /mcp` 共用 `internal/dirextalkmcp` registry/service；固定 `mcp.*` body action 已删除。详见 [当前 Agent 和 MCP 合约](agent-mcp-current-contract.md)。
-- Native Agent 对话是独立于 Online Agent Matrix room 的 server-backed `agent.*` 业务；普通调用走 owner-protected action，流式调用走 `client.native_agent_stream` / `server.native_agent_stream.*`。服务端只发布已通过依赖与 readiness 检查的能力；本机 runtime CLI、可变第三方 Skill 安装/执行、MCP server 安装/执行和任意 shell/code passthrough 均不可用。模型 profile、持久化对话/知识记忆和内置工具遵循 [当前 Agent 和 MCP 合约](agent-mcp-current-contract.md)；Execution V2 的 v78 schema 已注册，但 runtime capability/readiness 仍独立 gated，只有通过 [Agent 与 Execution V2 合约](agent-core-integration-development-contract.md) 与 [ADR](adr/2026-07-31-execution-orchestration-v2.md) 的 readiness gate 才发布。
+- Native Agent 对话是独立于 Online Agent Matrix room 的 `agent.*` 业务；普通调用走 owner-protected action，流式调用走 `client.native_agent_stream` / `server.native_agent_stream.*`。Message Server 把两者代理到外部 `dirextalk-agent`，只发布已通过 mTLS、account-generation、schema catalog 和 readiness 检查的能力。模型 profile、持久化对话、知识/长期记忆、Skills/MCP、调度和 Execution V2 均由 Agent 拥有，详见 [当前 Agent 和 MCP 合约](agent-mcp-current-contract.md) 与 [Agent Core 集成合约](agent-core-integration-development-contract.md)。
 - `agent.matrix_session.create` 使用 owner `access_token` 或 `agent_token` 调用，用于本地 cc-connect/gateway 获取 `@agent:<server>` 的 Matrix Client-Server session；它不返回 owner Matrix session，也不回显 `agent_token` 或 portal password。
 - Agent 在线状态对 owner 客户端只暴露一个 Matrix 房间状态字段：真实 `agent_room_id` 内的 `io.dirextalk.agent.status`，state key 为 `@agent:<server>`，content 只含 `online`。运行中的本地 bridge 通过 `@agent:<server>` Matrix session 发布 `online=true/false`；服务端不能从 Agent 配置、`/sync` 或 WS session 推断在线，只在启动/修复 agents room 或禁用 Agent 配置时写 `online=false` 兜底。`sync.bootstrap` 只返回 `agent_room_id` 供客户端定位房间，不再返回 `agent_online`；WS `server.event` 不发送 `agent.presence`。`agent.status`/`agents.status` 已删除，客户端不得再调用。
 - Agent 预览和最终可恢复正文都通过 Matrix 消息/编辑回写；客户端展示 Matrix timeline 的聚合编辑结果，不消费 `server.agent_stream`。
