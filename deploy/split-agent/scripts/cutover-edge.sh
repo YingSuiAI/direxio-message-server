@@ -663,7 +663,7 @@ verify_new_caddy() {
 create_new_caddy() {
   local short_id inspect_file image_file network_file data_file config_file actual_id actual_repo
   compose_edge create caddy >/dev/null 2>&1 || fail "new Caddy pre-create failed" || return 1
-  short_id=$(compose_edge ps -q caddy 2>/dev/null) || fail "new Caddy candidate ID is unavailable" || return 1
+  short_id=$(compose_edge ps -aq caddy 2>/dev/null) || fail "new Caddy candidate ID is unavailable" || return 1
   valid_container_id "$short_id" || fail "new Caddy candidate ID is invalid" || return 1
   inspect_file=$tmp_dir/new-caddy-pre.inspect.json
   inspect_container "$short_id" "$inspect_file" || fail "new Caddy candidate inspect failed" || return 1

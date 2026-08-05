@@ -79,7 +79,12 @@ JSON
     *' ps -q agent '*) printf '%s\n' "$agent_id"; exit 0 ;;
     *' create caddy '*) : >"$state/new-created"; printf '%s\n' "$new_id" >/dev/null; exit 0 ;;
     *' ps -q caddy '*) [ -f "$state/new-created" ] || [ -f "$state/new-up" ] && printf '%s\n' "$new_id"; exit 0 ;;
-    *' ps -aq caddy '*) [ "${DIREXTALK_MOCK_EDGE_EXISTS:-false}" = true ] && printf '%s\n' "$new_id"; exit 0 ;;
+    *' ps -aq caddy '*)
+      if [ "${DIREXTALK_MOCK_EDGE_EXISTS:-false}" = true ] || [ -f "$state/new-created" ]; then
+        printf '%s\n' "$new_id"
+      fi
+      exit 0
+      ;;
     *' up -d --wait caddy '*) [ "${DIREXTALK_MOCK_UP_FAIL:-false}" != true ] || exit 41; : >"$state/new-up"; exit 0 ;;
     *) exit 99 ;;
   esac
