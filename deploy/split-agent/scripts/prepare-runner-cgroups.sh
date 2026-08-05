@@ -153,7 +153,7 @@ require_command() {
 }
 
 for command_name in \
-  awk cat chmod chown cmp cp docker getent grep id install ln mktemp readlink rm sha256sum sleep stat tr \
+  awk cat chmod chown cmp cp docker getent grep id install ln mktemp readlink rm sha256sum sleep stat tee tr \
   systemctl systemd-analyze systemd-sysusers; do
   require_command "$command_name"
 done
@@ -505,6 +505,19 @@ unit_control_group() {
   printf '%s' "$value"
 }
 
+write_subtree_controllers() {
+  local uid=$1 gid=$2 target=$3
+  if command -v setpriv >/dev/null 2>&1; then
+    printf '%s\n' '+cpu +memory +pids' | \
+      setpriv --reuid="$uid" --regid="$gid" --clear-groups \
+        --inh-caps=-all --ambient-caps=-all --bounding-set=-all --no-new-privs \
+        -- /usr/bin/tee "$target" >/dev/null
+  else
+    printf '%s\n' '+cpu +memory +pids' | \
+      runuser -u "#$uid" -g "#$gid" -- /usr/bin/tee "$target" >/dev/null
+  fi
+}
+
 require_control_group_identity() {
   local role=$1 unit=$2 parent=$3 control_group=$4
   case "$control_group" in
@@ -534,11 +547,6 @@ prepare_root() {
     printf ' %s ' "$controllers" | grep -Fq " $required " || \
       die "$role delegated root does not expose controller $required"
   done
-  subtree=$(tr '\n' ' ' <"$root/cgroup.subtree_control" 2>/dev/null || true)
-  for required in cpu memory pids; do
-    printf ' %s ' "$subtree" | grep -Fq " $required " || \
-      die "$role delegated root has not enabled controller $required in subtree_control"
-  done
   [ -d "$root/keeper" ] && [ ! -L "$root/keeper" ] || \
     die "$role DelegateSubgroup=keeper is missing: $root/keeper"
   keeper_owner=$(stat -c '%u:%g' -- "$root/keeper" 2>/dev/null || true)
@@ -559,6 +567,13 @@ prepare_root() {
   probe_runner_write "$root" || die "$role delegated root is not writable by runner UID/GID $uid:$gid"
   probe_runner_write "$root/cgroup.subtree_control" || die "$role subtree control is not writable by runner UID/GID $uid:$gid"
   probe_runner_write "$root/cgroup.procs" || die "$role process control is not writable by runner UID/GID $uid:$gid"
+  write_subtree_controllers "$uid" "$gid" "$root/cgroup.subtree_control" || \
+    die "$role runner identity could not enable delegated controllers"
+  subtree=$(tr '\n' ' ' <"$root/cgroup.subtree_control" 2>/dev/null || true)
+  for required in cpu memory pids; do
+    printf ' %s ' "$subtree" | grep -Fq " $required " || \
+      die "$role delegated root did not enable controller $required in subtree_control"
+  done
   require_control_group_identity "$role" "$unit" "$parent" "$control_group"
   printf '%s' "$root"
 }

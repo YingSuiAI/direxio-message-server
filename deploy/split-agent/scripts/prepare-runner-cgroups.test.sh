@@ -251,4 +251,36 @@ done
 grep -Fq 'Delegate property is not enabled' "$runner_test_tmp/delegate-disabled.stderr"
 grep -Fq 'DelegateControllers must contain exactly cpu memory pids' "$runner_test_tmp/delegate-missing.stderr"
 
+# A delegated unit exposes controllers but leaves subtree_control for the
+# delegate owner to enable. Exercise the exact runner-identity write command
+# and require its infrastructure failure to remain non-zero.
+sed -n '/^write_subtree_controllers() {/,/^}$/p' "$script" >"$runner_test_tmp/controller-function.sh"
+cat >"$runner_test_tmp/bin/setpriv" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[ "${DIREXTALK_FAKE_SETPRIV_FAILURE:-false}" != true ] || exit 42
+while [ "$#" -gt 0 ] && [ "$1" != -- ]; do shift; done
+[ "${1:-}" = -- ]
+shift
+exec "$@"
+EOF
+chmod 755 "$runner_test_tmp/bin/setpriv"
+controller_target=$runner_test_tmp/cgroup.subtree_control
+: >"$controller_target"
+PATH="$runner_test_path" bash -c '
+  set -o pipefail
+  source "$1"
+  write_subtree_controllers 65531 65531 "$2"
+' _ "$runner_test_tmp/controller-function.sh" "$controller_target"
+grep -Fxq '+cpu +memory +pids' "$controller_target"
+if PATH="$runner_test_path" DIREXTALK_FAKE_SETPRIV_FAILURE=true bash -c '
+  set -o pipefail
+  source "$1"
+  write_subtree_controllers 65531 65531 "$2"
+' _ "$runner_test_tmp/controller-function.sh" "$controller_target" \
+  >"$runner_test_tmp/controller-failure.stdout" 2>"$runner_test_tmp/controller-failure.stderr"; then
+  echo "runner-identity controller write failure was unexpectedly accepted" >&2
+  exit 1
+fi
+
 echo "prepare-runner-cgroups fixture tests passed"
