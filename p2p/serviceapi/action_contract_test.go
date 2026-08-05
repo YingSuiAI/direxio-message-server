@@ -23,7 +23,7 @@ func TestActionContractArtifactMatchesActionSpecs(t *testing.T) {
 }
 
 func TestActionSpecCopiesDeepCloneNestedSchemas(t *testing.T) {
-	const action = "agent.web_search.test"
+	const action = "agent.models.list"
 
 	want, ok := ActionSpecFor(action)
 	if !ok || want.Schema == nil {
@@ -34,18 +34,17 @@ func TestActionSpecCopiesDeepCloneNestedSchemas(t *testing.T) {
 		t.Fatalf("marshal baseline action spec: %v", err)
 	}
 	got, _ := ActionSpecFor(action)
-	credentials := got.Schema.Request["tool_credentials"]
-	webSearch := credentials.Properties["web_search"]
-	provider := webSearch.Properties["provider"]
-	if provider.Presence == nil {
-		t.Fatal("web-search provider must publish presence metadata")
+	modelKind := got.Schema.Request["model_kind"]
+	if modelKind.Presence == nil {
+		t.Fatal("model catalog kind must publish presence metadata")
 	}
-	provider.Presence.Omitted = "mutated"
-	apiKey := webSearch.Properties["api_key"]
-	apiKey.Type = "mutated"
-	webSearch.Properties["api_key"] = apiKey
-	credentials.Properties["web_search"] = webSearch
-	got.Schema.Request["tool_credentials"] = credentials
+	modelKind.Presence.Omitted = "mutated"
+	got.Schema.Request["model_kind"] = modelKind
+	providers := got.Schema.Response["providers"]
+	provider := providers.Items.Properties["provider"]
+	provider.Type = "mutated"
+	providers.Items.Properties["provider"] = provider
+	got.Schema.Response["providers"] = providers
 
 	fresh, _ := ActionSpecFor(action)
 	freshJSON, err := json.Marshal(fresh)
@@ -67,10 +66,11 @@ func TestActionSpecCopiesDeepCloneNestedSchemas(t *testing.T) {
 			continue
 		}
 		found = true
-		contractCredentials := spec.Schema.Request["tool_credentials"]
-		contractWebSearch := contractCredentials.Properties["web_search"]
-		contractWebSearch.Properties["provider"].Presence.Present = "mutated"
-		contractCredentials.Properties["web_search"] = contractWebSearch
+		contractProviders := spec.Schema.Response["providers"]
+		contractProvider := contractProviders.Items.Properties["provider"]
+		contractProvider.Required = false
+		contractProviders.Items.Properties["provider"] = contractProvider
+		spec.Schema.Response["providers"] = contractProviders
 		break
 	}
 	if !found {

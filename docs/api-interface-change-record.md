@@ -5,6 +5,27 @@
 > generated contract metadata, `README.md`, and maintained current docs take
 > precedence. Git history is the complete audit trail.
 
+## 2026-08-05 Native Agent provider model catalog routing
+
+`agent.models.list` now routes to Agent Core `agent.info.v1/list_models` and
+returns the provider catalog `models` and `providers`. It no longer aliases the
+persisted model-profile list at `agent.models.v1/list_models`; the existing
+`agent.model_profiles.list` and `agent.core.model_profiles.list` actions retain
+that profile response. The gateway canonicalizes an omitted `model_kind` to
+`conversation`, preserving the established client request contract.
+
+## 2026-08-05 Agent-owned Tavily web-search configuration
+
+Web search now has one encrypted Agent-owned credential path. Owner clients use
+`agent.web_search.config.get`, `agent.web_search.config.update`, and
+`agent.web_search.test`, mapped to `agent.web_search.v1`. Config update is
+idempotent and revision-checked; its optional `api_key` is write-only and
+`api_key_clear` explicitly removes it. Config and test responses are strict
+safe projections and never contain key bytes or provider bodies.
+
+The chat and stream contracts do not accept `tool_credentials`; enabled,
+Agent-owned server configuration is the only Web Search credential path.
+
 ## 2026-08-05 External Agent Core is the only Native Agent runtime
 
 `agent.backends.get` keeps its existing owner-authenticated ProductCore action
@@ -25,26 +46,6 @@ Message Server renews its generation-bound Agent catalog lease before expiry.
 A failed renewal may retain only the still-valid lease for the same account
 generation; initial failure, expiry, or generation change fails closed. Public
 Flutter action names and Native Agent stream frames are unchanged.
-
-## 2026-08-02 Native Agent request-scoped BYOK web search
-
-Added owner action `agent.web_search.test` over HTTP and owner WebSocket. The
-request shape is `tool_credentials.web_search` with `enabled`, optional
-`provider` (default `tavily`), and write-only `api_key`. The key is accepted
-only for that request; it is never copied into Agent config, model profiles,
-durable turn records, conversation memory, logs, errors, or result payloads.
-
-When a chat/stream request carries the same valid Tavily credential, the
-compiled Native Agent `web_search` tool is available for that turn. It is
-absent for missing, disabled, or unsupported credentials. The adapter sends a
-bounded HTTPS Tavily request that rejects redirects, with a 1,000-character
-query limit, a server-enforced 1–10 result bound, 2 MiB response cap, and
-15-second timeout. Results and provider errors are reduced to safe summaries;
-provider response bodies and API keys are never returned.
-
-Durable turn request digests and runtime events remain secret-free. Reconnect
-and resume attach to an existing turn without persisting or rehydrating
-`tool_credentials`; only the original in-memory request may use its key.
 
 ## 2026-08-01 Native Agent new-target planning and built-in Skills
 
@@ -173,5 +174,6 @@ together with a complete `model_profile_revision` / `credential_version` pair.
 The durable turn resolves that immutable profile and credential snapshot before
 reservation and stores only the pin and secret-free request digest. Supplying
 only one version field, or conflicting request/context pins, fails before a
-turn is reserved. Omitting the profile still resolves the owner's default
-conversation profile.
+turn is reserved. The message-server boundary rejects omitted/partial pins and
+does not accept inline profiles, tool credentials, legacy client profile ids, or
+default-profile fallback for chat/stream requests.

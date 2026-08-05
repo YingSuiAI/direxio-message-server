@@ -67,17 +67,18 @@ Action auth and transport metadata is generated from `p2p/serviceapi.ActionSpecs
 Plugin management is deprecated/inactive for the current product surface. The server may keep owner-only `plugins.*` compatibility actions for future non-Agent plugins, but clients should not treat plugin pages as current acceptance scope. `plugins.catalog.list`、`plugins.installed.list`、`plugins.install`、`plugins.enable`、`plugins.disable`、`plugins.uninstall`、`plugins.config.get`、`plugins.config.update`、`plugins.job.get`、`plugins.health`、`plugins.logs.tail`、`plugins.invoke`、`plugins.invoke.stream` 都需要 owner `access_token`；`agent_token` 不能调用这些 action。`io.dirextalk.agent` is no longer exposed through plugin catalog/list/lifecycle/config/invoke/health/logs. Ops and future non-Agent Docker plugins only appear and run when the Docker plugin runner is enabled. Non-Agent Docker plugins still must use official catalog metadata whose Docker image belongs to the `dirextalk` Docker Hub organization; digest is optional audit/rollback metadata.
 
 
-Native Agent model-profile contract: `dirextalk-agent` persists encrypted owner profiles and default roles. Chat, stream, and compression resolve the Agent-owned default conversation profile from an exact profile/revision pin; Flutter clears its local credential snapshot after verified server readback and does not use an inline profile/key fallback. `agent.models.list` remains an explicit request-scoped lookup and does not persist profiles.
+Native Agent model-profile contract: `dirextalk-agent` persists encrypted owner profiles and default roles. `agent.chat` and `agent.chat.stream` require an explicit non-empty `model_profile_id` plus positive `model_profile_revision` and `credential_version`; the three pins are forwarded unchanged and no inline profile, tool credential, legacy client profile, or default-profile fallback is accepted. Compression and other server-owned workflows may use their separately documented defaults. Flutter clears its local credential snapshot after verified server readback and does not use an inline profile/key fallback. `agent.models.list` is an explicit request-scoped provider catalog lookup routed to `agent.info.v1/list_models`; it returns `models` and `providers`, defaults an omitted `model_kind` to `conversation`, rejects other kinds, and rejects combining a profile id with `api_key`. Profile list actions remain on `agent.models.v1/list_models` and return `profiles`.
 
-Native Agent BYOK web search is a separate request-scoped capability. Owner
-clients call `agent.web_search.test` or include
-`tool_credentials.web_search` in a chat/stream request; `enabled=true` and a
-Tavily `api_key` add the compiled `web_search` tool for that turn. The Tavily
-key is write-only and is never persisted in Agent config, model profiles,
-durable turns, conversation memory, logs, errors, or results. Search requests
-reject redirects and are bounded to a 1,000-character query, at most 10
-server-enforced results, a 2 MiB provider body, and a 15-second timeout;
-reconnect/resume never rehydrates the key.
+Native Agent BYOK web search is an Agent-owned encrypted capability. Owner
+clients use `agent.web_search.config.get`, revision-checked
+`agent.web_search.config.update`, and `agent.web_search.test`; only config
+update accepts the write-only Tavily API key. Chat and stream requests do not
+accept `tool_credentials` and resolve only the enabled, configured server
+credential. Safe config readback exposes configured state and a fixed
+non-secret hint, never key bytes or a display mask derived from them. Search
+requests reject redirects and are bounded to a 1,000-character query, at most
+10 server-enforced results, a 2 MiB provider body, and a 15-second timeout.
+Durable turns, events, logs, errors, and results remain secret-free.
 当前拆分部署以 `deploy/split-agent/compose.yaml` 为单一拓扑：message-server、外部 Agent、两套 PostgreSQL 角色/数据库、Qdrant 和隔离 runner 一起按固定镜像 digest 启动。非 Agent plugin 功能当前废弃/暂停维护，不作为当前部署验收项；`dendrite-a`、`dendrite-b`、`dendrite-c` 只属于三节点回归环境，不作为实际服务入口。
 
 Agent master key、知识内容、extension 安装/工作区、Execution artifact 和其他大文件都位于 `dirextalk-agent` 的受保护 secret/数据卷；Message Server 不挂载、读取或迁移这些材料。当前项目只支持 fresh-state Agent schema，不存在内嵌 Agent 数据升级、双写或兼容导入。回滚必须把 Agent 镜像、Agent PostgreSQL 快照和对应数据卷作为同一恢复集。
@@ -90,7 +91,8 @@ retain the mask for replay); speech profiles expose only
 `provider_secret_status`.
 
 For `agent.models.list`, `model_profile_id` or `client_model_profile_id` selects
-the encrypted server profile for its API key. `provider` may be omitted or
+the encrypted server profile for its API key; a profile id and request `api_key`
+are mutually exclusive. `provider` may be omitted or
 must match the stored provider case-insensitively; a non-empty request
 `base_url` is a temporary lookup override only when its scheme, hostname, and
 effective port match the stored profile URL; malformed, userinfo, and

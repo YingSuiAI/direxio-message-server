@@ -60,7 +60,7 @@ func (r *Runner) Invoke(ctx context.Context, action string, params map[string]an
 		if actionSupportsReplay(strings.TrimSpace(action)) {
 			output["replayed"] = replayed
 		}
-		return adaptActionResult(strings.TrimSpace(action), output), nil
+		return adaptActionResult(strings.TrimSpace(action), output)
 	}
 	if err := json.Unmarshal(result, &output); err != nil {
 		return nil, fmt.Errorf("agent operation returned invalid JSON: %w", err)
@@ -71,7 +71,7 @@ func (r *Runner) Invoke(ctx context.Context, action string, params map[string]an
 		// public schema explicitly defines the field.
 		output["replayed"] = replayed
 	}
-	return adaptActionResult(strings.TrimSpace(action), output), nil
+	return adaptActionResult(strings.TrimSpace(action), output)
 }
 
 func (r *Runner) Stream(ctx context.Context, action string, params map[string]any, emit func(agentstream.Event) error) error {
@@ -80,6 +80,9 @@ func (r *Runner) Stream(ctx context.Context, action string, params map[string]an
 	}
 	if r == nil || r.client == nil {
 		return fmt.Errorf("agent gateway is not configured")
+	}
+	if err := ValidateActionRequest(action, params); err != nil {
+		return err
 	}
 	operationID, requestJSON, permission, err := r.prepare(action, params)
 	if err != nil {
@@ -95,7 +98,7 @@ func (r *Runner) Stream(ctx context.Context, action string, params map[string]an
 	if err != nil {
 		return err
 	}
-	digest, operation, err := r.requestDigest(ctx, callCtx, operationID, binding, requestJSON, permission)
+	digest, operation, err := r.requestDigest(ctx, callCtx, operationID, action, binding, requestJSON, permission)
 	if err != nil {
 		return err
 	}
@@ -174,6 +177,9 @@ func (r *Runner) invokeOperationWithReplay(ctx context.Context, action string, p
 	if r == nil || r.client == nil {
 		return nil, false, fmt.Errorf("agent gateway is not configured")
 	}
+	if err := ValidateActionRequest(action, params); err != nil {
+		return nil, false, err
+	}
 	operationID, requestJSON, permission, err := r.prepare(action, params)
 	if err != nil {
 		return nil, false, err
@@ -188,7 +194,7 @@ func (r *Runner) invokeOperationWithReplay(ctx context.Context, action string, p
 	if err != nil {
 		return nil, false, err
 	}
-	digest, operation, err := r.requestDigest(ctx, callCtx, operationID, binding, requestJSON, permission)
+	digest, operation, err := r.requestDigest(ctx, callCtx, operationID, action, binding, requestJSON, permission)
 	if err != nil {
 		return nil, false, err
 	}
@@ -201,7 +207,7 @@ func (r *Runner) invokeOperationWithReplay(ctx context.Context, action string, p
 			return nil, false, fmt.Errorf("agent returned an empty query response")
 		}
 		if response.Error != nil {
-			return nil, false, fmt.Errorf("agent query failed: %s", response.Error.Message)
+			return nil, false, capabilityError(response.Error.GetCode())
 		}
 		return response.ResultJson, false, nil
 	}
@@ -241,11 +247,11 @@ func (r *Runner) invokeOperationWithReplay(ctx context.Context, action string, p
 			return value.Result.ResultJson, response.GetReplayed(), nil
 		case *capv1.WatchOperationEvent_Error:
 			if value.Error != nil && value.Error.Error != nil {
-				return nil, false, fmt.Errorf("agent operation failed: %s", value.Error.Error.Message)
+				return nil, false, capabilityError(value.Error.Error.GetCode())
 			}
-			return nil, false, fmt.Errorf("agent operation failed")
+			return nil, false, capabilityError(capv1.ErrorCode_ERROR_CODE_UPSTREAM_FAILED)
 		case *capv1.WatchOperationEvent_Cancelled:
-			return nil, false, fmt.Errorf("agent operation cancelled: %s", value.Cancelled.GetReason())
+			return nil, false, capabilityError(capv1.ErrorCode_ERROR_CODE_CONFLICT)
 		}
 	}
 }
@@ -416,7 +422,7 @@ func (r *Runner) operationControlPermission(callCtx *capv1.CallContext, operatio
 	}, nil
 }
 
-func (r *Runner) requestDigest(ctx context.Context, callCtx *capv1.CallContext, operationID string, binding actionBinding, requestJSON []byte, permission *capv1.PermissionContext) ([]byte, *capv1.OperationDescriptor, error) {
+func (r *Runner) requestDigest(ctx context.Context, callCtx *capv1.CallContext, operationID, action string, binding actionBinding, requestJSON []byte, permission *capv1.PermissionContext) ([]byte, *capv1.OperationDescriptor, error) {
 	if r == nil || r.client == nil {
 		return nil, nil, fmt.Errorf("agent gateway is not configured")
 	}
@@ -431,7 +437,7 @@ func (r *Runner) requestDigest(ctx context.Context, callCtx *capv1.CallContext, 
 	// RootRequestDigest deliberately excludes the opaque grant to avoid a
 	// circular dependency. The final operation digest below includes the grant
 	// hash and is checked by Agent's exact StartOperation binding.
-	catalog, descriptor, operation, err := r.lookupOperation(ctx, callCtx, binding)
+	catalog, descriptor, operation, err := r.lookupOperation(ctx, callCtx, action, binding)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -462,10 +468,21 @@ func (r *Runner) requestDigest(ctx context.Context, callCtx *capv1.CallContext, 
 	return digest, operation, nil
 }
 
-func (r *Runner) lookupOperation(ctx context.Context, callCtx *capv1.CallContext, binding actionBinding) (*capv1.DescribeCapabilitiesResponse, *capv1.CapabilityDescriptor, *capv1.OperationDescriptor, error) {
+func (r *Runner) lookupOperation(ctx context.Context, callCtx *capv1.CallContext, action string, binding actionBinding) (*capv1.DescribeCapabilitiesResponse, *capv1.CapabilityDescriptor, *capv1.OperationDescriptor, error) {
+	requirement, err := catalogRequirementForLookup(action)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	catalog, err := r.client.DescribeCapabilities(ctx, callCtx)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("describe agent capabilities: %w", err)
+	}
+	// A live catalog is the schema source used below for both digest
+	// computation and grant signing. Revalidate the exact action requirement
+	// on every lookup so a catalog replacement cannot slip an unpinned schema
+	// between readiness and execution.
+	if err := ValidateCatalog(catalog, []CatalogRequirement{requirement}); err != nil {
+		return nil, nil, nil, fmt.Errorf("validate agent capability catalog: %w", err)
 	}
 	for _, descriptor := range catalog.GetCapabilities() {
 		if descriptor == nil || descriptor.GetCapabilityId() != binding.capabilityID {
@@ -544,7 +561,7 @@ func operationResponseError(response *capv1.StartOperationResponse) error {
 		return fmt.Errorf("agent returned an empty operation response")
 	}
 	if response.Error != nil {
-		return fmt.Errorf("agent operation rejected: %s", response.Error.Message)
+		return capabilityError(response.Error.GetCode())
 	}
 	return nil
 }
@@ -552,7 +569,7 @@ func operationResponseError(response *capv1.StartOperationResponse) error {
 func operationStateError(state capv1.OperationState) error {
 	switch state {
 	case capv1.OperationState_OPERATION_STATE_UNCERTAIN:
-		return fmt.Errorf("agent operation is uncertain; reconciliation is required before retry")
+		return capabilityError(capv1.ErrorCode_ERROR_CODE_UNCERTAIN)
 	default:
 		return nil
 	}
@@ -696,16 +713,15 @@ func nativeEventFromProto(event *capv1.WatchOperationEvent) (*agentstream.Event,
 		}
 		return &agentstream.Event{Event: "done", Data: payload}, true, nil
 	case *capv1.WatchOperationEvent_Error:
-		message := "agent operation failed"
+		code := capv1.ErrorCode_ERROR_CODE_UPSTREAM_FAILED
 		if value.Error != nil && value.Error.Error != nil {
-			message = value.Error.Error.Message
+			code = value.Error.Error.GetCode()
 		}
-		base["error"] = message
-		return &agentstream.Event{Event: "error", Data: base}, true, fmt.Errorf("%s", message)
+		base["error"] = (&CapabilityError{Code: code}).Error()
+		return &agentstream.Event{Event: "error", Data: base}, true, capabilityError(code)
 	case *capv1.WatchOperationEvent_Cancelled:
-		message := value.Cancelled.GetReason()
-		base["reason"] = message
-		return &agentstream.Event{Event: "cancelled", Data: base}, true, fmt.Errorf("agent operation cancelled: %s", message)
+		base["reason"] = "external native agent operation was cancelled"
+		return &agentstream.Event{Event: "cancelled", Data: base}, true, capabilityError(capv1.ErrorCode_ERROR_CODE_CONFLICT)
 	case *capv1.WatchOperationEvent_Gap:
 		base["earliest_sequence"] = value.Gap.EarliestAvailableSequence
 		base["latest_sequence"] = value.Gap.LatestAvailableSequence
@@ -739,12 +755,14 @@ var actionBindings = map[string]actionBinding{
 	"agent.chat.turns.list":           {"agent.chat.v1", "list_turns"},
 	"agent.context.compress":          {"agent.chat.v1", "compress_context"},
 	"agent.summarize":                 {"agent.chat.v1", "summarize"},
-	"agent.models.list":               {"agent.models.v1", "list_models"},
+	"agent.models.list":               {"agent.info.v1", "list_models"},
 	"agent.runtime.inspect":           {"agent.runtime.v1", "inspect"},
 	"agent.runtime.install":           {"agent.runtime.v1", "install"},
 	"agent.runtime.which":             {"agent.runtime.v1", "which"},
 	"agent.runtime.run":               {"agent.runtime.v1", "run"},
-	"agent.web_search.test":           {"agent.runtime.v1", "web_search_test"},
+	"agent.web_search.config.get":     {"agent.web_search.v1", "get_config"},
+	"agent.web_search.config.update":  {"agent.web_search.v1", "update_config"},
+	"agent.web_search.test":           {"agent.web_search.v1", "test"},
 
 	// Model profiles. Sync is retained as a legacy alias while the typed Core
 	// create/update/test operations are also exposed to current clients.
@@ -949,10 +967,24 @@ func transformCapabilityRequest(action, operationID string, params map[string]an
 				input["request_id"] = turnID
 			}
 		}
-		if _, ok := input["model_profile_id"]; !ok {
-			if legacy, exists := input["client_model_profile_id"]; exists {
-				input["model_profile_id"] = legacy
+		if _, ok := input["idempotency_key"]; !ok {
+			if requestID, exists := input["request_id"]; exists {
+				input["idempotency_key"] = requestID
+			} else {
+				input["idempotency_key"] = operationID
 			}
+		}
+	}
+	if action == "agent.models.list" {
+		modelKind, exists := input["model_kind"]
+		if !exists {
+			input["model_kind"] = "conversation"
+		} else if kind, ok := modelKind.(string); !ok || strings.TrimSpace(kind) == "" {
+			// ValidateActionRequest rejects this before the capability lookup. Keep
+			// this branch defensive for callers that invoke the transformer in
+			// isolation; it must never silently select a default for an explicit
+			// invalid value.
+			return nil, invalidActionRequest(action, "model_kind", "must be conversation, embedding, or speech")
 		}
 	}
 	applyLegacyInputAliases(action, input)

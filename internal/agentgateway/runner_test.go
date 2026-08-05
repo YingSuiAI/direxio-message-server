@@ -23,6 +23,62 @@ func TestActionBindingIsExplicit(t *testing.T) {
 	if binding, ok := actionBindingFor("agent.core.mcp.execute"); !ok || binding.capabilityID != "agent.skills.v1" || binding.operation != "execute_mcp" {
 		t.Fatalf("typed MCP execute binding = %#v, want agent.skills.v1/execute_mcp", binding)
 	}
+	if binding, ok := actionBindingFor("agent.models.list"); !ok || binding.capabilityID != "agent.info.v1" || binding.operation != "list_models" {
+		t.Fatalf("provider model catalog binding = %#v, want agent.info.v1/list_models", binding)
+	}
+	if binding, ok := actionBindingFor("agent.model_profiles.list"); !ok || binding.capabilityID != "agent.models.v1" || binding.operation != "list_models" {
+		t.Fatalf("model profile list binding = %#v, want agent.models.v1/list_models", binding)
+	}
+	for action, operation := range map[string]string{
+		"agent.web_search.config.get":    "get_config",
+		"agent.web_search.config.update": "update_config",
+		"agent.web_search.test":          "test",
+	} {
+		binding, ok := actionBindingFor(action)
+		if !ok || binding.capabilityID != "agent.web_search.v1" || binding.operation != operation {
+			t.Errorf("%s binding = %#v, want agent.web_search.v1/%s", action, binding, operation)
+		}
+	}
+}
+
+func TestEveryLiveActionBindingHasPinnedCatalogSchema(t *testing.T) {
+	for action := range actionBindings {
+		requirement := NewCatalogRequirement(action)
+		if !requirement.RequireSchemaPin || len(requirement.InputSchemaDigest) != sha256.Size || len(requirement.ResultSchemaDigest) != sha256.Size {
+			t.Errorf("live action %q is missing exact schema pins: require=%v input=%d result=%d", action, requirement.RequireSchemaPin, len(requirement.InputSchemaDigest), len(requirement.ResultSchemaDigest))
+		}
+	}
+}
+
+func TestCatalogLookupRejectsUnpinnedLiveAction(t *testing.T) {
+	const action = "agent.test.unpinned"
+	actionBindings[action] = actionBinding{capabilityID: "agent.test.v1", operation: "test"}
+	defer delete(actionBindings, action)
+	if _, err := catalogRequirementForLookup(action); err == nil {
+		t.Fatal("live lookup accepted an action without an exact schema pin")
+	}
+}
+
+func TestModelCatalogDefaultsKindAtGatewayBoundary(t *testing.T) {
+	binding, ok := actionBindingFor("agent.models.list")
+	if !ok {
+		t.Fatal("agent.models.list binding is missing")
+	}
+	raw, err := transformCapabilityRequest("agent.models.list", "operation-id", map[string]any{"provider": "openrouter"}, binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(raw, []byte(`"model_kind":"conversation"`)) {
+		t.Fatalf("default model kind was not canonicalized: %s", raw)
+	}
+
+	raw, err = transformCapabilityRequest("agent.models.list", "operation-id", map[string]any{"model_kind": "embedding"}, binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(raw, []byte(`"model_kind":"embedding"`)) {
+		t.Fatalf("explicit model kind was replaced: %s", raw)
+	}
 }
 
 func TestRunnerOperationIDForTurnIsStableAndCanonical(t *testing.T) {

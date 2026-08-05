@@ -6,10 +6,26 @@ package agentgateway
 // field names, pagination cursors, or envelope changes.
 
 import (
+	"errors"
+	"fmt"
+	"math"
 	"strings"
 )
 
-func adaptActionResult(action string, output map[string]any) map[string]any {
+// ErrInvalidActionResult marks a successful Agent operation whose payload
+// violates the public ProductCore response contract. Callers must surface the
+// failure instead of converting a malformed payload into a successful empty
+// projection.
+var ErrInvalidActionResult = errors.New("native agent action result is invalid")
+
+func adaptActionResult(action string, output map[string]any) (map[string]any, error) {
+	if err := validateActionResult(strings.TrimSpace(action), output); err != nil {
+		return nil, err
+	}
+	return projectActionResult(action, output), nil
+}
+
+func projectActionResult(action string, output map[string]any) map[string]any {
 	if output == nil {
 		return map[string]any{}
 	}
@@ -61,7 +77,9 @@ func adaptActionResult(action string, output map[string]any) map[string]any {
 		return objectWrapper(result, "installation")
 	case "agent.core.model_profiles.sync", "agent.model_profiles.sync":
 		return modelSyncResult(result)
-	case "agent.models.list", "agent.core.model_profiles.list", "agent.model_profiles.list":
+	case "agent.models.list":
+		return modelCatalogResult(result)
+	case "agent.core.model_profiles.list", "agent.model_profiles.list":
 		return modelListResult(result)
 	case "agent.core.model_profiles.get", "agent.model_profiles.get":
 		return modelGetResult(result)
@@ -97,6 +115,10 @@ func adaptActionResult(action string, output map[string]any) map[string]any {
 		return knowledgeStatusResult(result)
 	case "agent.chat":
 		return chatResult(result)
+	case "agent.web_search.config.get", "agent.web_search.config.update":
+		return webSearchConfigResult(result)
+	case "agent.web_search.test":
+		return webSearchTestResult(result)
 	case "agent.core.confirmations.get", "agent.core.confirmations.confirm", "agent.core.confirmations.reject":
 		return confirmationResult(result)
 	case "agent.core.confirmations.list":
@@ -121,6 +143,215 @@ func adaptActionResult(action string, output map[string]any) map[string]any {
 		return mapProjection(result, []string{"confirmation_id", "task_id"}, nil)
 	default:
 		return result
+	}
+}
+
+func validateActionResult(action string, output map[string]any) error {
+	switch action {
+	case "agent.web_search.config.get", "agent.web_search.config.update":
+		return validateWebSearchConfigResult(action, output)
+	case "agent.web_search.test":
+		return validateWebSearchTestResult(action, output)
+	case "agent.models.list":
+		return validateModelCatalogResult(output)
+	default:
+		return nil
+	}
+}
+
+func validateModelCatalogResult(output map[string]any) error {
+	if output == nil {
+		return fmt.Errorf("%w: model catalog response is missing", ErrInvalidActionResult)
+	}
+	modelsValue := valueByKey(output, "models", "Models")
+	models, ok := modelsValue.([]any)
+	if !ok {
+		return fmt.Errorf("%w: model catalog models must be an array", ErrInvalidActionResult)
+	}
+	providersValue := valueByKey(output, "providers", "Providers")
+	providers, ok := providersValue.([]any)
+	if !ok {
+		return fmt.Errorf("%w: model catalog providers must be an array", ErrInvalidActionResult)
+	}
+	for index, item := range models {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			return fmt.Errorf("%w: model catalog model %d is malformed", ErrInvalidActionResult, index)
+		}
+		normalized := normalizeModelCatalogEntries([]any{entry}, map[string][]string{
+			"id":                {"id", "ID", "model_id", "ModelID"},
+			"name":              {"name", "Name"},
+			"provider":          {"provider", "Provider"},
+			"context_length":    {"context_length", "ContextLength"},
+			"context_window":    {"context_window", "ContextWindow"},
+			"max_output_tokens": {"max_output_tokens", "MaxOutputTokens"},
+			"input_modalities":  {"input_modalities", "InputModalities"},
+			"output_modalities": {"output_modalities", "OutputModalities"},
+		}, validModelCatalogModel)
+		if len(normalized) != 1 {
+			return fmt.Errorf("%w: model catalog model %d violates the schema", ErrInvalidActionResult, index)
+		}
+	}
+	for index, item := range providers {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			return fmt.Errorf("%w: model catalog provider %d is malformed", ErrInvalidActionResult, index)
+		}
+		normalized := normalizeModelCatalogEntries([]any{entry}, map[string][]string{
+			"provider":         {"provider", "Provider"},
+			"default_base_url": {"default_base_url", "DefaultBaseURL"},
+			"requires_api_key": {"requires_api_key", "RequiresAPIKey"},
+			"dynamic_models":   {"dynamic_models", "DynamicModels"},
+		}, validModelCatalogProvider)
+		if len(normalized) != 1 {
+			return fmt.Errorf("%w: model catalog provider %d violates the schema", ErrInvalidActionResult, index)
+		}
+	}
+	return nil
+}
+
+func validateWebSearchConfigResult(action string, output map[string]any) error {
+	if output == nil {
+		return fmt.Errorf("%w: %s response is missing", ErrInvalidActionResult, action)
+	}
+	if _, ok := output["config"]; ok {
+		return fmt.Errorf("%w: %s response must be a config object", ErrInvalidActionResult, action)
+	}
+	if err := requireWebSearchBool(output, "enabled"); err != nil {
+		return err
+	}
+	if err := requireWebSearchProvider(output); err != nil {
+		return err
+	}
+	if err := requireWebSearchBool(output, "api_key_configured"); err != nil {
+		return err
+	}
+	if err := requireWebSearchInteger(output, "revision", false); err != nil {
+		return err
+	}
+	for _, field := range []string{"api_key_hint", "tested_at", "updated_at"} {
+		value, present := webSearchValue(output, field)
+		if present {
+			if _, ok := value.(string); !ok {
+				return fmt.Errorf("%w: web search %s must be a string", ErrInvalidActionResult, field)
+			}
+		}
+	}
+	return nil
+}
+
+func validateWebSearchTestResult(action string, output map[string]any) error {
+	if output == nil {
+		return fmt.Errorf("%w: %s response is missing", ErrInvalidActionResult, action)
+	}
+	for _, field := range []string{"ok", "enabled", "api_key_configured"} {
+		if err := requireWebSearchBool(output, field); err != nil {
+			return err
+		}
+	}
+	if err := requireWebSearchProvider(output); err != nil {
+		return err
+	}
+	if err := requireWebSearchInteger(output, "result_count", false); err != nil {
+		return err
+	}
+	if err := requireWebSearchInteger(output, "revision", true); err != nil {
+		return err
+	}
+	value, present := webSearchValue(output, "tested_at")
+	if !present {
+		return fmt.Errorf("%w: web search tested_at is required", ErrInvalidActionResult)
+	}
+	if _, ok := value.(string); !ok {
+		return fmt.Errorf("%w: web search tested_at must be a string", ErrInvalidActionResult)
+	}
+	return nil
+}
+
+func webSearchValue(output map[string]any, field string) (any, bool) {
+	aliases := []string{field, strings.Title(strings.ReplaceAll(field, "_", ""))}
+	for actual, value := range output {
+		for _, alias := range aliases {
+			if strings.EqualFold(actual, alias) {
+				return value, true
+			}
+		}
+	}
+	return nil, false
+}
+
+func requireWebSearchBool(output map[string]any, field string) error {
+	value := valueByKey(output, field, strings.Title(strings.ReplaceAll(field, "_", "")))
+	if value == nil {
+		return fmt.Errorf("%w: web search %s is required", ErrInvalidActionResult, field)
+	}
+	if _, ok := value.(bool); !ok {
+		return fmt.Errorf("%w: web search %s must be a boolean", ErrInvalidActionResult, field)
+	}
+	return nil
+}
+
+func requireWebSearchProvider(output map[string]any) error {
+	value := valueByKey(output, "provider", "Provider")
+	provider, ok := value.(string)
+	if !ok || strings.TrimSpace(provider) == "" {
+		return fmt.Errorf("%w: web search provider must be a string", ErrInvalidActionResult)
+	}
+	if strings.TrimSpace(provider) != "tavily" {
+		return fmt.Errorf("%w: web search provider is unsupported", ErrInvalidActionResult)
+	}
+	return nil
+}
+
+func requireWebSearchInteger(output map[string]any, field string, positive bool) error {
+	value := valueByKey(output, field, strings.Title(strings.ReplaceAll(field, "_", "")))
+	if value == nil {
+		return fmt.Errorf("%w: web search %s is required", ErrInvalidActionResult, field)
+	}
+	if !isJSONInteger(value) {
+		return fmt.Errorf("%w: web search %s must be an integer", ErrInvalidActionResult, field)
+	}
+	if positive && !positiveInteger(value) {
+		return fmt.Errorf("%w: web search %s must be positive", ErrInvalidActionResult, field)
+	}
+	if !positive && isNegativeInteger(value) {
+		return fmt.Errorf("%w: web search %s must be non-negative", ErrInvalidActionResult, field)
+	}
+	return nil
+}
+
+func isJSONInteger(value any) bool {
+	switch typed := value.(type) {
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+		return true
+	case float32:
+		value := float64(typed)
+		return !math.IsNaN(value) && !math.IsInf(value, 0) && math.Trunc(value) == value
+	case float64:
+		return !math.IsNaN(typed) && !math.IsInf(typed, 0) && math.Trunc(typed) == typed
+	default:
+		return false
+	}
+}
+
+func isNegativeInteger(value any) bool {
+	switch typed := value.(type) {
+	case int:
+		return typed < 0
+	case int8:
+		return typed < 0
+	case int16:
+		return typed < 0
+	case int32:
+		return typed < 0
+	case int64:
+		return typed < 0
+	case float32:
+		return typed < 0
+	case float64:
+		return typed < 0
+	default:
+		return false
 	}
 }
 
@@ -189,6 +420,121 @@ func modelSyncResult(value map[string]any) map[string]any {
 	result := map[string]any{"profiles": normalizeProfiles(valueByKey(value, "profiles", "Profiles"))}
 	copyModelDefaults(result, value)
 	return result
+}
+
+func modelCatalogResult(value map[string]any) map[string]any {
+	models := normalizeModelCatalogEntries(valueByKey(value, "models", "Models"), map[string][]string{
+		"id":                {"id", "ID", "model_id", "ModelID"},
+		"name":              {"name", "Name"},
+		"provider":          {"provider", "Provider"},
+		"context_length":    {"context_length", "ContextLength"},
+		"context_window":    {"context_window", "ContextWindow"},
+		"max_output_tokens": {"max_output_tokens", "MaxOutputTokens"},
+		"input_modalities":  {"input_modalities", "InputModalities"},
+		"output_modalities": {"output_modalities", "OutputModalities"},
+	}, validModelCatalogModel)
+	providers := normalizeModelCatalogEntries(valueByKey(value, "providers", "Providers"), map[string][]string{
+		"provider":         {"provider", "Provider"},
+		"default_base_url": {"default_base_url", "DefaultBaseURL"},
+		"requires_api_key": {"requires_api_key", "RequiresAPIKey"},
+		"dynamic_models":   {"dynamic_models", "DynamicModels"},
+	}, validModelCatalogProvider)
+	return map[string]any{"models": models, "providers": providers}
+}
+
+func normalizeModelCatalogEntries(value any, aliases map[string][]string, valid func(map[string]any) bool) []any {
+	raw := anySlice(value)
+	result := make([]any, 0, len(raw))
+	for _, item := range raw {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		normalized := make(map[string]any, len(aliases))
+		for canonical, names := range aliases {
+			if field := valueByKey(entry, names...); field != nil {
+				normalized[canonical] = field
+			}
+		}
+		if valid(normalized) {
+			result = append(result, normalized)
+		}
+	}
+	return result
+}
+
+func validModelCatalogModel(value map[string]any) bool {
+	if !nonEmptyCatalogString(value["id"]) || !nonEmptyCatalogString(value["provider"]) {
+		return false
+	}
+	if item, ok := value["name"]; ok && !catalogString(item) {
+		return false
+	}
+	for _, key := range []string{"context_length", "context_window", "max_output_tokens"} {
+		if item, ok := value[key]; ok && !catalogInteger(item) {
+			return false
+		}
+	}
+	for _, key := range []string{"input_modalities", "output_modalities"} {
+		if item, ok := value[key]; ok && !catalogStringList(item) {
+			return false
+		}
+	}
+	return true
+}
+
+func validModelCatalogProvider(value map[string]any) bool {
+	if !nonEmptyCatalogString(value["provider"]) {
+		return false
+	}
+	if item, ok := value["default_base_url"]; ok && !catalogString(item) {
+		return false
+	}
+	for _, key := range []string{"requires_api_key", "dynamic_models"} {
+		if _, ok := value[key].(bool); !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func nonEmptyCatalogString(value any) bool {
+	item, ok := value.(string)
+	return ok && strings.TrimSpace(item) != ""
+}
+
+func catalogString(value any) bool {
+	_, ok := value.(string)
+	return ok
+}
+
+func catalogInteger(value any) bool {
+	switch item := value.(type) {
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+		return true
+	case float32:
+		return item == float32(int64(item))
+	case float64:
+		return item == float64(int64(item))
+	default:
+		return false
+	}
+}
+
+func catalogStringList(value any) bool {
+	switch items := value.(type) {
+	case []string:
+		return true
+	case []any:
+		for _, item := range items {
+			if _, ok := item.(string); !ok {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
 }
 
 func modelListResult(value map[string]any) map[string]any {
@@ -392,6 +738,37 @@ func chatResult(value map[string]any) map[string]any {
 		}
 	}
 	return result
+}
+
+func webSearchConfigResult(value map[string]any) map[string]any {
+	result := mapProjection(value,
+		[]string{"enabled", "provider", "api_key_configured", "revision", "tested_at", "updated_at"},
+		map[string][]string{
+			"enabled":            {"enabled", "Enabled"},
+			"provider":           {"provider", "Provider"},
+			"api_key_configured": {"api_key_configured", "APIKeyConfigured"},
+			"revision":           {"revision", "Revision"},
+			"tested_at":          {"tested_at", "TestedAt"},
+			"updated_at":         {"updated_at", "UpdatedAt"},
+		})
+	if boolValue(valueByKey(value, "api_key_configured", "APIKeyConfigured")) {
+		result["api_key_hint"] = "configured"
+	}
+	return result
+}
+
+func webSearchTestResult(value map[string]any) map[string]any {
+	return mapProjection(value,
+		[]string{"ok", "provider", "result_count", "tested_at", "enabled", "api_key_configured", "revision"},
+		map[string][]string{
+			"ok":                 {"ok", "OK"},
+			"provider":           {"provider", "Provider"},
+			"result_count":       {"result_count", "ResultCount"},
+			"tested_at":          {"tested_at", "TestedAt"},
+			"enabled":            {"enabled", "Enabled"},
+			"api_key_configured": {"api_key_configured", "APIKeyConfigured"},
+			"revision":           {"revision", "Revision"},
+		})
 }
 
 func confirmationResult(value map[string]any) map[string]any {

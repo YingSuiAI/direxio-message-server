@@ -222,6 +222,7 @@ func nativeAgentCatalogRequirements(extra []string) []agentgateway.CatalogRequir
 		"agent.backends.get", "agent.core.status.get", "agent.models.list",
 		"agent.config.get", "agent.config.update", "agent.config.propose_patch",
 		"agent.chat", "agent.chat.stream",
+		"agent.web_search.config.get", "agent.web_search.config.update", "agent.web_search.test",
 		"agent.chat.conversations.create", "agent.chat.conversations.list", "agent.chat.conversations.get", "agent.chat.conversations.rename", "agent.chat.conversations.delete", "agent.chat.turns.list",
 		"agent.context.compress", "agent.summarize",
 		"agent.core.model_profiles.sync", "agent.core.model_profiles.list", "agent.core.model_profiles.get", "agent.core.model_profiles.delete",
@@ -232,7 +233,7 @@ func nativeAgentCatalogRequirements(extra []string) []agentgateway.CatalogRequir
 	}
 	seen := make(map[string]struct{}, len(base)+len(extra))
 	requirements := make([]agentgateway.CatalogRequirement, 0, len(base)+len(extra))
-	for _, action := range append(base, extra...) {
+	for index, action := range append(base, extra...) {
 		action = strings.TrimSpace(action)
 		if action == "" {
 			continue
@@ -241,7 +242,16 @@ func nativeAgentCatalogRequirements(extra []string) []agentgateway.CatalogRequir
 			continue
 		}
 		seen[action] = struct{}{}
-		requirements = append(requirements, agentgateway.CatalogRequirement{Action: action})
+		requirement := agentgateway.NewCatalogRequirement(action)
+		// Every baseline binding is a release gate. If the generated digest table
+		// is missing an action (for example while Agent is adding a new schema),
+		// readiness must fail closed rather than accepting a self-consistent but
+		// incompatible descriptor. Explicit extras remain optional and use the
+		// normal self-consistency proof unless they are pinned in the table.
+		if index < len(base) {
+			requirement.RequireSchemaPin = true
+		}
+		requirements = append(requirements, requirement)
 	}
 	return requirements
 }

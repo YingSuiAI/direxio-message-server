@@ -62,7 +62,12 @@ func TestExternalNativeAgentModeDoesNotConstructEmbeddedRuntime(t *testing.T) {
 	if handler == nil {
 		t.Fatal("external mode must preserve the agent.chat action surface")
 	}
-	if _, actionErr := handler(context.Background(), map[string]any{"message": "hello"}); actionErr != nil {
+	if _, actionErr := handler(context.Background(), map[string]any{
+		"message":                "hello",
+		"model_profile_id":       "00000000-0000-4000-8000-000000000001",
+		"model_profile_revision": int64(1),
+		"credential_version":     int64(1),
+	}); actionErr != nil {
 		t.Fatalf("external agent action failed: %v", actionErr)
 	}
 	if probe.invoked != "agent.chat" {

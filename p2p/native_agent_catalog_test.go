@@ -136,9 +136,46 @@ func TestNativeAgentCatalogReadinessGenerationFence(t *testing.T) {
 
 func TestNativeAgentCatalogRequirementsKeepOptionalCapabilitiesExplicit(t *testing.T) {
 	requirements := nativeAgentCatalogRequirements(nil)
+	requiredActions := map[string]bool{
+		"agent.models.list":               false,
+		"agent.web_search.config.get":     false,
+		"agent.web_search.config.update":  false,
+		"agent.web_search.test":           false,
+		"agent.knowledge.config.get":      false,
+		"agent.knowledge.config.update":   false,
+		"agent.knowledge.sources.list":    false,
+		"agent.knowledge.sources.get":     false,
+		"agent.knowledge.sources.delete":  false,
+		"agent.knowledge.upload.start":    false,
+		"agent.knowledge.upload.chunk":    false,
+		"agent.knowledge.upload.finish":   false,
+		"agent.knowledge.memory.create":   false,
+		"agent.knowledge.memories.list":   false,
+		"agent.knowledge.memories.get":    false,
+		"agent.knowledge.memories.update": false,
+		"agent.knowledge.memories.delete": false,
+		"agent.knowledge.search":          false,
+		"agent.knowledge.memory.search":   false,
+		"agent.knowledge.index":           false,
+		"agent.knowledge.status":          false,
+	}
 	for _, requirement := range requirements {
+		if !requirement.RequireSchemaPin {
+			t.Errorf("baseline Native Agent action %q is not schema-pin gated", requirement.Action)
+		}
+		if len(requirement.InputSchemaDigest) != 32 || len(requirement.ResultSchemaDigest) != 32 {
+			t.Errorf("baseline Native Agent action %q is missing pinned schema digests", requirement.Action)
+		}
 		if requirement.Action == "agent.voice.session.create" {
 			t.Fatal("optional voice capability entered the base readiness catalog")
+		}
+		if _, tracked := requiredActions[requirement.Action]; tracked {
+			requiredActions[requirement.Action] = true
+		}
+	}
+	for action, found := range requiredActions {
+		if !found {
+			t.Errorf("required Native Agent action %q is missing from the readiness catalog", action)
 		}
 	}
 

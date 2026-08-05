@@ -201,33 +201,65 @@ func TestNativeAgentReferenceSchemaMatchesStrictProducerShape(t *testing.T) {
 	}
 }
 
-func TestNativeAgentWebSearchSchemaKeepsCredentialWriteOnly(t *testing.T) {
+func TestNativeAgentWebSearchSchemasUseServerStoredCredential(t *testing.T) {
+	getSpec, ok := ActionSpecFor("agent.web_search.config.get")
+	if !ok || getSpec.Schema == nil {
+		t.Fatal("agent.web_search.config.get must publish a schema")
+	}
+	updateSpec, ok := ActionSpecFor("agent.web_search.config.update")
+	if !ok || updateSpec.Schema == nil {
+		t.Fatal("agent.web_search.config.update must publish a schema")
+	}
+	if !updateSpec.Schema.Request["idempotency_key"].Required || !updateSpec.Schema.Request["expected_revision"].Required {
+		t.Fatalf("web search update concurrency fields = %#v", updateSpec.Schema.Request)
+	}
+	if !updateSpec.Schema.Request["api_key"].WriteOnly {
+		t.Fatal("web search update API key must be write-only")
+	}
+	for _, spec := range []ActionSpec{getSpec, updateSpec} {
+		for _, field := range []string{"enabled", "provider", "api_key_configured", "revision"} {
+			if !spec.Schema.Response[field].Required {
+				t.Errorf("%s response field %s must be required", spec.Name, field)
+			}
+		}
+		if _, exposed := spec.Schema.Response["api_key"]; exposed {
+			t.Errorf("%s response must not publish an API key", spec.Name)
+		}
+	}
 	testSpec, ok := ActionSpecFor("agent.web_search.test")
-	if !ok || testSpec.Schema == nil {
-		t.Fatal("agent.web_search.test must publish a schema")
-	}
-	credentials := testSpec.Schema.Request["tool_credentials"]
-	if !credentials.Required || !credentials.WriteOnly || credentials.Type != "object" {
-		t.Fatalf("web search credentials field = %#v", credentials)
-	}
-	webSearch := credentials.Properties["web_search"]
-	apiKey := webSearch.Properties["api_key"]
-	if !webSearch.Required || !webSearch.WriteOnly ||
-		!webSearch.Properties["enabled"].Required ||
-		!apiKey.Required || !apiKey.WriteOnly {
-		t.Fatalf("web search API key must be nested and write-only: %#v", credentials)
-	}
-	if _, exposed := testSpec.Schema.Response["api_key"]; exposed {
-		t.Fatal("web search response must not publish an API key")
+	if !ok || testSpec.Schema == nil || len(testSpec.Schema.Request) != 0 {
+		t.Fatalf("agent.web_search.test must use the stored credential without request secrets: %#v", testSpec)
 	}
 	for _, action := range []string{"agent.chat", "agent.chat.stream"} {
 		spec, ok := ActionSpecFor(action)
 		if !ok || spec.Schema == nil {
 			t.Fatalf("%s must publish a schema", action)
 		}
-		field := spec.Schema.Request["tool_credentials"]
-		if field.Type != "object" || !field.WriteOnly || !field.Properties["web_search"].Properties["api_key"].WriteOnly {
-			t.Fatalf("%s tool credentials schema = %#v", action, field)
+		if _, legacy := spec.Schema.Request["tool_credentials"]; legacy {
+			t.Fatalf("%s must not publish request-scoped web-search credentials", action)
 		}
+	}
+}
+
+func TestNativeAgentModelCatalogSchemaIsSeparateFromProfiles(t *testing.T) {
+	spec, ok := ActionSpecFor("agent.models.list")
+	if !ok || spec.Schema == nil {
+		t.Fatal("agent.models.list must publish a provider catalog schema")
+	}
+	if !spec.Schema.Request["api_key"].WriteOnly {
+		t.Fatal("provider catalog API key must remain write-only")
+	}
+	modelKind := spec.Schema.Request["model_kind"]
+	if modelKind.Presence == nil || modelKind.Presence.Omitted != "conversation" {
+		t.Fatalf("model_kind omission contract = %#v", modelKind.Presence)
+	}
+	if !spec.Schema.Response["models"].Required || !spec.Schema.Response["providers"].Required {
+		t.Fatalf("provider catalog response = %#v", spec.Schema.Response)
+	}
+	if !spec.Schema.Response["models"].Items.Properties["id"].Required || !spec.Schema.Response["models"].Items.Properties["provider"].Required {
+		t.Fatal("provider catalog model id and provider must be required")
+	}
+	if _, profiles := spec.Schema.Response["profiles"]; profiles {
+		t.Fatal("provider catalog must not publish model profiles")
 	}
 }

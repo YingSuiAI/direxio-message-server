@@ -58,6 +58,9 @@ func (m *Module) Stream(ctx context.Context, action string, params map[string]an
 	if m == nil || m.runner == nil {
 		return fmt.Errorf("external native agent gateway is not configured")
 	}
+	if err := agentgateway.ValidateActionRequest(action, params); err != nil {
+		return err
+	}
 	return m.runner.Stream(ctx, strings.TrimSpace(action), cloneMap(params), emit)
 }
 
@@ -70,6 +73,9 @@ func (m *Module) DurableStream(ctx context.Context, ownerID, action string, para
 	}
 	if strings.TrimSpace(action) != "agent.chat.stream" {
 		return fmt.Errorf("%w: %q", agentgateway.ErrUnsupportedAction, action)
+	}
+	if err := agentgateway.ValidateActionRequest(action, params); err != nil {
+		return err
 	}
 	turnID := strings.TrimSpace(actionbase.String(params["turn_id"]))
 	conversationID := agentstream.ConversationID(params)
@@ -186,6 +192,9 @@ func (m *Module) invoke(action string) actionbase.Handler {
 		if m == nil || m.runner == nil {
 			return nil, actionbase.StatusError(http.StatusBadGateway, "external native agent gateway is not configured")
 		}
+		if err := agentgateway.ValidateActionRequest(action, params); err != nil {
+			return nil, externalAgentActionError(err)
+		}
 		result, err := m.runner.Invoke(ctx, strings.TrimSpace(action), cloneMap(params))
 		if err != nil {
 			return nil, externalAgentActionError(err)
@@ -201,22 +210,32 @@ func externalAgentActionError(err error) *actionbase.Error {
 	if errors.Is(err, agentgateway.ErrUnsupportedAction) {
 		return actionbase.StatusError(http.StatusNotImplemented, err.Error())
 	}
+	if errors.Is(err, agentgateway.ErrInvalidActionRequest) {
+		return actionbase.BadRequest(err.Error())
+	}
+	if errors.Is(err, agentgateway.ErrInvalidActionResult) {
+		return actionbase.StatusError(http.StatusBadGateway, "external native agent returned an invalid response")
+	}
+	var capabilityErr *agentgateway.CapabilityError
+	if errors.As(err, &capabilityErr) {
+		return actionbase.StatusError(agentgateway.CapabilityHTTPStatus(capabilityErr.Code), capabilityErr.Error())
+	}
 	message := strings.ToLower(strings.TrimSpace(err.Error()))
 	switch {
 	case strings.Contains(message, "forbidden"), strings.Contains(message, "permission"), strings.Contains(message, "scope"):
-		return actionbase.StatusError(http.StatusForbidden, err.Error())
+		return actionbase.StatusError(http.StatusForbidden, "external native agent denied the request")
 	case strings.Contains(message, "not found"), strings.Contains(message, "does not exist"):
-		return actionbase.StatusError(http.StatusNotFound, err.Error())
+		return actionbase.StatusError(http.StatusNotFound, "external native agent resource was not found")
 	case strings.Contains(message, "conflict"), strings.Contains(message, "revision"), strings.Contains(message, "idempotency"):
-		return actionbase.StatusError(http.StatusConflict, err.Error())
+		return actionbase.StatusError(http.StatusConflict, "external native agent reported a conflict")
 	case strings.Contains(message, "invalid"), strings.Contains(message, "required"), strings.Contains(message, "malformed"), strings.Contains(message, "server-derived"):
-		return actionbase.BadRequest(err.Error())
+		return actionbase.BadRequest("external native agent rejected the request")
 	case strings.Contains(message, "not ready"), strings.Contains(message, "unavailable"), strings.Contains(message, "not configured"):
-		return actionbase.StatusError(http.StatusServiceUnavailable, err.Error())
+		return actionbase.StatusError(http.StatusServiceUnavailable, "external native agent is unavailable")
 	case strings.Contains(message, "deadline exceeded"), strings.Contains(message, "timeout"):
-		return actionbase.StatusError(http.StatusGatewayTimeout, err.Error())
+		return actionbase.StatusError(http.StatusGatewayTimeout, "external native agent request timed out")
 	default:
-		return actionbase.StatusError(http.StatusBadGateway, err.Error())
+		return actionbase.StatusError(http.StatusBadGateway, "external native agent operation failed")
 	}
 }
 
@@ -243,7 +262,7 @@ func (m *Module) currentOwnerID() string {
 }
 
 var runtimeActions = []string{
-	"agent.config.propose_patch", "agent.chat", "agent.web_search.test",
+	"agent.config.propose_patch", "agent.chat", "agent.web_search.config.get", "agent.web_search.config.update", "agent.web_search.test",
 	"agent.chat.conversations.create", "agent.chat.conversations.list", "agent.chat.conversations.get", "agent.chat.conversations.rename", "agent.chat.conversations.delete", "agent.context.compress", "agent.models.list", "agent.runtime.inspect", "agent.runtime.install", "agent.runtime.which", "agent.runtime.run", "agent.skills.list", "agent.skills.install", "agent.skills.enable", "agent.skills.disable", "agent.skills.uninstall", "agent.skills.registry.search", "agent.mcp.servers.list", "agent.mcp.servers.install", "agent.mcp.servers.enable", "agent.mcp.servers.disable", "agent.mcp.servers.uninstall", "agent.mcp.registry.search", "agent.knowledge.config.get", "agent.knowledge.config.update", "agent.knowledge.sources.list", "agent.knowledge.sources.delete", "agent.knowledge.upload.start", "agent.knowledge.upload.chunk", "agent.knowledge.upload.finish", "agent.knowledge.memory.create", "agent.knowledge.memories.list", "agent.knowledge.memories.update", "agent.knowledge.memories.delete", "agent.knowledge.search", "agent.knowledge.status", "agent.contacts.list", "agent.contacts.search", "agent.rooms.search", "agent.messages.list", "agent.messages.send", "agent.room_members.list", "agent.channel_posts.list", "agent.channel_comments.list", "agent.channel_comments.create", "agent.summarize",
 }
 

@@ -5096,11 +5096,15 @@
               }
             }
           },
-          "client_model_profile_id": {
-            "type": "string"
-          },
           "conversation_id": {
             "type": "string"
+          },
+          "credential_version": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "positive_integer"
+            }
           },
           "message": {
             "type": "string"
@@ -5109,38 +5113,21 @@
             "type": "array"
           },
           "model_profile_id": {
-            "type": "string"
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "exact_nonempty_bytes"
+            }
+          },
+          "model_profile_revision": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "positive_integer"
+            }
           },
           "prompt": {
             "type": "string"
-          },
-          "tool_credentials": {
-            "type": "object",
-            "write_only": true,
-            "properties": {
-              "web_search": {
-                "type": "object",
-                "required": true,
-                "write_only": true,
-                "properties": {
-                  "api_key": {
-                    "type": "string",
-                    "required": true,
-                    "write_only": true
-                  },
-                  "enabled": {
-                    "type": "boolean",
-                    "required": true
-                  },
-                  "provider": {
-                    "type": "string",
-                    "presence": {
-                      "omitted": "tavily"
-                    }
-                  }
-                }
-              }
-            }
           },
           "turn_id": {
             "type": "string"
@@ -5223,11 +5210,15 @@
               }
             }
           },
-          "client_model_profile_id": {
-            "type": "string"
-          },
           "conversation_id": {
             "type": "string"
+          },
+          "credential_version": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "positive_integer"
+            }
           },
           "message": {
             "type": "string"
@@ -5236,38 +5227,21 @@
             "type": "array"
           },
           "model_profile_id": {
-            "type": "string"
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "exact_nonempty_bytes"
+            }
+          },
+          "model_profile_revision": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "positive_integer"
+            }
           },
           "prompt": {
             "type": "string"
-          },
-          "tool_credentials": {
-            "type": "object",
-            "write_only": true,
-            "properties": {
-              "web_search": {
-                "type": "object",
-                "required": true,
-                "write_only": true,
-                "properties": {
-                  "api_key": {
-                    "type": "string",
-                    "required": true,
-                    "write_only": true
-                  },
-                  "enabled": {
-                    "type": "boolean",
-                    "required": true
-                  },
-                  "provider": {
-                    "type": "string",
-                    "presence": {
-                      "omitted": "tavily"
-                    }
-                  }
-                }
-              }
-            }
           },
           "turn_id": {
             "type": "string"
@@ -5319,42 +5293,123 @@
       }
     },
     {
-      "name": "agent.web_search.test",
+      "name": "agent.web_search.config.get",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "response": {
+          "api_key_configured": {
+            "type": "boolean",
+            "required": true
+          },
+          "api_key_hint": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean",
+            "required": true
+          },
+          "provider": {
+            "type": "string",
+            "required": true
+          },
+          "revision": {
+            "type": "integer",
+            "required": true
+          },
+          "tested_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.web_search.config.update",
       "auth": "owner",
       "transport": "http_and_ws_request",
       "schema": {
         "request": {
-          "tool_credentials": {
-            "type": "object",
-            "required": true,
+          "api_key": {
+            "type": "string",
             "write_only": true,
-            "properties": {
-              "web_search": {
-                "type": "object",
-                "required": true,
-                "write_only": true,
-                "properties": {
-                  "api_key": {
-                    "type": "string",
-                    "required": true,
-                    "write_only": true
-                  },
-                  "enabled": {
-                    "type": "boolean",
-                    "required": true
-                  },
-                  "provider": {
-                    "type": "string",
-                    "presence": {
-                      "omitted": "tavily"
-                    }
-                  }
-                }
-              }
+            "presence": {
+              "omitted": "preserve_existing",
+              "present": "rotate_write_only",
+              "empty": "rejected"
+            }
+          },
+          "api_key_clear": {
+            "type": "boolean",
+            "presence": {
+              "omitted": "preserve_existing",
+              "present": "clear_when_true"
+            }
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "expected_revision": {
+            "type": "integer",
+            "required": true
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          },
+          "provider": {
+            "type": "string",
+            "presence": {
+              "omitted": "preserve_existing",
+              "present": "tavily"
             }
           }
         },
         "response": {
+          "api_key_configured": {
+            "type": "boolean",
+            "required": true
+          },
+          "api_key_hint": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean",
+            "required": true
+          },
+          "provider": {
+            "type": "string",
+            "required": true
+          },
+          "revision": {
+            "type": "integer",
+            "required": true
+          },
+          "tested_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.web_search.test",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "response": {
+          "api_key_configured": {
+            "type": "boolean",
+            "required": true
+          },
+          "enabled": {
+            "type": "boolean",
+            "required": true
+          },
           "ok": {
             "type": "boolean",
             "required": true
@@ -5365,6 +5420,14 @@
           },
           "result_count": {
             "type": "integer",
+            "required": true
+          },
+          "revision": {
+            "type": "integer",
+            "required": true
+          },
+          "tested_at": {
+            "type": "string",
             "required": true
           }
         }
@@ -5726,7 +5789,101 @@
     {
       "name": "agent.models.list",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "api_key": {
+            "type": "string",
+            "write_only": true
+          },
+          "base_url": {
+            "type": "string"
+          },
+          "client_model_profile_id": {
+            "type": "string"
+          },
+          "model_kind": {
+            "type": "string",
+            "presence": {
+              "omitted": "conversation",
+              "present": "conversation_embedding_or_speech"
+            }
+          },
+          "model_profile_id": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          }
+        },
+        "response": {
+          "models": {
+            "type": "array",
+            "required": true,
+            "items": {
+              "type": "object",
+              "properties": {
+                "context_length": {
+                  "type": "integer"
+                },
+                "context_window": {
+                  "type": "integer"
+                },
+                "id": {
+                  "type": "string",
+                  "required": true
+                },
+                "input_modalities": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "max_output_tokens": {
+                  "type": "integer"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "output_modalities": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "provider": {
+                  "type": "string",
+                  "required": true
+                }
+              }
+            }
+          },
+          "providers": {
+            "type": "array",
+            "required": true,
+            "items": {
+              "type": "object",
+              "properties": {
+                "default_base_url": {
+                  "type": "string"
+                },
+                "dynamic_models": {
+                  "type": "boolean",
+                  "required": true
+                },
+                "provider": {
+                  "type": "string",
+                  "required": true
+                },
+                "requires_api_key": {
+                  "type": "boolean",
+                  "required": true
+                }
+              }
+            }
+          }
+        }
+      }
     },
     {
       "name": "agent.runtime.inspect",

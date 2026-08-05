@@ -141,6 +141,12 @@ probe proves every required action and schema. A successful proof is a short
 lease. The probe loop renews before expiry with enough margin for both the
 probe interval and timeout.
 
+For each required operation, the probe verifies that input and result schema
+JSON is present, each advertised schema digest matches its bytes, and pinned
+Agent Core schema identities match the current contract. Rehashing the catalog
+does not make an empty, incompatible, or stale schema acceptable; schema
+contents are never included in readiness errors or logs.
+
 A failed proactive renewal may retain the previous proof only until that same
 account generation's lease expires. Initial failure, expired lease, peer or
 account-generation change, schema mismatch, authentication failure, or loop

@@ -8,8 +8,9 @@ func nativeAgentChatSchema() *ActionSchema {
 	return &ActionSchema{Request: map[string]ActionFieldSchema{
 		"prompt": {Type: "string"}, "message": {Type: "string"}, "messages": {Type: "array"},
 		"conversation_id": {Type: "string"}, "turn_id": {Type: "string"}, "after_seq": {Type: "integer"},
-		"model_profile_id": {Type: "string"}, "client_model_profile_id": {Type: "string"},
-		"tool_credentials": webSearchToolCredentialsField(false),
+		"model_profile_id":       {Type: "string", Required: true, Presence: &ActionPresenceSchema{Present: "exact_nonempty_bytes"}},
+		"model_profile_revision": {Type: "integer", Required: true, Presence: &ActionPresenceSchema{Present: "positive_integer"}},
+		"credential_version":     {Type: "integer", Required: true, Presence: &ActionPresenceSchema{Present: "positive_integer"}},
 		"attachments": {Type: "array", Items: &ActionFieldSchema{Type: "object", Properties: map[string]ActionFieldSchema{
 			"type": {Type: "string"}, "name": {Type: "string"}, "mime_type": {Type: "string", Required: true}, "data_base64": {Type: "string", Required: true, WriteOnly: true},
 		}}},

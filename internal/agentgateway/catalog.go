@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -23,6 +24,18 @@ var ErrCatalogInvalid = errors.New("native agent capability catalog is invalid")
 // report external Native Agent readiness.
 type CatalogRequirement struct {
 	Action string
+	// InputSchemaDigest and ResultSchemaDigest pin the exact Agent descriptor
+	// schema identities expected for this action. Empty values retain the
+	// generic self-consistency proof for optional/extension actions; required
+	// baseline actions with a known Agent contract are populated by
+	// NewCatalogRequirement.
+	InputSchemaDigest  []byte
+	ResultSchemaDigest []byte
+	// RequireSchemaPin makes an empty expected digest a configuration error.
+	// Readiness baseline actions set this flag so a missing generated pin fails
+	// closed instead of silently degrading to self-consistency only. Optional
+	// extension actions may leave it false.
+	RequireSchemaPin bool
 }
 
 // ProbeCatalog performs one bounded, authenticated catalog probe. The
@@ -84,15 +97,55 @@ func ValidateCatalog(catalog *capv1.DescribeCapabilitiesResponse, requirements [
 		if !descriptor.GetReadiness() {
 			return fmt.Errorf("%w: capability %q is not ready", ErrCatalogInvalid, binding.capabilityID)
 		}
-		found := false
-		for _, operation := range descriptor.GetOperations() {
-			if operation != nil && operation.GetOperationId() == binding.operation {
-				found = true
+		var operation *capv1.OperationDescriptor
+		for _, candidate := range descriptor.GetOperations() {
+			if candidate != nil && candidate.GetOperationId() == binding.operation {
+				operation = candidate
 				break
 			}
 		}
-		if !found {
+		if operation == nil {
 			return fmt.Errorf("%w: operation %q/%q for action %q is not advertised", ErrCatalogInvalid, binding.capabilityID, binding.operation, action)
+		}
+		if requirement.RequireSchemaPin && (len(requirement.InputSchemaDigest) != sha256.Size || len(requirement.ResultSchemaDigest) != sha256.Size) {
+			return fmt.Errorf("%w: action %q has no pinned schema identity", ErrCatalogInvalid, action)
+		}
+		if err := validateOperationSchemas(operation, requirement); err != nil {
+			return fmt.Errorf("%w: action %q: %v", ErrCatalogInvalid, action, err)
+		}
+	}
+	return nil
+}
+
+func validateOperationSchemas(operation *capv1.OperationDescriptor, requirement CatalogRequirement) error {
+	if operation == nil {
+		return errors.New("operation descriptor is missing")
+	}
+	inputSchema := operation.GetInputSchemaJson()
+	if strings.TrimSpace(inputSchema) == "" || !json.Valid([]byte(inputSchema)) {
+		return errors.New("input schema is missing or invalid")
+	}
+	inputDigest := sha256.Sum256([]byte(inputSchema))
+	if len(operation.GetInputSchemaDigest()) != sha256.Size || !bytes.Equal(operation.GetInputSchemaDigest(), inputDigest[:]) {
+		return errors.New("input schema digest is missing or mismatched")
+	}
+	if len(requirement.InputSchemaDigest) > 0 {
+		if len(requirement.InputSchemaDigest) != sha256.Size || !bytes.Equal(requirement.InputSchemaDigest, inputDigest[:]) {
+			return errors.New("input schema does not match the expected contract")
+		}
+	}
+
+	resultSchema := operation.GetResultSchemaJson()
+	if strings.TrimSpace(resultSchema) == "" || !json.Valid([]byte(resultSchema)) {
+		return errors.New("result schema is missing or invalid")
+	}
+	resultDigest := sha256.Sum256([]byte(resultSchema))
+	if len(operation.GetResultSchemaDigest()) != sha256.Size || !bytes.Equal(operation.GetResultSchemaDigest(), resultDigest[:]) {
+		return errors.New("result schema digest is missing or mismatched")
+	}
+	if len(requirement.ResultSchemaDigest) > 0 {
+		if len(requirement.ResultSchemaDigest) != sha256.Size || !bytes.Equal(requirement.ResultSchemaDigest, resultDigest[:]) {
+			return errors.New("result schema does not match the expected contract")
 		}
 	}
 	return nil

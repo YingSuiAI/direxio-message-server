@@ -33,10 +33,26 @@ capability live.
 - `dirextalk-agent` owns Native Agent conversations, models, encrypted provider credentials, knowledge and long-term memory, tasks, schedules, Skills/MCP lifecycle, Execution V2, AWS state, and runtime data. `dirextalk-message-server` owns the Flutter-facing owner-authenticated `agent.*` actions and `client.native_agent_stream` / `server.native_agent_stream.*` frames, and proxies them to the external Agent Capability gRPC service. Flutter never connects to `dirextalk-agent` directly.
 - The message server exposes product contacts, rooms, members, messages, and channel content back to the Agent through the separate Product Capability gRPC service. A Product Capability handler must not synchronously call back into Agent. Both directions carry the authenticated owner, account generation, granted scopes, operation identity, and call-chain fence; loops fail closed.
 - Native Agent is not installed, enabled, configured, or invoked through `plugins.*`. Backend `plugins.*` actions remain for non-Agent plugins.
-- Model-backed Native Agent chat and compression resolve the owner’s Agent-owned default `conversation` model profile. Flutter configures profiles through the proxied model-profile actions and sends only profile identifiers and exact revision pins; it does not persist or send inline API keys after server-profile synchronization. Model API keys are write-only and must not be returned, logged, or injected into unrelated extension/runtime state.
-- Native Agent BYOK web search is request-scoped. The owner may call `agent.web_search.test` over HTTP or the owner WebSocket with `tool_credentials.web_search.enabled=true`, `provider=tavily`, and a Tavily `api_key`; the key is write-only and is never stored in Agent config, model profiles, durable turns, conversation memory, logs, errors, or results. The same valid request credential adds the compiled `web_search` Eino tool to that chat turn; without it, the tool is absent.
+- Model-backed Native Agent `agent.chat` and `agent.chat.stream` require the owner-selected `model_profile_id` together with positive `model_profile_revision` and `credential_version` pins. The message server forwards those pins unchanged; inline profiles, tool credentials, legacy client profile ids, and default-profile fallback are rejected before capability execution. Compression and other server-owned workflows retain their separately documented default behavior. Flutter configures profiles through the proxied model-profile actions and sends only profile identifiers and exact revision pins; it does not persist or send inline API keys after server-profile synchronization. Model API keys are write-only and must not be returned, logged, or injected into unrelated extension/runtime state.
+- Native Agent BYOK web search uses an Agent-owned encrypted Tavily credential.
+  Owners read safe state with `agent.web_search.config.get`, update it with
+  revision-checked `agent.web_search.config.update`, and verify it with
+  `agent.web_search.test`. The API key is accepted only by config update, is
+  write-only, and is never returned through config, test, chat, logs, errors,
+  durable turns, or events. Readback exposes only configured state and the
+  non-secret fixed hint `configured`.
+- The current Web Search provider set is exactly `tavily`. Future providers
+  extend the capability with provider-specific schemas, validation, adapters,
+  and encrypted fields; neither ProductCore nor Agent exposes an arbitrary
+  key/value credential store.
+- Chat and stream requests do not accept `tool_credentials`; the compiled
+  `web_search` Eino tool is available only from enabled, configured Agent-owned
+  web-search state. This is a single credential path, not a request fallback.
 - Web search performs one bounded HTTPS Tavily request (a local injected endpoint is only a test seam), rejects redirects, trims queries to 1,000 Unicode characters, clamps and re-enforces `max_results` to 1–10, limits provider bodies to 2 MiB, and applies a 15-second timeout. Responses contain only bounded answer/title/content previews, URLs, scores, and provider metadata. Provider bodies and credential values are not returned on errors.
-- Durable Native Agent turn digests and events are secret-free. A reconnect/resume request may subscribe to an existing turn without resending or recovering `tool_credentials`; credentials remain available only to the original in-memory request execution and are never reconstructed from durable state.
+- Durable Native Agent turn digests and events are secret-free. Reconnect and
+  resume requests never carry, persist, or reconstruct a credential from turn
+  state; the Agent resolves web-search configuration through its encrypted
+  owner-scoped store.
 - With persistent server conversation memory, the client sends only the current prompt, `conversation_id`, durable `turn_id`, and attachment references. It does not replay `messages`; the server rejects such history, loads the authoritative transcript, automatically summarizes older context against the model token budget, and generates the first successful conversation title with a redacted first-instruction fallback.
 - Native Agent deployment planning treats an empty target inventory as a signal
   to compare and reserve a new AWS target, not as a terminal error. The bounded
@@ -55,7 +71,13 @@ capability live.
   operations are published. A product-capability bridge by itself advertises
   neither token.
 - Supported model-provider identifiers are `openai`, `anthropic`, `deepseek`, `gemini`, `xai`, `openai_compatible`, and `openrouter`. `litellm`, `vertex`, and unknown identifiers are rejected; clients use `openai_compatible` for custom compatible endpoints.
-- `agent.models.list` preserves upstream `input_modalities` only when the
+- `agent.models.list` is the provider/runtime catalog backed by Agent Core
+  `agent.info.v1/list_models`; it returns `models` and `providers` and remains
+  separate from `agent.model_profiles.list` and
+  `agent.core.model_profiles.list`, which return persisted `profiles` from
+  `agent.models.v1/list_models`. An omitted `model_kind` is canonicalized to
+  `conversation` at the gateway boundary. The catalog preserves upstream
+  `input_modalities` only when the
   provider explicitly returns it on the model or its `architecture`. The
   server normalizes known `text` and `image` values and never infers image
   support from a model ID, name, provider, or URL. A client may preselect its

@@ -1,6 +1,7 @@
 package agentgateway
 
 import (
+	"errors"
 	"reflect"
 	"sort"
 	"testing"
@@ -45,6 +46,30 @@ func TestPublicResultAdaptersPreserveLegacyEnvelopes(t *testing.T) {
 		{"model list", "agent.model_profiles.list", map[string]any{"Profiles": []any{}, "NextCursor": "p"}, func(t *testing.T, got map[string]any) {
 			if _, ok := got["profiles"]; !ok || got["next_page_token"] != "p" {
 				t.Fatalf("model list = %#v", got)
+			}
+		}},
+		{"provider model catalog", "agent.models.list", map[string]any{
+			"Models":    []any{map[string]any{"ID": "openai/gpt-4o", "Name": "GPT-4o", "Provider": "openrouter", "InputModalities": []any{"text", "image"}, "pricing": map[string]any{"prompt": "1"}}},
+			"Providers": []any{map[string]any{"Provider": "openrouter", "DefaultBaseURL": "https://openrouter.ai/api/v1", "RequiresAPIKey": true, "DynamicModels": true}},
+		}, func(t *testing.T, got map[string]any) {
+			if keys := sortedMapKeys(got); !reflect.DeepEqual(keys, []string{"models", "providers"}) {
+				t.Fatalf("model catalog keys=%v value=%#v", keys, got)
+			}
+			models := got["models"].([]any)
+			model := models[0].(map[string]any)
+			if model["id"] != "openai/gpt-4o" || model["name"] != "GPT-4o" || !reflect.DeepEqual(model["input_modalities"], []any{"text", "image"}) {
+				t.Fatalf("model catalog model = %#v", model)
+			}
+			if _, leaked := model["pricing"]; leaked {
+				t.Fatalf("model catalog retained non-schema field: %#v", model)
+			}
+			if _, leakedAlias := model["ID"]; leakedAlias {
+				t.Fatalf("model catalog retained non-canonical alias: %#v", model)
+			}
+			providers := got["providers"].([]any)
+			provider := providers[0].(map[string]any)
+			if provider["provider"] != "openrouter" || provider["default_base_url"] != "https://openrouter.ai/api/v1" || provider["requires_api_key"] != true || provider["dynamic_models"] != true {
+				t.Fatalf("model catalog provider = %#v", provider)
 			}
 		}},
 		{"source list", "agent.knowledge.sources.list", map[string]any{"Sources": []any{map[string]any{"ID": "s1", "SizeBytes": float64(4)}}, "NextPageToken": "p"}, func(t *testing.T, got map[string]any) {
@@ -114,11 +139,127 @@ func TestPublicResultAdaptersPreserveLegacyEnvelopes(t *testing.T) {
 				t.Fatalf("chat = %#v", got)
 			}
 		}},
+		{"web search config drops secrets", "agent.web_search.config.get", map[string]any{"Enabled": true, "Provider": "tavily", "APIKeyConfigured": true, "APIKeyHint": "tvly-secret-must-not-leak", "Revision": float64(2), "TestedAt": "tested", "UpdatedAt": "updated", "api_key": "must-not-leak", "secret": "must-not-leak"}, func(t *testing.T, got map[string]any) {
+			if keys := sortedMapKeys(got); !reflect.DeepEqual(keys, []string{"api_key_configured", "api_key_hint", "enabled", "provider", "revision", "tested_at", "updated_at"}) {
+				t.Fatalf("web search config keys=%v value=%#v", keys, got)
+			}
+			if got["provider"] != "tavily" || got["api_key_hint"] != "configured" {
+				t.Fatalf("web search config = %#v", got)
+			}
+		}},
+		{"web search config omits unconfigured hint", "agent.web_search.config.get", map[string]any{"enabled": false, "provider": "tavily", "api_key_configured": false, "api_key_hint": "tvly-secret-must-not-leak", "revision": float64(0)}, func(t *testing.T, got map[string]any) {
+			if _, exposed := got["api_key_hint"]; exposed {
+				t.Fatalf("unconfigured web search exposed a hint: %#v", got)
+			}
+		}},
+		{"web search test exact projection", "agent.web_search.test", map[string]any{"OK": true, "Provider": "tavily", "ResultCount": float64(1), "TestedAt": "tested", "Enabled": true, "APIKeyConfigured": true, "Revision": float64(3), "api_key_hint": "drop", "provider_body": "drop"}, func(t *testing.T, got map[string]any) {
+			if keys := sortedMapKeys(got); !reflect.DeepEqual(keys, []string{"api_key_configured", "enabled", "ok", "provider", "result_count", "revision", "tested_at"}) {
+				t.Fatalf("web search test keys=%v value=%#v", keys, got)
+			}
+		}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			test.check(t, adaptActionResult(test.action, test.input))
+			got, err := adaptActionResult(test.action, test.input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			test.check(t, got)
 		})
+	}
+}
+
+func TestModelCatalogResultAdapterDropsUnknownModelFieldsAtGatewayBoundary(t *testing.T) {
+	got := modelCatalogResult(map[string]any{
+		"models": []any{map[string]any{
+			"ID":                  "model-1",
+			"Name":                "Model 1",
+			"Provider":            "openrouter",
+			"ContextLength":       float64(128000),
+			"MaxOutputTokens":     float64(4096),
+			"InputModalities":     []any{"text"},
+			"OutputModalities":    []any{"text"},
+			"API_KEY":             "canary-key",
+			"Authorization":       "Bearer canary-key",
+			"nested":              map[string]any{"api_key": "canary-key"},
+			"unknown_alias_field": "drop-me",
+		}},
+		"providers": []any{},
+	})
+	models := got["models"].([]any)
+	if len(models) != 1 {
+		t.Fatalf("model catalog models = %#v", got)
+	}
+	model := models[0].(map[string]any)
+	wantKeys := []string{"context_length", "id", "input_modalities", "max_output_tokens", "name", "output_modalities", "provider"}
+	if keys := sortedMapKeys(model); !reflect.DeepEqual(keys, wantKeys) {
+		t.Fatalf("gateway model projection keys=%v value=%#v", keys, model)
+	}
+	if model["id"] != "model-1" || model["name"] != "Model 1" || model["provider"] != "openrouter" {
+		t.Fatalf("gateway model canonical fields = %#v", model)
+	}
+}
+
+func TestModelCatalogResultAdapterRejectsEntriesThatViolatePublishedSchema(t *testing.T) {
+	_, err := adaptActionResult("agent.models.list", map[string]any{
+		"models": []any{
+			map[string]any{"id": "valid", "provider": "openrouter", "name": "Valid", "context_length": float64(128000), "input_modalities": []any{"text"}},
+			map[string]any{"id": "missing-provider"},
+			map[string]any{"id": float64(7), "provider": "openrouter"},
+			map[string]any{"id": "bad-provider", "provider": true},
+			map[string]any{"id": "bad-name", "provider": "openrouter", "name": float64(1)},
+			map[string]any{"id": "fractional", "provider": "openrouter", "context_length": 1.5},
+			map[string]any{"id": "bad-modalities", "provider": "openrouter", "input_modalities": []any{"text", float64(1)}},
+			"not-an-object",
+		},
+		"providers": []any{
+			map[string]any{"provider": "openrouter", "default_base_url": "https://openrouter.ai/api/v1", "requires_api_key": true, "dynamic_models": true},
+			map[string]any{"provider": "missing-dynamic", "requires_api_key": true},
+			map[string]any{"provider": float64(1), "requires_api_key": true, "dynamic_models": true},
+			map[string]any{"provider": "bad-bool", "requires_api_key": "true", "dynamic_models": true},
+			map[string]any{"provider": "bad-url", "default_base_url": true, "requires_api_key": true, "dynamic_models": true},
+		},
+	})
+	if !errors.Is(err, ErrInvalidActionResult) {
+		t.Fatalf("schema-invalid catalog error = %v, want ErrInvalidActionResult", err)
+	}
+}
+
+func TestWebSearchResultAdapterRejectsMissingOrWrongTypedFields(t *testing.T) {
+	validConfig := map[string]any{
+		"enabled": true, "provider": "tavily", "api_key_configured": true,
+		"revision": float64(2), "tested_at": "2026-08-05T00:00:00Z",
+	}
+	if _, err := adaptActionResult("agent.web_search.config.get", validConfig); err != nil {
+		t.Fatalf("valid web-search config rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(map[string]any){
+		"missing enabled": func(value map[string]any) { delete(value, "enabled") },
+		"wrong provider":  func(value map[string]any) { value["provider"] = "other" },
+		"wrong revision":  func(value map[string]any) { value["revision"] = "2" },
+		"wrong configured": func(value map[string]any) {
+			value["api_key_configured"] = "true"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			value := cloneParams(validConfig)
+			mutate(value)
+			if _, err := adaptActionResult("agent.web_search.config.update", value); !errors.Is(err, ErrInvalidActionResult) {
+				t.Fatalf("invalid web-search config error = %v, want ErrInvalidActionResult", err)
+			}
+		})
+	}
+	validTest := map[string]any{
+		"ok": true, "provider": "tavily", "result_count": float64(1),
+		"tested_at": "2026-08-05T00:00:00Z", "enabled": true,
+		"api_key_configured": true, "revision": float64(3),
+	}
+	if _, err := adaptActionResult("agent.web_search.test", validTest); err != nil {
+		t.Fatalf("valid web-search test rejected: %v", err)
+	}
+	delete(validTest, "tested_at")
+	if _, err := adaptActionResult("agent.web_search.test", validTest); !errors.Is(err, ErrInvalidActionResult) {
+		t.Fatalf("web-search test missing tested_at error = %v, want ErrInvalidActionResult", err)
 	}
 }
 
