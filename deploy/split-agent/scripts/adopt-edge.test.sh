@@ -99,10 +99,10 @@ JSON
           candidate_healthcheck=''
           candidate_state="{\"Status\":\"$status\"}"
         fi
-        candidate_cap_add='["NET_BIND_SERVICE"]'
+        candidate_cap_add='["CAP_NET_BIND_SERVICE"]'
         case "${DIREXTALK_MOCK_CANDIDATE_INSPECT_CAP_ADD:-${DIREXTALK_MOCK_CANDIDATE_CAP_ADD:-}}" in
           missing) candidate_cap_add='[]' ;;
-          extra) candidate_cap_add='["NET_BIND_SERVICE","SYS_ADMIN"]' ;;
+          extra) candidate_cap_add='["CAP_NET_BIND_SERVICE","CAP_SYS_ADMIN"]' ;;
         esac
         cat <<JSON
 [{"Id":"$candidate_id","Image":"$candidate_image_id","Config":{"Image":"$candidate_image","Labels":{"com.docker.compose.project":"edge-new","com.docker.compose.service":"caddy"}$candidate_healthcheck},"NetworkSettings":{"Networks":{"$network":{}}},"Mounts":[{"Type":"volume","Name":"$data_volume","Destination":"/data"},{"Type":"volume","Name":"$config_volume","Destination":"/config"}],"HostConfig":{"PortBindings":{"80/tcp":[{"HostPort":"80"}],"443/tcp":[{"HostPort":"443"}]},"ReadonlyRootfs":true,"CapDrop":["ALL"],"CapAdd":$candidate_cap_add,"SecurityOpt":["no-new-privileges:true"]},"State":$candidate_state}]

@@ -209,7 +209,7 @@ volume_fingerprint_from_json() {
 
 verify_hardened_candidate() {
   local file=$1
-  "$jq_bin" -e '.[0].HostConfig.ReadonlyRootfs == true and ((.[0].HostConfig.CapDrop // []) | map(ascii_upcase) | index("ALL")) != null and ((.[0].HostConfig.CapAdd // []) | map(ascii_upcase) | sort) == ["NET_BIND_SERVICE"] and ((.[0].HostConfig.SecurityOpt // []) | map(ascii_downcase) | any(. == "no-new-privileges:true" or . == "no-new-privileges")) and ((.[0].Config.Healthcheck.Test // []) | length) > 1 and ((.[0].Config.Healthcheck.Test // [""])[0] == "CMD-SHELL") and ((.[0].Config.Healthcheck.Test // [] | join(" ")) | test("wget|curl"))' "$file" >/dev/null 2>&1
+  "$jq_bin" -e '.[0].HostConfig.ReadonlyRootfs == true and ((.[0].HostConfig.CapDrop // []) | map(ascii_upcase) | index("ALL")) != null and ((.[0].HostConfig.CapAdd // []) | map(ascii_upcase | sub("^CAP_"; "")) | sort) == ["NET_BIND_SERVICE"] and ((.[0].HostConfig.SecurityOpt // []) | map(ascii_downcase) | any(. == "no-new-privileges:true" or . == "no-new-privileges")) and ((.[0].Config.Healthcheck.Test // []) | length) > 1 and ((.[0].Config.Healthcheck.Test // [""])[0] == "CMD-SHELL") and ((.[0].Config.Healthcheck.Test // [] | join(" ")) | test("wget|curl"))' "$file" >/dev/null 2>&1
 }
 
 # Read one literal KEY=VALUE entry without sourcing untrusted deployment

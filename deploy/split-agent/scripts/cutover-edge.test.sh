@@ -130,10 +130,10 @@ JSON
         [ -f "$state/new-up" ] && status=running
         [ -f "$state/new-removed" ] && status=exited
         [ "${DIREXTALK_MOCK_NEW_RESTARTING:-false}" = true ] && status=restarting
-        new_cap_add='["NET_BIND_SERVICE"]'
+        new_cap_add='["CAP_NET_BIND_SERVICE"]'
         case "${DIREXTALK_MOCK_NEW_INSPECT_CAP_ADD:-}" in
           missing) new_cap_add='[]' ;;
-          extra) new_cap_add='["NET_BIND_SERVICE","SYS_ADMIN"]' ;;
+          extra) new_cap_add='["CAP_NET_BIND_SERVICE","CAP_SYS_ADMIN"]' ;;
         esac
         cat <<JSON
 [{"Id":"$new_id","Image":"$new_image_id","Config":{"Image":"$caddy_image","Healthcheck":{"Test":["CMD-SHELL","wget -q -O - http://127.0.0.1:2019/config/ >/dev/null"]},"Labels":{"com.docker.compose.project":"edge-test","com.docker.compose.service":"caddy"}},"NetworkSettings":{"Networks":{"$network":{}}},"Mounts":[{"Type":"volume","Name":"caddy-data","Destination":"/data"},{"Type":"volume","Name":"caddy-config","Destination":"/config"}],"HostConfig":{"PortBindings":{"80/tcp":[{"HostPort":"80"}],"443/tcp":[{"HostPort":"443"}]},"ReadonlyRootfs":true,"CapDrop":["ALL"],"CapAdd":$new_cap_add,"SecurityOpt":["no-new-privileges:true"]},"State":{"Status":"$status","Health":{"Status":"healthy"}}}]
