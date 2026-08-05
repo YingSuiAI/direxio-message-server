@@ -6,10 +6,14 @@ package agentgateway
 // field names, pagination cursors, or envelope changes.
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"strings"
+	"time"
+
+	"github.com/google/uuid"
 )
 
 // ErrInvalidActionResult marks a successful Agent operation whose payload
@@ -154,6 +158,8 @@ func validateActionResult(action string, output map[string]any) error {
 		return validateWebSearchTestResult(action, output)
 	case "agent.models.list":
 		return validateModelCatalogResult(output)
+	case "agent.chat.turns.list":
+		return validateTurnsListResult(output)
 	default:
 		return nil
 	}
@@ -410,9 +416,150 @@ func renameNextCursor(value map[string]any) map[string]any {
 }
 
 func turnsListResult(value map[string]any) map[string]any {
+	turns := anySlice(value["turns"])
+	projected := make([]any, 0, len(turns))
+	for _, item := range turns {
+		turn := item.(map[string]any)
+		projected = append(projected, map[string]any{
+			"turn_id":          turn["turn_id"],
+			"conversation_id":  turn["conversation_id"],
+			"state":            turn["state"],
+			"revision":         turn["revision"],
+			"last_sequence":    turn["last_sequence"],
+			"terminal_code":    turn["terminal_code"],
+			"terminal_summary": turn["terminal_summary"],
+			"created_at":       turn["created_at"],
+			"updated_at":       turn["updated_at"],
+		})
+	}
 	return map[string]any{
-		"turns":       anySlice(valueByKey(value, "turns", "Turns")),
-		"next_cursor": stringValue(valueByKey(value, "next_cursor", "next_page_token", "NextCursor")),
+		"turns":       projected,
+		"next_cursor": value["next_page_token"],
+	}
+}
+
+func validateTurnsListResult(value map[string]any) error {
+	if value == nil || len(value) != 2 {
+		return fmt.Errorf("%w: turn list envelope is malformed", ErrInvalidActionResult)
+	}
+	turns, ok := value["turns"].([]any)
+	if !ok {
+		return fmt.Errorf("%w: turn list turns must be an array", ErrInvalidActionResult)
+	}
+	if _, ok := value["next_page_token"].(string); !ok {
+		return fmt.Errorf("%w: turn list next_page_token must be a string", ErrInvalidActionResult)
+	}
+	for index, raw := range turns {
+		turn, ok := raw.(map[string]any)
+		if !ok || !validCanonicalTurn(turn) {
+			return fmt.Errorf("%w: turn list item %d is malformed", ErrInvalidActionResult, index)
+		}
+	}
+	return nil
+}
+
+func validCanonicalTurn(turn map[string]any) bool {
+	if len(turn) != 9 {
+		return false
+	}
+	for _, key := range []string{
+		"turn_id", "conversation_id", "state", "revision", "last_sequence",
+		"terminal_code", "terminal_summary", "created_at", "updated_at",
+	} {
+		if _, ok := turn[key]; !ok {
+			return false
+		}
+	}
+	if !canonicalTurnUUID(turn["turn_id"]) || !canonicalTurnUUID(turn["conversation_id"]) {
+		return false
+	}
+	state, ok := turn["state"].(string)
+	if !ok {
+		return false
+	}
+	switch state {
+	case "accepted", "running", "waiting_confirmation", "completed", "canceled", "failed":
+	default:
+		return false
+	}
+	revision, ok := turnInt64(turn["revision"])
+	if !ok || revision <= 0 {
+		return false
+	}
+	lastSequence, ok := turnInt64(turn["last_sequence"])
+	if !ok || lastSequence < 0 {
+		return false
+	}
+	for _, key := range []string{"terminal_code", "terminal_summary"} {
+		if _, ok := turn[key].(string); !ok {
+			return false
+		}
+	}
+	for _, key := range []string{"created_at", "updated_at"} {
+		stamp, ok := turn[key].(string)
+		if !ok {
+			return false
+		}
+		if _, err := time.Parse(time.RFC3339Nano, stamp); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+func canonicalTurnUUID(value any) bool {
+	text, ok := value.(string)
+	if !ok || text != strings.TrimSpace(text) {
+		return false
+	}
+	parsed, err := uuid.Parse(text)
+	return err == nil && parsed != uuid.Nil && parsed.String() == text
+}
+
+func turnInt64(value any) (int64, bool) {
+	switch item := value.(type) {
+	case int:
+		return int64(item), true
+	case int8:
+		return int64(item), true
+	case int16:
+		return int64(item), true
+	case int32:
+		return int64(item), true
+	case int64:
+		return item, true
+	case uint:
+		if uint64(item) > math.MaxInt64 {
+			return 0, false
+		}
+		return int64(item), true
+	case uint8:
+		return int64(item), true
+	case uint16:
+		return int64(item), true
+	case uint32:
+		return int64(item), true
+	case uint64:
+		if item > math.MaxInt64 {
+			return 0, false
+		}
+		return int64(item), true
+	case float32:
+		value := float64(item)
+		if math.IsNaN(value) || math.IsInf(value, 0) || value < -9223372036854775808.0 || value >= 9223372036854775808.0 || math.Trunc(value) != value {
+			return 0, false
+		}
+		return int64(value), true
+	case float64:
+		if math.IsNaN(item) || math.IsInf(item, 0) || item < -9223372036854775808.0 || item >= 9223372036854775808.0 || math.Trunc(item) != item {
+			return 0, false
+		}
+		return int64(item), true
+	case json.Number:
+		parsed, err := item.Int64()
+		return parsed, err == nil
+	default:
+		return 0, false
 	}
 }
 

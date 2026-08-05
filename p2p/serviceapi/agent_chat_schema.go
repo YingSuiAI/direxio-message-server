@@ -6,7 +6,7 @@ func nativeAgentChatSchema() *ActionSchema {
 		"title": {Type: "string"}, "preview": {Type: "string"}, "channel_id": {Type: "string"}, "post_id": {Type: "string"},
 	}}
 	return &ActionSchema{Request: map[string]ActionFieldSchema{
-		"prompt": {Type: "string"}, "message": {Type: "string"}, "messages": {Type: "array"},
+		"prompt": {Type: "string"}, "message": {Type: "string"},
 		"conversation_id": {Type: "string"}, "turn_id": {Type: "string"}, "after_seq": {Type: "integer"},
 		"model_profile_id":       {Type: "string", Required: true, Presence: &ActionPresenceSchema{Present: "exact_nonempty_bytes"}},
 		"model_profile_revision": {Type: "integer", Required: true, Presence: &ActionPresenceSchema{Present: "positive_integer"}},
@@ -21,4 +21,40 @@ func nativeAgentChatSchema() *ActionSchema {
 			Present: "References are immutable projections derived from successful built-in Dirextalk tool results.",
 		}},
 	}}
+}
+
+func nativeAgentTurnStopSchema() *ActionSchema {
+	return &ActionSchema{
+		Request: map[string]ActionFieldSchema{
+			"turn_id": {Type: "string", Required: true},
+		},
+		Response: map[string]ActionFieldSchema{
+			"turn_id": {Type: "string", Required: true},
+		},
+	}
+}
+
+func nativeAgentTurnsListSchema() *ActionSchema {
+	turn := &ActionFieldSchema{Type: "object", Properties: map[string]ActionFieldSchema{
+		"turn_id":          {Type: "string", Required: true},
+		"conversation_id":  {Type: "string", Required: true},
+		"state":            {Type: "string", Required: true},
+		"revision":         {Type: "integer", Required: true},
+		"last_sequence":    {Type: "integer", Required: true},
+		"terminal_code":    {Type: "string", Required: true},
+		"terminal_summary": {Type: "string", Required: true},
+		"created_at":       {Type: "string", Required: true},
+		"updated_at":       {Type: "string", Required: true},
+	}}
+	return &ActionSchema{
+		Request: map[string]ActionFieldSchema{
+			"conversation_id": {Type: "string", Required: true},
+			"page_token":      {Type: "string"},
+			"limit":           {Type: "integer"},
+		},
+		Response: map[string]ActionFieldSchema{
+			"turns":       {Type: "array", Required: true, Items: turn},
+			"next_cursor": {Type: "string", Required: true},
+		},
+	}
 }

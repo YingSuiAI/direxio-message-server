@@ -34,7 +34,7 @@ func TestValidateChatRequestRequiresImmutableProfilePins(t *testing.T) {
 			t.Errorf("missing %s error = %v, want ErrInvalidActionRequest", field, err)
 		}
 	}
-	for _, field := range []string{"model_profile", "tool_credentials", "default_profile", "client_model_profile_id"} {
+	for _, field := range []string{"model_profile", "tool_credentials", "default_profile", "client_model_profile_id", "messages", "history", "chat_history", "conversation_history"} {
 		params := cloneParams(base)
 		params[field] = map[string]any{"api_key": "secret"}
 		err := ValidateActionRequest("agent.chat", params)
@@ -102,6 +102,10 @@ func TestValidateChatRequestRejectsNestedSensitiveKeysButNotPromptValues(t *test
 		{name: "authorizations plural", key: "authorizations"},
 		{name: "secret", key: "secret"},
 		{name: "private key", key: "private_key"},
+		{name: "messages", key: "messages"},
+		{name: "history", key: "history"},
+		{name: "chat history camel", key: "chatHistory"},
+		{name: "conversation history", key: "conversation_history"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			params := cloneParams(base)
@@ -157,6 +161,36 @@ func TestPositiveIntegerUsesExactInt64UpperBound(t *testing.T) {
 	} {
 		if positiveInteger(value) {
 			t.Errorf("overflowing positive integer %#v was accepted", value)
+		}
+	}
+}
+
+func TestTurnControlRequestsRequireCanonicalClosedShapes(t *testing.T) {
+	turnID := "11111111-1111-4111-8111-111111111111"
+	conversationID := "22222222-2222-4222-8222-222222222222"
+	if err := ValidateActionRequest("agent.chat.turn.stop", map[string]any{"turn_id": turnID}); err != nil {
+		t.Fatalf("canonical stop rejected: %v", err)
+	}
+	if err := ValidateActionRequest("agent.chat.turns.list", map[string]any{"conversation_id": conversationID, "page_token": "", "limit": json.Number("20")}); err != nil {
+		t.Fatalf("canonical list rejected: %v", err)
+	}
+	if err := ValidateActionRequest("agent.chat.turns.list", map[string]any{"conversation_id": conversationID, "limit": json.Number("1000")}); err != nil {
+		t.Fatalf("maximum canonical list limit rejected: %v", err)
+	}
+	for _, test := range []struct {
+		action string
+		params map[string]any
+	}{
+		{"agent.chat.turn.stop", map[string]any{"turn_id": "turn-1"}},
+		{"agent.chat.turn.stop", map[string]any{"turn_id": "00000000-0000-0000-0000-000000000000"}},
+		{"agent.chat.turn.stop", map[string]any{"turn_id": turnID, "conversation_id": conversationID}},
+		{"agent.chat.turns.list", map[string]any{"conversation_id": "conversation-1"}},
+		{"agent.chat.turns.list", map[string]any{"conversation_id": conversationID, "next_cursor": "legacy"}},
+		{"agent.chat.turns.list", map[string]any{"conversation_id": conversationID, "limit": 0}},
+		{"agent.chat.turns.list", map[string]any{"conversation_id": conversationID, "limit": json.Number("1001")}},
+	} {
+		if err := ValidateActionRequest(test.action, test.params); !errors.Is(err, ErrInvalidActionRequest) {
+			t.Errorf("%s %#v error=%v, want ErrInvalidActionRequest", test.action, test.params, err)
 		}
 	}
 }

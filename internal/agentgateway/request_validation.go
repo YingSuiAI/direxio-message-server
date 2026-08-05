@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	capv1 "github.com/YingSuiAI/dirextalk-capability-api/gen/go/dirextalk/capability/v1"
+	"github.com/google/uuid"
 )
 
 // ErrInvalidActionRequest marks ProductCore parameters that cannot be sent to
@@ -70,9 +71,69 @@ func ValidateActionRequest(action string, params map[string]any) error {
 		return validateChatRequest(action, params)
 	case "agent.models.list":
 		return validateModelCatalogRequest(action, params)
+	case "agent.chat.turn.stop":
+		return validateTurnStopRequest(action, params)
+	case "agent.chat.turns.list":
+		return validateTurnsListRequest(action, params)
 	default:
 		return nil
 	}
+}
+
+func validateTurnStopRequest(action string, params map[string]any) error {
+	if err := rejectUnknownActionFields(action, params, "turn_id"); err != nil {
+		return err
+	}
+	if params == nil || !canonicalActionUUID(params["turn_id"]) {
+		return invalidActionRequest(action, "turn_id", "must be a canonical UUID")
+	}
+	return nil
+}
+
+func validateTurnsListRequest(action string, params map[string]any) error {
+	if err := rejectUnknownActionFields(action, params, "conversation_id", "page_token", "limit"); err != nil {
+		return err
+	}
+	if params == nil || !canonicalActionUUID(params["conversation_id"]) {
+		return invalidActionRequest(action, "conversation_id", "must be a canonical UUID")
+	}
+	if value, present := params["page_token"]; present {
+		pageToken, ok := value.(string)
+		if !ok || len(pageToken) > 4096 {
+			return invalidActionRequest(action, "page_token", "must be a bounded string")
+		}
+	}
+	if value, present := params["limit"]; present && !positiveIntegerAtMost(value, 1000) {
+		return invalidActionRequest(action, "limit", "must be an integer from 1 to 1000")
+	}
+	return nil
+}
+
+func rejectUnknownActionFields(action string, params map[string]any, allowed ...string) error {
+	allowedSet := make(map[string]struct{}, len(allowed))
+	for _, field := range allowed {
+		allowedSet[field] = struct{}{}
+	}
+	unknown := make([]string, 0)
+	for field := range params {
+		if _, ok := allowedSet[field]; !ok {
+			unknown = append(unknown, field)
+		}
+	}
+	if len(unknown) == 0 {
+		return nil
+	}
+	sort.Strings(unknown)
+	return invalidActionRequest(action, unknown[0], "is not supported")
+}
+
+func canonicalActionUUID(value any) bool {
+	text, ok := value.(string)
+	if !ok || text != strings.TrimSpace(text) {
+		return false
+	}
+	parsed, err := uuid.Parse(text)
+	return err == nil && parsed != uuid.Nil && parsed.String() == text
 }
 
 func validateChatRequest(action string, params map[string]any) error {
@@ -90,6 +151,10 @@ func validateChatRequest(action string, params map[string]any) error {
 		"default_model_profile_id",
 		"use_default_profile",
 		"tool_credentials",
+		"messages",
+		"history",
+		"chat_history",
+		"conversation_history",
 	} {
 		if _, present := params[field]; present {
 			return invalidActionRequest(action, field, "is not supported")
@@ -222,6 +287,7 @@ func isUnsupportedChatKey(key string) bool {
 	for _, unsupported := range []string{
 		"tool_credentials", "model_profile", "client_model_profile_id",
 		"default_profile", "default_profile_id", "default_model_profile_id", "use_default_profile",
+		"messages", "history", "chat_history", "conversation_history",
 	} {
 		if key == unsupported {
 			return true
@@ -231,7 +297,8 @@ func isUnsupportedChatKey(key string) bool {
 	switch joined {
 	case "tool_credentials", "model_profile", "client_model_profile_id",
 		"default_profile", "default_profile_id", "default_model_profile_id", "use_default_profile",
-		"model_profile_id", "model_profile_revision":
+		"model_profile_id", "model_profile_revision",
+		"messages", "history", "chat_history", "conversation_history":
 		// Profile pin variants (for example clientModelProfileId) are not
 		// server-derived pins and must not become a nested escape hatch.
 		return true
@@ -450,6 +517,43 @@ func positiveInteger(value any) bool {
 		return value > 0 && !math.IsNaN(value) && !math.IsInf(value, 0) && value < float64(math.MaxInt64) && math.Trunc(value) == value
 	case float64:
 		return typed > 0 && !math.IsNaN(typed) && !math.IsInf(typed, 0) && typed < float64(math.MaxInt64) && math.Trunc(typed) == typed
+	default:
+		return false
+	}
+}
+
+func positiveIntegerAtMost(value any, maximum int64) bool {
+	if maximum <= 0 || !positiveInteger(value) {
+		return false
+	}
+	switch typed := value.(type) {
+	case json.Number:
+		rational, ok := new(big.Rat).SetString(strings.TrimSpace(typed.String()))
+		return ok && rational.Cmp(new(big.Rat).SetInt64(maximum)) <= 0
+	case int:
+		return int64(typed) <= maximum
+	case int8:
+		return int64(typed) <= maximum
+	case int16:
+		return int64(typed) <= maximum
+	case int32:
+		return int64(typed) <= maximum
+	case int64:
+		return typed <= maximum
+	case uint:
+		return uint64(typed) <= uint64(maximum)
+	case uint8:
+		return uint64(typed) <= uint64(maximum)
+	case uint16:
+		return uint64(typed) <= uint64(maximum)
+	case uint32:
+		return uint64(typed) <= uint64(maximum)
+	case uint64:
+		return typed <= uint64(maximum)
+	case float32:
+		return float64(typed) <= float64(maximum)
+	case float64:
+		return typed <= float64(maximum)
 	default:
 		return false
 	}

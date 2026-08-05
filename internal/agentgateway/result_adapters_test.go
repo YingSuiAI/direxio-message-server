@@ -203,6 +203,67 @@ func TestModelCatalogResultAdapterDropsUnknownModelFieldsAtGatewayBoundary(t *te
 	}
 }
 
+func TestTurnsListResultPublishesOnlyCanonicalMetadata(t *testing.T) {
+	input := map[string]any{
+		"turns": []any{map[string]any{
+			"turn_id":          "11111111-1111-4111-8111-111111111111",
+			"conversation_id":  "22222222-2222-4222-8222-222222222222",
+			"state":            "completed",
+			"revision":         float64(3),
+			"last_sequence":    float64(7),
+			"terminal_code":    "",
+			"terminal_summary": "",
+			"created_at":       "2026-08-06T01:02:03Z",
+			"updated_at":       "2026-08-06T01:02:04.123Z",
+		}},
+		"next_page_token": "next",
+	}
+	got, err := adaptActionResult("agent.chat.turns.list", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if keys := sortedMapKeys(got); !reflect.DeepEqual(keys, []string{"next_cursor", "turns"}) {
+		t.Fatalf("turn list keys=%v value=%#v", keys, got)
+	}
+	turn := got["turns"].([]any)[0].(map[string]any)
+	if keys := sortedMapKeys(turn); !reflect.DeepEqual(keys, []string{"conversation_id", "created_at", "last_sequence", "revision", "state", "terminal_code", "terminal_summary", "turn_id", "updated_at"}) {
+		t.Fatalf("turn keys=%v value=%#v", keys, turn)
+	}
+}
+
+func TestTurnsListResultRejectsAliasesLeaksAndMalformedMetadata(t *testing.T) {
+	valid := map[string]any{
+		"turn_id":          "11111111-1111-4111-8111-111111111111",
+		"conversation_id":  "22222222-2222-4222-8222-222222222222",
+		"state":            "running",
+		"revision":         float64(2),
+		"last_sequence":    float64(0),
+		"terminal_code":    "",
+		"terminal_summary": "",
+		"created_at":       "2026-08-06T01:02:03Z",
+		"updated_at":       "2026-08-06T01:02:03Z",
+	}
+	for name, mutate := range map[string]func(map[string]any){
+		"Go alias":      func(turn map[string]any) { delete(turn, "turn_id"); turn["ID"] = valid["turn_id"] },
+		"prompt leak":   func(turn map[string]any) { turn["prompt"] = "must not cross" },
+		"status alias":  func(turn map[string]any) { delete(turn, "state"); turn["status"] = "running" },
+		"bad UUID":      func(turn map[string]any) { turn["turn_id"] = "turn-1" },
+		"bad state":     func(turn map[string]any) { turn["state"] = "unknown" },
+		"zero revision": func(turn map[string]any) { turn["revision"] = float64(0) },
+		"negative seq":  func(turn map[string]any) { turn["last_sequence"] = float64(-1) },
+		"bad timestamp": func(turn map[string]any) { turn["updated_at"] = "today" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			turn := cloneParams(valid)
+			mutate(turn)
+			_, err := adaptActionResult("agent.chat.turns.list", map[string]any{"turns": []any{turn}, "next_page_token": ""})
+			if !errors.Is(err, ErrInvalidActionResult) {
+				t.Fatalf("error=%v, want ErrInvalidActionResult", err)
+			}
+		})
+	}
+}
+
 func TestModelCatalogResultAdapterRejectsEntriesThatViolatePublishedSchema(t *testing.T) {
 	_, err := adaptActionResult("agent.models.list", map[string]any{
 		"models": []any{

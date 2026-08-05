@@ -54,6 +54,14 @@ capability live.
   state; the Agent resolves web-search configuration through its encrypted
   owner-scoped store.
 - With persistent server conversation memory, the client sends only the current prompt, `conversation_id`, durable `turn_id`, and attachment references. It does not replay `messages`; the server rejects such history, loads the authoritative transcript, automatically summarizes older context against the model token budget, and generates the first successful conversation title with a redacted first-instruction fallback.
+- Durable turn reconciliation uses `agent.chat.turns.list` with one canonical
+  conversation UUID, an optional opaque page token of at most 4,096 bytes, and
+  an optional limit from 1 through 1,000. Each returned turn is the exact
+  nine-field public metadata projection: `turn_id`, `conversation_id`, `state`,
+  `revision`, `last_sequence`, `terminal_code`, `terminal_summary`,
+  `created_at`, and `updated_at`. Prompt/request identity, model/profile data,
+  credential material, and execution snapshots remain Agent-private; aliases,
+  extra fields, and malformed UUIDs fail closed at both proxy boundaries.
 - Native Agent deployment planning treats an empty target inventory as a signal
   to compare and reserve a new AWS target, not as a terminal error. The bounded
   target-reservation tool creates only a logical revision-1 reservation; EC2

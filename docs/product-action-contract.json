@@ -5109,9 +5109,6 @@
           "message": {
             "type": "string"
           },
-          "messages": {
-            "type": "array"
-          },
           "model_profile_id": {
             "type": "string",
             "required": true,
@@ -5222,9 +5219,6 @@
           },
           "message": {
             "type": "string"
-          },
-          "messages": {
-            "type": "array"
           },
           "model_profile_id": {
             "type": "string",
@@ -5436,12 +5430,91 @@
     {
       "name": "agent.chat.turn.stop",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "turn_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "turn_id": {
+            "type": "string",
+            "required": true
+          }
+        }
+      }
     },
     {
       "name": "agent.chat.turns.list",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "conversation_id": {
+            "type": "string",
+            "required": true
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "page_token": {
+            "type": "string"
+          }
+        },
+        "response": {
+          "next_cursor": {
+            "type": "string",
+            "required": true
+          },
+          "turns": {
+            "type": "array",
+            "required": true,
+            "items": {
+              "type": "object",
+              "properties": {
+                "conversation_id": {
+                  "type": "string",
+                  "required": true
+                },
+                "created_at": {
+                  "type": "string",
+                  "required": true
+                },
+                "last_sequence": {
+                  "type": "integer",
+                  "required": true
+                },
+                "revision": {
+                  "type": "integer",
+                  "required": true
+                },
+                "state": {
+                  "type": "string",
+                  "required": true
+                },
+                "terminal_code": {
+                  "type": "string",
+                  "required": true
+                },
+                "terminal_summary": {
+                  "type": "string",
+                  "required": true
+                },
+                "turn_id": {
+                  "type": "string",
+                  "required": true
+                },
+                "updated_at": {
+                  "type": "string",
+                  "required": true
+                }
+              }
+            }
+          }
+        }
+      }
     },
     {
       "name": "agent.voice.session.create",

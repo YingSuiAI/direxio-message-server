@@ -82,8 +82,8 @@ var expectedCatalogSchemaDigests = map[string]catalogSchemaDigest{
 		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
 	},
 	"agent.chat.turns.list": {
-		inputHex:  "a6f5998471ffc56ef36ae609aca240371a06696f5712fb63c928f77c184d9599",
-		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+		inputHex:  "30681a058e34eaaf4cbbfe914762501b9dc2c8c8891a297e0ea458369fe6cf75",
+		resultHex: "929619cdc1fafde6c72777f7b8d14d55a421366cfe2df410c978c48ff619ba93",
 	},
 	"agent.context.compress": {
 		inputHex:  "e482c09e35d5c78ff7205b9ca1cb91509ed9432ec707de9ed25143f635869523",

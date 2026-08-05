@@ -131,20 +131,21 @@ func (m *Module) CancelExternal(ctx context.Context, action string, params map[s
 }
 
 func (m *Module) stopTurn(ctx context.Context, params map[string]any) (any, *actionbase.Error) {
+	if err := agentgateway.ValidateActionRequest("agent.chat.turn.stop", params); err != nil {
+		return nil, externalAgentActionError(err)
+	}
 	turnID := strings.TrimSpace(actionbase.String(params["turn_id"]))
 	if !agentstream.ValidID(turnID) {
 		return nil, actionbase.BadRequest("turn_id is invalid")
 	}
-	result, err := m.Cancel(ctx, "agent.chat.turn.stop", map[string]any{"turn_id": turnID})
+	_, err := m.Cancel(ctx, "agent.chat.turn.stop", map[string]any{"turn_id": turnID})
 	if err != nil {
 		return nil, externalAgentActionError(err)
 	}
-	if result == nil {
-		result = map[string]any{}
-	}
-	result["turn_id"] = turnID
-	result["changed"] = true
-	return result, nil
+	// Operation-control state and operation_id are transport internals. A
+	// successful stop publishes only the canonical turn identity; callers
+	// reattach/list for authoritative state.
+	return map[string]any{"turn_id": turnID}, nil
 }
 
 func (m *Module) listTurns(ctx context.Context, params map[string]any) (any, *actionbase.Error) {
