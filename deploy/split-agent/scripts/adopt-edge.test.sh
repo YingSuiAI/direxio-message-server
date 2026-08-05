@@ -52,8 +52,8 @@ JSON
       ;;
     *' ps -aq caddy '*) [ -f "$state/candidate-created" ] && printf '%s\n' "$candidate_id"; exit 0 ;;
     *' ps -q caddy '*) [ -f "$state/candidate-created" ] && printf '%s\n' "$candidate_id"; exit 0 ;;
-    *' create --no-start caddy '*) [ "${DIREXTALK_MOCK_CREATE_FAIL:-false}" != true ] || exit 40; : >"$state/candidate-created"; exit 0 ;;
-    *) exit 0 ;;
+    *' create caddy '*) [ "${DIREXTALK_MOCK_CREATE_FAIL:-false}" != true ] || exit 40; : >"$state/candidate-created"; exit 0 ;;
+    *) exit 99 ;;
   esac
 fi
 
@@ -400,7 +400,7 @@ if "$script" commit "$edge_env" "$pre_stop_probe" pre-stop-public-fail rev-pre-s
   exit 1
 fi
 unset DIREXTALK_MOCK_PUBLIC_FAIL
-grep -Fq -- 'create --no-start caddy' "$DIREXTALK_MOCK_LOG"
+grep -Fq -- 'create caddy' "$DIREXTALK_MOCK_LOG"
 if grep -Fq -- "stop $legacy_id" "$DIREXTALK_MOCK_LOG"; then
   echo "pre-stop public failure crossed the legacy stop boundary" >&2
   exit 1

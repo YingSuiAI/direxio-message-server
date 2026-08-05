@@ -925,7 +925,7 @@ revalidate_objects() {
 
 candidate_create_and_verify() {
   local candidate_short candidate_full
-  compose_edge create --no-start caddy >/dev/null 2>&1 || fail "candidate pre-create failed" || return 1
+  compose_edge create caddy >/dev/null 2>&1 || fail "candidate pre-create failed" || return 1
   candidate_short=$(compose_edge ps -q caddy 2>/dev/null) || fail "candidate ID is unavailable" || return 1
   valid_container_id "$candidate_short" || fail "candidate ID is not a Docker ID" || return 1
   inspect_json "$candidate_short" "$tmp_dir/candidate-pre.json" || fail "candidate inspect failed" || return 1
