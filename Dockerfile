@@ -13,6 +13,7 @@ RUN apk --update --no-cache add bash build-base git
 #
 FROM --platform=${BUILDPLATFORM} base AS build
 WORKDIR /src
+ARG GOPROXY=https://proxy.golang.org,direct
 ARG TARGETOS
 ARG TARGETARCH
 ARG VERSION=v0.0.0-dev+local
