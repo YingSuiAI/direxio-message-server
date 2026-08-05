@@ -84,15 +84,18 @@ func TestPublicResultAdaptersPreserveLegacyEnvelopes(t *testing.T) {
 				t.Fatalf("memory list = %#v", got)
 			}
 		}},
-		{"knowledge search", "agent.knowledge.search", map[string]any{"Matches": []any{map[string]any{"SourceID": "s1", "Score": float64(.9)}}, "NextPageToken": "p"}, func(t *testing.T, got map[string]any) {
+		{"knowledge search", "agent.knowledge.search", map[string]any{"Matches": []any{map[string]any{"SourceID": "s1", "Score": float64(.9)}}, "NextPageToken": "p", "EmbeddingProfileID": "embed", "EmbeddingProfileRevision": float64(4), "EmbeddingModel": "text-embedding-3-small", "EmbeddingGeneration": "gen-7", "CollectionConfigDigest": "digest-8"}, func(t *testing.T, got map[string]any) {
 			items := got["items"].([]any)
-			if items[0].(map[string]any)["source_id"] != "s1" || got["next_cursor"] != "p" {
+			if items[0].(map[string]any)["source_id"] != "s1" || got["next_cursor"] != "p" || got["embedding_profile_id"] != "embed" || got["embedding_profile_revision"] != float64(4) || got["embedding_model"] != "text-embedding-3-small" || got["embedding_generation"] != "gen-7" || got["collection_config_digest"] != "digest-8" {
 				t.Fatalf("knowledge search = %#v", got)
 			}
 		}},
-		{"knowledge config", "agent.knowledge.config.get", map[string]any{"EmbeddingProfileID": "embed", "Dimension": float64(3), "Revision": float64(2)}, func(t *testing.T, got map[string]any) {
-			if got["embedding_profile_id"] != "embed" || got["dimension"] != float64(3) || got["revision"] != float64(2) {
+		{"knowledge config", "agent.knowledge.config.get", map[string]any{"EmbeddingProfileID": "embed", "EmbeddingProfileRevision": float64(4), "EmbeddingModel": "text-embedding-3-small", "EmbeddingGeneration": "drop-me", "Dimension": float64(3), "Collection": "knowledge", "CollectionConfigDigest": "digest-8", "Revision": float64(2), "UpdatedAt": "updated"}, func(t *testing.T, got map[string]any) {
+			if got["embedding_profile_id"] != "embed" || got["embedding_profile_revision"] != float64(4) || got["embedding_model"] != "text-embedding-3-small" || got["dimension"] != float64(3) || got["collection"] != "knowledge" || got["collection_config_digest"] != "digest-8" || got["revision"] != float64(2) || got["updated_at"] != "updated" {
 				t.Fatalf("knowledge config = %#v", got)
+			}
+			if _, exposed := got["embedding_generation"]; exposed {
+				t.Fatalf("knowledge config exposed search-only generation: %#v", got)
 			}
 		}},
 		{"knowledge upload start exact projection", "agent.knowledge.upload.start", map[string]any{"upload_id": "u1", "source_id": "s1", "status": "open", "size": float64(8), "received_size": float64(2), "max_chunk_bytes": float64(4), "progress": float64(.25), "replayed": true, "revision": float64(2)}, func(t *testing.T, got map[string]any) {

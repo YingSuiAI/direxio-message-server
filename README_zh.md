@@ -17,8 +17,11 @@ Dirextalk Message Server 是 Dirextalk 的后端合约权威。在一个 Go mono
 - PostgreSQL-backed P2P 表默认是 projection/read model，只有当前合约明确
   声明时才作为权威记录。
 - Native Agent 和 `POST /mcp` 是后端拥有的能力，不通过 plugin 生命周期安装、
-  配置或调用。BYOK web search 只在请求级
-  `tool_credentials.web_search` 中接收 Tavily key，绝不持久化。
+  配置或调用。Native Agent 加密保存 owner 配置的 Tavily key；ProductCore
+  只提供 write-only 更新和安全的 configured/hint/revision 状态。`agent.chat` 和
+  `agent.chat.stream` 必须携带明确的模型 profile id、profile revision、credential
+  version 三个 pin；聊天请求不携带 inline profile 或 tool credentials，也不会回退
+  到默认 profile。
 
 ## 运行时
 

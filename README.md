@@ -18,9 +18,12 @@ Native Agent:
 - PostgreSQL-backed P2P tables are projection/read models unless a current
   contract explicitly makes a record authoritative.
 - Native Agent and `POST /mcp` are backend-owned capabilities. They are not
-  installed, configured, or invoked through the plugin lifecycle. BYOK web
-  search accepts a Tavily key only in the request-scoped
-  `tool_credentials.web_search` object and never persists it.
+  installed, configured, or invoked through the plugin lifecycle. Native Agent
+  stores the owner-configured Tavily key encrypted; ProductCore exposes only
+  write-only update and safe configured/hint/revision state. `agent.chat` and
+  `agent.chat.stream` require the explicit model profile id, profile revision,
+  and credential version pins; chat requests do not carry inline profiles or
+  tool credentials and do not fall back to a default profile.
 
 ## Runtime
 

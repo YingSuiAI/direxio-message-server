@@ -45,13 +45,38 @@ func knowledgeSchema(action string) *ActionSchema {
 	case "create":
 		s.Response = map[string]ActionFieldSchema{"memory_id": {Type: "string"}, "title": {Type: "string"}, "content": {Type: "string"}, "tags": {Type: "array"}, "created_at": {Type: "string"}, "replayed": {Type: "boolean"}, "embedding_indexed": {Type: "boolean"}, "embedding_profile_id": {Type: "string"}, "embedding_profile_revision": {Type: "integer"}, "embedding_model": {Type: "string"}}
 	case "search":
-		s.Response = map[string]ActionFieldSchema{"items": {Type: "array"}, "next_cursor": {Type: "string"}, "search_mode": {Type: "string"}, "embedding_profile_id": {Type: "string"}, "embedding_profile_revision": {Type: "integer"}, "embedding_model": {Type: "string"}}
+		s.Response = map[string]ActionFieldSchema{"items": {Type: "array"}, "next_cursor": {Type: "string"}, "search_mode": {Type: "string"}, "embedding_profile_id": {Type: "string"}, "embedding_profile_revision": {Type: "integer"}, "embedding_model": {Type: "string"}, "embedding_generation": {Type: "string"}, "collection_config_digest": {Type: "string"}}
 	case "status":
 		s.Response = map[string]ActionFieldSchema{"supported": {Type: "boolean"}, "count": {Type: "integer"}, "embedding_indexed": {Type: "integer"}, "embedding_stale": {Type: "integer"}, "embedding_profile_id": {Type: "string"}, "embedding_profile_revision": {Type: "integer"}, "embedding_model": {Type: "string"}}
 	case "memories_list":
 		s.Response = map[string]ActionFieldSchema{"items": {Type: "array"}, "next_page_token": {Type: "string"}}
 	default:
 		s.Response = map[string]ActionFieldSchema{"memory_id": {Type: "string"}, "title": {Type: "string"}, "content": {Type: "string"}, "tags": {Type: "array"}, "revision": {Type: "integer"}, "created_at": {Type: "string"}, "updated_at": {Type: "string"}, "replayed": {Type: "boolean"}}
+	}
+	return s
+}
+
+func knowledgeConfigSchema(action string) *ActionSchema {
+	s := &ActionSchema{Response: map[string]ActionFieldSchema{
+		"embedding_profile_id":       {Type: "string", Required: true},
+		"embedding_profile_revision": {Type: "integer", Required: true},
+		"embedding_model":            {Type: "string", Required: true},
+		"dimension":                  {Type: "integer"},
+		"collection":                 {Type: "string"},
+		"collection_config_digest":   {Type: "string", Required: true},
+		"revision":                   {Type: "integer", Required: true},
+		"updated_at":                 {Type: "string"},
+	}}
+	if action == "update" {
+		s.Request = map[string]ActionFieldSchema{
+			"idempotency_key":          {Type: "string", Required: true},
+			"expected_revision":        {Type: "integer", Required: true},
+			"embedding_profile_id":     {Type: "string"},
+			"profile_id":               {Type: "string"},
+			"dimension":                {Type: "integer"},
+			"collection":               {Type: "string"},
+			"collection_config_digest": {Type: "string"},
+		}
 	}
 	return s
 }
@@ -66,7 +91,7 @@ func knowledgeSourceSchema(action string) *ActionSchema {
 		s.Request = map[string]ActionFieldSchema{"source_id": {Type: "string", Required: true}, "expected_revision": {Type: "integer", Required: true}, "idempotency_key": {Type: "string", Required: true}}
 		s.Response = map[string]ActionFieldSchema{"source": {Type: "object"}, "replayed": {Type: "boolean"}}
 	case "upload_start":
-		s.Request = map[string]ActionFieldSchema{"filename": {Type: "string", Required: true}, "mime_type": {Type: "string", Required: true}, "size": {Type: "integer", Required: true}, "idempotency_key": {Type: "string", Required: true}}
+		s.Request = map[string]ActionFieldSchema{"filename": {Type: "string", Required: true}, "mime_type": {Type: "string", Required: true}, "size": {Type: "integer", Required: true}, "content_sha256": {Type: "string", Required: true}, "idempotency_key": {Type: "string", Required: true}}
 		s.Response = map[string]ActionFieldSchema{"upload_id": {Type: "string"}, "source_id": {Type: "string"}, "status": {Type: "string"}, "size": {Type: "integer"}, "received_size": {Type: "integer"}, "max_chunk_bytes": {Type: "integer"}, "progress": {Type: "number"}, "replayed": {Type: "boolean"}}
 	case "upload_chunk":
 		s.Request = map[string]ActionFieldSchema{"upload_id": {Type: "string", Required: true}, "offset": {Type: "integer", Required: true}, "data": {Type: "string", Required: true}, "chunk_sha256": {Type: "string", Required: true}, "idempotency_key": {Type: "string", Required: true}}

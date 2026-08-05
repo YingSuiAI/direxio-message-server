@@ -183,11 +183,11 @@ var expectedCatalogSchemaDigests = map[string]catalogSchemaDigest{
 	},
 	"agent.knowledge.config.get": {
 		inputHex:  "51da7ceec6376f5f1caac4b422cfa832718adde8bb2de8fda7940d2aff2b043f",
-		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+		resultHex: "87c332e9185a0436d6488041bbfc11cd66c9f40e345af02d9f97a76676cd65ae",
 	},
 	"agent.knowledge.config.update": {
 		inputHex:  "541e3f040ce4430ffdefbc6f72404382909e2329074b45b89b6c5321a3a3c7c0",
-		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+		resultHex: "87c332e9185a0436d6488041bbfc11cd66c9f40e345af02d9f97a76676cd65ae",
 	},
 	"agent.knowledge.sources.list": {
 		inputHex:  "b0418cb4b54dc5e1f787929dd8ba9c6fdd7d80d665779879e7da2a5a905aa08d",
@@ -235,11 +235,11 @@ var expectedCatalogSchemaDigests = map[string]catalogSchemaDigest{
 	},
 	"agent.knowledge.search": {
 		inputHex:  "50578c159dc6f9691d3c9e36a04f8216f1ff4d53414e35ac67cdbe8a43ebf62a",
-		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+		resultHex: "3bff0a96cb6f09421ee1a5ea243b8801a0b61fa4b1f8e01cdf98653acfd99761",
 	},
 	"agent.knowledge.memory.search": {
 		inputHex:  "e3590849933ecd876335ec1a0657848c4d165aeffb58162ab67fd45ec86fd679",
-		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+		resultHex: "3bff0a96cb6f09421ee1a5ea243b8801a0b61fa4b1f8e01cdf98653acfd99761",
 	},
 	"agent.knowledge.index": {
 		inputHex:  "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",

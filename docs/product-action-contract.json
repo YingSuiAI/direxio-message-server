@@ -5968,12 +5968,103 @@
     {
       "name": "agent.knowledge.config.get",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_and_ws_request",
+      "schema": {
+        "response": {
+          "collection": {
+            "type": "string"
+          },
+          "collection_config_digest": {
+            "type": "string",
+            "required": true
+          },
+          "dimension": {
+            "type": "integer"
+          },
+          "embedding_model": {
+            "type": "string",
+            "required": true
+          },
+          "embedding_profile_id": {
+            "type": "string",
+            "required": true
+          },
+          "embedding_profile_revision": {
+            "type": "integer",
+            "required": true
+          },
+          "revision": {
+            "type": "integer",
+            "required": true
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        }
+      }
     },
     {
       "name": "agent.knowledge.config.update",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "collection": {
+            "type": "string"
+          },
+          "collection_config_digest": {
+            "type": "string"
+          },
+          "dimension": {
+            "type": "integer"
+          },
+          "embedding_profile_id": {
+            "type": "string"
+          },
+          "expected_revision": {
+            "type": "integer",
+            "required": true
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          },
+          "profile_id": {
+            "type": "string"
+          }
+        },
+        "response": {
+          "collection": {
+            "type": "string"
+          },
+          "collection_config_digest": {
+            "type": "string",
+            "required": true
+          },
+          "dimension": {
+            "type": "integer"
+          },
+          "embedding_model": {
+            "type": "string",
+            "required": true
+          },
+          "embedding_profile_id": {
+            "type": "string",
+            "required": true
+          },
+          "embedding_profile_revision": {
+            "type": "integer",
+            "required": true
+          },
+          "revision": {
+            "type": "integer",
+            "required": true
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        }
+      }
     },
     {
       "name": "agent.knowledge.sources.list",
@@ -6033,6 +6124,10 @@
       "transport": "http_and_ws_request",
       "schema": {
         "request": {
+          "content_sha256": {
+            "type": "string",
+            "required": true
+          },
           "filename": {
             "type": "string",
             "required": true
@@ -6358,6 +6453,12 @@
           }
         },
         "response": {
+          "collection_config_digest": {
+            "type": "string"
+          },
+          "embedding_generation": {
+            "type": "string"
+          },
           "embedding_model": {
             "type": "string"
           },

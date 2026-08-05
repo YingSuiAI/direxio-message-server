@@ -111,12 +111,15 @@ explicitly non-text models.
 
 Native Agent 知识库由外部 Agent 按 owner 管理，Message Server 只做认证代理。`agent.knowledge.sources.list`、
 `.delete`、`agent.knowledge.upload.start`、`.chunk`、`.finish` 提供知识源
-上传和生命周期；V1 只接受合法 UTF-8 的 `text/plain`、`text/markdown`、
+上传和生命周期；`upload.start` 在创建会话前必须提交完整内容 SHA-256。V1
+只接受合法 UTF-8 的 `text/plain`、`text/markdown`、
 `text/csv`、`application/json`，文件大小不超过 10 MiB，分片使用 canonical
 base64 且每片不超过 256 KiB。上传阶段返回按字节计算的 `progress`；向量化
 阶段只有在所有向量和 ready source 记录原子提交后才算完成。索引始终解析
 服务端当前 owner 默认向量 profile，知识 API 不接收或返回 provider、base URL
-或任何模型密钥。
+或任何模型密钥。配置读写公开非密钥的 profile id/revision、模型、collection
+配置摘要和配置 revision；搜索页还公开实际 embedding generation，并从分页游标
+快照重放这些来源字段。
 
 `agent.knowledge.memory.create` 是 Eino remember/recall 的单条写入工具；
 `agent.knowledge.memories.list`、`.update`、`.delete` 管理可查看和编辑的

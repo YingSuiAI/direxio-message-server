@@ -3,10 +3,26 @@ package agentgateway
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/hex"
 	"testing"
 
 	capv1 "github.com/YingSuiAI/dirextalk-capability-api/gen/go/dirextalk/capability/v1"
 )
+
+func TestKnowledgeCatalogPinsCurrentAgentSchemaResults(t *testing.T) {
+	want := map[string]string{
+		"agent.knowledge.config.get":    "87c332e9185a0436d6488041bbfc11cd66c9f40e345af02d9f97a76676cd65ae",
+		"agent.knowledge.config.update": "87c332e9185a0436d6488041bbfc11cd66c9f40e345af02d9f97a76676cd65ae",
+		"agent.knowledge.search":        "3bff0a96cb6f09421ee1a5ea243b8801a0b61fa4b1f8e01cdf98653acfd99761",
+		"agent.knowledge.memory.search": "3bff0a96cb6f09421ee1a5ea243b8801a0b61fa4b1f8e01cdf98653acfd99761",
+	}
+	for action, expected := range want {
+		requirement := NewCatalogRequirement(action)
+		if got := hex.EncodeToString(requirement.ResultSchemaDigest); got != expected {
+			t.Errorf("%s result schema digest = %s, want %s", action, got, expected)
+		}
+	}
+}
 
 func TestValidateCatalogRejectsMissingOperationAndBadDigest(t *testing.T) {
 	descriptor := &capv1.CapabilityDescriptor{

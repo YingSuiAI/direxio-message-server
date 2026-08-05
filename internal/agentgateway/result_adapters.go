@@ -677,8 +677,15 @@ func knowledgeSearchResult(value map[string]any) map[string]any {
 	if mode := stringValue(valueByKey(value, "search_mode", "SearchMode")); mode != "" {
 		result["search_mode"] = mode
 	}
-	for _, key := range []string{"embedding_profile_id", "embedding_profile_revision", "embedding_model"} {
-		if item := valueByKey(value, key); item != nil {
+	aliases := map[string][]string{
+		"embedding_profile_id":       {"embedding_profile_id", "EmbeddingProfileID"},
+		"embedding_profile_revision": {"embedding_profile_revision", "EmbeddingProfileRevision"},
+		"embedding_model":            {"embedding_model", "EmbeddingModel"},
+		"embedding_generation":       {"embedding_generation", "EmbeddingGeneration"},
+		"collection_config_digest":   {"collection_config_digest", "CollectionConfigDigest"},
+	}
+	for key, names := range aliases {
+		if item := valueByKey(value, names...); item != nil {
 			result[key] = item
 		}
 	}
@@ -706,7 +713,7 @@ func knowledgeStatusResult(value map[string]any) map[string]any {
 
 func embeddingConfigResult(value map[string]any) map[string]any {
 	result := map[string]any{}
-	for _, pair := range [][2]string{{"embedding_profile_id", "EmbeddingProfileID"}, {"dimension", "Dimension"}, {"collection", "Collection"}, {"collection_config_digest", "CollectionConfigDigest"}, {"revision", "Revision"}, {"updated_at", "UpdatedAt"}} {
+	for _, pair := range [][2]string{{"embedding_profile_id", "EmbeddingProfileID"}, {"embedding_profile_revision", "EmbeddingProfileRevision"}, {"embedding_model", "EmbeddingModel"}, {"dimension", "Dimension"}, {"collection", "Collection"}, {"collection_config_digest", "CollectionConfigDigest"}, {"revision", "Revision"}, {"updated_at", "UpdatedAt"}} {
 		if item := valueByKey(value, pair[0], pair[1]); item != nil {
 			result[pair[0]] = item
 		}

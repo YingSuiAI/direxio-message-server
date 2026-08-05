@@ -87,11 +87,15 @@ capability live.
   `agent.knowledge.sources.list`, `.delete`, `agent.knowledge.upload.start`,
   `.chunk`, and `.finish`; V1 accepts valid UTF-8 `text/plain`,
   `text/markdown`, `text/csv`, and `application/json` files up to 10 MiB, with
-  canonical base64 chunks no larger than 256 KiB. Upload progress is byte-based;
-  a source is `ready` only after all vectors and the source record commit
-  atomically. The current owner default embedding profile is resolved by the
-  server, and knowledge actions never accept or return model credentials,
-  provider settings, or base URLs.
+  canonical base64 chunks no larger than 256 KiB. `upload.start` requires the
+  complete content SHA-256 before any session is created; upload progress is
+  byte-based, and a source is `ready` only after all vectors and the source
+  record commit atomically. The current owner default embedding profile is
+  resolved by the server, and knowledge actions never accept or return model
+  credentials, provider settings, or base URLs. Config reads/writes expose the
+  non-secret profile id/revision, model, collection digest, and config revision;
+  search pages additionally expose the exact embedding generation and replay
+  those values from opaque cursor snapshots.
 - `agent.knowledge.memory.create` is the singular Eino remember/recall write
   tool. `agent.knowledge.memories.list`, `.update`, and `.delete` expose the
   editable durable-memory records; they are distinct from conversation
