@@ -380,6 +380,7 @@ verify_hardened_candidate() {
   "$jq_bin" -e '
     .[0].HostConfig.ReadonlyRootfs == true and
     ((.[0].HostConfig.CapDrop // []) | map(ascii_upcase) | index("ALL")) != null and
+    ((.[0].HostConfig.CapAdd // []) | map(ascii_upcase) | sort) == ["NET_BIND_SERVICE"] and
     ((.[0].HostConfig.SecurityOpt // []) | map(ascii_downcase) | any(. == "no-new-privileges:true" or . == "no-new-privileges")) and
     ((.[0].Config.Healthcheck.Test // []) | length) > 1 and
     ((.[0].Config.Healthcheck.Test // [""])[0] == "CMD-SHELL") and
@@ -429,7 +430,7 @@ container_state() {
   "$jq_bin" -r '.[0].State.Status // ""' "$1"
 }
 
-container_matches_candidate() {
+container_matches_candidate_identity() {
   local file=$1 expected_state=${2:-}
   "$jq_bin" -e --arg id "$candidate_id" --arg project "$edge_project" --arg image "$caddy_image" --arg network "$edge_network" \
     '.[0].Id == $id and .[0].Config.Image == $image and
@@ -438,16 +439,19 @@ container_matches_candidate() {
      .[0].NetworkSettings.Networks[$network] != null' "$file" >/dev/null 2>&1 || return 1
   verify_ports_80_443 "$file" || return 1
   verify_volume_mounts "$file" "$caddy_data_volume" "$caddy_config_volume" || return 1
-  verify_hardened_candidate "$file" || return 1
   if [ -n "$expected_state" ]; then
+    case "$expected_state" in
+      created|exited|running|restarting|dead|paused) ;;
+      *) return 1 ;;
+    esac
     [ "$(container_state "$file")" = "$expected_state" ] || return 1
   fi
 }
 
-revalidate_candidate() {
+revalidate_candidate_identity() {
   local expected_state=${1:-}
   inspect_json "$candidate_id" "$tmp_dir/candidate-revalidate.json" || fail "candidate exact ID is unavailable" || return 1
-  container_matches_candidate "$tmp_dir/candidate-revalidate.json" "$expected_state" || fail "candidate exact identity changed" || return 1
+  container_matches_candidate_identity "$tmp_dir/candidate-revalidate.json" "$expected_state" || fail "candidate exact identity changed" || return 1
   candidate_image_id_actual=$(container_image_id "$tmp_dir/candidate-revalidate.json")
   [ "$candidate_image_id_actual" = "$candidate_image_id" ] || fail "candidate image ID changed" || return 1
   image_json "$caddy_image" "$tmp_dir/candidate-image-revalidate.json" || return 1
@@ -458,6 +462,12 @@ revalidate_candidate() {
   volume_json "$caddy_config_volume" "$tmp_dir/candidate-config-revalidate.json" || return 1
   [ "$(volume_fingerprint_from_json "$tmp_dir/candidate-data-revalidate.json")" = "$data_volume_fingerprint" ] || fail "candidate data volume object changed" || return 1
   [ "$(volume_fingerprint_from_json "$tmp_dir/candidate-config-revalidate.json")" = "$config_volume_fingerprint" ] || fail "candidate config volume object changed" || return 1
+}
+
+revalidate_candidate() {
+  local expected_state=${1:-}
+  revalidate_candidate_identity "$expected_state" || return 1
+  verify_hardened_candidate "$tmp_dir/candidate-revalidate.json" || fail "candidate hardening changed" || return 1
 }
 
 compose_edge() {
@@ -671,24 +681,46 @@ recover_transaction() {
     exited:running|created:running)
       revalidate_bound_files_and_host || return 1
       revalidate_objects stopped || return 1
-      revalidate_candidate running || return 1
-      [ "$(container_health "$tmp_dir/candidate-revalidate.json")" = healthy ] || return 1
-      verify_public_after_switch || return 1
+      revalidate_candidate_identity running || return 1
+      if ! verify_hardened_candidate "$tmp_dir/candidate-revalidate.json"; then
+        recover_candidate_failure "recovery candidate hardening mismatch" || return 1
+      fi
+      if ! wait_candidate_healthy; then
+        recover_candidate_failure "recovery candidate did not become healthy" || return 1
+      fi
+      if ! verify_public_after_switch; then
+        recover_candidate_failure "recovery candidate public verification failed" || return 1
+      fi
       install_transaction_receipts
+      ;;
+    exited:restarting|exited:dead|exited:paused|created:restarting|created:dead|created:paused)
+      revalidate_bound_files_and_host || return 1
+      revalidate_objects stopped || return 1
+      revalidate_candidate_identity "$candidate_state" || return 1
+      recover_candidate_failure "recovery candidate is $candidate_state" || return 1
       ;;
     exited:created|exited:exited|created:created|created:exited)
       revalidate_bound_files_and_host || return 1
       revalidate_objects stopped || return 1
-      revalidate_candidate "$candidate_state" || return 1
-      "$docker_bin" start "$candidate_id" >/dev/null 2>&1 || return 1
-      wait_candidate_healthy || return 1
-      verify_public_after_switch || return 1
+      revalidate_candidate_identity "$candidate_state" || return 1
+      if ! verify_hardened_candidate "$tmp_dir/candidate-revalidate.json"; then
+        recover_candidate_failure "recovery candidate hardening mismatch" || return 1
+      fi
+      if ! "$docker_bin" start "$candidate_id" >/dev/null 2>&1; then
+        recover_candidate_failure "recovery candidate start failed" || return 1
+      fi
+      if ! wait_candidate_healthy; then
+        recover_candidate_failure "recovery candidate did not become healthy" || return 1
+      fi
+      if ! verify_public_after_switch; then
+        recover_candidate_failure "recovery candidate public verification failed" || return 1
+      fi
       install_transaction_receipts
       ;;
     running:created|running:exited)
       revalidate_bound_files_and_host || return 1
       revalidate_objects running || return 1
-      revalidate_candidate "$candidate_state" || return 1
+      revalidate_candidate_identity "$candidate_state" || return 1
       remove_candidate_exact || return 1
       cleanup_transaction || return 1
       fail "recovery found an uncommitted candidate; legacy edge left public" || return 1
@@ -720,6 +752,7 @@ probe_read_only_candidate() {
       .volumes.caddy_data.name == $data and .volumes.caddy_data.external == true and
       .volumes.caddy_config.name == $config and .volumes.caddy_config.external == true and
       .services.caddy.read_only == true and (.services.caddy.cap_drop | index("ALL")) != null and
+      ((.services.caddy.cap_add // []) | map(ascii_upcase) | sort) == ["NET_BIND_SERVICE"] and
       (.services.caddy.security_opt | index("no-new-privileges:true")) != null and
       ((.services.caddy.healthcheck.test // []) | length) > 1 and
       ((.services.caddy.healthcheck.test | join(" ")) | test("wget|curl"))
@@ -949,7 +982,6 @@ candidate_create_and_verify() {
     "$tmp_dir/candidate-pre.json" >/dev/null 2>&1 || fail "candidate image/labels/network identity mismatch" || return 1
   verify_ports_80_443 "$tmp_dir/candidate-pre.json" || fail "candidate must publish 80 and 443" || return 1
   verify_volume_mounts "$tmp_dir/candidate-pre.json" "$caddy_data_volume" "$caddy_config_volume" || fail "candidate volume identity mismatch" || return 1
-  verify_hardened_candidate "$tmp_dir/candidate-pre.json" || fail "candidate hardening/healthcheck assumptions are not met" || return 1
   image_json "$caddy_image" "$tmp_dir/candidate-image.json" || fail "candidate image inspect failed" || return 1
   candidate_image=$(container_image_id "$tmp_dir/candidate-pre.json")
   candidate_image_id=$(image_id_from_image_json "$tmp_dir/candidate-image.json")
@@ -958,6 +990,7 @@ candidate_create_and_verify() {
   [ -n "$candidate_repo" ] || fail "candidate image has no RepoDigest" || return 1
   candidate_repo_digest=$candidate_repo
   candidate_image_id=$candidate_image
+  verify_hardened_candidate "$tmp_dir/candidate-pre.json" || fail "candidate hardening/healthcheck assumptions are not met" || return 1
   network_json "$edge_network" "$tmp_dir/candidate-network.json" || return 1
   verify_network_binding "$tmp_dir/candidate-network.json" "$network_id" "$edge_network" "$network_labels_hash" || fail "candidate public network object identity mismatch" || return 1
   volume_json "$caddy_data_volume" "$tmp_dir/candidate-data-volume.json" || return 1
@@ -986,21 +1019,37 @@ verify_public_after_switch() {
   probe_public
 }
 
+recover_candidate_failure() {
+  local reason=$1 candidate_file=$tmp_dir/recovery-candidate-rollback.json candidate_state
+  revalidate_bound_files_and_host || return 1
+  revalidate_objects stopped || return 1
+  inspect_json "$candidate_id" "$candidate_file" || fail "recovery candidate exact ID unavailable before rollback" || return 1
+  [ "$(container_id_from_json "$candidate_file")" = "$candidate_id" ] || fail "recovery candidate ID changed before rollback" || return 1
+  candidate_state=$(container_state "$candidate_file")
+  case "$candidate_state" in
+    created|exited|running|restarting|dead|paused) ;;
+    *) fail "recovery candidate left an uncertain exact-container state" || return 1 ;;
+  esac
+  revalidate_candidate_identity "$candidate_state" || fail "recovery candidate identity changed before rollback" || return 1
+  if rollback_exact; then
+    cleanup_transaction || fail "recovery rollback succeeded but transaction cleanup failed" || return 1
+    fail "$reason; exact legacy Caddy restored" || return 1
+  fi
+  fail "$reason and exact rollback failed" || return 1
+}
+
 remove_candidate_exact() {
-  local candidate_inspect candidate_full after expected_legacy_state=${1:-running}
+  local candidate_inspect candidate_full after candidate_state expected_legacy_state=${1:-running}
   [ -n "${candidate_id:-}" ] && valid_full_container_id "$candidate_id" || return 0
   candidate_inspect=$tmp_dir/candidate-pre-stop-rollback.json
   inspect_json "$candidate_id" "$candidate_inspect" || return 1
   candidate_full=$(container_id_from_json "$candidate_inspect")
   [ "$candidate_full" = "$candidate_id" ] || return 1
-  "$jq_bin" -e --arg project "$edge_project" --arg image "$caddy_image" --arg network "$edge_network" \
-    '.[0].Config.Labels["com.docker.compose.project"] == $project and .[0].Config.Labels["com.docker.compose.service"] == "caddy" and .[0].Config.Image == $image and .[0].NetworkSettings.Networks[$network] != null' \
-    "$candidate_inspect" >/dev/null 2>&1 || return 1
-  verify_ports_80_443 "$candidate_inspect" || return 1
-  verify_volume_mounts "$candidate_inspect" "$caddy_data_volume" "$caddy_config_volume" || return 1
+  candidate_state=$(container_state "$candidate_inspect")
+  container_matches_candidate_identity "$candidate_inspect" "$candidate_state" || return 1
   revalidate_bound_files_and_host || return 1
   revalidate_objects "$expected_legacy_state" || return 1
-  revalidate_candidate || return 1
+  revalidate_candidate_identity "$candidate_state" || return 1
   if "$docker_bin" rm -f "$candidate_id" >/dev/null 2>&1; then
     return 0
   fi
@@ -1008,7 +1057,7 @@ remove_candidate_exact() {
   # an uncertain rm result.
   revalidate_bound_files_and_host || return 1
   revalidate_objects "$expected_legacy_state" || return 1
-  revalidate_candidate || return 1
+  revalidate_candidate_identity "$candidate_state" || return 1
   "$docker_bin" stop "$candidate_id" >/dev/null 2>&1 || return 1
   after=$tmp_dir/candidate-after-stop.json
   inspect_json "$candidate_id" "$after" || return 1
@@ -1025,7 +1074,7 @@ rollback_exact() {
       candidate_full=$(container_id_from_json "$candidate_inspect")
       if [ "$candidate_full" = "$candidate_id" ] && "$jq_bin" -e --arg project "$edge_project" --arg image "$caddy_image" --arg network "$edge_network" \
         '.[0].Config.Labels["com.docker.compose.project"] == $project and .[0].Config.Labels["com.docker.compose.service"] == "caddy" and .[0].Config.Image == $image and .[0].NetworkSettings.Networks[$network] != null' \
-        "$candidate_inspect" >/dev/null 2>&1 && verify_ports_80_443 "$candidate_inspect" && verify_volume_mounts "$candidate_inspect" "$caddy_data_volume" "$caddy_config_volume" && verify_hardened_candidate "$candidate_inspect"; then
+        "$candidate_inspect" >/dev/null 2>&1 && verify_ports_80_443 "$candidate_inspect" && verify_volume_mounts "$candidate_inspect" "$caddy_data_volume" "$caddy_config_volume"; then
         if ! remove_candidate_exact stopped; then
           candidate_cleanup_ok=false
         fi

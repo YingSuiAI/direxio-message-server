@@ -524,8 +524,10 @@ never attach a newer image to an old namespace in this harness.
 Public TLS termination is a separate, tracked Compose project in
 `edge-compose.yaml`. It contains only one Caddy service: the service is
 digest-pinned through `DIREXTALK_CADDY_IMAGE_IMMUTABLE`, read-only, drops all
-Linux capabilities, enables `no-new-privileges`, publishes host ports 80/443,
-and joins only the fresh message-server `message_public` network. Caddy data
+Linux capabilities, then adds only `NET_BIND_SERVICE` so the official Caddy
+binary's file capability can bind ports 80/443 while `no-new-privileges` is
+enabled, and joins only the fresh message-server `message_public` network.
+Caddy data
 and config are explicitly named external volumes. The Caddyfile is a reviewed,
 mode-0400 regular file and must reverse-proxy to `message-server:8008` or
 `message-server:8448`.
@@ -575,8 +577,9 @@ binds its full immutable container ID before stopping the legacy ID:
 Only the exact legacy ID is stopped and only the exact candidate ID is
 started. The candidate must expose 80/443, retain the recorded network and
 volume object identities, use the digest-pinned image/RepoDigest, expose a
-usable healthcheck command, and satisfy read-only-rootfs, capability-drop,
-and no-new-privileges checks before the legacy stop boundary. Failure verifies
+usable healthcheck command, and satisfy read-only-rootfs, capability-drop with
+exactly NET_BIND_SERVICE added, and no-new-privileges checks before the legacy
+stop boundary. Failure verifies
 the candidate identity before removing it, re-inspects the exact legacy ID
 before starting it, and verifies public health/TLS after rollback. A running
 legacy must remain in the public network object's container map; after an

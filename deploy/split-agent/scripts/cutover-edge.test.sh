@@ -63,8 +63,13 @@ if [ "$1" = compose ]; then
       [ "${DIREXTALK_MOCK_CONFIG_FAIL:-false}" != true ] || exit 37
       case " $* " in
         *edge-compose.yaml*)
+          edge_cap_add='["NET_BIND_SERVICE"]'
+          case "${DIREXTALK_MOCK_EDGE_CAP_ADD:-}" in
+            missing) edge_cap_add='[]' ;;
+            extra) edge_cap_add='["NET_BIND_SERVICE","SYS_ADMIN"]' ;;
+          esac
           cat <<JSON
-{"name":"edge-test","services":{"caddy":{"image":"$caddy_image","networks":["message_public"],"ports":[{"published":"80","target":80},{"published":"443","target":443}],"read_only":true,"cap_drop":["ALL"],"security_opt":["no-new-privileges:true"],"healthcheck":{"test":["CMD-SHELL","wget -q -O - http://127.0.0.1:2019/config/ >/dev/null"]},"volumes":[{"type":"volume","source":"caddy_data","target":"/data"},{"type":"volume","source":"caddy_config","target":"/config"}]}},"networks":{"message_public":{"name":"$network","external":true}},"volumes":{"caddy_data":{"name":"caddy-data","external":true},"caddy_config":{"name":"caddy-config","external":true}}}
+{"name":"edge-test","services":{"caddy":{"image":"$caddy_image","networks":["message_public"],"ports":[{"published":"80","target":80},{"published":"443","target":443}],"read_only":true,"cap_drop":["ALL"],"cap_add":$edge_cap_add,"security_opt":["no-new-privileges:true"],"healthcheck":{"test":["CMD-SHELL","wget -q -O - http://127.0.0.1:2019/config/ >/dev/null"]},"volumes":[{"type":"volume","source":"caddy_data","target":"/data"},{"type":"volume","source":"caddy_config","target":"/config"}]}},"networks":{"message_public":{"name":"$network","external":true}},"volumes":{"caddy_data":{"name":"caddy-data","external":true},"caddy_config":{"name":"caddy-config","external":true}}}
 JSON
           ;;
         *)
@@ -124,8 +129,14 @@ JSON
         status=created
         [ -f "$state/new-up" ] && status=running
         [ -f "$state/new-removed" ] && status=exited
+        [ "${DIREXTALK_MOCK_NEW_RESTARTING:-false}" = true ] && status=restarting
+        new_cap_add='["NET_BIND_SERVICE"]'
+        case "${DIREXTALK_MOCK_NEW_INSPECT_CAP_ADD:-}" in
+          missing) new_cap_add='[]' ;;
+          extra) new_cap_add='["NET_BIND_SERVICE","SYS_ADMIN"]' ;;
+        esac
         cat <<JSON
-[{"Id":"$new_id","Image":"$new_image_id","Config":{"Image":"$caddy_image","Healthcheck":{"Test":["CMD-SHELL","wget -q -O - http://127.0.0.1:2019/config/ >/dev/null"]},"Labels":{"com.docker.compose.project":"edge-test","com.docker.compose.service":"caddy"}},"NetworkSettings":{"Networks":{"$network":{}}},"Mounts":[{"Type":"volume","Name":"caddy-data","Destination":"/data"},{"Type":"volume","Name":"caddy-config","Destination":"/config"}],"HostConfig":{"PortBindings":{"80/tcp":[{"HostPort":"80"}],"443/tcp":[{"HostPort":"443"}]},"ReadonlyRootfs":true,"CapDrop":["ALL"],"SecurityOpt":["no-new-privileges:true"]},"State":{"Status":"$status","Health":{"Status":"healthy"}}}]
+[{"Id":"$new_id","Image":"$new_image_id","Config":{"Image":"$caddy_image","Healthcheck":{"Test":["CMD-SHELL","wget -q -O - http://127.0.0.1:2019/config/ >/dev/null"]},"Labels":{"com.docker.compose.project":"edge-test","com.docker.compose.service":"caddy"}},"NetworkSettings":{"Networks":{"$network":{}}},"Mounts":[{"Type":"volume","Name":"caddy-data","Destination":"/data"},{"Type":"volume","Name":"caddy-config","Destination":"/config"}],"HostConfig":{"PortBindings":{"80/tcp":[{"HostPort":"80"}],"443/tcp":[{"HostPort":"443"}]},"ReadonlyRootfs":true,"CapDrop":["ALL"],"CapAdd":$new_cap_add,"SecurityOpt":["no-new-privileges:true"]},"State":{"Status":"$status","Health":{"Status":"healthy"}}}]
 JSON
         ;;
       *) exit 1 ;;
@@ -301,7 +312,7 @@ run_case() {
   : >"$DIREXTALK_MOCK_LOG"
   : >"$DIREXTALK_CURL_LOG"
   rm -f -- "$DIREXTALK_MOCK_STATE"/old-stopped "$DIREXTALK_MOCK_STATE"/old-started "$DIREXTALK_MOCK_STATE"/new-created "$DIREXTALK_MOCK_STATE"/new-up "$DIREXTALK_MOCK_STATE"/new-removed "$DIREXTALK_MOCK_STATE"/config-blocked "$DIREXTALK_MOCK_STATE"/config-release "$DIREXTALK_MOCK_STATE"/post-stop-inspect-failed
-  unset DIREXTALK_MOCK_CONFIG_FAIL DIREXTALK_MOCK_UP_FAIL DIREXTALK_MOCK_PUBLIC_FAIL DIREXTALK_MOCK_START_FAIL DIREXTALK_MOCK_NEW_START_FAIL DIREXTALK_MOCK_STOP_APPLIED_ERROR DIREXTALK_MOCK_RM_FAIL DIREXTALK_MOCK_BLOCK_CONFIG DIREXTALK_MOCK_POST_STOP_INSPECT_FAIL DIREXTALK_CUTOVER_TEST_BLOCK_AFTER_LOCK DIREXTALK_CUTOVER_TEST_LOCK_READY_FILE DIREXTALK_CUTOVER_TEST_LOCK_RELEASE_FILE DIREXTALK_CUTOVER_TEST_CRASH_AFTER_OLD_STOP DIREXTALK_CUTOVER_TEST_CRASH_AFTER_CANDIDATE_START DIREXTALK_CUTOVER_TEST_CRASH_AFTER_RECEIPT_INSTALL DIREXTALK_MOCK_EDGE_EXISTS DIREXTALK_MOCK_REPLACED
+  unset DIREXTALK_MOCK_CONFIG_FAIL DIREXTALK_MOCK_UP_FAIL DIREXTALK_MOCK_PUBLIC_FAIL DIREXTALK_MOCK_START_FAIL DIREXTALK_MOCK_NEW_START_FAIL DIREXTALK_MOCK_NEW_RESTARTING DIREXTALK_MOCK_STOP_APPLIED_ERROR DIREXTALK_MOCK_RM_FAIL DIREXTALK_MOCK_BLOCK_CONFIG DIREXTALK_MOCK_POST_STOP_INSPECT_FAIL DIREXTALK_MOCK_EDGE_CAP_ADD DIREXTALK_MOCK_NEW_INSPECT_CAP_ADD DIREXTALK_CUTOVER_TEST_BLOCK_AFTER_LOCK DIREXTALK_CUTOVER_TEST_LOCK_READY_FILE DIREXTALK_CUTOVER_TEST_LOCK_RELEASE_FILE DIREXTALK_CUTOVER_TEST_CRASH_AFTER_OLD_STOP DIREXTALK_CUTOVER_TEST_CRASH_AFTER_CANDIDATE_START DIREXTALK_CUTOVER_TEST_CRASH_AFTER_RECEIPT_INSTALL DIREXTALK_MOCK_EDGE_EXISTS DIREXTALK_MOCK_REPLACED
   rm -f -- "$1"
 }
 
@@ -319,6 +330,43 @@ if grep -Fq -- "rm -f $new_id" "$DIREXTALK_MOCK_LOG"; then
   exit 1
 fi
 [ ! -e "$tmp_dir/.cutover-edge-txn" ] || { echo "successful cutover left transaction" >&2; exit 1; }
+
+# Rendered edge hardening requires exactly NET_BIND_SERVICE: missing and extra
+# capabilities must fail before the old Caddy stop boundary.
+for cap_case in missing extra; do
+  cap_receipt=$tmp_dir/output/cap-render-$cap_case.receipt
+  run_case "$cap_receipt"
+  export DIREXTALK_MOCK_EDGE_CAP_ADD=$cap_case
+  if "$script" "$stack_env" "$edge_env" "$receipt" "$cap_receipt" >/dev/null 2>&1; then
+    echo "$cap_case edge capability render unexpectedly succeeded" >&2
+    exit 1
+  fi
+  unset DIREXTALK_MOCK_EDGE_CAP_ADD
+  [ ! -e "$cap_receipt" ]
+  if grep -Fq -- "stop $old_id" "$DIREXTALK_MOCK_LOG"; then
+    echo "$cap_case edge capability render crossed the old stop boundary" >&2
+    exit 1
+  fi
+done
+
+# Container hardening independently rejects missing and extra CapAdd entries
+# even when the rendered Compose definition is correct.
+for cap_case in missing extra; do
+  cap_receipt=$tmp_dir/output/cap-inspect-$cap_case.receipt
+  run_case "$cap_receipt"
+  export DIREXTALK_MOCK_NEW_INSPECT_CAP_ADD=$cap_case
+  if "$script" "$stack_env" "$edge_env" "$receipt" "$cap_receipt" >/dev/null 2>&1; then
+    echo "$cap_case edge capability inspect unexpectedly succeeded" >&2
+    exit 1
+  fi
+  unset DIREXTALK_MOCK_NEW_INSPECT_CAP_ADD
+  [ ! -e "$cap_receipt" ]
+  grep -Fq -- "rm -f $new_id" "$DIREXTALK_MOCK_LOG"
+  if grep -Fq -- "stop $old_id" "$DIREXTALK_MOCK_LOG"; then
+    echo "$cap_case edge capability inspect crossed the old stop boundary" >&2
+    exit 1
+  fi
+done
 
 sigkill_first=$tmp_dir/output/sigkill-first.receipt
 sigkill_second=$tmp_dir/output/sigkill-second.receipt
@@ -459,6 +507,52 @@ unset DIREXTALK_CUTOVER_TEST_CRASH_AFTER_CANDIDATE_START
 [ -f "$tmp_dir/.cutover-edge-txn/journal" ]
 "$script" "$stack_env" "$edge_env" "$receipt" "$crash_start_receipt" >/dev/null
 [ "$(stat -c '%a' "$crash_start_receipt")" = 400 ]
+[ ! -e "$tmp_dir/.cutover-edge-txn" ]
+
+# A journal-bound restarting candidate with legacy stopped must be removed by
+# exact ID, old Caddy restored, and recovery must return negative.
+restarting_recovery_receipt=$tmp_dir/output/restarting-recovery.receipt
+run_case "$restarting_recovery_receipt"
+export DIREXTALK_CUTOVER_TEST_CRASH_AFTER_CANDIDATE_START=true
+if "$script" "$stack_env" "$edge_env" "$receipt" "$restarting_recovery_receipt" >/dev/null 2>&1; then
+  echo "restarting recovery crash injection unexpectedly succeeded" >&2
+  exit 1
+fi
+unset DIREXTALK_CUTOVER_TEST_CRASH_AFTER_CANDIDATE_START
+: >"$DIREXTALK_MOCK_LOG"
+export DIREXTALK_MOCK_NEW_RESTARTING=true
+export DIREXTALK_MOCK_NEW_INSPECT_CAP_ADD=missing
+if "$script" "$stack_env" "$edge_env" "$receipt" "$restarting_recovery_receipt" >/dev/null 2>&1; then
+  echo "restarting cutover recovery unexpectedly succeeded" >&2
+  exit 1
+fi
+unset DIREXTALK_MOCK_NEW_RESTARTING DIREXTALK_MOCK_NEW_INSPECT_CAP_ADD
+grep -Fq -- "rm -f $new_id" "$DIREXTALK_MOCK_LOG"
+grep -Fq -- "start $old_id" "$DIREXTALK_MOCK_LOG"
+[ ! -e "$restarting_recovery_receipt" ]
+[ ! -e "$tmp_dir/.cutover-edge-txn" ]
+
+# A journal-bound created candidate whose recovery start fails must take the
+# same exact rollback path and leave no transaction or output receipt.
+created_fail_recovery_receipt=$tmp_dir/output/created-start-fail-recovery.receipt
+run_case "$created_fail_recovery_receipt"
+export DIREXTALK_CUTOVER_TEST_CRASH_AFTER_OLD_STOP=true
+if "$script" "$stack_env" "$edge_env" "$receipt" "$created_fail_recovery_receipt" >/dev/null 2>&1; then
+  echo "created start-fail crash injection unexpectedly succeeded" >&2
+  exit 1
+fi
+unset DIREXTALK_CUTOVER_TEST_CRASH_AFTER_OLD_STOP
+: >"$DIREXTALK_MOCK_LOG"
+export DIREXTALK_MOCK_NEW_START_FAIL=true
+if "$script" "$stack_env" "$edge_env" "$receipt" "$created_fail_recovery_receipt" >/dev/null 2>&1; then
+  echo "created start-fail cutover recovery unexpectedly succeeded" >&2
+  exit 1
+fi
+unset DIREXTALK_MOCK_NEW_START_FAIL
+grep -Fq -- "start $new_id" "$DIREXTALK_MOCK_LOG"
+grep -Fq -- "rm -f $new_id" "$DIREXTALK_MOCK_LOG"
+grep -Fq -- "start $old_id" "$DIREXTALK_MOCK_LOG"
+[ ! -e "$created_fail_recovery_receipt" ]
 [ ! -e "$tmp_dir/.cutover-edge-txn" ]
 
 crash_receipt_install=$tmp_dir/output/crash-receipt-install.receipt

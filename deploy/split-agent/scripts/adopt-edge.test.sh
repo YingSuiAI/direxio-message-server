@@ -45,8 +45,13 @@ if [ "$1" = compose ]; then
   case " $* " in
     *' config --quiet '*) exit 0 ;;
     *' config --format json '*)
+      candidate_cap_add='["NET_BIND_SERVICE"]'
+      case "${DIREXTALK_MOCK_CANDIDATE_CAP_ADD:-}" in
+        missing) candidate_cap_add='[]' ;;
+        extra) candidate_cap_add='["NET_BIND_SERVICE","SYS_ADMIN"]' ;;
+      esac
       cat <<JSON
-{"name":"edge-new","services":{"caddy":{"image":"$candidate_image","read_only":true,"cap_drop":["ALL"],"security_opt":["no-new-privileges:true"],"ports":[{"published":"80","target":80},{"published":"443","target":443}],"healthcheck":{"test":["CMD-SHELL","wget -q -O - http://127.0.0.1:2019/config/ >/dev/null"]},"networks":["message_public"],"volumes":[{"type":"volume","source":"caddy_data","target":"/data"},{"type":"volume","source":"caddy_config","target":"/config"}]}},"networks":{"message_public":{"name":"$network","external":true}},"volumes":{"caddy_data":{"name":"$data_volume","external":true},"caddy_config":{"name":"$config_volume","external":true}}}
+{"name":"edge-new","services":{"caddy":{"image":"$candidate_image","read_only":true,"cap_drop":["ALL"],"cap_add":$candidate_cap_add,"security_opt":["no-new-privileges:true"],"ports":[{"published":"80","target":80},{"published":"443","target":443}],"healthcheck":{"test":["CMD-SHELL","wget -q -O - http://127.0.0.1:2019/config/ >/dev/null"]},"networks":["message_public"],"volumes":[{"type":"volume","source":"caddy_data","target":"/data"},{"type":"volume","source":"caddy_config","target":"/config"}]}},"networks":{"message_public":{"name":"$network","external":true}},"volumes":{"caddy_data":{"name":"$data_volume","external":true},"caddy_config":{"name":"$config_volume","external":true}}}
 JSON
       exit 0
       ;;
@@ -87,14 +92,20 @@ JSON
         status=created; health=starting
         [ -f "$state/candidate-started" ] && status=running && health=healthy
         [ -f "$state/candidate-removed" ] && status=exited
+        [ "${DIREXTALK_MOCK_CANDIDATE_RESTARTING:-false}" = true ] && status=restarting && health=starting
         candidate_healthcheck=',"Healthcheck":{"Test":["CMD-SHELL","wget -q -O - http://127.0.0.1:2019/config/ >/dev/null"]}'
         candidate_state="{\"Status\":\"$status\",\"Health\":{\"Status\":\"$health\"}}"
         if [ "${DIREXTALK_MOCK_CANDIDATE_NO_HEALTH:-false}" = true ]; then
           candidate_healthcheck=''
           candidate_state="{\"Status\":\"$status\"}"
         fi
+        candidate_cap_add='["NET_BIND_SERVICE"]'
+        case "${DIREXTALK_MOCK_CANDIDATE_INSPECT_CAP_ADD:-${DIREXTALK_MOCK_CANDIDATE_CAP_ADD:-}}" in
+          missing) candidate_cap_add='[]' ;;
+          extra) candidate_cap_add='["NET_BIND_SERVICE","SYS_ADMIN"]' ;;
+        esac
         cat <<JSON
-[{"Id":"$candidate_id","Image":"$candidate_image_id","Config":{"Image":"$candidate_image","Labels":{"com.docker.compose.project":"edge-new","com.docker.compose.service":"caddy"}$candidate_healthcheck},"NetworkSettings":{"Networks":{"$network":{}}},"Mounts":[{"Type":"volume","Name":"$data_volume","Destination":"/data"},{"Type":"volume","Name":"$config_volume","Destination":"/config"}],"HostConfig":{"PortBindings":{"80/tcp":[{"HostPort":"80"}],"443/tcp":[{"HostPort":"443"}]},"ReadonlyRootfs":true,"CapDrop":["ALL"],"SecurityOpt":["no-new-privileges:true"]},"State":$candidate_state}]
+[{"Id":"$candidate_id","Image":"$candidate_image_id","Config":{"Image":"$candidate_image","Labels":{"com.docker.compose.project":"edge-new","com.docker.compose.service":"caddy"}$candidate_healthcheck},"NetworkSettings":{"Networks":{"$network":{}}},"Mounts":[{"Type":"volume","Name":"$data_volume","Destination":"/data"},{"Type":"volume","Name":"$config_volume","Destination":"/config"}],"HostConfig":{"PortBindings":{"80/tcp":[{"HostPort":"80"}],"443/tcp":[{"HostPort":"443"}]},"ReadonlyRootfs":true,"CapDrop":["ALL"],"CapAdd":$candidate_cap_add,"SecurityOpt":["no-new-privileges:true"]},"State":$candidate_state}]
 JSON
         ;;
       *3333333333333333333333333333333333333333333333333333333333333333) printf '[{"Id":"%s","RepoDigests":["%s"]}]\n' "$legacy_image_id" "$legacy_repo_digest" ;;
@@ -233,6 +244,47 @@ grep -Fq -- "start $candidate_id" "$DIREXTALK_MOCK_LOG"
 [ -e "$tmp_dir/probe/.adopt-edge-committed.$operation" ]
 [ "$(stat -c '%a' "$tmp_dir/probe/.adopt-edge-committed.$operation")" = 400 ]
 
+# The edge render must carry exactly NET_BIND_SERVICE: missing and extra
+# capabilities are rejected before any candidate or legacy mutation.
+for cap_case in missing extra; do
+  cap_dir=$tmp_dir/probe/cap-$cap_case
+  rm -rf -- "$cap_dir"; mkdir -m 700 "$cap_dir"
+  rm -f -- "$DIREXTALK_MOCK_STATE"/* "$DIREXTALK_MOCK_LOG"
+  export DIREXTALK_MOCK_CANDIDATE_CAP_ADD=$cap_case
+  if "$script" probe "$edge_env" "$legacy_id" "$cap_dir/probe.receipt" "cap-$cap_case" "rev-cap-$cap_case" >/dev/null 2>&1; then
+    echo "$cap_case candidate capability render unexpectedly accepted" >&2
+    exit 1
+  fi
+  unset DIREXTALK_MOCK_CANDIDATE_CAP_ADD
+  [ ! -e "$cap_dir/probe.receipt" ]
+  if grep -Eq '(^| )(stop|start|rm|create)( |$)' "$DIREXTALK_MOCK_LOG"; then
+    echo "$cap_case candidate capability render caused a Docker mutation" >&2
+    exit 1
+  fi
+done
+
+# The candidate inspect hardening gate independently rejects missing and extra
+# capabilities even when the Compose render itself is correct.
+for cap_case in missing extra; do
+  cap_dir=$tmp_dir/probe/cap-inspect-$cap_case
+  rm -rf -- "$cap_dir"; mkdir -m 700 "$cap_dir"
+  rm -f -- "$DIREXTALK_MOCK_STATE"/* "$DIREXTALK_MOCK_LOG"
+  cap_probe=$cap_dir/probe.receipt
+  "$script" probe "$edge_env" "$legacy_id" "$cap_probe" "cap-inspect-$cap_case" "rev-cap-inspect-$cap_case" >/dev/null
+  : >"$DIREXTALK_MOCK_LOG"
+  export DIREXTALK_MOCK_CANDIDATE_INSPECT_CAP_ADD=$cap_case
+  if "$script" commit "$edge_env" "$cap_probe" "cap-inspect-$cap_case" "rev-cap-inspect-$cap_case" "$cap_dir/active.receipt" "$cap_dir/legacy.snapshot" >/dev/null 2>&1; then
+    echo "$cap_case candidate capability inspect unexpectedly accepted" >&2
+    exit 1
+  fi
+  unset DIREXTALK_MOCK_CANDIDATE_INSPECT_CAP_ADD
+  grep -Fq -- "rm -f $candidate_id" "$DIREXTALK_MOCK_LOG"
+  if grep -Fq -- "stop $legacy_id" "$DIREXTALK_MOCK_LOG"; then
+    echo "$cap_case candidate capability inspect crossed the legacy stop boundary" >&2
+    exit 1
+  fi
+done
+
 # A crash after the exact legacy stop leaves a created candidate and a stopped
 # legacy. Recovery must accept the network object omitting the stopped legacy,
 # then start only the journal-bound candidate.
@@ -256,6 +308,62 @@ unset DIREXTALK_ADOPT_TEST_CRASH_AFTER_LEGACY_STOP
 unset DIREXTALK_MOCK_OMIT_STOPPED_LEGACY_FROM_NETWORK
 [ -f "$created_active" ] && [ -f "$created_snapshot" ]
 [ ! -e "$tmp_dir/probe/post-stop-created-recovery/.adopt-edge-txn.post-stop-created" ]
+
+# A journal-bound candidate that is restarting must be removed by exact ID,
+# the exact stopped legacy must be started, and recovery must return negative.
+rm -rf -- "$tmp_dir/probe/restarting-recovery"; mkdir -m 700 "$tmp_dir/probe/restarting-recovery"
+rm -f -- "$DIREXTALK_MOCK_STATE"/* "$DIREXTALK_MOCK_LOG"
+restarting_probe=$tmp_dir/probe/restarting-recovery/probe.receipt
+restarting_active=$tmp_dir/probe/restarting-recovery/active.receipt
+restarting_snapshot=$tmp_dir/probe/restarting-recovery/legacy.snapshot
+"$script" probe "$edge_env" "$legacy_id" "$restarting_probe" restarting-recovery rev-restarting-recovery >/dev/null
+export DIREXTALK_MOCK_OMIT_STOPPED_LEGACY_FROM_NETWORK=true
+export DIREXTALK_ADOPT_TEST_CRASH_AFTER_LEGACY_STOP=true
+if "$script" commit "$edge_env" "$restarting_probe" restarting-recovery rev-restarting-recovery "$restarting_active" "$restarting_snapshot" >/dev/null 2>&1; then
+  echo "restarting recovery crash injection unexpectedly succeeded" >&2
+  exit 1
+fi
+unset DIREXTALK_ADOPT_TEST_CRASH_AFTER_LEGACY_STOP
+: >"$DIREXTALK_MOCK_LOG"
+export DIREXTALK_MOCK_CANDIDATE_RESTARTING=true
+export DIREXTALK_MOCK_CANDIDATE_INSPECT_CAP_ADD=missing
+if "$script" commit "$edge_env" "$restarting_probe" restarting-recovery rev-restarting-recovery "$restarting_active" "$restarting_snapshot" >/dev/null 2>&1; then
+  echo "restarting candidate recovery unexpectedly succeeded" >&2
+  exit 1
+fi
+unset DIREXTALK_MOCK_CANDIDATE_RESTARTING DIREXTALK_MOCK_CANDIDATE_INSPECT_CAP_ADD DIREXTALK_MOCK_OMIT_STOPPED_LEGACY_FROM_NETWORK
+grep -Fq -- "rm -f $candidate_id" "$DIREXTALK_MOCK_LOG"
+grep -Fq -- "start $legacy_id" "$DIREXTALK_MOCK_LOG"
+[ ! -e "$restarting_active" ] && [ ! -e "$restarting_snapshot" ]
+[ ! -e "$tmp_dir/probe/restarting-recovery/.adopt-edge-txn.restarting-recovery" ]
+
+# A created journal candidate whose recovery start fails must take the same
+# exact rollback path and leave no transaction or receipts behind.
+rm -rf -- "$tmp_dir/probe/created-start-fail-recovery"; mkdir -m 700 "$tmp_dir/probe/created-start-fail-recovery"
+rm -f -- "$DIREXTALK_MOCK_STATE"/* "$DIREXTALK_MOCK_LOG"
+created_fail_probe=$tmp_dir/probe/created-start-fail-recovery/probe.receipt
+created_fail_active=$tmp_dir/probe/created-start-fail-recovery/active.receipt
+created_fail_snapshot=$tmp_dir/probe/created-start-fail-recovery/legacy.snapshot
+"$script" probe "$edge_env" "$legacy_id" "$created_fail_probe" created-start-fail rev-created-start-fail >/dev/null
+export DIREXTALK_MOCK_OMIT_STOPPED_LEGACY_FROM_NETWORK=true
+export DIREXTALK_ADOPT_TEST_CRASH_AFTER_LEGACY_STOP=true
+if "$script" commit "$edge_env" "$created_fail_probe" created-start-fail rev-created-start-fail "$created_fail_active" "$created_fail_snapshot" >/dev/null 2>&1; then
+  echo "created start-fail recovery crash injection unexpectedly succeeded" >&2
+  exit 1
+fi
+unset DIREXTALK_ADOPT_TEST_CRASH_AFTER_LEGACY_STOP
+: >"$DIREXTALK_MOCK_LOG"
+export DIREXTALK_MOCK_CANDIDATE_START_FAIL=true
+if "$script" commit "$edge_env" "$created_fail_probe" created-start-fail rev-created-start-fail "$created_fail_active" "$created_fail_snapshot" >/dev/null 2>&1; then
+  echo "created start-fail recovery unexpectedly succeeded" >&2
+  exit 1
+fi
+unset DIREXTALK_MOCK_CANDIDATE_START_FAIL DIREXTALK_MOCK_OMIT_STOPPED_LEGACY_FROM_NETWORK
+grep -Fq -- "start $candidate_id" "$DIREXTALK_MOCK_LOG"
+grep -Fq -- "rm -f $candidate_id" "$DIREXTALK_MOCK_LOG"
+grep -Fq -- "start $legacy_id" "$DIREXTALK_MOCK_LOG"
+[ ! -e "$created_fail_active" ] && [ ! -e "$created_fail_snapshot" ]
+[ ! -e "$tmp_dir/probe/created-start-fail-recovery/.adopt-edge-txn.created-start-fail" ]
 
 # A running legacy container missing from the network object remains a hard
 # pre-stop failure and must not reach candidate creation or the stop boundary.

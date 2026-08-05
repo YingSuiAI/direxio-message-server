@@ -209,7 +209,7 @@ volume_fingerprint_from_json() {
 
 verify_hardened_candidate() {
   local file=$1
-  "$jq_bin" -e '.[0].HostConfig.ReadonlyRootfs == true and ((.[0].HostConfig.CapDrop // []) | map(ascii_upcase) | index("ALL")) != null and ((.[0].HostConfig.SecurityOpt // []) | map(ascii_downcase) | any(. == "no-new-privileges:true" or . == "no-new-privileges")) and ((.[0].Config.Healthcheck.Test // []) | length) > 1 and ((.[0].Config.Healthcheck.Test // [""])[0] == "CMD-SHELL") and ((.[0].Config.Healthcheck.Test // [] | join(" ")) | test("wget|curl"))' "$file" >/dev/null 2>&1
+  "$jq_bin" -e '.[0].HostConfig.ReadonlyRootfs == true and ((.[0].HostConfig.CapDrop // []) | map(ascii_upcase) | index("ALL")) != null and ((.[0].HostConfig.CapAdd // []) | map(ascii_upcase) | sort) == ["NET_BIND_SERVICE"] and ((.[0].HostConfig.SecurityOpt // []) | map(ascii_downcase) | any(. == "no-new-privileges:true" or . == "no-new-privileges")) and ((.[0].Config.Healthcheck.Test // []) | length) > 1 and ((.[0].Config.Healthcheck.Test // [""])[0] == "CMD-SHELL") and ((.[0].Config.Healthcheck.Test // [] | join(" ")) | test("wget|curl"))' "$file" >/dev/null 2>&1
 }
 
 # Read one literal KEY=VALUE entry without sourcing untrusted deployment
@@ -555,6 +555,7 @@ render_and_verify_compose() {
       .volumes.caddy_config.name == $config and .volumes.caddy_config.external == true and
       .services.caddy.read_only == true and
       (.services.caddy.cap_drop | index("ALL")) != null and
+      ((.services.caddy.cap_add // []) | map(ascii_upcase) | sort) == ["NET_BIND_SERVICE"] and
       (.services.caddy.security_opt | index("no-new-privileges:true")) != null and
       ((.services.caddy.healthcheck.test // []) | length) > 1 and
       ((.services.caddy.healthcheck.test | join(" ")) | test("wget|curl")) and
@@ -671,7 +672,6 @@ create_new_caddy() {
   valid_full_container_id "$new_id" || fail "new Caddy candidate ID is not full" || return 1
   case "$new_id" in "$short_id"*) ;; *) fail "new Caddy candidate ID changed during inspect" || return 1 ;; esac
   verify_new_identity_without_health "$inspect_file" "$new_id" "$edge_project" "$caddy_image" "$message_network" "$caddy_data_volume" "$caddy_config_volume" || fail "new Caddy candidate identity mismatch" || return 1
-  verify_hardened_candidate "$inspect_file" || fail "new Caddy candidate hardening/healthcheck mismatch" || return 1
   candidate_image_id=$("$jq_bin" -r '.[0].Image // ""' "$inspect_file")
   image_file=$tmp_dir/new-caddy-image.json
   image_inspect_json "$caddy_image" "$image_file" || return 1
@@ -692,14 +692,20 @@ create_new_caddy() {
   volume_inspect_json "$caddy_config_volume" "$config_file" || return 1
   candidate_data_volume_fingerprint=$(volume_fingerprint_from_json "$data_file") || return 1
   candidate_config_volume_fingerprint=$(volume_fingerprint_from_json "$config_file") || return 1
+  verify_hardened_candidate "$inspect_file" || fail "new Caddy candidate hardening/healthcheck mismatch" || return 1
 }
 
-revalidate_candidate_exact() {
+revalidate_candidate_identity() {
   local file=$tmp_dir/new-caddy-revalidate.inspect.json actual_id actual_repo image_file network_file data_file config_file
+  local candidate_state
   inspect_container "$new_id" "$file" || return 1
   [ "$(container_id_from_inspect "$file")" = "$new_id" ] || return 1
+  candidate_state=$("$jq_bin" -r '.[0].State.Status // ""' "$file")
+  case "$candidate_state" in
+    created|exited|running|restarting|dead|paused) ;;
+    *) return 1 ;;
+  esac
   verify_new_identity_without_health "$file" "$new_id" "$edge_project" "$caddy_image" "$message_network" "$caddy_data_volume" "$caddy_config_volume" || return 1
-  verify_hardened_candidate "$file" || return 1
   [ "$("$jq_bin" -r '.[0].Image // ""' "$file")" = "$candidate_image_id" ] || return 1
   image_file=$tmp_dir/new-caddy-revalidate-image.json
   image_inspect_json "$caddy_image" "$image_file" || return 1
@@ -718,6 +724,11 @@ revalidate_candidate_exact() {
   [ "$(volume_fingerprint_from_json "$config_file")" = "$candidate_config_volume_fingerprint" ] || return 1
 }
 
+revalidate_candidate_exact() {
+  revalidate_candidate_identity || return 1
+  verify_hardened_candidate "$tmp_dir/new-caddy-revalidate.inspect.json" || return 1
+}
+
 wait_new_healthy() {
   local status
   for _ in $(seq 1 60); do
@@ -732,6 +743,25 @@ wait_new_healthy() {
     sleep 1
   done
   return 1
+}
+
+recover_candidate_failure() {
+  local reason=$1 candidate_file=$tmp_dir/recovery-candidate-rollback.inspect.json candidate_state
+  revalidate_control_bindings || return 1
+  revalidate_active_objects || return 1
+  inspect_container "$new_id" "$candidate_file" || fail "recovery candidate exact ID unavailable before rollback" || return 1
+  [ "$(container_id_from_inspect "$candidate_file")" = "$new_id" ] || fail "recovery candidate ID changed before rollback" || return 1
+  candidate_state=$("$jq_bin" -r '.[0].State.Status // ""' "$candidate_file")
+  case "$candidate_state" in
+    created|exited|running|restarting|dead|paused) ;;
+    *) fail "recovery candidate left an uncertain exact-container state" || return 1 ;;
+  esac
+  revalidate_candidate_identity || fail "recovery candidate identity changed before rollback" || return 1
+  if rollback; then
+    cleanup_transaction || fail "recovery rollback succeeded but transaction cleanup failed" || return 1
+    fail "$reason; exact old Caddy restored" || return 1
+  fi
+  fail "$reason and exact rollback failed" || return 1
 }
 
 remove_candidate_with_revalidation() {
@@ -830,7 +860,7 @@ revalidate_before_candidate_start() {
 revalidate_before_candidate_remove() {
   revalidate_control_bindings || return 1
   revalidate_active_objects || return 1
-  revalidate_candidate_exact
+  revalidate_candidate_identity
 }
 
 verify_old_identity_before_start() {
@@ -986,20 +1016,41 @@ recover_transaction() {
   old_state=$("$jq_bin" -r '.[0].State.Status // ""' "$old_file")
   candidate_state=$("$jq_bin" -r '.[0].State.Status // ""' "$candidate_file")
   case "$old_state:$candidate_state" in
-    exited:running)
+    exited:running|created:running)
       verify_old_identity_before_start "$old_file" "$old_id" "$old_project" "$old_image" "$current_network" "$old_data_volume" "$old_config_volume" || return 1
-      revalidate_before_candidate_start || return 1
-      wait_new_healthy || return 1
-      verify_public || return 1
+      revalidate_candidate_identity || return 1
+      if ! verify_hardened_candidate "$tmp_dir/new-caddy-revalidate.inspect.json"; then
+        recover_candidate_failure "recovery candidate hardening mismatch" || return 1
+      fi
+      if ! wait_new_healthy; then
+        recover_candidate_failure "recovery candidate did not become healthy" || return 1
+      fi
+      if ! verify_public; then
+        recover_candidate_failure "recovery candidate public verification failed" || return 1
+      fi
       write_receipt || return 1
       cleanup_transaction || return 1
       ;;
-    exited:created|exited:exited)
+    exited:restarting|exited:dead|exited:paused|created:restarting|created:dead|created:paused)
       verify_old_identity_before_start "$old_file" "$old_id" "$old_project" "$old_image" "$current_network" "$old_data_volume" "$old_config_volume" || return 1
-      revalidate_before_candidate_start || return 1
-      "$docker_bin" start "$new_id" >/dev/null 2>&1 || return 1
-      wait_new_healthy || return 1
-      verify_public || return 1
+      revalidate_candidate_identity || return 1
+      recover_candidate_failure "recovery candidate is $candidate_state" || return 1
+      ;;
+    exited:created|exited:exited|created:created|created:exited)
+      verify_old_identity_before_start "$old_file" "$old_id" "$old_project" "$old_image" "$current_network" "$old_data_volume" "$old_config_volume" || return 1
+      revalidate_candidate_identity || return 1
+      if ! verify_hardened_candidate "$tmp_dir/new-caddy-revalidate.inspect.json"; then
+        recover_candidate_failure "recovery candidate hardening mismatch" || return 1
+      fi
+      if ! "$docker_bin" start "$new_id" >/dev/null 2>&1; then
+        recover_candidate_failure "recovery candidate start failed" || return 1
+      fi
+      if ! wait_new_healthy; then
+        recover_candidate_failure "recovery candidate did not become healthy" || return 1
+      fi
+      if ! verify_public; then
+        recover_candidate_failure "recovery candidate public verification failed" || return 1
+      fi
       write_receipt || return 1
       cleanup_transaction || return 1
       ;;
@@ -1110,7 +1161,10 @@ verify_no_new_edge_container || exit 1
 
 # Render and pre-create the candidate while the recorded legacy edge is still
 # public.  All later mutations use only this full immutable ID.
-create_new_caddy || exit 1
+if ! create_new_caddy; then
+  remove_candidate_with_revalidation || true
+  exit 1
+fi
 if ! write_transaction_journal; then
   remove_candidate_with_revalidation || true
   exit 1
