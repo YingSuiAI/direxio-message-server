@@ -122,8 +122,16 @@ JSON
   network)
     [ "${2:-}" = inspect ] || exit 1
     [ "${3:-}" = "$network" ] || exit 1
-    containers="\"$legacy_id\":{}"
-    [ -f "$state/candidate-created" ] && containers="$containers,\"$candidate_id\":{}"
+    containers=''
+    if [ "${DIREXTALK_MOCK_OMIT_LEGACY_FROM_NETWORK:-false}" != true ]; then
+      if [ ! -f "$state/legacy-stopped" ] || [ -f "$state/legacy-started" ] || [ "${DIREXTALK_MOCK_OMIT_STOPPED_LEGACY_FROM_NETWORK:-false}" != true ]; then
+        containers="\"$legacy_id\":{}"
+      fi
+    fi
+    if [ -f "$state/candidate-created" ]; then
+      [ -n "$containers" ] && containers="$containers,"
+      containers="$containers\"$candidate_id\":{}"
+    fi
     printf '[{"Id":"%s","Name":"%s","Labels":{"com.docker.compose.project":"legacy-message","com.docker.compose.network":"message_public"},"Containers":{%s}}]\n' "$network_id" "$network" "$containers"
     ;;
   volume)
@@ -211,7 +219,9 @@ fi
 
 active=$tmp_dir/output/active.receipt
 snapshot=$tmp_dir/output/legacy.snapshot
+export DIREXTALK_MOCK_OMIT_STOPPED_LEGACY_FROM_NETWORK=true
 "$script" commit "$edge_env" "$tmp_dir/probe/probe.receipt" "$operation" "$revision" "$active" "$snapshot" >/dev/null
+unset DIREXTALK_MOCK_OMIT_STOPPED_LEGACY_FROM_NETWORK
 [ "$(stat -c '%a' "$active")" = 400 ]
 [ "$(stat -c '%a' "$snapshot")" = 400 ]
 grep -Fq '# dirextalk-edge-receipt-v1' "$active"
@@ -222,6 +232,48 @@ grep -Fq -- "stop $legacy_id" "$DIREXTALK_MOCK_LOG"
 grep -Fq -- "start $candidate_id" "$DIREXTALK_MOCK_LOG"
 [ -e "$tmp_dir/probe/.adopt-edge-committed.$operation" ]
 [ "$(stat -c '%a' "$tmp_dir/probe/.adopt-edge-committed.$operation")" = 400 ]
+
+# A crash after the exact legacy stop leaves a created candidate and a stopped
+# legacy. Recovery must accept the network object omitting the stopped legacy,
+# then start only the journal-bound candidate.
+rm -rf -- "$tmp_dir/probe/post-stop-created-recovery"; mkdir -m 700 "$tmp_dir/probe/post-stop-created-recovery"
+rm -f -- "$DIREXTALK_MOCK_STATE"/* "$DIREXTALK_MOCK_LOG"
+created_probe=$tmp_dir/probe/post-stop-created-recovery/probe.receipt
+created_active=$tmp_dir/probe/post-stop-created-recovery/active.receipt
+created_snapshot=$tmp_dir/probe/post-stop-created-recovery/legacy.snapshot
+"$script" probe "$edge_env" "$legacy_id" "$created_probe" post-stop-created rev-post-stop-created >/dev/null
+export DIREXTALK_MOCK_OMIT_STOPPED_LEGACY_FROM_NETWORK=true
+export DIREXTALK_ADOPT_TEST_CRASH_AFTER_LEGACY_STOP=true
+if "$script" commit "$edge_env" "$created_probe" post-stop-created rev-post-stop-created "$created_active" "$created_snapshot" >/dev/null 2>&1; then
+  echo "post-stop crash injection unexpectedly succeeded" >&2
+  exit 1
+fi
+unset DIREXTALK_ADOPT_TEST_CRASH_AFTER_LEGACY_STOP
+[ -f "$tmp_dir/probe/post-stop-created-recovery/.adopt-edge-txn.post-stop-created/journal" ]
+[ -f "$DIREXTALK_MOCK_STATE/legacy-stopped" ]
+[ ! -f "$DIREXTALK_MOCK_STATE/candidate-started" ]
+"$script" commit "$edge_env" "$created_probe" post-stop-created rev-post-stop-created "$created_active" "$created_snapshot" >/dev/null
+unset DIREXTALK_MOCK_OMIT_STOPPED_LEGACY_FROM_NETWORK
+[ -f "$created_active" ] && [ -f "$created_snapshot" ]
+[ ! -e "$tmp_dir/probe/post-stop-created-recovery/.adopt-edge-txn.post-stop-created" ]
+
+# A running legacy container missing from the network object remains a hard
+# pre-stop failure and must not reach candidate creation or the stop boundary.
+rm -rf -- "$tmp_dir/probe/running-network-missing"; mkdir -m 700 "$tmp_dir/probe/running-network-missing"
+rm -f -- "$DIREXTALK_MOCK_STATE"/* "$DIREXTALK_MOCK_LOG"
+missing_network_probe=$tmp_dir/probe/running-network-missing/probe.receipt
+"$script" probe "$edge_env" "$legacy_id" "$missing_network_probe" running-network-missing rev-running-network-missing >/dev/null
+: >"$DIREXTALK_MOCK_LOG"
+export DIREXTALK_MOCK_OMIT_LEGACY_FROM_NETWORK=true
+if "$script" commit "$edge_env" "$missing_network_probe" running-network-missing rev-running-network-missing "$tmp_dir/output/running-network-missing.active" "$tmp_dir/output/running-network-missing.snapshot" >/dev/null 2>&1; then
+  echo "running legacy without network entry unexpectedly accepted" >&2
+  exit 1
+fi
+unset DIREXTALK_MOCK_OMIT_LEGACY_FROM_NETWORK
+if grep -Eq '(^| )(stop|start|rm|create)( |$)' "$DIREXTALK_MOCK_LOG"; then
+  echo "running legacy without network entry caused a Docker mutation" >&2
+  exit 1
+fi
 
 # A running legacy Caddy without any configured Docker healthcheck can be
 # adopted only after the real public health, well-known, and TLS probes pass.

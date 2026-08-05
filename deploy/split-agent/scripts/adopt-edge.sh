@@ -661,7 +661,6 @@ recover_transaction() {
   txn_journal=$txn_dir/journal
   load_transaction || return 1
   revalidate_bound_files_and_host || return 1
-  revalidate_objects || return 1
   old_file=$tmp_dir/recovery-legacy.json
   candidate_file=$tmp_dir/recovery-candidate.json
   inspect_json "$legacy_id" "$old_file" || fail "recovery legacy exact ID unavailable" || return 1
@@ -669,17 +668,17 @@ recover_transaction() {
   old_state=$(container_state "$old_file")
   candidate_state=$(container_state "$candidate_file")
   case "$old_state:$candidate_state" in
-    exited:running)
+    exited:running|created:running)
       revalidate_bound_files_and_host || return 1
-      revalidate_objects || return 1
+      revalidate_objects stopped || return 1
       revalidate_candidate running || return 1
       [ "$(container_health "$tmp_dir/candidate-revalidate.json")" = healthy ] || return 1
       verify_public_after_switch || return 1
       install_transaction_receipts
       ;;
-    exited:created|exited:exited)
+    exited:created|exited:exited|created:created|created:exited)
       revalidate_bound_files_and_host || return 1
-      revalidate_objects || return 1
+      revalidate_objects stopped || return 1
       revalidate_candidate "$candidate_state" || return 1
       "$docker_bin" start "$candidate_id" >/dev/null 2>&1 || return 1
       wait_candidate_healthy || return 1
@@ -688,7 +687,7 @@ recover_transaction() {
       ;;
     running:created|running:exited)
       revalidate_bound_files_and_host || return 1
-      revalidate_objects || return 1
+      revalidate_objects running || return 1
       revalidate_candidate "$candidate_state" || return 1
       remove_candidate_exact || return 1
       cleanup_transaction || return 1
@@ -903,8 +902,18 @@ revalidate_bound_files_and_host() {
 }
 
 revalidate_objects() {
+  local expected_legacy_state=${1:-running} actual_legacy_state
+  case "$expected_legacy_state" in
+    running|stopped) ;;
+    *) fail "unsupported legacy Caddy revalidation state" || return 1 ;;
+  esac
   inspect_json "$legacy_id" "$tmp_dir/legacy-pre.json" || fail "legacy Caddy is unavailable" || return 1
   [ "$(container_id_from_json "$tmp_dir/legacy-pre.json")" = "$legacy_id" ] || fail "legacy Caddy ID changed" || return 1
+  actual_legacy_state=$(container_state "$tmp_dir/legacy-pre.json")
+  case "$expected_legacy_state:$actual_legacy_state" in
+    running:running|stopped:exited|stopped:created) ;;
+    *) fail "legacy Caddy state changed during revalidation" || return 1 ;;
+  esac
   [ "$(container_config_image "$tmp_dir/legacy-pre.json")" = "$legacy_config_image" ] || fail "legacy Config.Image changed" || return 1
   [ "$(container_image_id "$tmp_dir/legacy-pre.json")" = "$legacy_image_id" ] || fail "legacy image ID changed" || return 1
   "$jq_bin" -e --arg project "$legacy_project" --arg service "$legacy_service" --arg network "$edge_network" \
@@ -914,7 +923,9 @@ revalidate_objects() {
   verify_volume_mounts "$tmp_dir/legacy-pre.json" "$caddy_data_volume" "$caddy_config_volume" || fail "legacy Caddy volume bindings changed" || return 1
   network_json "$edge_network" "$tmp_dir/network-pre.json" || return 1
   verify_network_binding "$tmp_dir/network-pre.json" "$network_id" "$edge_network" "$network_labels_hash" || fail "public network object identity changed" || return 1
-  "$jq_bin" -e --arg id "$legacy_id" '.[0].Containers[$id] != null' "$tmp_dir/network-pre.json" >/dev/null 2>&1 || fail "legacy Caddy left public network" || return 1
+  if [ "$actual_legacy_state" = running ]; then
+    "$jq_bin" -e --arg id "$legacy_id" '.[0].Containers[$id] != null' "$tmp_dir/network-pre.json" >/dev/null 2>&1 || fail "legacy Caddy left public network" || return 1
+  fi
   volume_json "$caddy_data_volume" "$tmp_dir/data-volume-pre.json" || return 1
   volume_json "$caddy_config_volume" "$tmp_dir/config-volume-pre.json" || return 1
   [ "$(volume_fingerprint_from_json "$tmp_dir/data-volume-pre.json")" = "$data_volume_fingerprint" ] || fail "Caddy data volume identity changed" || return 1
@@ -976,7 +987,7 @@ verify_public_after_switch() {
 }
 
 remove_candidate_exact() {
-  local candidate_inspect candidate_full after
+  local candidate_inspect candidate_full after expected_legacy_state=${1:-running}
   [ -n "${candidate_id:-}" ] && valid_full_container_id "$candidate_id" || return 0
   candidate_inspect=$tmp_dir/candidate-pre-stop-rollback.json
   inspect_json "$candidate_id" "$candidate_inspect" || return 1
@@ -988,7 +999,7 @@ remove_candidate_exact() {
   verify_ports_80_443 "$candidate_inspect" || return 1
   verify_volume_mounts "$candidate_inspect" "$caddy_data_volume" "$caddy_config_volume" || return 1
   revalidate_bound_files_and_host || return 1
-  revalidate_objects || return 1
+  revalidate_objects "$expected_legacy_state" || return 1
   revalidate_candidate || return 1
   if "$docker_bin" rm -f "$candidate_id" >/dev/null 2>&1; then
     return 0
@@ -996,7 +1007,7 @@ remove_candidate_exact() {
   # Re-assert the complete immutable binding before retrying with stop after
   # an uncertain rm result.
   revalidate_bound_files_and_host || return 1
-  revalidate_objects || return 1
+  revalidate_objects "$expected_legacy_state" || return 1
   revalidate_candidate || return 1
   "$docker_bin" stop "$candidate_id" >/dev/null 2>&1 || return 1
   after=$tmp_dir/candidate-after-stop.json
@@ -1015,7 +1026,7 @@ rollback_exact() {
       if [ "$candidate_full" = "$candidate_id" ] && "$jq_bin" -e --arg project "$edge_project" --arg image "$caddy_image" --arg network "$edge_network" \
         '.[0].Config.Labels["com.docker.compose.project"] == $project and .[0].Config.Labels["com.docker.compose.service"] == "caddy" and .[0].Config.Image == $image and .[0].NetworkSettings.Networks[$network] != null' \
         "$candidate_inspect" >/dev/null 2>&1 && verify_ports_80_443 "$candidate_inspect" && verify_volume_mounts "$candidate_inspect" "$caddy_data_volume" "$caddy_config_volume" && verify_hardened_candidate "$candidate_inspect"; then
-        if ! remove_candidate_exact; then
+        if ! remove_candidate_exact stopped; then
           candidate_cleanup_ok=false
         fi
       else
@@ -1028,7 +1039,7 @@ rollback_exact() {
   fi
   [ "$candidate_cleanup_ok" = true ] || return 1
   revalidate_bound_files_and_host || return 1
-  revalidate_objects || return 1
+  revalidate_objects stopped || return 1
   old_inspect=$tmp_dir/legacy-rollback.json
   if ! inspect_json "$legacy_id" "$old_inspect" || ! "$jq_bin" -e --arg id "$legacy_id" --arg project "$legacy_project" --arg image "$legacy_config_image" --arg network "$edge_network" \
     '.[0].Id == $id and .[0].Config.Labels["com.docker.compose.project"] == $project and .[0].Config.Labels["com.docker.compose.service"] == "caddy" and .[0].Config.Image == $image and .[0].NetworkSettings.Networks[$network] != null' \
@@ -1037,7 +1048,7 @@ rollback_exact() {
     return 1
   fi
   revalidate_bound_files_and_host || return 1
-  revalidate_objects || return 1
+  revalidate_objects stopped || return 1
   "$docker_bin" start "$legacy_id" >/dev/null 2>&1 || return 1
   inspect_json "$legacy_id" "$tmp_dir/legacy-restored.json" || return 1
   verify_container_identity "$tmp_dir/legacy-restored.json" "$legacy_id" "$legacy_project" "$legacy_config_image" "$edge_network" "$caddy_data_volume" "$caddy_config_volume" false || return 1
@@ -1062,7 +1073,10 @@ stop_legacy_exact() {
   inspect_json "$legacy_id" "$after" || return 1
   [ "$(container_id_from_json "$after")" = "$legacy_id" ] || return 1
   case "$(container_state "$after"):$stop_status" in
-    exited:0|created:0|exited:*) return 0 ;;
+    exited:0|created:0|exited:*)
+      revalidate_objects stopped || return 1
+      return 0
+      ;;
     running:*)
       remove_candidate_exact || return 1
       stop_failure_cleanup_safe=true
@@ -1076,7 +1090,7 @@ stop_legacy_exact() {
 
 start_candidate_exact() {
   revalidate_bound_files_and_host || return 1
-  revalidate_objects || return 1
+  revalidate_objects stopped || return 1
   revalidate_candidate created || return 1
   "$docker_bin" start "$candidate_id" >/dev/null 2>&1 || return 1
   wait_candidate_healthy || return 1
@@ -1148,6 +1162,10 @@ commit() {
       cleanup_transaction 2>/dev/null || true
     fi
     return 1
+  fi
+  if [ "${DIREXTALK_ADOPT_TEST_CRASH_AFTER_LEGACY_STOP:-false}" = true ]; then
+    log "test crash after legacy stop"
+    exit 99
   fi
   if ! start_candidate_exact; then
     if ! rollback_exact; then

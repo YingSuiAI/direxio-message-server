@@ -578,7 +578,10 @@ volume object identities, use the digest-pinned image/RepoDigest, expose a
 usable healthcheck command, and satisfy read-only-rootfs, capability-drop,
 and no-new-privileges checks before the legacy stop boundary. Failure verifies
 the candidate identity before removing it, re-inspects the exact legacy ID
-before starting it, and verifies public health/TLS after rollback. No
+before starting it, and verifies public health/TLS after rollback. A running
+legacy must remain in the public network object's container map; after an
+exact stop, an exited/created legacy may be omitted while the bound network
+object identity remains unchanged. No
 Compose `down`, volume deletion, or name-based mutation is used. A successful
 commit writes a separate mode-0400 legacy snapshot and a compliant
 `# dirextalk-edge-receipt-v1` active receipt, preserves the stopped legacy
