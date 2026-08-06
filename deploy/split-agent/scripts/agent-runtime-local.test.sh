@@ -89,6 +89,14 @@ json_for_role() {
   record=$(awk -F'|' -v wanted="$1" '$1 == wanted { print; exit }' "$state")
   [ -n "$record" ] || return 1
   IFS='|' read -r role id status health <<<"$record"
+  settle_file=$DIREXTALK_FAKE_STATE/settle-$role
+  if [ -f "$settle_file" ]; then
+    settle_step=$(cat "$settle_file")
+    case "$settle_step" in
+      0) update_status "$role" restarting starting; printf '1\n' >"$settle_file" ;;
+      1) update_status "$role" running healthy; printf '2\n' >"$settle_file" ;;
+    esac
+  fi
   case "$role" in
     message) name=$DIREXTALK_FAKE_STACK-message-server-1; service=message-server; image=dirextalk-message-server:split-local; image_id=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb ;;
     agent) name=$DIREXTALK_FAKE_STACK-agent-1; service=agent; image=$DIREXTALK_FAKE_AGENT_IMAGE; image_id=$DIREXTALK_FAKE_AGENT_IMAGE_ID ;;
@@ -138,7 +146,16 @@ case "$1" in
       update_status "$role" exited none
     elif [ "$action" = start ]; then
       [ "$DIREXTALK_FAKE_FAIL_START_ROLE" != "$role" ] || { printf 'injected start failure\n' >&2; exit 1; }
-      update_status "$role" running healthy
+      if [ "$DIREXTALK_FAKE_SETTLE_ROLE" = "$role" ]; then
+        case "$DIREXTALK_FAKE_START_MODE" in
+          transient) update_status "$role" exited unhealthy; printf '0\n' >"$DIREXTALK_FAKE_STATE/settle-$role" ;;
+          never) update_status "$role" exited unhealthy ;;
+          unknown) update_status "$role" paused unhealthy ;;
+          *) printf 'unexpected fake start mode: %s\n' "$DIREXTALK_FAKE_START_MODE" >&2; exit 1 ;;
+        esac
+      else
+        update_status "$role" running healthy
+      fi
     else
       printf 'unexpected container action: %s\n' "$action" >&2
       exit 1
@@ -167,6 +184,7 @@ export PATH=$fixture/bin:$PATH
 export DIREXTALK_FAKE_STATE=$fixture/state DIREXTALK_FAKE_STACK=$stack_name DIREXTALK_FAKE_ENGINE=$engine_id
 export DIREXTALK_FAKE_AGENT_IMAGE=$agent_image DIREXTALK_FAKE_AGENT_IMAGE_ID=$agent_image_id
 export DIREXTALK_FAKE_REPLACEMENT_ROLE='' DIREXTALK_FAKE_FAIL_STOP_ROLE='' DIREXTALK_FAKE_FAIL_START_ROLE=''
+export DIREXTALK_FAKE_SETTLE_ROLE='' DIREXTALK_FAKE_START_MODE='transient'
 
 tampered_env_fixture=$tmp_dir/tampered-env
 write_fixture "$tampered_env_fixture"
@@ -235,6 +253,61 @@ if grep -Fq "container stop $message_id" "$fixture/state/docker.log" || grep -Fq
   echo 'message-server was unexpectedly mutated' >&2
   exit 1
 fi
+
+cat >"$fixture/state/containers" <<EOF
+message|$message_id|running|healthy
+agent|$agent_id|exited|none
+extension-runner|$extension_id|exited|none
+core-runner|$core_id|exited|none
+EOF
+rm -f -- "$fixture/state/settle-"*
+: >"$fixture/state/docker.log"
+run_expect 0 "$restart_script" "$fixture" \
+  DIREXTALK_FAKE_SETTLE_ROLE=extension-runner DIREXTALK_FAKE_START_MODE=transient \
+  DIREXTALK_AGENT_RUNTIME_HEALTH_TIMEOUT_SECONDS=4
+sequence=$(grep -E '^(container stop|container start)' "$fixture/state/docker.log" | tr '\n' ' ')
+[ "$sequence" = "container start $extension_id container start $core_id container start $agent_id " ]
+[ "$(grep -Fc "inspect $extension_id" "$fixture/state/docker.log")" -ge 3 ]
+
+cat >"$fixture/state/containers" <<EOF
+message|$message_id|running|healthy
+agent|$agent_id|exited|none
+extension-runner|$extension_id|exited|none
+core-runner|$core_id|exited|none
+EOF
+rm -f -- "$fixture/state/settle-"*
+: >"$fixture/state/docker.log"
+run_expect 1 "$restart_script" "$fixture" \
+  DIREXTALK_FAKE_SETTLE_ROLE=extension-runner DIREXTALK_FAKE_START_MODE=never \
+  DIREXTALK_AGENT_RUNTIME_HEALTH_TIMEOUT_SECONDS=2
+[ "$(grep -Fc "inspect $extension_id" "$fixture/state/docker.log")" -ge 2 ]
+if grep -Fq "container start $core_id" "$fixture/state/docker.log" || grep -Fq "container start $agent_id" "$fixture/state/docker.log"; then
+  echo 'restart advanced past a runner that never became healthy' >&2
+  exit 1
+fi
+
+cat >"$fixture/state/containers" <<EOF
+message|$message_id|running|healthy
+agent|$agent_id|exited|none
+extension-runner|$extension_id|exited|none
+core-runner|$core_id|exited|none
+EOF
+: >"$fixture/state/docker.log"
+run_expect 1 "$restart_script" "$fixture" \
+  DIREXTALK_FAKE_SETTLE_ROLE=extension-runner DIREXTALK_FAKE_START_MODE=unknown \
+  DIREXTALK_AGENT_RUNTIME_HEALTH_TIMEOUT_SECONDS=4
+[ "$(grep -Fc "inspect $extension_id" "$fixture/state/docker.log")" -ge 1 ]
+if grep -Fq "container start $core_id" "$fixture/state/docker.log" || grep -Fq "container start $agent_id" "$fixture/state/docker.log"; then
+  echo 'restart advanced past an unknown runner state' >&2
+  exit 1
+fi
+
+cat >"$fixture/state/containers" <<EOF
+message|$message_id|running|healthy
+agent|$agent_id|running|healthy
+extension-runner|$extension_id|running|healthy
+core-runner|$core_id|running|healthy
+EOF
 : >"$fixture/state/docker.log"
 run_expect 0 "$restart_script" "$fixture"
 sequence=$(grep -E '^(container stop|container start)' "$fixture/state/docker.log" | tr '\n' ' ')

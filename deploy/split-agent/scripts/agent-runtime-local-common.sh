@@ -203,9 +203,10 @@ agent_runtime_wait_healthy() {
     if [ "$status" = running ] && [ "$health" = healthy ]; then
       return 0
     fi
-    if [ "$status" != running ] || [ "$health" = unhealthy ] || [ "$health" = none ]; then
-      agent_runtime_die "$role did not become healthy (state=$status health=$health)"
-    fi
+    case "$health" in
+      healthy|starting|unhealthy|none) ;;
+      *) agent_runtime_die "$role has an unknown health state while settling: $health" ;;
+    esac
     attempts=$((attempts - 1))
     [ "$attempts" -gt 0 ] && sleep 1
   done
