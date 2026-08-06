@@ -83,11 +83,9 @@ func NormalizeConfig(cfg dirextalkdomain.AgentConfig) dirextalkdomain.AgentConfi
 	cfg.AvatarURL = strings.TrimSpace(cfg.AvatarURL)
 	legacyIdentity := dirextalkdomain.AgentIdentityConfig{DisplayName: cfg.DisplayName, AvatarURL: cfg.AvatarURL}
 	cfg.NativeAgentIdentity = normalizeIdentity(cfg.NativeAgentIdentity, legacyIdentity)
-	onlineFallback := dirextalkdomain.AgentIdentityConfig{DisplayName: DefaultOnlineAgentDisplayName}
-	if strings.TrimSpace(legacyIdentity.DisplayName) != "" || strings.TrimSpace(legacyIdentity.AvatarURL) != "" {
-		onlineFallback = legacyIdentity
-	}
-	cfg.OnlineAgentIdentity = normalizeIdentity(cfg.OnlineAgentIdentity, onlineFallback)
+	cfg.OnlineAgentIdentity = normalizeIdentity(cfg.OnlineAgentIdentity, dirextalkdomain.AgentIdentityConfig{
+		DisplayName: DefaultOnlineAgentDisplayName,
+	})
 	cfg.DisplayName = cfg.NativeAgentIdentity.DisplayName
 	cfg.AvatarURL = cfg.NativeAgentIdentity.AvatarURL
 	if cfg.ContextWindow <= 0 {

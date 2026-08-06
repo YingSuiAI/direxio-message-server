@@ -11,6 +11,8 @@ import (
 	capv1 "github.com/YingSuiAI/dirextalk-capability-api/gen/go/dirextalk/capability/v1"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/agentgateway"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/agentstream"
+	"github.com/YingSuiAI/dirextalk-message-server/internal/dirextalkdomain"
+	actionbase "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/action"
 )
 
 func TestExternalAgentActionErrorClassifiesForgedServerDerivedIdentity(t *testing.T) {
@@ -118,5 +120,101 @@ func TestChatRequestValidationRunsBeforeInvokeStreamAndDurableRetry(t *testing.T
 	}
 	if runner.streamCalls != 0 {
 		t.Fatalf("invalid durable retry/replay reached runner %d time(s)", runner.streamCalls)
+	}
+}
+
+type configContractRunner struct {
+	action string
+	params map[string]any
+}
+
+func (r *configContractRunner) Apply(context.Context, string) error { return nil }
+
+func (r *configContractRunner) Invoke(_ context.Context, action string, params map[string]any) (map[string]any, error) {
+	r.action = action
+	r.params = cloneMap(params)
+	return map[string]any{
+		"display_name": "Ying Remote",
+		"avatar_url":   "mxc://ying-remote",
+	}, nil
+}
+
+func (r *configContractRunner) Stream(context.Context, string, map[string]any, func(agentstream.Event) error) error {
+	return nil
+}
+
+type configContractAccount struct {
+	config         dirextalkdomain.AgentConfig
+	syncedIdentity dirextalkdomain.AgentIdentityConfig
+}
+
+func (a *configContractAccount) Password() string { return "password" }
+
+func (a *configContractAccount) CreateMatrixSession(context.Context, map[string]any) (MatrixSession, *actionbase.Error) {
+	return MatrixSession{}, nil
+}
+
+func (a *configContractAccount) Config() dirextalkdomain.AgentConfig { return a.config }
+
+func (a *configContractAccount) UpdateConfig(_ context.Context, mutate func(dirextalkdomain.AgentConfig) dirextalkdomain.AgentConfig) (dirextalkdomain.AgentConfig, *actionbase.Error) {
+	a.config = mutate(a.config)
+	return a.config, nil
+}
+
+func (a *configContractAccount) SyncOnlineIdentity(_ context.Context, identity dirextalkdomain.AgentIdentityConfig) *actionbase.Error {
+	a.syncedIdentity = identity
+	return nil
+}
+
+func (a *configContractAccount) PublishOffline(context.Context) *actionbase.Error { return nil }
+
+func TestExternalConfigKeepsNativeAndOnlineIdentityOwnershipSeparate(t *testing.T) {
+	runner := &configContractRunner{}
+	account := &configContractAccount{config: NormalizeConfig(dirextalkdomain.AgentConfig{})}
+	handler := New(Config{Runner: runner, Account: account, OwnerID: func() string { return "@owner:example.com" }}).Handlers()[actionConfigUpdate]
+
+	value, actionErr := handler(context.Background(), map[string]any{
+		"native_agent_identity": map[string]any{
+			"display_name": "Ying Requested",
+			"avatar_url":   "mxc://ying-requested",
+		},
+	})
+	if actionErr != nil {
+		t.Fatalf("native identity update failed: %v", actionErr)
+	}
+	if runner.action != actionConfigUpdate ||
+		runner.params["display_name"] != "Ying Requested" ||
+		runner.params["avatar_url"] != "mxc://ying-requested" ||
+		runner.params["native_agent_identity"] != nil ||
+		runner.params["online_agent_identity"] != nil {
+		t.Fatalf("native identity update crossed ownership boundary: action=%q params=%#v", runner.action, runner.params)
+	}
+	if account.syncedIdentity != (dirextalkdomain.AgentIdentityConfig{}) {
+		t.Fatalf("native-only update touched Matrix identity: %#v", account.syncedIdentity)
+	}
+	response := value.(map[string]any)
+	if response["online_agent_identity"].(map[string]any)["display_name"] != DefaultOnlineAgentDisplayName {
+		t.Fatalf("native response changed Online identity: %#v", response)
+	}
+
+	value, actionErr = handler(context.Background(), map[string]any{
+		"online_agent_identity": map[string]any{
+			"display_name": "Your Online",
+			"avatar_url":   "mxc://online",
+		},
+	})
+	if actionErr != nil {
+		t.Fatalf("online identity update failed: %v", actionErr)
+	}
+	if runner.action != actionConfigGet || runner.params["online_agent_identity"] != nil {
+		t.Fatalf("online identity reached external Agent: action=%q params=%#v", runner.action, runner.params)
+	}
+	if account.syncedIdentity.DisplayName != "Your Online" || account.syncedIdentity.AvatarURL != "mxc://online" {
+		t.Fatalf("online identity was not synchronized to Matrix: %#v", account.syncedIdentity)
+	}
+	response = value.(map[string]any)
+	if response["native_agent_identity"].(map[string]any)["display_name"] != "Ying Remote" ||
+		response["online_agent_identity"].(map[string]any)["display_name"] != "Your Online" {
+		t.Fatalf("mode-specific identities were not preserved: %#v", response)
 	}
 }

@@ -470,20 +470,7 @@ func (s *Service) nativeAgentIdentityLocked() dirextalkdomain.AgentIdentityConfi
 }
 
 func (s *Service) onlineAgentIdentityLocked() dirextalkdomain.AgentIdentityConfig {
-	identity := agentmodule.OnlineAgentIdentity(s.agentConfig)
-	// Keep direct legacy field mutations observable for compatibility with
-	// older in-process callers. Persisted dual-identity configs normalize the
-	// top-level fields to the Native identity, so an explicit Online identity
-	// is never overwritten here.
-	legacyName := strings.TrimSpace(s.agentConfig.DisplayName)
-	nativeName := strings.TrimSpace(agentmodule.NativeAgentIdentity(s.agentConfig).DisplayName)
-	if legacyName != "" && legacyName != nativeName && identity.DisplayName == agentmodule.DefaultOnlineAgentDisplayName {
-		identity.DisplayName = legacyName
-		if strings.TrimSpace(s.agentConfig.AvatarURL) != "" && identity.AvatarURL == "" {
-			identity.AvatarURL = strings.TrimSpace(s.agentConfig.AvatarURL)
-		}
-	}
-	return identity
+	return agentmodule.OnlineAgentIdentity(s.agentConfig)
 }
 
 func (s *Service) updateAgentRoomMemberProfile(ctx context.Context, roomID, agentMXID string, identity dirextalkdomain.AgentIdentityConfig) error {
@@ -492,8 +479,11 @@ func (s *Service) updateAgentRoomMemberProfile(ctx context.Context, roomID, agen
 	}
 	identity = agentmodule.OnlineAgentIdentity(dirextalkdomain.AgentConfig{OnlineAgentIdentity: identity})
 	return s.transport.UpdateMemberProfile(ctx, UpdateMemberProfileRequest{
-		RoomID: strings.TrimSpace(roomID), UserMXID: strings.TrimSpace(agentMXID),
-		DisplayName: identity.DisplayName, AvatarURL: identity.AvatarURL, Timestamp: time.Now().UTC(),
+		RoomID:      strings.TrimSpace(roomID),
+		UserMXID:    strings.TrimSpace(agentMXID),
+		DisplayName: identity.DisplayName,
+		AvatarURL:   identity.AvatarURL,
+		Timestamp:   time.Now().UTC(),
 	})
 }
 

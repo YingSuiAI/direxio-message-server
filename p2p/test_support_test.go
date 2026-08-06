@@ -221,6 +221,7 @@ type recordingTransport struct {
 	roomChannelError error
 	roomMembers      []memberRecord
 	profiles         []string
+	profileRequests  []UpdateMemberProfileRequest
 	profileErrors    map[string]error
 	redactions       []string
 	inviteRequests   []InviteUserRequest
@@ -306,6 +307,7 @@ func (t *recordingTransport) ListRoomMembers(ctx context.Context, roomID string)
 
 func (t *recordingTransport) UpdateMemberProfile(ctx context.Context, req UpdateMemberProfileRequest) error {
 	t.profiles = append(t.profiles, req.UserMXID+" in "+req.RoomID+" as "+req.DisplayName+" "+req.AvatarURL)
+	t.profileRequests = append(t.profileRequests, req)
 	if t.profileErrors != nil {
 		return t.profileErrors[req.RoomID]
 	}
