@@ -186,7 +186,7 @@ var expectedCatalogSchemaDigests = map[string]catalogSchemaDigest{
 		resultHex: "87c332e9185a0436d6488041bbfc11cd66c9f40e345af02d9f97a76676cd65ae",
 	},
 	"agent.knowledge.config.update": {
-		inputHex:  "541e3f040ce4430ffdefbc6f72404382909e2329074b45b89b6c5321a3a3c7c0",
+		inputHex:  "c9d87f07b7dc15e181a272bfacceecfa82e331e516eff88358dd32c64661d97b",
 		resultHex: "87c332e9185a0436d6488041bbfc11cd66c9f40e345af02d9f97a76676cd65ae",
 	},
 	"agent.knowledge.sources.list": {
@@ -198,23 +198,23 @@ var expectedCatalogSchemaDigests = map[string]catalogSchemaDigest{
 		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
 	},
 	"agent.knowledge.sources.delete": {
-		inputHex:  "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
+		inputHex:  "122c4ab26b5340e5526f3433bae033acb51f5852bb81940a5d0d987328475c3a",
 		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
 	},
 	"agent.knowledge.upload.start": {
-		inputHex:  "423f3ebf4c93be249b2f3326dd8105c97766143d1c2bcfc8195cfe3cd4552e3b",
+		inputHex:  "d389f473339cc4f1a94221a28f5d5f39e1a21d9be6a46271d3e2b38c5c499839",
 		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
 	},
 	"agent.knowledge.upload.chunk": {
-		inputHex:  "4c590020e97b2022d9edbc183f89bf5d6fb072d404ef38b66e680cc1db75a075",
+		inputHex:  "edc7fded7efd20a9ad6c2cc66cec77889415a4709807d17cb0b9cd1cd3d648c4",
 		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
 	},
 	"agent.knowledge.upload.finish": {
-		inputHex:  "d5bf1322faac7e6002ef7f3bdb55f7c27da1e0f3a74771024123159a9b26a847",
+		inputHex:  "5c3ca14110e4195b443f226af01c2610b5595d612e198b1996b3341889c4e353",
 		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
 	},
 	"agent.knowledge.memory.create": {
-		inputHex:  "02eb50e7eed9ebc425a99feb99537eda6b03c0685665b9ce75bd2e628e109df1",
+		inputHex:  "c04cf443c490416332723c300b6044f976bdd023f797a135a22b4ee47b6af216",
 		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
 	},
 	"agent.knowledge.memories.list": {
@@ -226,11 +226,11 @@ var expectedCatalogSchemaDigests = map[string]catalogSchemaDigest{
 		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
 	},
 	"agent.knowledge.memories.update": {
-		inputHex:  "c308291d7535acdcfed5aef8d8d1f96e57145b4ec837fd4bf313da522f24be15",
+		inputHex:  "09d90a8d9865b2e768ab6ff43a35a009324b4abedb9fe305a851cb838ffcf117",
 		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
 	},
 	"agent.knowledge.memories.delete": {
-		inputHex:  "39832085d74beecd214379176b5a7512b81f3afe5c563dc754b075b59ba98cb2",
+		inputHex:  "94749fd60006d5ac350fecd3f2f34fc85bc5bf894afa9acc209b8848484bee87",
 		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
 	},
 	"agent.knowledge.search": {
@@ -242,7 +242,7 @@ var expectedCatalogSchemaDigests = map[string]catalogSchemaDigest{
 		resultHex: "3bff0a96cb6f09421ee1a5ea243b8801a0b61fa4b1f8e01cdf98653acfd99761",
 	},
 	"agent.knowledge.index": {
-		inputHex:  "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
+		inputHex:  "5f8d5704bdba8b308c6a8a2bd385ce395530c99a45bd8836292c37d4823b4f86",
 		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
 	},
 	"agent.knowledge.status": {
@@ -494,8 +494,8 @@ var expectedCatalogSchemaDigests = map[string]catalogSchemaDigest{
 		resultHex: "5b4b96856d4905ab16617e86afd4e5f558e21929488edee989ba701932b3938c",
 	},
 	"agent.core.aws.credentials.test": {
-		inputHex:  "69d36d24529afdd195b47f049f5be79810cb8f3451cdcd2a7e89e1553631fffe",
-		resultHex: "965a5f5e54a0bd2f7c174a36740447b78c7c597c07eea3e31586b3b9251d5d5e",
+		inputHex:  "cf4245b73f19ef99b8481d487e369317fda8e9997e57db85aff5a6848847684a",
+		resultHex: "fd1394709469435c496de2ce805250f4229211f550ae82bd7d2d647682a5aa6c",
 	},
 	"agent.voice.session.create": {
 		inputHex:  "2a9d9b82b94ed22ca8771c014f568efb089006bda98db1402e605ca3379bbe8d",

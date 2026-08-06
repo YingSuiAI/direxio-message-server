@@ -178,22 +178,32 @@ func TestValidateCatalogRequiresChatSchemaPins(t *testing.T) {
 	}
 }
 
-func TestValidateCatalogAcceptsCanonicalCreateConversationSchema(t *testing.T) {
-	const input = `{"type":"object","properties":{"title":{"type":"string"},"conversation_id":{"type":"string","format":"uuid"},"idempotency_key":{"type":"string","format":"uuid"}},"required":["conversation_id","idempotency_key"]}`
-	const result = `{"type":"object"}`
-	descriptor := catalogTestDescriptor("agent.chat.v1", "create_conversation", input, result)
-	requirement := NewCatalogRequirement("agent.chat.conversations.create")
-	catalog := catalogTestWithDigest(t, descriptor)
-
-	if err := ValidateCatalog(catalog, []CatalogRequirement{requirement}); err != nil {
-		t.Fatalf("current Agent create-conversation catalog rejected: %v", err)
+func TestValidateCatalogAcceptsCurrentMutationSchemas(t *testing.T) {
+	const objectResult = `{"type":"object"}`
+	const knowledgeConfigResult = `{"type":"object","properties":{"embedding_profile_id":{"type":"string"},"embedding_profile_revision":{"type":"integer"},"embedding_model":{"type":"string"},"dimension":{"type":"integer"},"collection":{"type":"string"},"collection_config_digest":{"type":"string"},"revision":{"type":"integer"},"updated_at":{"type":"string"}},"required":["embedding_profile_id","embedding_profile_revision","embedding_model","collection_config_digest","revision"]}`
+	tests := []struct {
+		action, capability, operation, input, result string
+	}{
+		{"agent.chat.conversations.create", "agent.chat.v1", "create_conversation", `{"type":"object","properties":{"title":{"type":"string"},"conversation_id":{"type":"string","format":"uuid"},"idempotency_key":{"type":"string","format":"uuid"}},"required":["conversation_id","idempotency_key"]}`, objectResult},
+		{"agent.knowledge.config.update", "agent.knowledge.v1", "update_config", `{"type":"object","properties":{"idempotency_key":{"format":"uuid","type":"string"},"expected_revision":{"type":"integer"},"embedding_profile_id":{"type":"string"},"profile_id":{"type":"string"},"dimension":{"type":"integer"},"collection":{"type":"string"},"collection_config_digest":{"type":"string"}},"required":["idempotency_key","expected_revision"]}`, knowledgeConfigResult},
+		{"agent.knowledge.sources.delete", "agent.knowledge.v1", "delete_source", `{"type":"object","properties":{"source_id":{"type":"string"},"expected_revision":{"type":"integer"},"idempotency_key":{"format":"uuid","type":"string"}},"required":["source_id","expected_revision","idempotency_key"]}`, objectResult},
+		{"agent.knowledge.upload.start", "agent.knowledge.v1", "start_upload", `{"type":"object","properties":{"upload_id":{"type":"string"},"source_id":{"type":"string"},"title":{"type":"string"},"relative_path":{"type":"string"},"media_type":{"type":"string"},"declared_size":{"type":"integer"},"content_sha256":{"type":"string"},"idempotency_key":{"format":"uuid","type":"string"}},"required":["declared_size","content_sha256","idempotency_key"]}`, objectResult},
+		{"agent.knowledge.upload.chunk", "agent.knowledge.v1", "append_upload_chunk", `{"type":"object","properties":{"upload_id":{"type":"string"},"ordinal":{"type":"integer"},"offset_bytes":{"type":"integer"},"data":{"type":"string"},"chunk_sha256":{"type":"string"},"idempotency_key":{"format":"uuid","type":"string"}},"required":["upload_id","data","chunk_sha256","idempotency_key"]}`, objectResult},
+		{"agent.knowledge.upload.finish", "agent.knowledge.v1", "commit_upload", `{"type":"object","properties":{"upload_id":{"type":"string"},"expected_revision":{"type":"integer"},"content_sha256":{"type":"string"},"idempotency_key":{"format":"uuid","type":"string"}},"required":["upload_id","content_sha256","idempotency_key"]}`, objectResult},
+		{"agent.knowledge.memory.create", "agent.knowledge.v1", "create_memory", `{"type":"object","properties":{"source_id":{"type":"string"},"title":{"type":"string"},"content":{"type":"string"},"content_sha256":{"type":"string"},"media_type":{"type":"string"},"tags":{"type":"array"},"idempotency_key":{"format":"uuid","type":"string"}},"required":["content","idempotency_key"]}`, objectResult},
+		{"agent.knowledge.memories.update", "agent.knowledge.v1", "update_memory", `{"type":"object","properties":{"memory_id":{"type":"string"},"source_id":{"type":"string"},"expected_revision":{"type":"integer"},"title":{"type":"string"},"content":{"type":"string"},"content_sha256":{"type":"string"},"media_type":{"type":"string"},"tags":{"type":"array"},"idempotency_key":{"format":"uuid","type":"string"}},"required":["memory_id","expected_revision","content","idempotency_key"]}`, objectResult},
+		{"agent.knowledge.memories.delete", "agent.knowledge.v1", "delete_memory", `{"type":"object","properties":{"memory_id":{"type":"string"},"expected_revision":{"type":"integer"},"idempotency_key":{"format":"uuid","type":"string"}},"required":["memory_id","expected_revision","idempotency_key"]}`, objectResult},
+		{"agent.knowledge.index", "agent.knowledge.v1", "index_sources", `{"type":"object","properties":{"source_ids":{"items":{"format":"uuid","type":"string"},"type":"array"},"idempotency_key":{"format":"uuid","type":"string"}},"required":["source_ids","idempotency_key"]}`, objectResult},
+		{"agent.core.aws.credentials.test", "agent.aws.v1", "test_credential", `{"type":"object","additionalProperties":false,"properties":{"credential_id":{"format":"uuid","type":"string"},"expected_revision":{"type":"integer"},"idempotency_key":{"format":"uuid","type":"string"}},"required":["credential_id","expected_revision","idempotency_key"]}`, `{"additionalProperties":false,"properties":{"account_id":{"type":"string"},"credential_id":{"format":"uuid","type":"string"},"credential_revision":{"minimum":1,"type":"integer"},"principal_id":{"type":"string"},"tested_at":{"format":"date-time","type":"string"},"user_arn":{"type":"string"}},"required":["credential_id","credential_revision","account_id","user_arn","principal_id","tested_at"],"type":"object"}`},
 	}
 
-	descriptor.Operations[0].InputSchemaJson = `{"type":"object","properties":{"title":{"type":"string"},"conversation_id":{"type":"string"},"idempotency_key":{"type":"string"}},"required":["idempotency_key"]}`
-	drifted := sha256.Sum256([]byte(descriptor.Operations[0].InputSchemaJson))
-	descriptor.Operations[0].InputSchemaDigest = drifted[:]
-	catalog.CatalogDigest = computeCatalogDigest(catalog.Capabilities)
-	if err := ValidateCatalog(catalog, []CatalogRequirement{requirement}); err == nil {
-		t.Fatal("legacy create-conversation schema was accepted")
+	for _, test := range tests {
+		t.Run(test.action, func(t *testing.T) {
+			descriptor := catalogTestDescriptor(test.capability, test.operation, test.input, test.result)
+			catalog := catalogTestWithDigest(t, descriptor)
+			if err := ValidateCatalog(catalog, []CatalogRequirement{NewCatalogRequirement(test.action)}); err != nil {
+				t.Fatalf("current Agent schema rejected: %v", err)
+			}
+		})
 	}
 }
