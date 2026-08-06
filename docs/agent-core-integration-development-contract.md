@@ -43,6 +43,7 @@ Agent Capability gRPC catalog and never exposes a second client-facing API.
     "status": "ready",
     "instance_id": "...",
     "api_version": "...",
+    "release_version": "v1.0.0",
     "capabilities": [],
     "supported_model_providers": []
   },

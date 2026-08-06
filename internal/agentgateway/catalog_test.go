@@ -24,6 +24,39 @@ func TestKnowledgeCatalogPinsCurrentAgentSchemaResults(t *testing.T) {
 	}
 }
 
+func TestValidateCatalogAcceptsCurrentAgentInfoSchemas(t *testing.T) {
+	const input = `{"additionalProperties":false,"properties":{},"type":"object"}`
+	const backend = `{"additionalProperties":false,"properties":{"api_version":{"type":"string"},"available":{"type":"boolean"},"capabilities":{"items":{"type":"string"},"type":"array"},"configured":{"type":"boolean"},"instance_id":{"type":"string"},"release_version":{"type":"string"},"status":{"type":"string"},"supported_model_providers":{"items":{"type":"string"},"type":"array"}},"required":["available","configured","status","capabilities","supported_model_providers"],"type":"object"}`
+	const backends = `{"additionalProperties":false,"properties":{"core":{"$ref":"#/$defs/backend"},"embedded":{"$ref":"#/$defs/backend"}},"required":["core","embedded"],"$defs":{"backend":` + backend + `},"type":"object"}`
+
+	descriptor := &capv1.CapabilityDescriptor{
+		CapabilityId:    "agent.info.v1",
+		SemanticVersion: "1.0.0",
+		ProtocolVersion: 1,
+		Readiness:       true,
+		Operations: []*capv1.OperationDescriptor{
+			catalogTestDescriptor("agent.info.v1", "get_backends", input, backends).Operations[0],
+			catalogTestDescriptor("agent.info.v1", "get_status", input, backend).Operations[0],
+		},
+	}
+	catalog := catalogTestWithDigest(t, descriptor)
+	wantDigest := map[string]string{
+		"agent.backends.get":    "4a0f95cd99ddf917e51efbf74e83f2dd78775f7602437f9afe31df0a25e82d19",
+		"agent.core.status.get": "677f2cc7224b592e8bebc7e63eeecef4a63bda3b74fbe673999fc5bf559b675e",
+	}
+	for _, action := range []string{"agent.backends.get", "agent.core.status.get"} {
+		t.Run(action, func(t *testing.T) {
+			requirement := NewCatalogRequirement(action)
+			if got := hex.EncodeToString(requirement.ResultSchemaDigest); got != wantDigest[action] {
+				t.Fatalf("result schema digest = %s, want %s", got, wantDigest[action])
+			}
+			if err := ValidateCatalog(catalog, []CatalogRequirement{requirement}); err != nil {
+				t.Fatalf("current Agent info schema rejected: %v", err)
+			}
+		})
+	}
+}
+
 func TestValidateCatalogRejectsMissingOperationAndBadDigest(t *testing.T) {
 	descriptor := &capv1.CapabilityDescriptor{
 		CapabilityId:    "agent.chat.v1",
