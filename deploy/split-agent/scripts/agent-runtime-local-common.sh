@@ -161,11 +161,18 @@ agent_runtime_is_running() {
   [ "$1" = running ]
 }
 
+agent_runtime_is_active() {
+  case "$1" in
+    running|restarting) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 agent_runtime_require_known_states() {
   local role status
   for role in agent extension-runner core-runner; do
     status=${agent_runtime_target_status[$role]}
-    if ! agent_runtime_is_stopped "$status" && ! agent_runtime_is_running "$status"; then
+    if ! agent_runtime_is_stopped "$status" && ! agent_runtime_is_active "$status"; then
       agent_runtime_die "$role container has an unknown state: $status"
     fi
   done
@@ -174,7 +181,7 @@ agent_runtime_require_known_states() {
 agent_runtime_stop_one() {
   local role=$1 id=${agent_runtime_ids[$1]}
   agent_runtime_before_mutation
-  [ "${agent_runtime_target_status[$role]}" = running ] || return 0
+  agent_runtime_is_active "${agent_runtime_target_status[$role]}" || return 0
   if docker container stop "$id" >/dev/null; then
     :
   else

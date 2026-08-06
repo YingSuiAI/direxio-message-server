@@ -195,6 +195,32 @@ sequence=$(grep -E '^(container stop|container start)' "$fixture/state/docker.lo
 [ "$sequence" = "container stop $agent_id container stop $extension_id container stop $core_id " ]
 run_expect 3 "$stop_script" "$fixture"
 
+# Docker may report an exact restart-policy container as `restarting` while
+# both runners remain stopped. It is an active state that must first cross the
+# same exact-ID stop boundary before the ordered healthy restart.
+cat >"$fixture/state/containers" <<EOF
+message|$message_id|running|healthy
+agent|$agent_id|restarting|starting
+extension-runner|$extension_id|exited|none
+core-runner|$core_id|exited|none
+EOF
+: >"$fixture/state/docker.log"
+run_expect 0 "$restart_script" "$fixture"
+sequence=$(grep -E '^(container stop|container start)' "$fixture/state/docker.log" | tr '\n' ' ')
+[ "$sequence" = "container stop $agent_id container start $extension_id container start $core_id container start $agent_id " ]
+
+cat >"$fixture/state/containers" <<EOF
+message|$message_id|running|healthy
+agent|$agent_id|restarting|starting
+extension-runner|$extension_id|exited|none
+core-runner|$core_id|exited|none
+EOF
+: >"$fixture/state/docker.log"
+run_expect 0 "$stop_script" "$fixture"
+sequence=$(grep -E '^(container stop|container start)' "$fixture/state/docker.log" | tr '\n' ' ')
+[ "$sequence" = "container stop $agent_id " ]
+run_expect 3 "$stop_script" "$fixture"
+
 cat >"$fixture/state/containers" <<EOF
 message|$message_id|running|healthy
 agent|$agent_id|exited|none
