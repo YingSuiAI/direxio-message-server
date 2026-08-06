@@ -209,6 +209,7 @@ jq -e '
   (.services["agent-secret-init"].entrypoint == ["/usr/local/bin/materialize-agent-secrets"]) and
   ([.services["agent-secret-init"].configs[] | select(.target == "/usr/local/bin/materialize-agent-secrets" and .mode == "0555")] | length) == 1 and
   ([.services["message-server-init"].secrets[] | select(.target == "/run/secrets/message_registration_shared_secret")] | length) == 1 and
+  ([.services["message-server-init"].secrets[] | select(.target == "/run/secrets/turn_shared_secret")] | length) == 1 and
   ([.services["message-server-init"].secrets[] | select(.target == "/run/secrets/message_database_url")] | length) == 0 and
   (.services["message-server-init"].environment.MESSAGE_SERVER_TLS_MODE == "edge-terminated") and
   (.services["message-server-init"].environment.MESSAGE_DEPLOYMENT_MODE == "production") and
@@ -229,6 +230,14 @@ jq -e '
   ([.services["message-server"].configs[] | select(.target == "/usr/local/bin/message-server-entrypoint")] | length) == 1 and
   ([.services["message-server"].secrets[] | select(.target == "/run/secrets/message_database_url")] | length) == 1 and
   (.services["message-server"].tmpfs | any(test("^/tmp:rw,noexec")))
+  and (.services.coturn.image | test("^docker.io/coturn/coturn:4\\.6\\.3-alpine@sha256:[0-9a-f]{64}$"))
+  and (.services.coturn.network_mode == "host")
+  and (.services.coturn.command == ["-c", "/run/secrets/turnserver.conf"])
+  and (.services.coturn.environment == null)
+  and (.services.coturn.read_only == true)
+  and (.services.coturn.cap_drop == ["ALL"])
+  and (.services.coturn.cap_add == ["NET_BIND_SERVICE"])
+  and ([.services.coturn.secrets[] | select(.source == "coturn_config" and .target == "/run/secrets/turnserver.conf" and .mode == "0400")] | length) == 1
   and (.services.qdrant.tmpfs | any(test("^/qdrant/snapshots:rw"))) and
   ([.services["agent-secret-init"].secrets[] | select(.source == "core_secret_master_key" and .target == "core_secret_master_key")] | length) == 1 and
   ([.services | to_entries[] | select(.key != "agent-secret-init") | .value.secrets // [] | .[] | select(.source == "core_secret_master_key" or (.target // "" | test("core_secret_master_key")))] | length) == 0
@@ -354,6 +363,8 @@ for secret in \
   "$run_dir/provision/agent-database-url" \
   "$run_dir/provision/message-database-url" \
   "$run_dir/provision/message-registration-shared-secret" \
+  "$run_dir/provision/turn-shared-secret" \
+  "$run_dir/provision/turnserver.conf" \
   "$run_dir/provision/message-portal-password" \
   "$run_dir/provision/core-secret-master-key" \
   "$run_dir/provision/message-tls-external-cert.pem" \
@@ -389,5 +400,17 @@ for secret in \
     exit 1
   fi
 done
+
+# Keep the TURN secret out of every ordinary rendered artifact without ever
+# passing the value itself to grep/awk (and therefore process argv).
+IFS= read -r turn_secret <"$run_dir/provision/turn-shared-secret"
+for public_file in "$env_file" "$rendered" "$run_dir/provision/agent-config.yaml"; do
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      *"$turn_secret"*) echo "TURN shared secret rendered outside protected files" >&2; exit 1 ;;
+    esac
+  done <"$public_file"
+done
+unset turn_secret
 
 printf 'split-stack topology, fresh secret permissions, and Compose rendering verified\n'

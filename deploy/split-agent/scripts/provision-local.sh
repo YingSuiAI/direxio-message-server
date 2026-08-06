@@ -48,6 +48,19 @@ validate_server_name() {
     die "$name must be a DNS host name without a scheme, port, or wildcard"
 }
 
+validate_ipv4() {
+  local name=$1 value=$2 octet
+  local IFS=.
+  read -r -a octets <<<"$value"
+  [ "${#octets[@]}" -eq 4 ] || die "$name must be an IPv4 address"
+  for octet in "${octets[@]}"; do
+    case "$octet" in
+      ''|*[!0-9]*|0[0-9]*) die "$name must be a canonical IPv4 address" ;;
+    esac
+    [ "$octet" -le 255 ] 2>/dev/null || die "$name contains an IPv4 octet above 255"
+  done
+}
+
 validate_host_port() {
   local name=$1 value=$2
   case "$value" in
@@ -335,6 +348,13 @@ if [ -n "${DIREXTALK_MESSAGE_CLIENT_BASE_URL:-}" ]; then
   [ "$DIREXTALK_MESSAGE_CLIENT_BASE_URL" = "$message_client_base_url" ] || \
     die "DIREXTALK_MESSAGE_CLIENT_BASE_URL must be derived from DIREXTALK_MESSAGE_HTTP_BIND ($message_client_base_url)"
 fi
+turn_external_ip=${DIREXTALK_TURN_EXTERNAL_IP:-}
+if [ "$compose_mode" = production ]; then
+  [ -n "$turn_external_ip" ] || die "DIREXTALK_TURN_EXTERNAL_IP is required for production TURN relay"
+else
+  [ -n "$turn_external_ip" ] || turn_external_ip=127.0.0.1
+fi
+validate_ipv4 DIREXTALK_TURN_EXTERNAL_IP "$turn_external_ip"
 
 if [ "$core_aws_ssm_enabled" = true ]; then
   [ "$core_aws_enabled" = true ] || die "DIREXTALK_CORE_AWS_SSM_ENABLED requires DIREXTALK_CORE_AWS_ENABLED=true"
@@ -702,6 +722,7 @@ account_generation=$((16#$generation_hex + 1))
 agent_password=$(openssl rand -hex 24)
 message_password=$(openssl rand -hex 24)
 message_registration_shared_secret=$(openssl rand -hex 32)
+turn_shared_secret=$(openssl rand -hex 32)
 if [ -n "$portal_password_source" ]; then
   read_portal_password_source "$portal_password_source"
 else
@@ -845,12 +866,15 @@ agent_image=$(printenv DIREXTALK_AGENT_IMAGE_IMMUTABLE 2>/dev/null || true)
 [ -n "$agent_image" ] || agent_image=registry.invalid/dirextalk-agent@sha256:0000000000000000000000000000000000000000000000000000000000000000
 qdrant_image=$(printenv DIREXTALK_QDRANT_IMAGE_IMMUTABLE 2>/dev/null || true)
 [ -n "$qdrant_image" ] || qdrant_image=qdrant/qdrant:v1.18.3@sha256:0bd98fa7977f1e75694779359ca4e212822e5a71334e28421182f72f209d5286
+coturn_image=$(printenv DIREXTALK_COTURN_IMAGE_IMMUTABLE 2>/dev/null || true)
+[ -n "$coturn_image" ] || coturn_image=docker.io/coturn/coturn:4.6.3-alpine@sha256:e2bca2f79a4269d7240de5872ab60a9305013ad37296d2acf14f9510874346be
 for image_pair in \
   DIREXTALK_POSTGRES_IMAGE_IMMUTABLE:$postgres_image \
   DIREXTALK_UTILITY_IMAGE_IMMUTABLE:$utility_image \
   DIREXTALK_MESSAGE_SERVER_IMAGE_IMMUTABLE:$message_image \
   DIREXTALK_AGENT_IMAGE_IMMUTABLE:$agent_image \
-  DIREXTALK_QDRANT_IMAGE_IMMUTABLE:$qdrant_image; do
+  DIREXTALK_QDRANT_IMAGE_IMMUTABLE:$qdrant_image \
+  DIREXTALK_COTURN_IMAGE_IMMUTABLE:$coturn_image; do
   image_name=${image_pair%%:*}
   image_value=${image_pair#*:}
   validate_immutable_image "$image_name" "$image_value"
@@ -868,6 +892,29 @@ write_secret "$out/message-postgres-password" "$message_password"
 write_secret "$out/agent-database-url" "postgresql://dirextalk_agent:$agent_password@agent-postgres:5432/dirextalk_agent?sslmode=disable"
 write_secret "$out/message-database-url" "postgresql://dirextalk_message_server:$message_password@message-postgres:5432/dirextalk_message_server?sslmode=disable"
 write_secret "$out/message-registration-shared-secret" "$message_registration_shared_secret"
+write_secret "$out/turn-shared-secret" "$turn_shared_secret"
+umask 077
+{
+  printf '%s\n' \
+    'listening-port=3478' \
+    'min-port=49160' \
+    'max-port=49200' \
+    "realm=$message_server_name" \
+    "external-ip=$turn_external_ip" \
+    'fingerprint' \
+    'use-auth-secret'
+  printf 'static-auth-secret=%s\n' "$turn_shared_secret"
+  printf '%s\n' \
+    'stale-nonce=600' \
+    'no-cli' \
+    'no-multicast-peers' \
+    'no-tls' \
+    'no-dtls' \
+    'no-sqlite' \
+    'pidfile=/tmp/turnserver.pid'
+} >"$out/turnserver.conf"
+chmod 400 "$out/turnserver.conf"
+unset turn_shared_secret
 write_secret "$out/message-portal-password" "$message_portal_password"
 write_raw_secret "$out/core-secret-master-key" 32
 core_secret_master_key_device=$(stat -c '%d' "$out/core-secret-master-key")
@@ -1047,6 +1094,7 @@ DIREXTALK_AGENT_IMAGE_IMMUTABLE=$agent_image
 DIREXTALK_POSTGRES_IMAGE_IMMUTABLE=$postgres_image
 DIREXTALK_UTILITY_IMAGE_IMMUTABLE=$utility_image
 DIREXTALK_QDRANT_IMAGE_IMMUTABLE=$qdrant_image
+DIREXTALK_COTURN_IMAGE_IMMUTABLE=$coturn_image
 DIREXTALK_AGENT_BUILD_CONTEXT=$agent_root
 DIREXTALK_MESSAGE_BUILD_CONTEXT=$message_root
 DIREXTALK_AGENT_BUILD_VERSION=$agent_build_version
@@ -1067,6 +1115,9 @@ DIREXTALK_MESSAGE_TLS_CERT_FILE=$message_tls_cert_file
 DIREXTALK_MESSAGE_TLS_KEY_FILE=$message_tls_key_file
 DIREXTALK_MESSAGE_HTTP_BIND=$message_http_bind
 DIREXTALK_MESSAGE_HTTPS_BIND=$message_https_bind
+DIREXTALK_TURN_EXTERNAL_IP=$turn_external_ip
+DIREXTALK_COTURN_CONFIG_FILE=$out/turnserver.conf
+DIREXTALK_TURN_SHARED_SECRET_FILE=$out/turn-shared-secret
 DIREXTALK_AGENT_CONFIG_FILE=$out/agent-config.yaml
 DIREXTALK_MESSAGE_POSTGRES_PASSWORD_FILE=$out/message-postgres-password
 DIREXTALK_AGENT_POSTGRES_PASSWORD_FILE=$out/agent-postgres-password
@@ -1189,6 +1240,15 @@ message_https_bind=$message_https_bind
 message_client_base_url=$message_client_base_url
 message_tls_mode=$message_tls_mode
 message_server_name=$message_server_name
+turn_external_ip=$turn_external_ip
+turn_config_path=$out/turnserver.conf
+turn_config_device=$(stat -c '%d' "$out/turnserver.conf")
+turn_config_inode=$(stat -c '%i' "$out/turnserver.conf")
+turn_config_uid=$(stat -c '%u' "$out/turnserver.conf")
+turn_secret_path=$out/turn-shared-secret
+turn_secret_device=$(stat -c '%d' "$out/turn-shared-secret")
+turn_secret_inode=$(stat -c '%i' "$out/turn-shared-secret")
+turn_secret_uid=$(stat -c '%u' "$out/turn-shared-secret")
 message_tls_cert_path=$message_tls_cert_file
 message_tls_cert_device=$message_tls_cert_device
 message_tls_cert_inode=$message_tls_cert_inode

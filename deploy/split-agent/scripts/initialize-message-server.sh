@@ -9,6 +9,7 @@ die() {
 config_dir=${MESSAGE_CONFIG_DIR:-/etc/dirextalk-message-server}
 data_dir=${MESSAGE_DATA_DIR:-/var/dirextalk-message-server}
 registration_secret=${MESSAGE_REGISTRATION_SECRET_FILE:-/run/secrets/message_registration_shared_secret}
+turn_secret_file=${MESSAGE_TURN_SHARED_SECRET_FILE:-/run/secrets/turn_shared_secret}
 external_cert=${MESSAGE_EXTERNAL_TLS_CERT_FILE:-/bootstrap/external/server.crt}
 external_key=${MESSAGE_EXTERNAL_TLS_KEY_FILE:-/bootstrap/external/server.key}
 generate_keys=${MESSAGE_GENERATE_KEYS_BINARY:-/usr/bin/generate-keys}
@@ -55,6 +56,46 @@ esac
 
 "$generate_config" -dir "$data_dir" -db '__DIREXTALK_DB_DSN__' \
   -server "${MESSAGE_SERVER_NAME:?set MESSAGE_SERVER_NAME}" >"$config_dir/message-server.yaml"
+
+# Populate the generated TURN section without ever placing the shared secret
+# in a child process environment or argv. The shell builtins below keep the
+# value in this init process and write the final protected config directly.
+test -s "$turn_secret_file" || die 'TURN shared secret is missing or empty'
+IFS= read -r turn_secret <"$turn_secret_file" || die 'TURN shared secret cannot be read'
+case "$turn_secret" in
+  *[!0-9a-f]*) die 'TURN shared secret must be lowercase hexadecimal' ;;
+esac
+[ "${#turn_secret}" -eq 64 ] || die 'TURN shared secret must contain exactly 32 bytes'
+turn_config_tmp=$config_dir/.message-server.yaml.turn.$$
+turn_lifetime_count=0
+turn_uris_count=0
+turn_secret_count=0
+while IFS= read -r line || [ -n "$line" ]; do
+  case "$line" in
+    '    turn_user_lifetime:'*)
+      printf '%s\n' '    turn_user_lifetime: "24h"' >>"$turn_config_tmp"
+      turn_lifetime_count=$((turn_lifetime_count + 1))
+      ;;
+    '    turn_uris:'*)
+      printf '%s\n' \
+        '    turn_uris:' \
+        "      - turn:${MESSAGE_SERVER_NAME}:3478?transport=udp" \
+        "      - turn:${MESSAGE_SERVER_NAME}:3478?transport=tcp" >>"$turn_config_tmp"
+      turn_uris_count=$((turn_uris_count + 1))
+      ;;
+    '    turn_shared_secret:'*)
+      printf '    turn_shared_secret: "%s"\n' "$turn_secret" >>"$turn_config_tmp"
+      turn_secret_count=$((turn_secret_count + 1))
+      ;;
+    *) printf '%s\n' "$line" >>"$turn_config_tmp" ;;
+  esac
+done <"$config_dir/message-server.yaml"
+[ "$turn_lifetime_count" -eq 1 ] || die 'generated config must contain one TURN lifetime field'
+[ "$turn_uris_count" -eq 1 ] || die 'generated config must contain one TURN URI field'
+[ "$turn_secret_count" -eq 1 ] || die 'generated config must contain one TURN shared-secret field'
+chmod 0400 "$turn_config_tmp"
+mv -f "$turn_config_tmp" "$config_dir/message-server.yaml"
+unset turn_secret
 
 case ${MESSAGE_LOCAL_BOOTSTRAP_ENABLED:?set MESSAGE_LOCAL_BOOTSTRAP_ENABLED} in
   true)

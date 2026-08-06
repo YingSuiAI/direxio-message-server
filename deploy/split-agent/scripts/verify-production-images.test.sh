@@ -20,6 +20,7 @@ DIREXTALK_UTILITY_IMAGE_IMMUTABLE=docker.io/library/postgres:18@sha256:$digest
 DIREXTALK_MESSAGE_SERVER_IMAGE_IMMUTABLE=docker.io/dirextalk/message-server@sha256:$digest
 DIREXTALK_AGENT_IMAGE_IMMUTABLE=docker.io/dirextalk/agent@sha256:$digest
 DIREXTALK_QDRANT_IMAGE_IMMUTABLE=qdrant/qdrant:v1.18.3@sha256:$digest
+DIREXTALK_COTURN_IMAGE_IMMUTABLE=coturn/coturn:4.6.3-alpine@sha256:$digest
 EOF
 chmod 400 "$env_file"
 {

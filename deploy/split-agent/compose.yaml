@@ -10,6 +10,9 @@ x-message-image: &message-image
 x-agent-image: &agent-image
   image: ${DIREXTALK_AGENT_IMAGE_IMMUTABLE:?set an immutable Agent image reference}
 
+x-coturn-image: &coturn-image
+  image: ${DIREXTALK_COTURN_IMAGE_IMMUTABLE:?set an immutable coturn image reference}
+
 x-hardened-service: &hardened-service
   read_only: true
   cap_drop: ["ALL"]
@@ -116,6 +119,35 @@ x-message-capability-environment: &message-capability-environment
   P2P_AGENT_CAPABILITY_PEER_COMMON_NAME: agent-client
 
 services:
+  # TURN uses coturn's established shared-secret REST credential mechanism.
+  # The protected configuration is generated during provisioning; the secret
+  # itself never enters Compose interpolation, the environment, or argv.
+  coturn:
+    <<: *coturn-image
+    user: "0:0"
+    command: ["-c", "/run/secrets/turnserver.conf"]
+    network_mode: host
+    restart: unless-stopped
+    read_only: true
+    cap_drop: ["ALL"]
+    # The official Alpine image marks turnserver with file capability
+    # cap_net_bind_service; retain only that capability so exec remains valid
+    # under no-new-privileges (all configured TURN ports are still unprivileged).
+    cap_add: ["NET_BIND_SERVICE"]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,mode=0700
+    secrets:
+      - source: coturn_config
+        target: /run/secrets/turnserver.conf
+        mode: 0400
+    healthcheck:
+      test: ["CMD-SHELL", "kill -0 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
   message-postgres:
     <<: *postgres-service
     environment:
@@ -399,6 +431,9 @@ services:
       - source: message_registration_shared_secret
         target: /run/secrets/message_registration_shared_secret
         mode: 0400
+      - source: turn_shared_secret
+        target: /run/secrets/turn_shared_secret
+        mode: 0400
     volumes:
       - message_server_config:/etc/dirextalk-message-server
       - message_server_data:/var/dirextalk-message-server
@@ -565,6 +600,10 @@ configs:
     file: ${DIREXTALK_CAPABILITY_CA_INITIALIZER_FILE:?set the Capability CA initializer helper file}
 
 secrets:
+  coturn_config:
+    file: ${DIREXTALK_COTURN_CONFIG_FILE:?set the protected coturn configuration file}
+  turn_shared_secret:
+    file: ${DIREXTALK_TURN_SHARED_SECRET_FILE:?set the protected TURN shared secret file}
   message_postgres_password:
     file: ${DIREXTALK_MESSAGE_POSTGRES_PASSWORD_FILE:?set the message PostgreSQL password file}
   agent_postgres_password:

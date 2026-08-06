@@ -72,6 +72,26 @@ if grep -Eq '^DIREXTALK_(EXTENSION_RUNNER|CORE_RUNNER)_IMAGE_' "$generated_dir/.
   echo "runner-specific image variables must not be provisioned" >&2
   exit 1
 fi
+turn_secret=$(tr -d '\n' <"$generated_dir/turn-shared-secret")
+[ "${#turn_secret}" -eq 64 ]
+printf '%s\n' "$turn_secret" | grep -Eq '^[0-9a-f]{64}$'
+[ "$(stat -c '%a' "$generated_dir/turn-shared-secret")" = 400 ]
+[ "$(stat -c '%a' "$generated_dir/turnserver.conf")" = 400 ]
+config_turn_secret=
+while IFS= read -r line; do
+  case "$line" in static-auth-secret=*) config_turn_secret=${line#static-auth-secret=} ;; esac
+done <"$generated_dir/turnserver.conf"
+[ "$config_turn_secret" = "$turn_secret" ]
+grep -Fqx 'DIREXTALK_TURN_EXTERNAL_IP=127.0.0.1' "$generated_dir/.env"
+grep -Fqx "DIREXTALK_TURN_SHARED_SECRET_FILE=$generated_dir/turn-shared-secret" "$generated_dir/.env"
+grep -Fqx "DIREXTALK_COTURN_CONFIG_FILE=$generated_dir/turnserver.conf" "$generated_dir/.env"
+for public_file in "$generated_log" "$generated_dir/.env"; do
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      *"$turn_secret"*) echo "TURN shared secret leaked into output or .env" >&2; exit 1 ;;
+    esac
+  done <"$public_file"
+done
 
 # External TLS is provisioned only from two protected, current-UID source
 # files. Source paths and material stay out of logs, .env, and the manifest;
@@ -146,6 +166,7 @@ DIREXTALK_SPLIT_TEST_MODE=true \
 DIREXTALK_SPLIT_COMPOSE_MODE=production \
 DIREXTALK_CORE_EXTENSION_ENABLED=true \
 DIREXTALK_CORE_WORKLOAD_ENABLED=true \
+DIREXTALK_TURN_EXTERNAL_IP=192.0.2.10 \
 DIREXTALK_MESSAGE_SERVER_IMAGE_IMMUTABLE=docker.io/dirextalk/message-server@sha256:$image_digest \
 DIREXTALK_AGENT_IMAGE_IMMUTABLE=docker.io/dirextalk/agent@sha256:$image_digest \
 DIREXTALK_IMAGE_ATTESTATION_SOURCE_FILE=$attestation_source \
@@ -166,6 +187,7 @@ DIREXTALK_SPLIT_TEST_MODE=true \
 DIREXTALK_SPLIT_COMPOSE_MODE=production \
 DIREXTALK_CORE_EXTENSION_ENABLED=true \
 DIREXTALK_CORE_WORKLOAD_ENABLED=true \
+DIREXTALK_TURN_EXTERNAL_IP=192.0.2.10 \
 DIREXTALK_MESSAGE_SERVER_IMAGE_IMMUTABLE=docker.io/dirextalk/message-server@sha256:$image_digest \
 DIREXTALK_AGENT_IMAGE_IMMUTABLE=docker.io/dirextalk/agent@sha256:$image_digest \
 DIREXTALK_IMAGE_ATTESTATION_SOURCE_FILE=$attestation_source \

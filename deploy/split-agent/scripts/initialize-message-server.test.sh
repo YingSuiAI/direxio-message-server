@@ -20,6 +20,7 @@ cat >"$tmp_dir/bin/generate-config" <<'EOF'
 #!/bin/sh
 set -eu
 printf '%s\n' 'global:' '  database:' '    connection_string: __DIREXTALK_DB_DSN__' '  well_known_client_name: "http://invalid"'
+printf '%s\n' 'client_api:' '  turn:' '    turn_user_lifetime: "5m"' '    turn_uris:' '    turn_shared_secret: ""'
 EOF
 cat >"$tmp_dir/bin/capability-init" <<'EOF'
 #!/bin/sh
@@ -28,6 +29,7 @@ for dir in "$@"; do mkdir -p "$dir"; done
 EOF
 chmod 755 "$tmp_dir/bin/"*
 : >"$tmp_dir/registration-secret"
+printf '%064d\n' 0 >"$tmp_dir/turn-secret"
 : >"$tmp_dir/external/server.crt"
 : >"$tmp_dir/external/server.key"
 
@@ -37,6 +39,7 @@ run_init() {
   MESSAGE_CONFIG_DIR=$root/config \
   MESSAGE_DATA_DIR=$root/data \
   MESSAGE_REGISTRATION_SECRET_FILE=$tmp_dir/registration-secret \
+  MESSAGE_TURN_SHARED_SECRET_FILE=$tmp_dir/turn-secret \
   MESSAGE_EXTERNAL_TLS_CERT_FILE=$tmp_dir/external/server.crt \
   MESSAGE_EXTERNAL_TLS_KEY_FILE=$tmp_dir/external/server.key \
   MESSAGE_GENERATE_KEYS_BINARY=$tmp_dir/bin/generate-keys \
@@ -58,6 +61,11 @@ run_init "$edge_root" edge-terminated production
 [ ! -e "$edge_root/config/server.crt" ]
 [ ! -e "$edge_root/config/server.key" ]
 grep -Fq 'well_known_client_name: "https://message.example.com"' "$edge_root/config/message-server.yaml"
+grep -Fq '    turn_user_lifetime: "24h"' "$edge_root/config/message-server.yaml"
+grep -Fq '      - turn:message.example.com:3478?transport=udp' "$edge_root/config/message-server.yaml"
+grep -Fq '      - turn:message.example.com:3478?transport=tcp' "$edge_root/config/message-server.yaml"
+grep -Fq '    turn_shared_secret: "0000000000000000000000000000000000000000000000000000000000000000"' "$edge_root/config/message-server.yaml"
+[ "$(stat -c '%a' "$edge_root/config/message-server.yaml")" = 400 ]
 
 if run_init "$tmp_dir/edge-local" edge-terminated local >/dev/null 2>&1; then
   echo 'edge-terminated local initialization unexpectedly passed' >&2
