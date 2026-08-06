@@ -47,6 +47,8 @@ grep -Fq -- 'agent.chat.conversations.create' "$script"
 grep -Fq -- 'agent.chat.conversations.list' "$script"
 grep -Fq -- 'agent.chat.conversations.get' "$script"
 grep -Fq -- 'any(.messages[]?; (.content // "") | contains($marker))' "$script"
+grep -Fq -- 'history-context-after-restart' "$script"
+grep -Fq -- 'Native Agent did not preserve multi-turn conversation context after restart' "$script"
 grep -Fq -- 'DIREXTALK_TAVILY_API_KEY_FILE' "$script"
 grep -Fq -- 'agent.web_search.config.get' "$script"
 grep -Fq -- 'agent.web_search.config.update' "$script"
@@ -101,6 +103,23 @@ if grep -Fq -- '$new_memory_phrase' <<<"$memory_recall_builder"; then
   echo "memory recall chat prompt leaks the expected marker" >&2
   exit 1
 fi
+
+# The post-restart second turn must use the same durable conversation with a
+# fresh turn id, while omitting the first-turn marker from its request.
+history_context_builder=$(sed -n '/^write_chat_params "$history_context_chat"/,/^call agent\.chat "$history_context_chat"/p' "$script")
+grep -Fq -- '"$history_conversation_id"' <<<"$history_context_builder"
+grep -Fq -- '"$history_context_turn_id"' <<<"$history_context_builder"
+grep -Fq -- 'Recall the unique marker from the first turn of this conversation.' <<<"$history_context_builder"
+if grep -Fq -- '$history_marker' <<<"$history_context_builder"; then
+  echo "multi-turn continuation request leaks the first-turn marker" >&2
+  exit 1
+fi
+restart_line=$(grep -nF -- 'run_compose restart agent' "$script" | head -n 1 | cut -d: -f1)
+history_context_line=$(grep -nF -- 'call agent.chat "$history_context_chat" history-context-after-restart' "$script" | head -n 1 | cut -d: -f1)
+[ -n "$restart_line" ] && [ -n "$history_context_line" ] && [ "$history_context_line" -gt "$restart_line" ] || {
+  echo "multi-turn continuation does not execute after the Agent restart" >&2
+  exit 1
+}
 
 # Account deletion remains the default disposable-account gate, but the final
 # persistent-account lane must be able to skip only the deprovision assertions.

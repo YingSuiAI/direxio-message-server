@@ -818,6 +818,18 @@ call agent.core.status.get "$params" core-status-after-restart
 call agent.knowledge.search "$memory_search" memory-search-after-restart
 jq -e --arg id "$memory_id" --arg phrase "$new_memory_phrase" 'any(.items[]?; (.source_id == $id) and ((.snippet // .content // "") | contains($phrase)))' "$last_response" >/dev/null || die "updated memory was not searchable after Agent restart"
 
+# Continue the pre-restart conversation with a fresh turn. The second prompt
+# deliberately omits history_marker, so the only production path that can
+# return it is Agent-owned durable conversation context loaded after restart.
+history_context_turn_id=$(uuid4)
+history_context_chat=$tmp/history-context-chat.params.json
+write_chat_params "$history_context_chat" "$history_conversation_id" "$history_context_turn_id" \
+  'Recall the unique marker from the first turn of this conversation. Reply with ACCEPT_CONTEXT_OK followed by that exact marker, and nothing else.'
+call agent.chat "$history_context_chat" history-context-after-restart
+jq -e --arg marker "$history_marker" \
+  '.text | type == "string" and contains("ACCEPT_CONTEXT_OK") and contains($marker)' \
+  "$last_response" >/dev/null || die "Native Agent did not preserve multi-turn conversation context after restart"
+
 # A new conversation has no transcript to leak the marker. Its first turn asks
 # for the stored fact without including the value, so observing the unique
 # marker proves the production long-term-memory recall path reached the model.
@@ -1010,4 +1022,4 @@ if [ "$account_delete_enabled" = true ]; then
 else
   account_delete_summary='account deletion skipped; model/Tavily/conversation state retained'
 fi
-echo "split local acceptance passed: bootstrap, HTTP+HTTPS health, live model catalog plus stored-profile catalog, model sync/chat replay, Tavily credential/config/test plus real Web Search chat/restart, Product capability exact-once, Knowledge/memory indexing+restart+delete, $account_delete_summary, DB/network isolation and secret canary"
+echo "split local acceptance passed: bootstrap, HTTP+HTTPS health, live model catalog plus stored-profile catalog, model sync/chat replay plus durable multi-turn restart context, Tavily credential/config/test plus real Web Search chat/restart, Product capability exact-once, Knowledge/memory indexing+restart+delete, $account_delete_summary, DB/network isolation and secret canary"
