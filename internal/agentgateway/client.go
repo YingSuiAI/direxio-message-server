@@ -17,6 +17,8 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
+const agentRootCallBudget = 2 * time.Minute
+
 // Config 是 AgentCapability 客户端配置
 type Config struct {
 	// ServerAddr 是 Agent 的 AgentCapabilityService 地址
@@ -54,6 +56,7 @@ type Client struct {
 	conn   *grpc.ClientConn
 	client capv1.AgentCapabilityServiceClient
 	token  []byte
+	now    func() time.Time
 
 	// 并发控制
 	querySem chan struct{}
@@ -96,6 +99,7 @@ func New(config *Config) (*Client, error) {
 	c := &Client{
 		config:   config,
 		token:    token,
+		now:      time.Now,
 		querySem: make(chan struct{}, config.MaxConcurrentQuery),
 		watchSem: make(chan struct{}, config.MaxConcurrentWatch),
 	}
@@ -359,7 +363,11 @@ func (c *Client) authenticatedContext(ctx context.Context) context.Context {
 // createCallContext 创建新的 CallContext
 func (c *Client) createCallContext(rootOperationID string) *capv1.CallContext {
 	chainID := uuid.New().String()
-	deadline := time.Now().Add(30 * time.Second).UnixMilli()
+	now := time.Now
+	if c != nil && c.now != nil {
+		now = c.now
+	}
+	deadline := now().Add(agentRootCallBudget).UnixMilli()
 	base := capv1.NewCallContext(chainID, rootOperationID, deadline)
 	callContext, err := capv1.IncrementHop(base, "ms")
 	if err != nil {
