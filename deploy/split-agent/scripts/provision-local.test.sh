@@ -20,6 +20,8 @@ fi
 grep -Fq -- "[ -n \"\$controllers\" ]" "$script"
 grep -Fq -- 'validate_target_write_access' "$script"
 grep -Fq -- 'getfacl -cp' "$script"
+message_server_contract=$(sed -n '/^  message-server:/,/^networks:/p' "$script_dir/../compose.yaml")
+grep -A2 -F '      coturn:' <<<"$message_server_contract" | grep -Fq 'condition: service_healthy'
 
 # cgroup-v2 controller pseudo-files report stat size zero even when readable
 # controller content is present. Exercise the real filesystem semantic that

@@ -502,6 +502,8 @@ services:
         mode: 0400
     networks: [message_private, message_database, agent_caller, message_public]
     depends_on:
+      coturn:
+        condition: service_healthy
       message-postgres:
         condition: service_healthy
       message-server-init:
