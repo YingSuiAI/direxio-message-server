@@ -64,6 +64,7 @@ Trace changes through entry point, auth, policy, durable state, Matrix writes, r
 3. Make the smallest change and update generated contracts or contract-critical docs in the same commit.
 4. Run focused package tests first. Add projection, restart, federation, or multi-node coverage only when the changed path crosses those boundaries.
 5. Format touched Go files, review `git diff`, run `git diff --check`, and commit only current-task changes.
+6. Write Git commit messages in English.
 
 Typical completion checks:
 
