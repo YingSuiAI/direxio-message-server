@@ -141,6 +141,51 @@ status `3` as an expected negative state, and fail on other non-zero statuses.
 Flutter and other public clients must connect to message-server and must never
 call these scripts or Docker directly.
 
+The same root-owned integration point can apply a formal Agent version. A
+release operator first installs the canonical channel file (for example
+`scripts/release/agent-channel/v1.0.0.json`) into the fixed root-owned
+`/usr/local/share/dirextalk/agent-channel` directory, then invokes:
+
+    deploy/split-agent/scripts/update-agent-local.sh \
+      /absolute/path/.run/split v1.0.0
+
+The channel file contains only `version` and `minimum_server_version`. The
+wrapper compares that minimum to the OCI version label of the exact
+receipt-bound running message-server container; it never compares a Flutter or
+other client version. An unmet minimum, a non-newer Agent target, or a
+non-production stack is an expected negative result (exit `3`) before pull or
+mutation. Exit `1` is an identity, metadata, Docker, migration, health, or
+rollback infrastructure failure. A successful update pulls the fixed
+`docker.io/dirextalk/agent:<version>` repository, resolves it to an immutable
+digest, migrates Agent storage, recreates both runners and then Agent from that
+one digest, verifies all three healthy, and updates the receipt binding. A
+post-mutation failure recreates and health-checks the previous immutable image.
+
+This wrapper is the host execution adapter only. The current message-server
+`release.v1`/`release.v2` actions continue to delegate exclusively to the
+root-owned updater Unix contract, and Flutter never calls this wrapper or Agent
+directly. Automatic scheduling of Agent updates from an updater job still
+requires a reviewed integration in the `dirextalk-updater` repository; these
+scripts do not claim that integration already exists.
+
+Formal Agent images are built from the sibling `dirextalk-agent` repository.
+The first channel version is `v1.0.0`:
+
+    scripts/release/prepare-agent.sh v1.0.0
+    scripts/release/verify-agent.sh v1.0.0
+    scripts/release/publish-agent.sh v1.0.0
+
+Preparation requires the committed HEAD of Agent branch
+`adam/agent-core-v1-integration`. The only permitted worktree entry is the
+protected untracked `.codex-final-overlay.Containerfile`; verification records
+that exact revision and exports the committed Git tree to a temporary build
+context, so that local overlay can never enter the released image.
+Verification builds `dirextalk/agent:v1.0.0` from
+`deploy/container/agent.Containerfile`, checks its source/version OCI labels,
+and executes all three bundled binaries. Publication pushes only after that
+commit-bound evidence and reports the immutable Docker Hub digest for the
+deployment channel; it does not move a `latest` tag.
+
 The message-server portal owner is initialized by the protected
 `portal.bootstrap` action, not by the ordinary Matrix `create-account` binary.
 Provisioning generates a separate mode 0400 portal-password file and Compose

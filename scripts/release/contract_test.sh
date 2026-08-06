@@ -15,6 +15,9 @@ for script in "$prepare" "$verify" "$publish"; do
   [[ -x "$script" ]] || fail "missing executable ${script#$repo_root/}"
 done
 
+"$repo_root/scripts/release/agent-release.test.sh" >/dev/null
+"$repo_root/deploy/split-agent/scripts/update-agent-local.test.sh" >/dev/null
+
 grep -F 'dirextalk-message-server-release' "$repo_root/AGENTS.md" >/dev/null || fail 'AGENTS does not route stable releases to the release Skill'
 grep -Eq '^[[:space:]]+tags:' "$repo_root/.github/workflows/ci.yml" || fail 'CI does not validate pushed version tags'
 grep -F 'persist-credentials: false' "$repo_root/.github/workflows/release.yml" >/dev/null || fail 'release checkout persists repository credentials'

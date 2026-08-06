@@ -117,6 +117,8 @@ shellcheck \
   "$script_dir/prepare-runner-cgroups.test.sh" \
   "$script_dir/manage-runner-apparmor.sh" \
   "$script_dir/manage-runner-apparmor.test.sh" \
+  "$script_dir/update-agent-local.sh" \
+  "$script_dir/update-agent-local.test.sh" \
   "$script_dir/provision-local.test.sh" \
   "$script_dir/verify-production-images.sh" \
   "$script_dir/verify-production-images.test.sh" \
@@ -144,6 +146,7 @@ shellcheck \
 "$script_dir/verify-first-fresh.test.sh" >/dev/null
 "$script_dir/prepare-runner-cgroups.test.sh" >/dev/null
 "$script_dir/manage-runner-apparmor.test.sh" >/dev/null
+"$script_dir/update-agent-local.test.sh" >/dev/null
 apparmor_parser --preprocess "$stack_dir/apparmor.d/dirextalk-runner-userns" >/dev/null
 grep -Fqx 'profile dirextalk-runner-userns flags=(unconfined) {' "$stack_dir/apparmor.d/dirextalk-runner-userns"
 grep -Fqx '  userns,' "$stack_dir/apparmor.d/dirextalk-runner-userns"

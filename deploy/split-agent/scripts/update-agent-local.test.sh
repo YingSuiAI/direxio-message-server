@@ -1,0 +1,161 @@
+#!/usr/bin/env bash
+set -euo pipefail
+script_dir=$(cd "$(dirname "$0")" && pwd -P)
+script=$script_dir/update-agent-local.sh
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/dirextalk-agent-update.XXXXXX")
+trap 'rm -rf "$tmp"' EXIT
+mkdir -p "$tmp/bin" "$tmp/channel"
+log=$tmp/docker.log; state=$tmp/docker.state
+old_digest=$(printf '1%.0s' {1..64}); target_digest=$(printf '2%.0s' {1..64})
+old_image_id=sha256:$(printf 'a%.0s' {1..64}); target_image_id=sha256:$(printf 'b%.0s' {1..64})
+message_image_id=sha256:$(printf 'c%.0s' {1..64})
+message_id=$(printf 'd%.0s' {1..64}); agent_id=$(printf 'e%.0s' {1..64}); extension_id=$(printf 'f%.0s' {1..64}); core_id=$(printf '9%.0s' {1..64})
+new_agent_id=$(printf '8%.0s' {1..64}); new_extension_id=$(printf '7%.0s' {1..64}); new_core_id=$(printf '6%.0s' {1..64})
+old_ref=docker.io/dirextalk/agent@sha256:$old_digest
+target_ref=docker.io/dirextalk/agent@sha256:$target_digest
+
+cat >"$tmp/bin/stop" <<'EOF'
+#!/usr/bin/env bash
+exit "${FAKE_STOP_STATUS:-0}"
+EOF
+cat >"$tmp/bin/docker" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s|image=%s\n' "$*" "${DIREXTALK_AGENT_IMAGE_IMMUTABLE:-}" >>"$FAKE_DOCKER_LOG"
+if [ "$1 $2" = 'image inspect' ]; then
+  case "$3" in
+    "$FAKE_MESSAGE_IMAGE_ID") printf '%s\n' "$FAKE_SERVER_VERSION" ;;
+    "$FAKE_OLD_IMAGE_ID") printf '%s\n' "$FAKE_CURRENT_AGENT_VERSION" ;;
+    docker.io/dirextalk/agent:*)
+      [ "${FAKE_PULL_FAIL:-false}" != true ] || exit 1
+      printf '%s|%s|%s\n' "$FAKE_TARGET_VERSION" "$FAKE_TARGET_IMAGE_ID" "$FAKE_TARGET_REF"
+      ;;
+    *) exit 1 ;;
+  esac
+  exit 0
+fi
+if [ "$1" = pull ]; then [ "${FAKE_PULL_FAIL:-false}" != true ]; exit; fi
+if [ "$1" = inspect ]; then
+  id=$2; image=$FAKE_OLD_IMAGE_ID; ref=$FAKE_OLD_REF
+  case "$id" in
+    "$FAKE_MESSAGE_ID") image=$FAKE_MESSAGE_IMAGE_ID; ref=dirextalk/message-server:v1.0.0 ;;
+    "$FAKE_NEW_AGENT_ID"|"$FAKE_NEW_EXTENSION_ID"|"$FAKE_NEW_CORE_ID")
+      if [ "$(cat "$FAKE_DOCKER_STATE" 2>/dev/null || true)" = target ]; then image=$FAKE_TARGET_IMAGE_ID; ref=$FAKE_TARGET_REF; fi ;;
+  esac
+  printf '[{"Id":"%s","Image":"%s","Config":{"Image":"%s"},"State":{"Status":"running","Health":{"Status":"healthy"}}}]\n' "$id" "$image" "$ref"
+  exit 0
+fi
+if [ "$1" = compose ]; then
+  shift
+  while [ "$#" -gt 0 ]; do
+    case "$1" in --env-file|-f|--project-name) shift 2;; *) break;; esac
+  done
+  command=$1; shift
+  if [ "$command" = ps ]; then
+    [ "$1" = -q ]; service=$2
+    case "$service" in agent) printf '%s\n' "$FAKE_NEW_AGENT_ID";; extension-runner) printf '%s\n' "$FAKE_NEW_EXTENSION_ID";; core-runner) printf '%s\n' "$FAKE_NEW_CORE_ID";; esac
+    exit 0
+  fi
+  if [ "$command" = run ]; then [ "${FAKE_MIGRATE_FAIL:-false}" != true ]; exit; fi
+  if [ "$command" = up ]; then
+    case "${DIREXTALK_AGENT_IMAGE_IMMUTABLE:-}" in "$FAKE_TARGET_REF") printf target >"$FAKE_DOCKER_STATE";; *) printf old >"$FAKE_DOCKER_STATE";; esac
+    if [ "${FAKE_TARGET_AGENT_FAIL:-false}" = true ] && [ "${DIREXTALK_AGENT_IMAGE_IMMUTABLE:-}" = "$FAKE_TARGET_REF" ] && [ "${*: -1}" = agent ]; then exit 1; fi
+    exit 0
+  fi
+fi
+exit 1
+EOF
+chmod +x "$tmp/bin/docker" "$tmp/bin/stop" "$script"
+
+make_stack() {
+  local name=$1 root env_identity env_sha manifest_identity manifest_sha
+  root=$tmp/$name
+  mkdir -m 700 "$root"
+  printf 'DIREXTALK_AGENT_IMAGE_IMMUTABLE=%s\n' "$old_ref" >"$root/.env"
+  printf '# dirextalk-split-manifest-v1\nstack_name=d-abcdefghijklmnopqrstuvwxyz\ncompose_mode=production\n' >"$root/.manifest"
+  chmod 400 "$root/.env" "$root/.manifest"
+  env_identity=$(stat -c '%d:%i:%u' "$root/.env"); env_sha=$(sha256sum "$root/.env"|awk '{print $1}')
+  manifest_identity=$(stat -c '%d:%i:%u' "$root/.manifest"); manifest_sha=$(sha256sum "$root/.manifest"|awk '{print $1}')
+  cat >"$root/.cleanup-receipt" <<EOF
+# dirextalk-split-cleanup-receipt-v1
+state=complete
+stack_name=d-abcdefghijklmnopqrstuvwxyz
+control.env_identity=$env_identity
+control.manifest_identity=$manifest_identity
+control.env_sha256=$env_sha
+control.manifest_sha256=$manifest_sha
+container.count=4
+container.0.id=$message_id
+container.0.name=message
+container.0.service=message-server
+container.0.project=d-abcdefghijklmnopqrstuvwxyz
+container.1.id=$agent_id
+container.1.name=agent
+container.1.service=agent
+container.1.project=d-abcdefghijklmnopqrstuvwxyz
+container.2.id=$extension_id
+container.2.name=extension
+container.2.service=extension-runner
+container.2.project=d-abcdefghijklmnopqrstuvwxyz
+container.3.id=$core_id
+container.3.name=core
+container.3.service=core-runner
+container.3.project=d-abcdefghijklmnopqrstuvwxyz
+EOF
+  chmod 400 "$root/.cleanup-receipt"
+  printf '%s\n' "$root"
+}
+write_channel() { printf '{"minimum_server_version":"%s","version":"%s"}\n' "$2" "$1" >"$tmp/channel/$1.json"; }
+run_update() {
+  PATH="$tmp/bin:$PATH" FAKE_DOCKER_LOG=$log FAKE_DOCKER_STATE=$state \
+  FAKE_MESSAGE_ID=$message_id FAKE_MESSAGE_IMAGE_ID=$message_image_id FAKE_SERVER_VERSION="${FAKE_SERVER_VERSION:-v1.0.0}" \
+  FAKE_OLD_IMAGE_ID=$old_image_id FAKE_OLD_REF=$old_ref FAKE_CURRENT_AGENT_VERSION=v1.0.0 \
+  FAKE_TARGET_VERSION=v1.0.1 FAKE_TARGET_IMAGE_ID=$target_image_id FAKE_TARGET_REF=$target_ref \
+  FAKE_NEW_AGENT_ID=$new_agent_id FAKE_NEW_EXTENSION_ID=$new_extension_id FAKE_NEW_CORE_ID=$new_core_id \
+  DIREXTALK_AGENT_UPDATE_TEST_FIXTURE=true DIREXTALK_AGENT_UPDATE_STOP_WRAPPER=$tmp/bin/stop \
+  DIREXTALK_AGENT_CHANNEL_DIR=$tmp/channel DIREXTALK_AGENT_UPDATE_HEALTH_ATTEMPTS=1 \
+  "$script" "$@"
+}
+
+write_channel v1.0.1 v1.1.0
+root=$(make_stack minimum-server)
+before=$(sha256sum "$root/.env" "$root/.cleanup-receipt")
+if run_update "$root" v1.0.1 >/dev/null 2>&1; then echo 'minimum server gate unexpectedly passed' >&2; exit 1; else status=$?; fi
+[ "$status" -eq 3 ] || { echo "minimum server gate returned $status, want 3" >&2; exit 1; }
+! grep -Eq '(^|\|)(pull|compose)( |\|)' "$log" || { echo 'minimum server gate performed Docker mutation' >&2; exit 1; }
+[ "$before" = "$(sha256sum "$root/.env" "$root/.cleanup-receipt")" ]
+
+write_channel v1.0.1 v1.0.0
+: >"$log"; root=$(make_stack success)
+run_update "$root" v1.0.1 >/dev/null
+grep -Fqx "DIREXTALK_AGENT_IMAGE_IMMUTABLE=$target_ref" "$root/.env"
+grep -Fq "container.1.id=$new_agent_id" "$root/.cleanup-receipt"
+grep -Fq "container.2.id=$new_extension_id" "$root/.cleanup-receipt"
+grep -Fq "container.3.id=$new_core_id" "$root/.cleanup-receipt"
+
+: >"$log"; root=$(make_stack pull-failure); before=$(sha256sum "$root/.env" "$root/.cleanup-receipt")
+if FAKE_PULL_FAIL=true run_update "$root" v1.0.1 >/dev/null 2>&1; then echo 'pull failure unexpectedly passed' >&2; exit 1; fi
+[ "$before" = "$(sha256sum "$root/.env" "$root/.cleanup-receipt")" ]
+if grep -Fq 'compose ' "$log"; then echo 'pull failure crossed the Compose mutation boundary' >&2; exit 1; fi
+
+: >"$log"; : >"$state"; root=$(make_stack rollback); before=$(sha256sum "$root/.env" "$root/.cleanup-receipt")
+if FAKE_TARGET_AGENT_FAIL=true run_update "$root" v1.0.1 >/dev/null 2>&1; then echo 'target health/start failure unexpectedly passed' >&2; exit 1; fi
+[ "$before" = "$(sha256sum "$root/.env" "$root/.cleanup-receipt")" ]
+grep -Fq "image=$old_ref" "$log"
+[ "$(cat "$state")" = old ]
+
+# Inject failure after the new .env has replaced its path but before the new
+# receipt is committed. The transaction trap must restore the exact original
+# control-file identities as well as the previous runtime image.
+: >"$log"; : >"$state"; root=$(make_stack receipt-commit-failure)
+before=$(stat -c '%d:%i:%u' "$root/.env" "$root/.cleanup-receipt"; sha256sum "$root/.env" "$root/.cleanup-receipt")
+if DIREXTALK_AGENT_UPDATE_FAIL_RECEIPT_COMMIT=true run_update "$root" v1.0.1 >/dev/null 2>&1; then
+  echo 'injected receipt commit failure unexpectedly passed' >&2
+  exit 1
+fi
+after=$(stat -c '%d:%i:%u' "$root/.env" "$root/.cleanup-receipt"; sha256sum "$root/.env" "$root/.cleanup-receipt")
+[ "$before" = "$after" ] || { echo 'receipt commit failure did not restore exact protected control files' >&2; exit 1; }
+grep -Fq "image=$old_ref" "$log"
+[ "$(cat "$state")" = old ]
+
+printf 'Agent update success, expected-negative, infrastructure, receipt-commit, and rollback paths verified\n'
