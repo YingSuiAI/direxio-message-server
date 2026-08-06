@@ -169,7 +169,6 @@ volume_pairs=(
   'DIREXTALK_AGENT_SOCKET_VOLUME:resource.volume.agent_extension_socket'
   'DIREXTALK_AGENT_INSTALL_VOLUME:resource.volume.agent_extension_install'
   'DIREXTALK_AGENT_STAGING_VOLUME:resource.volume.agent_extension_staging'
-  'DIREXTALK_AGENT_WORKSPACE_VOLUME:resource.volume.agent_extension_workspaces'
   'DIREXTALK_AGENT_RUNNER_WORKSPACE_VOLUME:resource.volume.agent_runner_workspaces'
   'DIREXTALK_AGENT_RUNNER_STATE_VOLUME:resource.volume.agent_runner_state'
   'DIREXTALK_AGENT_KNOWLEDGE_CONTENT_VOLUME:resource.volume.agent_knowledge_content'

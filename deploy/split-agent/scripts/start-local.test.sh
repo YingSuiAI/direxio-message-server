@@ -57,6 +57,7 @@ grep -Fq -- 'verify-production-tls.sh' "$script"
 grep -Fq -- 'verify-production-images.sh' "$script"
 grep -Fq -- 'pull --policy always' "$script"
 grep -Fq -- 'up -d --no-build --pull never --wait message-server' "$script"
+grep -Fq -- "inspect_runner_cgroup_namespace \"\$service\" \"\$container\"" "$script"
 
 tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/dirextalk-start-local.XXXXXX")
 cleanup() {
@@ -66,6 +67,39 @@ trap cleanup EXIT
 mkdir -p "$tmp_dir/bin"
 docker_log=$tmp_dir/docker.log
 docker_state=$tmp_dir/up.state
+
+cat >"$tmp_dir/runner-cgroup-namespace.sh" <<'EOF'
+die() {
+  printf '%s\n' "$*" >&2
+  exit 1
+}
+EOF
+sed -n '/^inspect_runner_cgroup_namespace() {/,/^}$/p' "$script" >>"$tmp_dir/runner-cgroup-namespace.sh"
+cat >"$tmp_dir/bin/docker" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[ "$1" = inspect ] || exit 44
+[ "${DIREXTALK_FAKE_CGROUPNS_INSPECT_FAILURE:-false}" != true ] || exit 42
+printf '%s\n' "${DIREXTALK_FAKE_CGROUPNS_MODE:-host}"
+EOF
+chmod 755 "$tmp_dir/bin/docker"
+runner_test_path=$tmp_dir/bin:$PATH
+PATH="$runner_test_path" bash -c 'source "$1"; inspect_runner_cgroup_namespace extension-runner fixture-container' \
+  _ "$tmp_dir/runner-cgroup-namespace.sh"
+if PATH="$runner_test_path" DIREXTALK_FAKE_CGROUPNS_MODE=private \
+  bash -c 'source "$1"; inspect_runner_cgroup_namespace extension-runner fixture-container' \
+    _ "$tmp_dir/runner-cgroup-namespace.sh" >"$tmp_dir/cgroupns-private.stdout" 2>"$tmp_dir/cgroupns-private.stderr"; then
+  echo "private runner cgroup namespace was unexpectedly accepted" >&2
+  exit 1
+fi
+grep -Fq 'extension-runner must use the host cgroup namespace' "$tmp_dir/cgroupns-private.stderr"
+if PATH="$runner_test_path" DIREXTALK_FAKE_CGROUPNS_INSPECT_FAILURE=true \
+  bash -c 'source "$1"; inspect_runner_cgroup_namespace core-runner fixture-container' \
+    _ "$tmp_dir/runner-cgroup-namespace.sh" >"$tmp_dir/cgroupns-failure.stdout" 2>"$tmp_dir/cgroupns-failure.stderr"; then
+  echo "runner cgroup namespace inspection failure was unexpectedly accepted" >&2
+  exit 1
+fi
+grep -Fq 'core-runner cgroup namespace inspection failed (status 42)' "$tmp_dir/cgroupns-failure.stderr"
 
 cat >"$tmp_dir/runner-binding-functions.sh" <<'EOF'
 die() {

@@ -182,7 +182,6 @@ volume_pairs=(
   'DIREXTALK_AGENT_SOCKET_VOLUME:resource.volume.agent_extension_socket'
   'DIREXTALK_AGENT_INSTALL_VOLUME:resource.volume.agent_extension_install'
   'DIREXTALK_AGENT_STAGING_VOLUME:resource.volume.agent_extension_staging'
-  'DIREXTALK_AGENT_WORKSPACE_VOLUME:resource.volume.agent_extension_workspaces'
   'DIREXTALK_AGENT_RUNNER_WORKSPACE_VOLUME:resource.volume.agent_runner_workspaces'
   'DIREXTALK_AGENT_RUNNER_STATE_VOLUME:resource.volume.agent_runner_state'
   'DIREXTALK_AGENT_KNOWLEDGE_CONTENT_VOLUME:resource.volume.agent_knowledge_content'
@@ -813,6 +812,16 @@ else
 fi
 
 verify_control_identity
+inspect_runner_cgroup_namespace() {
+  local service=$1 container=$2 mode status
+  if mode=$(docker inspect -f '{{.HostConfig.CgroupnsMode}}' "$container" 2>/dev/null); then
+    :
+  else
+    status=$?
+    die "$service cgroup namespace inspection failed (status $status)"
+  fi
+  [ "$mode" = host ] || die "$service must use the host cgroup namespace"
+}
 for service in agent extension-runner core-runner message-server; do
   container=$(docker ps -q \
     --filter "label=com.docker.compose.project=$stack_name" \
@@ -820,6 +829,9 @@ for service in agent extension-runner core-runner message-server; do
   [ -n "$container" ] && [ "${container#*$'\n'}" = "$container" ] || die "$service does not have exactly one running container"
   state=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project" }}|{{ index .Config.Labels "com.docker.compose.service" }}|{{ .State.Health.Status }}' "$container")
   [ "$state" = "$stack_name|$service|healthy" ] || die "$service health ownership check failed: $state"
+  case "$service" in
+    extension-runner|core-runner) inspect_runner_cgroup_namespace "$service" "$container" ;;
+  esac
 done
 
 # Persist the exact objects created by this fresh start.  Cleanup consumes this

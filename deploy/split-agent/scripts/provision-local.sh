@@ -826,7 +826,7 @@ require_fresh_docker_namespace \
   "$stack_name-agent-postgres" "$stack_name-agent-secrets" \
   "$stack_name-agent-config" "$stack_name-agent-core-data" \
   "$stack_name-agent-extension-socket" "$stack_name-agent-extension-install" \
-  "$stack_name-agent-extension-staging" "$stack_name-agent-extension-workspaces" \
+  "$stack_name-agent-extension-staging" \
   "$stack_name-agent-extension-runner-workspaces" "$stack_name-agent-extension-runner-state" \
   "$stack_name-agent-knowledge-content" "$stack_name-agent-knowledge-mount" \
   "$stack_name-agent-qdrant" "$stack_name-capability-authority" \
@@ -1096,7 +1096,6 @@ DIREXTALK_AGENT_CORE_DATA_VOLUME=$stack_name-agent-core-data
 DIREXTALK_AGENT_SOCKET_VOLUME=$stack_name-agent-extension-socket
 DIREXTALK_AGENT_INSTALL_VOLUME=$stack_name-agent-extension-install
 DIREXTALK_AGENT_STAGING_VOLUME=$stack_name-agent-extension-staging
-DIREXTALK_AGENT_WORKSPACE_VOLUME=$stack_name-agent-extension-workspaces
 DIREXTALK_AGENT_RUNNER_WORKSPACE_VOLUME=$stack_name-agent-extension-runner-workspaces
 DIREXTALK_AGENT_RUNNER_STATE_VOLUME=$stack_name-agent-extension-runner-state
 DIREXTALK_AGENT_KNOWLEDGE_CONTENT_VOLUME=$stack_name-agent-knowledge-content
@@ -1263,7 +1262,6 @@ resource.volume.agent_core_data=$stack_name-agent-core-data
 resource.volume.agent_extension_socket=$stack_name-agent-extension-socket
 resource.volume.agent_extension_install=$stack_name-agent-extension-install
 resource.volume.agent_extension_staging=$stack_name-agent-extension-staging
-resource.volume.agent_extension_workspaces=$stack_name-agent-extension-workspaces
 resource.volume.agent_runner_workspaces=$stack_name-agent-extension-runner-workspaces
 resource.volume.agent_runner_state=$stack_name-agent-extension-runner-state
 resource.volume.agent_knowledge_content=$stack_name-agent-knowledge-content

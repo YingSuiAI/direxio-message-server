@@ -30,7 +30,7 @@ network_suffixes=(message-private message-public message-db agent-private agent-
 volume_suffixes=(
   message-postgres message-config message-data message-plugins agent-postgres agent-secrets
   agent-config agent-core-data agent-extension-socket agent-extension-install agent-extension-staging
-  agent-extension-workspaces agent-extension-runner-workspaces agent-extension-runner-state
+  agent-extension-runner-workspaces agent-extension-runner-state
   agent-knowledge-content agent-knowledge-mount agent-qdrant capability-authority capability-shared
   capability-private core-runner-socket core-runner-installs core-runner-workspaces core-runner-state
 )
@@ -95,7 +95,6 @@ write_fixture() {
       agent-extension-socket) env_key=DIREXTALK_AGENT_SOCKET_VOLUME ;;
       agent-extension-install) env_key=DIREXTALK_AGENT_INSTALL_VOLUME ;;
       agent-extension-staging) env_key=DIREXTALK_AGENT_STAGING_VOLUME ;;
-      agent-extension-workspaces) env_key=DIREXTALK_AGENT_WORKSPACE_VOLUME ;;
       agent-extension-runner-workspaces) env_key=DIREXTALK_AGENT_RUNNER_WORKSPACE_VOLUME ;;
       agent-extension-runner-state) env_key=DIREXTALK_AGENT_RUNNER_STATE_VOLUME ;;
       agent-knowledge-content) env_key=DIREXTALK_AGENT_KNOWLEDGE_CONTENT_VOLUME ;;
@@ -148,7 +147,6 @@ write_fixture() {
       agent-extension-socket) key=agent_extension_socket ;;
       agent-extension-install) key=agent_extension_install ;;
       agent-extension-staging) key=agent_extension_staging ;;
-      agent-extension-workspaces) key=agent_extension_workspaces ;;
       agent-extension-runner-workspaces) key=agent_runner_workspaces ;;
       agent-extension-runner-state) key=agent_runner_state ;;
       agent-knowledge-content) key=agent_knowledge_content ;;

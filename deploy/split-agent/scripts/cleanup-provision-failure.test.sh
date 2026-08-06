@@ -23,7 +23,7 @@ engine=cleanup-failure-engine
 fragment=/usr/lib/systemd/system/systemd-journald.service
 fragment_hash=$(sha256sum -- "$fragment" | awk '{print $1}')
 network_keys=(message_private message_public message_database agent_private agent_database agent_caller agent_egress)
-volume_keys=(message_postgres message_config message_data message_plugins agent_postgres agent_secrets agent_config agent_core_data agent_extension_socket agent_extension_install agent_extension_staging agent_extension_workspaces agent_runner_workspaces agent_runner_state agent_knowledge_content agent_knowledge_mount agent_qdrant capability_authority capability_shared capability_private core_runner_socket core_runner_installs core_runner_workspaces core_runner_state)
+volume_keys=(message_postgres message_config message_data message_plugins agent_postgres agent_secrets agent_config agent_core_data agent_extension_socket agent_extension_install agent_extension_staging agent_runner_workspaces agent_runner_state agent_knowledge_content agent_knowledge_mount agent_qdrant capability_authority capability_shared capability_private core_runner_socket core_runner_installs core_runner_workspaces core_runner_state)
 
 write_fixture() {
   local dir=$1 key
@@ -48,7 +48,6 @@ write_fixture() {
       agent_extension_socket) env_key=DIREXTALK_AGENT_SOCKET_VOLUME ;;
       agent_extension_install) env_key=DIREXTALK_AGENT_INSTALL_VOLUME ;;
       agent_extension_staging) env_key=DIREXTALK_AGENT_STAGING_VOLUME ;;
-      agent_extension_workspaces) env_key=DIREXTALK_AGENT_WORKSPACE_VOLUME ;;
       agent_runner_workspaces) env_key=DIREXTALK_AGENT_RUNNER_WORKSPACE_VOLUME ;;
       core_runner_installs) env_key=DIREXTALK_CORE_RUNNER_INSTALL_VOLUME ;;
       core_runner_workspaces) env_key=DIREXTALK_CORE_RUNNER_WORKSPACE_VOLUME ;;

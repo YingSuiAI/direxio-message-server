@@ -346,6 +346,10 @@ jq -e --arg http "$http_bind" --arg https "$https_bind" --arg tls_mode "$tls_mod
   ((.networks.message_public.internal // false) == false) and
   ([.services | to_entries[] | select(.value.networks | has("message_public")) | .key] == ["message-server"]) and
   ([.services | to_entries[] | select(.value.networks | has("agent_egress")) | .key] == ["agent"]) and
+  (.services["extension-runner"].cgroup == "host") and
+  (.services["core-runner"].cgroup == "host") and
+  ([.services.agent.volumes[] | select(.target == "/var/lib/dirextalk-agent/extension-workspaces" and .source == "agent_runner_workspaces")] | length == 1) and
+  ([.services["extension-runner"].volumes[] | select(.target == "/var/lib/dirextalk-agent/extension-workspaces" and .source == "agent_runner_workspaces")] | length == 1) and
   ((.services["message-postgres"].networks | has("agent_database")) | not) and
   ((.services["agent-postgres"].networks | has("message_database")) | not)
 ' "$topology" >/dev/null || die "Compose topology violates public-port or private-network isolation"

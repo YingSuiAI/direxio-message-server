@@ -215,7 +215,7 @@ services:
       - agent_secret_material:/run/secrets:ro
       - agent_extension_socket:${DIREXTALK_CORE_EXTENSION_RUNNER_DIR:?set the extension runner socket directory}
       - agent_extension_staging:/var/lib/dirextalk-agent/extension-staging
-      - agent_extension_workspaces:/var/lib/dirextalk-agent/extension-workspaces
+      - agent_runner_workspaces:/var/lib/dirextalk-agent/extension-workspaces
       - core_runner_socket:${DIREXTALK_CORE_WORKLOAD_RUNNER_DIR:?set the Core Runner socket directory}
       - agent_knowledge_content:/var/lib/dirextalk-agent/knowledge-content
       - agent_knowledge_mount:/var/lib/dirextalk-agent/knowledge-mount:ro
@@ -245,6 +245,7 @@ services:
     <<: [*agent-image, *extension-runner-hardening]
     restart: unless-stopped
     entrypoint: ["/usr/local/bin/dirextalk-extension-runner"]
+    cgroup: host
     cgroup_parent: ${DIREXTALK_EXTENSION_CGROUP_PARENT:-${DIREXTALK_SPLIT_STACK_NAME:?set a unique split stack name}-extension.slice}
     group_add: ["65532"]
     command:
@@ -319,6 +320,7 @@ services:
     <<: [*agent-image, *core-runner-hardening]
     restart: unless-stopped
     entrypoint: ["/usr/local/bin/dirextalk-core-runner"]
+    cgroup: host
     cgroup_parent: ${DIREXTALK_CORE_RUNNER_CGROUP_PARENT:-${DIREXTALK_SPLIT_STACK_NAME:?set a unique split stack name}-core-runner.slice}
     group_add: ["65532"]
     command:
@@ -527,8 +529,6 @@ volumes:
     name: ${DIREXTALK_AGENT_INSTALL_VOLUME:?set a fresh extension install volume name}
   agent_extension_staging:
     name: ${DIREXTALK_AGENT_STAGING_VOLUME:?set a fresh extension staging volume name}
-  agent_extension_workspaces:
-    name: ${DIREXTALK_AGENT_WORKSPACE_VOLUME:?set a fresh extension workspace volume name}
   agent_runner_workspaces:
     name: ${DIREXTALK_AGENT_RUNNER_WORKSPACE_VOLUME:?set a fresh extension runner workspace volume name}
   agent_extension_state:

@@ -261,6 +261,8 @@ jq -e '
   .services["core-runner"].entrypoint == ["/usr/local/bin/dirextalk-core-runner"] and
   .services["extension-runner"].network_mode == "none" and
   .services["core-runner"].network_mode == "none" and
+  .services["extension-runner"].cgroup == "host" and
+  .services["core-runner"].cgroup == "host" and
   .services["extension-runner"].networks == null and
   .services["core-runner"].networks == null and
   .services["extension-runner"].secrets == null and
@@ -309,7 +311,9 @@ jq -e --arg http "$http_bind" --arg https "$https_bind" '
 
 jq -e '
   (.services.agent.volumes | map(.source // "") | any(test("agent_extension_socket|core_runner_socket"))) and
-  (.services.agent.volumes | map(.source // "") | any(test("agent_extension_staging|agent_extension_workspaces"))) and
+  (.services.agent.volumes | map(.source // "") | any(test("agent_extension_staging"))) and
+  ([.services.agent.volumes[] | select(.target == "/var/lib/dirextalk-agent/extension-workspaces" and .source == "agent_runner_workspaces")] | length) == 1 and
+  ([.services["extension-runner"].volumes[] | select(.target == "/var/lib/dirextalk-agent/extension-workspaces" and .source == "agent_runner_workspaces")] | length) == 1 and
   (.services.agent.depends_on["extension-runner"].condition == "service_healthy") and
   (.services.agent.depends_on["extension-runner"].required == true) and
   (.services.agent.depends_on["core-runner"].condition == "service_healthy") and
