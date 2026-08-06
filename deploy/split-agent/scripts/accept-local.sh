@@ -154,9 +154,14 @@ deploy_dir=$(cd -- "$script_dir/.." && pwd -P)
 compose_yaml=$deploy_dir/compose.yaml
 compose_direct_tls_yaml=$deploy_dir/compose.direct-tls.yaml
 compose_local_yaml=$deploy_dir/compose.local.yaml
-[ -f "$compose_yaml" ] || die "compose.yaml is missing"
-[ -f "$compose_direct_tls_yaml" ] || die "compose.direct-tls.yaml is missing"
-[ -f "$compose_local_yaml" ] || die "compose.local.yaml is missing"
+require_compose_inputs() {
+  [ -f "$compose_yaml" ] || die "compose.yaml is missing"
+  [ -f "$compose_direct_tls_yaml" ] || die "compose.direct-tls.yaml is missing"
+  if [ "$compose_mode" = local ]; then
+    [ -f "$compose_local_yaml" ] || die "compose.local.yaml is missing"
+  fi
+}
+require_compose_inputs
 command -v docker >/dev/null 2>&1 || die "docker is required"
 command -v jq >/dev/null 2>&1 || die "jq is required"
 command -v curl >/dev/null 2>&1 || die "curl is required"
@@ -189,6 +194,17 @@ new_file() {
   # request/session artifacts. The private 0700 workspace plus mode 0600 keeps
   # in-flight output protected without making the file unwritable.
   chmod 600 "$file"
+}
+render_compose_topology() {
+  local output=$1 error=$2 status
+  new_file "$output"
+  new_file "$error"
+  if run_compose config --format json >"$output" 2>"$error"; then
+    :
+  else
+    status=$?
+    die "Compose topology rendering failed (status $status)"
+  fi
 }
 uuid4() {
   if command -v uuidgen >/dev/null 2>&1; then
@@ -326,13 +342,7 @@ fi
 
 topology=$tmp/compose.json
 topology_error=$tmp/compose.err
-new_file "$topology"
-new_file "$topology_error"
-if run_compose config --format json >"$topology" 2>"$topology_error"; then
-  :
-else
-  die "Compose topology rendering failed"
-fi
+render_compose_topology "$topology" "$topology_error"
 jq -e --arg http "$http_bind" --arg https "$https_bind" --arg tls_mode "$tls_mode" '
   ([.services | to_entries[] | select((.value.ports // []) | length > 0) | .key] | length == 1 and .[0] == "message-server") and
   ([.services["message-server"].ports[]?.published | tostring] | sort == (if $tls_mode == "edge-terminated" then [$http] else ([$http,$https] | sort) end)) and

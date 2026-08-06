@@ -101,6 +101,112 @@ if PATH="$runner_test_path" DIREXTALK_FAKE_CGROUPNS_INSPECT_FAILURE=true \
 fi
 grep -Fq 'core-runner cgroup namespace inspection failed (status 42)' "$tmp_dir/cgroupns-failure.stderr"
 
+# Exercise the production receipt writer through its real function body. Docker
+# must be asked for untruncated IDs, reject an expected short-ID negative, and
+# preserve a command infrastructure status before replacing the start journal.
+cat >"$tmp_dir/receipt-wrapper.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+die() { printf '%s\n' "$*" >&2; exit 1; }
+runner_unit_property() {
+  case "$1" in
+    *extension*) printf '101\n' ;;
+    *) printf '102\n' ;;
+  esac
+}
+EOF
+sed -n '/^write_cleanup_receipt() {/,/^}$/p' "$script" >>"$tmp_dir/receipt-wrapper.sh"
+cat >>"$tmp_dir/receipt-wrapper.sh" <<'EOF'
+out=$1
+env_file=$out/.env
+manifest=$out/.manifest
+journal_receipt=$out/.cleanup-receipt
+journal_identity=$(stat -c '%d:%i:%u' "$journal_receipt")
+stack_name=d-aaaaaaaaaaaaaaaaaaaaaaaaaa
+docker_machine_id=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+docker_engine_id=engine-start-receipt-test
+docker_context_endpoint=unix:///run/docker.sock
+docker_context_canonical=/run/docker.sock
+env_identity=fixture-env-identity
+manifest_identity=fixture-manifest-identity
+extension_runner_unit=dirextalk-extension-runner@fixture.service
+extension_control_group=/fixture-extension.slice/extension.service
+extension_fragment_path=/fixture/extension.service
+extension_fragment_hash=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+core_runner_unit=dirextalk-core-runner@fixture.service
+core_control_group=/fixture-core.slice/core.service
+core_fragment_path=/fixture/core.service
+core_fragment_hash=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+networks=()
+volumes=()
+write_cleanup_receipt complete
+EOF
+chmod 755 "$tmp_dir/receipt-wrapper.sh"
+
+cat >"$tmp_dir/bin/docker" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$DIREXTALK_RECEIPT_DOCKER_LOG"
+case "$1" in
+  ps)
+    case "${DIREXTALK_RECEIPT_PS_MODE:-success}" in
+      success) printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n' ;;
+      short) printf 'aaaaaaaaaaaa\n' ;;
+      infrastructure) exit 42 ;;
+    esac
+    ;;
+  inspect)
+    id=${!#}
+    printf '%s|/%s-message-server-1|message-server|%s\n' "$id" "$DIREXTALK_FAKE_STACK" "$DIREXTALK_FAKE_STACK"
+    ;;
+  *) exit 44 ;;
+esac
+EOF
+chmod 755 "$tmp_dir/bin/docker"
+receipt_docker_log=$tmp_dir/receipt-docker.log
+export DIREXTALK_RECEIPT_DOCKER_LOG=$receipt_docker_log
+export DIREXTALK_FAKE_STACK=d-aaaaaaaaaaaaaaaaaaaaaaaaaa
+
+write_receipt_fixture() {
+  local fixture=$1
+  mkdir -m 700 "$fixture"
+  printf 'fixture-env\n' >"$fixture/.env"
+  printf 'fixture-manifest\n' >"$fixture/.manifest"
+  printf 'state=starting\n' >"$fixture/.cleanup-receipt"
+  chmod 400 "$fixture/.env" "$fixture/.manifest" "$fixture/.cleanup-receipt"
+}
+
+receipt_success=$tmp_dir/receipt-success
+write_receipt_fixture "$receipt_success"
+: >"$receipt_docker_log"
+PATH="$tmp_dir/bin:$PATH" "$tmp_dir/receipt-wrapper.sh" "$receipt_success"
+grep -Fqx 'state=complete' "$receipt_success/.cleanup-receipt"
+grep -Fqx 'container.count=1' "$receipt_success/.cleanup-receipt"
+grep -Eq '^container\.0\.id=[0-9a-f]{64}$' "$receipt_success/.cleanup-receipt"
+grep -Fq 'ps --no-trunc -aq --filter label=com.docker.compose.project=d-aaaaaaaaaaaaaaaaaaaaaaaaaa' "$receipt_docker_log"
+
+receipt_negative=$tmp_dir/receipt-negative
+write_receipt_fixture "$receipt_negative"
+: >"$receipt_docker_log"
+if PATH="$tmp_dir/bin:$PATH" DIREXTALK_RECEIPT_PS_MODE=short \
+    "$tmp_dir/receipt-wrapper.sh" "$receipt_negative" >/dev/null 2>"$receipt_negative/error"; then
+  echo "short Compose container ID was unexpectedly accepted" >&2
+  exit 1
+fi
+grep -Fq 'Compose container ID is not a full immutable ID' "$receipt_negative/error"
+grep -Fqx 'state=starting' "$receipt_negative/.cleanup-receipt"
+
+receipt_infrastructure=$tmp_dir/receipt-infrastructure
+write_receipt_fixture "$receipt_infrastructure"
+: >"$receipt_docker_log"
+if PATH="$tmp_dir/bin:$PATH" DIREXTALK_RECEIPT_PS_MODE=infrastructure \
+    "$tmp_dir/receipt-wrapper.sh" "$receipt_infrastructure" >/dev/null 2>"$receipt_infrastructure/error"; then
+  echo "Docker container listing infrastructure failure was unexpectedly accepted" >&2
+  exit 1
+fi
+grep -Fq 'container identity inspection failed after startup (status 42)' "$receipt_infrastructure/error"
+grep -Fqx 'state=starting' "$receipt_infrastructure/.cleanup-receipt"
+
 cat >"$tmp_dir/runner-binding-functions.sh" <<'EOF'
 die() {
   printf '%s\n' "$*" >&2

@@ -188,6 +188,77 @@ for invalid_server_name in \
   fi
 done
 
+# A canonical production bundle excludes compose.local.yaml. Exercise the real
+# input gate, Compose argument builder, and rendering consumer for success,
+# expected-negative local input, and Docker infrastructure failure outcomes.
+compose_tmp=$(mktemp -d "${TMPDIR:-/tmp}/dirextalk-accept-compose.XXXXXX")
+trap 'rm -rf -- "$compose_tmp"' EXIT
+mkdir -p "$compose_tmp/bin" "$compose_tmp/bundle" "$compose_tmp/output"
+: >"$compose_tmp/bundle/compose.yaml"
+: >"$compose_tmp/bundle/compose.direct-tls.yaml"
+cat >"$compose_tmp/compose-wrapper.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+die() { printf '%s\n' "$*" >&2; exit 1; }
+new_file() { : >"$1"; chmod 600 "$1"; }
+EOF
+{
+  sed -n '/^require_compose_inputs() {/,/^}/p' "$script"
+  sed -n '/^run_compose() {/,/^}/p' "$script"
+  sed -n '/^render_compose_topology() {/,/^}/p' "$script"
+} >>"$compose_tmp/compose-wrapper.sh"
+cat >>"$compose_tmp/compose-wrapper.sh" <<'EOF'
+compose_mode=$1
+tls_mode=$2
+compose_yaml=$3/compose.yaml
+compose_direct_tls_yaml=$3/compose.direct-tls.yaml
+compose_local_yaml=$3/compose.local.yaml
+stack_name=d-aaaaaaaaaaaaaaaaaaaaaaaaaa
+env_file=$3/.env
+require_compose_inputs
+render_compose_topology "$4/compose.json" "$4/compose.err"
+EOF
+chmod 755 "$compose_tmp/compose-wrapper.sh"
+cat >"$compose_tmp/bin/docker" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$DIREXTALK_ACCEPT_COMPOSE_LOG"
+case "${DIREXTALK_ACCEPT_COMPOSE_MODE:-success}" in
+  success) printf '{"services":{}}\n' ;;
+  infrastructure) exit 42 ;;
+esac
+EOF
+chmod 755 "$compose_tmp/bin/docker"
+compose_log=$compose_tmp/docker.log
+export DIREXTALK_ACCEPT_COMPOSE_LOG=$compose_log
+
+: >"$compose_log"
+PATH="$compose_tmp/bin:$PATH" "$compose_tmp/compose-wrapper.sh" \
+  production edge-terminated "$compose_tmp/bundle" "$compose_tmp/output"
+grep -Fq 'compose --project-name d-aaaaaaaaaaaaaaaaaaaaaaaaaa' "$compose_log"
+if grep -Fq 'compose.local.yaml' "$compose_log"; then
+  echo "production acceptance consumed the local Compose override" >&2
+  exit 1
+fi
+
+: >"$compose_log"
+if PATH="$compose_tmp/bin:$PATH" "$compose_tmp/compose-wrapper.sh" \
+    local local "$compose_tmp/bundle" "$compose_tmp/output" >/dev/null 2>"$compose_tmp/local.error"; then
+  echo "local acceptance unexpectedly accepted a missing compose.local.yaml" >&2
+  exit 1
+fi
+grep -Fq 'compose.local.yaml is missing' "$compose_tmp/local.error"
+[ ! -s "$compose_log" ] || { echo "missing local override reached Docker Compose" >&2; exit 1; }
+
+: >"$compose_log"
+if PATH="$compose_tmp/bin:$PATH" DIREXTALK_ACCEPT_COMPOSE_MODE=infrastructure \
+    "$compose_tmp/compose-wrapper.sh" production edge-terminated \
+    "$compose_tmp/bundle" "$compose_tmp/output" >/dev/null 2>"$compose_tmp/infrastructure.error"; then
+  echo "production Compose infrastructure failure was unexpectedly accepted" >&2
+  exit 1
+fi
+grep -Fq 'Compose topology rendering failed (status 42)' "$compose_tmp/infrastructure.error"
+
 "$provision_test" >/dev/null
 
 echo "accept-local static contract test passed"

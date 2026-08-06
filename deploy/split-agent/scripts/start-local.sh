@@ -691,7 +691,7 @@ capture_incomplete_receipt() {
   command -v sha256sum >/dev/null 2>&1 || return 1
   [ -f "$receipt" ] && [ ! -L "$receipt" ] || return 1
   [ "$(stat -c '%d:%i:%u' "$receipt")" = "$journal_identity" ] || return 1
-  if ! ids=$(docker ps -aq --filter "label=com.docker.compose.project=$stack_name"); then
+  if ! ids=$(docker ps --no-trunc -aq --filter "label=com.docker.compose.project=$stack_name"); then
     return 1
   fi
   while IFS= read -r id; do
@@ -855,10 +855,11 @@ write_cleanup_receipt() {
   [ -f "$receipt" ] && [ ! -L "$receipt" ] || die "cleanup journal is missing before receipt finalization"
   [ "$(stat -c '%d:%i:%u' "$receipt")" = "$journal_identity" ] || die "cleanup journal identity changed before receipt finalization"
 
-  if container_ids=$(docker ps -aq --filter "label=com.docker.compose.project=$stack_name"); then
+  if container_ids=$(docker ps --no-trunc -aq --filter "label=com.docker.compose.project=$stack_name"); then
     :
   else
-    die "container identity inspection failed after startup"
+    status=$?
+    die "container identity inspection failed after startup (status $status)"
   fi
   if [ "$receipt_state" = complete ]; then
     [ -n "$container_ids" ] || die "no Compose containers were created after startup"
