@@ -199,6 +199,7 @@ edge_env=$tmp_dir/edge.env
 cat >"$edge_env" <<EOF
 DIREXTALK_EDGE_STACK_NAME=edge-new
 DIREXTALK_PUBLIC_DOMAIN=edge.example
+DIREXTALK_MESSAGE_TLS_MODE=edge-terminated
 DIREXTALK_MESSAGE_PUBLIC_NETWORK=$message_network
 DIREXTALK_CADDY_IMAGE_IMMUTABLE=$candidate_image
 DIREXTALK_CADDY_DATA_VOLUME=$data_volume

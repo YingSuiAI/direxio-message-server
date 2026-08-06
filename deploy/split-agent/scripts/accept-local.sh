@@ -79,6 +79,11 @@ manifest_qdrant=$(read_pair "$manifest" resource.volume.agent_qdrant)
 
 http_bind=$(read_pair "$env_file" DIREXTALK_MESSAGE_HTTP_BIND)
 https_bind=$(read_pair "$env_file" DIREXTALK_MESSAGE_HTTPS_BIND)
+tls_mode=$(read_pair "$env_file" DIREXTALK_MESSAGE_TLS_MODE)
+manifest_tls_mode=$(read_pair "$manifest" message_tls_mode)
+[ "$tls_mode" = "$manifest_tls_mode" ] || die "message TLS mode differs between .manifest and .env"
+case "$tls_mode" in local|external|edge-terminated) ;; *) die "message TLS mode is invalid" ;; esac
+[ "$compose_mode" = production ] || [ "$tls_mode" != edge-terminated ] || die "edge-terminated TLS is production-only"
 case "$http_bind" in ''|*[!0-9]*) die "invalid HTTP host bind" ;; esac
 case "$https_bind" in ''|*[!0-9]*) die "invalid HTTPS host bind" ;; esac
 [ "$http_bind" != "$https_bind" ] || die "HTTP and HTTPS host binds must differ"
@@ -147,8 +152,10 @@ case "$embedding_dimension" in ''|0*|*[!0-9]*) die "Agent config has an invalid 
 script_dir=$(cd -- "$(dirname -- "$0")" && pwd -P)
 deploy_dir=$(cd -- "$script_dir/.." && pwd -P)
 compose_yaml=$deploy_dir/compose.yaml
+compose_direct_tls_yaml=$deploy_dir/compose.direct-tls.yaml
 compose_local_yaml=$deploy_dir/compose.local.yaml
 [ -f "$compose_yaml" ] || die "compose.yaml is missing"
+[ -f "$compose_direct_tls_yaml" ] || die "compose.direct-tls.yaml is missing"
 [ -f "$compose_local_yaml" ] || die "compose.local.yaml is missing"
 command -v docker >/dev/null 2>&1 || die "docker is required"
 command -v jq >/dev/null 2>&1 || die "jq is required"
@@ -156,11 +163,12 @@ command -v curl >/dev/null 2>&1 || die "curl is required"
 command -v sha256sum >/dev/null 2>&1 || die "sha256sum is required"
 
 run_compose() {
+  local compose=(docker compose --project-name "$stack_name" --env-file "$env_file" -f "$compose_yaml")
+  [ "$tls_mode" = edge-terminated ] || compose+=(-f "$compose_direct_tls_yaml")
   if [ "$compose_mode" = local ]; then
-    docker compose --project-name "$stack_name" --env-file "$env_file" -f "$compose_yaml" -f "$compose_local_yaml" "$@"
-  else
-    docker compose --project-name "$stack_name" --env-file "$env_file" -f "$compose_yaml" "$@"
+    compose+=(-f "$compose_local_yaml")
   fi
+  "${compose[@]}" "$@"
 }
 
 tmp=$(mktemp -d "$out/.acceptance.XXXXXX")
@@ -310,9 +318,11 @@ health_check() {
   done
 }
 health_check "$http_base" http false
-https_insecure=true
-[ "$compose_mode" = production ] && https_insecure=false
-health_check "$https_base" https "$https_insecure" "$https_resolve_host"
+if [ "$tls_mode" != edge-terminated ]; then
+  https_insecure=true
+  [ "$compose_mode" = production ] && https_insecure=false
+  health_check "$https_base" https "$https_insecure" "$https_resolve_host"
+fi
 
 topology=$tmp/compose.json
 topology_error=$tmp/compose.err
@@ -323,9 +333,9 @@ if run_compose config --format json >"$topology" 2>"$topology_error"; then
 else
   die "Compose topology rendering failed"
 fi
-jq -e --arg http "$http_bind" --arg https "$https_bind" '
+jq -e --arg http "$http_bind" --arg https "$https_bind" --arg tls_mode "$tls_mode" '
   ([.services | to_entries[] | select((.value.ports // []) | length > 0) | .key] | length == 1 and .[0] == "message-server") and
-  ([.services["message-server"].ports[]?.published | tostring] | sort == ([$http,$https] | sort)) and
+  ([.services["message-server"].ports[]?.published | tostring] | sort == (if $tls_mode == "edge-terminated" then [$http] else ([$http,$https] | sort) end)) and
   (all(.services | to_entries[]; .key == "message-server" or ((.value.ports // []) | length == 0))) and
   ((.networks.message_private.internal // false) == true) and
   ((.networks.message_database.internal // false) == true) and

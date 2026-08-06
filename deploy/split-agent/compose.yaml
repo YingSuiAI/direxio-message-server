@@ -390,7 +390,8 @@ services:
     environment:
       MESSAGE_SERVER_NAME: ${DIREXTALK_MESSAGE_SERVER_NAME:-localhost}
       MESSAGE_CLIENT_BASE_URL: ${DIREXTALK_MESSAGE_CLIENT_BASE_URL:?set DIREXTALK_MESSAGE_CLIENT_BASE_URL in the protected stack .env}
-      MESSAGE_SERVER_TLS_MODE: ${DIREXTALK_MESSAGE_TLS_MODE:-local}
+      MESSAGE_SERVER_TLS_MODE: ${DIREXTALK_MESSAGE_TLS_MODE:?set DIREXTALK_MESSAGE_TLS_MODE in the protected stack .env}
+      MESSAGE_DEPLOYMENT_MODE: ${DIREXTALK_SPLIT_COMPOSE_MODE:?set DIREXTALK_SPLIT_COMPOSE_MODE in the protected stack .env}
       MESSAGE_LOCAL_BOOTSTRAP_ENABLED: ${DIREXTALK_LOCAL_BOOTSTRAP_ENABLED:-false}
     secrets:
       - source: message_registration_shared_secret
@@ -432,6 +433,7 @@ services:
     restart: unless-stopped
     environment:
       <<: *message-capability-environment
+      MESSAGE_SERVER_TLS_MODE: ${DIREXTALK_MESSAGE_TLS_MODE:?set DIREXTALK_MESSAGE_TLS_MODE in the protected stack .env}
       P2P_PORTAL_CREDENTIALS_FILE: /var/dirextalk-message-server/p2p/bootstrap.json
       P2P_PORTAL_PASSWORD_FILE: /run/secrets/message_portal_password
       P2P_MESSAGE_SERVER_INSTANCE_ID: ${DIREXTALK_MESSAGE_SERVER_INSTANCE_ID:?set the message-server instance ID}
@@ -441,15 +443,8 @@ services:
     command:
       - --http-bind-address
       - :8008
-      - --https-bind-address
-      - :8448
-      - --tls-cert
-      - /etc/dirextalk-message-server/server.crt
-      - --tls-key
-      - /etc/dirextalk-message-server/server.key
     ports:
       - "127.0.0.1:${DIREXTALK_MESSAGE_HTTP_BIND:?set DIREXTALK_MESSAGE_HTTP_BIND in the protected stack .env}:8008"
-      - "127.0.0.1:${DIREXTALK_MESSAGE_HTTPS_BIND:?set DIREXTALK_MESSAGE_HTTPS_BIND in the protected stack .env}:8448"
     expose: ["50053"]
     volumes:
       - message_server_config:/etc/dirextalk-message-server:ro
@@ -477,7 +472,7 @@ services:
       agent:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8008/_p2p/health >/dev/null && wget --no-check-certificate -q -O - https://127.0.0.1:8448/_p2p/health >/dev/null"]
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8008/_p2p/health"]
       interval: 10s
       timeout: 5s
       retries: 30

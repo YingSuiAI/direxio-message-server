@@ -560,8 +560,9 @@ verify_runner_host_binding core "$core_runner_unit" "$core_runner_user" \
 command -v ss >/dev/null 2>&1 || die "ss is required for host-port ownership checks"
 verify_local_docker_identity
 require_free_host_ports() {
-  local port listeners status
-  for port in "$manifest_http_bind" "$manifest_https_bind"; do
+  local port listeners status ports=("$manifest_http_bind")
+  [ "$message_tls_mode" = edge-terminated ] || ports+=("$manifest_https_bind")
+  for port in "${ports[@]}"; do
     if listeners=$(ss -H -ltn "sport = :$port"); then
       [ -z "$listeners" ] || die "host port is already in use: $port"
     else
@@ -596,10 +597,18 @@ require_fresh_stack() {
   fi
 }
 
+message_tls_mode=$(read_pair "$manifest" message_tls_mode)
+case "$message_tls_mode" in
+  local|external|edge-terminated) ;;
+  *) die "manifest message TLS mode is invalid" ;;
+esac
+[ "$(read_pair "$env_file" DIREXTALK_MESSAGE_TLS_MODE)" = "$message_tls_mode" ] || die ".env message TLS mode differs from manifest"
+compose=(docker compose --project-name "$stack_name" --env-file "$env_file" -f "$stack_dir/compose.yaml")
+if [ "$message_tls_mode" != edge-terminated ]; then
+  compose+=(-f "$stack_dir/compose.direct-tls.yaml")
+fi
 if [ "$compose_mode" = local ]; then
-  compose=(docker compose --project-name "$stack_name" --env-file "$env_file" -f "$stack_dir/compose.yaml" -f "$stack_dir/compose.local.yaml")
-else
-  compose=(docker compose --project-name "$stack_name" --env-file "$env_file" -f "$stack_dir/compose.yaml")
+  compose+=(-f "$stack_dir/compose.local.yaml")
 fi
 verify_control_identity
 "${compose[@]}" config --quiet

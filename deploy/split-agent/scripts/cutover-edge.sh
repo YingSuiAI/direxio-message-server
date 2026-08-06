@@ -332,10 +332,14 @@ verify_healthy_running_container() {
 }
 
 verify_loopback_message_ports() {
-  local file=$1 http_port=$2 https_port=$3
-  "$jq_bin" -e --arg http "$http_port" --arg https "$https_port" '
+  local file=$1 http_port=$2 tls_mode=$3 https_port=$4
+  "$jq_bin" -e --arg http "$http_port" --arg https "$https_port" --arg mode "$tls_mode" '
     ([.[0].HostConfig.PortBindings["8008/tcp"][]? | {port: .HostPort, ip: (.HostIp // "")}] | length == 1 and .[0].port == $http and .[0].ip == "127.0.0.1") and
-    ([.[0].HostConfig.PortBindings["8448/tcp"][]? | {port: .HostPort, ip: (.HostIp // "")}] | length == 1 and .[0].port == $https and .[0].ip == "127.0.0.1")
+    (if $mode == "edge-terminated" then
+      ([.[0].HostConfig.PortBindings["8448/tcp"][]?] | length) == 0
+    else
+      ([.[0].HostConfig.PortBindings["8448/tcp"][]? | {port: .HostPort, ip: (.HostIp // "")}] | length == 1 and .[0].port == $https and .[0].ip == "127.0.0.1")
+    end)
   ' "$file" >/dev/null 2>&1
 }
 
@@ -455,7 +459,7 @@ read_and_validate_inputs() {
   valid_name "$message_private_network" && valid_name "$agent_private_network" || fail "invalid private network name" || return 1
   valid_port "$message_http_port" && valid_port "$message_https_port" || fail "message host ports are invalid" || return 1
   [ "$message_http_port" != "$message_https_port" ] || fail "message HTTP and HTTPS host ports must differ" || return 1
-  [ "$message_tls_mode" = external ] || fail "message TLS mode must be external" || return 1
+  [ "$message_tls_mode" = edge-terminated ] || fail "edge cutover requires message TLS mode edge-terminated" || return 1
   valid_domain "$edge_domain" || fail "public domain is invalid" || return 1
   [ "$message_server_name" = "$edge_domain" ] || fail "message TLS server name must equal public domain" || return 1
   valid_image "$message_image" || fail "message-server image is not an immutable digest" || return 1
@@ -474,7 +478,8 @@ read_and_validate_inputs() {
   if [ -n "${public_ca:-}" ]; then
     require_regular_owned "$public_ca" || return 1
   fi
-  grep -Eq '(^|[[:space:]])reverse_proxy[[:space:]]+message-server:(8008|8448)([[:space:]]|$)' "$caddyfile" || fail "Caddyfile must proxy to message-server" || return 1
+  grep -Eq '(^|[[:space:]])reverse_proxy[[:space:]]+message-server:8008([[:space:]]|$)' "$caddyfile" || fail "edge-terminated Caddyfile must proxy to message-server:8008" || return 1
+  ! grep -Eq '(^|[[:space:]])reverse_proxy[[:space:]]+message-server:8448([[:space:]]|$)' "$caddyfile" || fail "edge-terminated Caddyfile must not proxy to message-server:8448" || return 1
 
   [ "$(sed -n '1p' "$active_receipt")" = '# dirextalk-edge-receipt-v1' ] || fail "active receipt header is invalid" || return 1
   receipt_kind=$(read_kv "$active_receipt" receipt_kind) || return 1
@@ -580,7 +585,7 @@ verify_message_stack() {
   verify_container_labels "$agent_inspect" "$stack_name" agent || fail "Agent Compose identity mismatch" || return 1
   [ "$(container_image "$message_inspect")" = "$message_image" ] || fail "message-server image identity mismatch" || return 1
   [ "$(container_image "$agent_inspect")" = "$agent_image" ] || fail "Agent image identity mismatch" || return 1
-  verify_loopback_message_ports "$message_inspect" "$message_http_port" "$message_https_port" || fail "message-server host ports must be loopback-only" || return 1
+  verify_loopback_message_ports "$message_inspect" "$message_http_port" "$message_tls_mode" "$message_https_port" || fail "message-server host port contract is invalid" || return 1
   verify_healthy_running_container "$message_inspect" || fail "new message-server is not healthy" || return 1
   verify_healthy_running_container "$agent_inspect" || fail "new Agent is not healthy" || return 1
   verify_network_contains "$message_network" "$message_full_id" "$stack_name" || fail "new public network identity mismatch" || return 1
@@ -595,9 +600,7 @@ verify_message_stack() {
 verify_message_host() {
   "$curl_bin" --fail --silent --show-error --max-time 15 \
     "http://127.0.0.1:${message_http_port}/_p2p/health" >/dev/null 2>&1 || fail "new message-server HTTP health check failed" || return 1
-  [ -s "$message_tls_cert" ] || fail "new message-server TLS certificate is empty" || return 1
-  "$curl_bin" --fail --silent --show-error --max-time 15 --resolve "${message_server_name}:${message_https_port}:127.0.0.1" \
-    --cacert "$message_tls_cert" "https://${message_server_name}:${message_https_port}/_p2p/health" >/dev/null 2>&1 || fail "new message-server TLS health check failed" || return 1
+  [ ! -s "$message_tls_cert" ] || fail "edge-terminated message-server TLS certificate placeholder must be empty" || return 1
 }
 
 verify_active_caddy() {

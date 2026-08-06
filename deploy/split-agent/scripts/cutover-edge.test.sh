@@ -74,7 +74,7 @@ JSON
           ;;
         *)
           cat <<JSON
-{"name":"message-test","services":{"message-server":{"image":"$message_image","ports":[{"published":"18008","host_ip":"127.0.0.1"},{"published":"18448","host_ip":"127.0.0.1"}]},"agent":{"image":"$agent_image"}}}
+{"name":"message-test","services":{"message-server":{"image":"$message_image","ports":[{"published":"18008","host_ip":"127.0.0.1"}]},"agent":{"image":"$agent_image"}}}
 JSON
           ;;
       esac
@@ -117,7 +117,7 @@ JSON
         ;;
       "$message_id")
         cat <<JSON
-[{"Id":"$message_id","Image":"sha256:1111111111111111111111111111111111111111111111111111111111111111","Config":{"Image":"$message_image","Labels":{"com.docker.compose.project":"message-test","com.docker.compose.service":"message-server"}},"NetworkSettings":{"Networks":{"$network":{}}},"Mounts":[],"HostConfig":{"PortBindings":{"8008/tcp":[{"HostPort":"18008","HostIp":"127.0.0.1"}],"8448/tcp":[{"HostPort":"18448","HostIp":"127.0.0.1"}]}},"State":{"Status":"running","Health":{"Status":"healthy"}}}]
+[{"Id":"$message_id","Image":"sha256:1111111111111111111111111111111111111111111111111111111111111111","Config":{"Image":"$message_image","Labels":{"com.docker.compose.project":"message-test","com.docker.compose.service":"message-server"}},"NetworkSettings":{"Networks":{"$network":{}}},"Mounts":[],"HostConfig":{"PortBindings":{"8008/tcp":[{"HostPort":"18008","HostIp":"127.0.0.1"}]}},"State":{"Status":"running","Health":{"Status":"healthy"}}}]
 JSON
         ;;
       "$agent_id")
@@ -249,7 +249,7 @@ tls_cert=$tmp_dir/message.crt
 test_host_name=$(hostname)
 test_machine_id=$(tr -d '[:space:]' </etc/machine-id)
 printf 'reverse_proxy message-server:8008\n' >"$caddyfile"
-printf 'test-certificate\n' >"$tls_cert"
+: >"$tls_cert"
 cat >"$stack_env" <<EOF
 DIREXTALK_SPLIT_STACK_NAME=message-test
 DIREXTALK_MESSAGE_PUBLIC_NETWORK=$network
@@ -258,7 +258,7 @@ DIREXTALK_AGENT_PRIVATE_NETWORK=$agent_network
 DIREXTALK_MESSAGE_HTTP_BIND=18008
 DIREXTALK_MESSAGE_HTTPS_BIND=18448
 DIREXTALK_MESSAGE_SERVER_NAME=edge.example
-DIREXTALK_MESSAGE_TLS_MODE=external
+DIREXTALK_MESSAGE_TLS_MODE=edge-terminated
 DIREXTALK_MESSAGE_TLS_CERT_FILE=$tls_cert
 DIREXTALK_MESSAGE_SERVER_IMAGE_IMMUTABLE=$message_image
 DIREXTALK_AGENT_IMAGE_IMMUTABLE=$agent_image

@@ -478,6 +478,7 @@ read_edge_env() {
   require_regular_owned "$edge_env" 400 || return 1
   edge_project=$(read_kv "$edge_env" DIREXTALK_EDGE_STACK_NAME) || return 1
   edge_domain=$(read_kv "$edge_env" DIREXTALK_PUBLIC_DOMAIN) || return 1
+  edge_tls_mode=$(read_kv "$edge_env" DIREXTALK_MESSAGE_TLS_MODE) || return 1
   edge_network=$(read_kv "$edge_env" DIREXTALK_MESSAGE_PUBLIC_NETWORK) || return 1
   caddy_image=$(read_kv "$edge_env" DIREXTALK_CADDY_IMAGE_IMMUTABLE) || return 1
   caddy_data_volume=$(read_kv "$edge_env" DIREXTALK_CADDY_DATA_VOLUME) || return 1
@@ -498,11 +499,13 @@ read_edge_env() {
   valid_name "$caddy_data_volume" && valid_name "$caddy_config_volume" || fail "invalid Caddy volume name" || return 1
   valid_project "${legacy_message_stack:-legacy-edge}" || fail "invalid legacy message stack name" || return 1
   valid_domain "$edge_domain" || fail "invalid public domain" || return 1
+  [ "$edge_tls_mode" = edge-terminated ] || fail "edge adoption requires DIREXTALK_MESSAGE_TLS_MODE=edge-terminated" || return 1
   case "$well_known_path:$public_health_path" in /*:/*) ;; *) fail "public endpoint paths must be absolute" || return 1 ;; esac
   require_regular_owned "$edge_compose" || return 1
   require_regular_owned "$caddyfile" || return 1
   [ -z "${public_ca:-}" ] || require_regular_owned "$public_ca" || return 1
-  grep -Eq '(^|[[:space:]])reverse_proxy[[:space:]]+message-server:(8008|8448)([[:space:]]|$)' "$caddyfile" || fail "Caddyfile must proxy to message-server" || return 1
+  grep -Eq '(^|[[:space:]])reverse_proxy[[:space:]]+message-server:8008([[:space:]]|$)' "$caddyfile" || fail "edge-terminated Caddyfile must proxy to message-server:8008" || return 1
+  ! grep -Eq '(^|[[:space:]])reverse_proxy[[:space:]]+message-server:8448([[:space:]]|$)' "$caddyfile" || fail "edge-terminated Caddyfile must not proxy to message-server:8448" || return 1
 }
 
 ensure_output_parent() {

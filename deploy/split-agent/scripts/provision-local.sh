@@ -288,23 +288,35 @@ validate_host_port DIREXTALK_MESSAGE_HTTPS_BIND "$message_https_bind"
 [ "$message_http_bind" != "$message_https_bind" ] || die "DIREXTALK_MESSAGE_HTTP_BIND and DIREXTALK_MESSAGE_HTTPS_BIND must differ"
 message_tls_mode=${DIREXTALK_MESSAGE_TLS_MODE:-local}
 case "$message_tls_mode" in
-  local|external) ;;
-  *) die "DIREXTALK_MESSAGE_TLS_MODE must be local or external" ;;
+  local|external|edge-terminated) ;;
+  *) die "DIREXTALK_MESSAGE_TLS_MODE must be local, external, or edge-terminated" ;;
 esac
-if [ "$compose_mode" = production ] && [ "$message_tls_mode" != external ]; then
-  die "production requires DIREXTALK_MESSAGE_TLS_MODE=external"
+if [ "$compose_mode" = production ] && [ "$message_tls_mode" = local ]; then
+  die "production requires DIREXTALK_MESSAGE_TLS_MODE=external or edge-terminated"
+fi
+if [ "$compose_mode" != production ] && [ "$message_tls_mode" = edge-terminated ]; then
+  die "DIREXTALK_MESSAGE_TLS_MODE=edge-terminated is valid only for production"
+fi
+if [ "$message_tls_mode" = external ] || [ "$message_tls_mode" = edge-terminated ]; then
+  message_server_name=${DIREXTALK_MESSAGE_SERVER_NAME:-}
+  [ -n "$message_server_name" ] || die "DIREXTALK_MESSAGE_SERVER_NAME is required for public TLS"
+  validate_server_name DIREXTALK_MESSAGE_SERVER_NAME "$message_server_name"
+  message_client_base_url=https://$message_server_name
 fi
 if [ "$message_tls_mode" = external ]; then
-  message_server_name=${DIREXTALK_MESSAGE_SERVER_NAME:-}
-  [ -n "$message_server_name" ] || die "DIREXTALK_MESSAGE_SERVER_NAME is required for external TLS"
-  validate_server_name DIREXTALK_MESSAGE_SERVER_NAME "$message_server_name"
   message_tls_cert_source=${DIREXTALK_MESSAGE_TLS_CERT_SOURCE_FILE:-}
   message_tls_key_source=${DIREXTALK_MESSAGE_TLS_KEY_SOURCE_FILE:-}
   [ -n "$message_tls_cert_source" ] || die "DIREXTALK_MESSAGE_TLS_CERT_SOURCE_FILE is required for external TLS"
   [ -n "$message_tls_key_source" ] || die "DIREXTALK_MESSAGE_TLS_KEY_SOURCE_FILE is required for external TLS"
   validate_absolute_path DIREXTALK_MESSAGE_TLS_CERT_SOURCE_FILE "$message_tls_cert_source"
   validate_absolute_path DIREXTALK_MESSAGE_TLS_KEY_SOURCE_FILE "$message_tls_key_source"
-  message_client_base_url=https://$message_server_name
+elif [ "$message_tls_mode" = edge-terminated ]; then
+  message_tls_cert_source=
+  message_tls_key_source=
+  [ -z "${DIREXTALK_MESSAGE_TLS_CERT_SOURCE_FILE:-}" ] || \
+    die "DIREXTALK_MESSAGE_TLS_CERT_SOURCE_FILE is forbidden with edge-terminated TLS"
+  [ -z "${DIREXTALK_MESSAGE_TLS_KEY_SOURCE_FILE:-}" ] || \
+    die "DIREXTALK_MESSAGE_TLS_KEY_SOURCE_FILE is forbidden with edge-terminated TLS"
 else
   message_server_name=localhost
   message_tls_cert_source=
@@ -548,7 +560,7 @@ read_portal_password_source() {
 }
 
 copy_secret_or_empty() {
-  local source=$1 target=$2 label=$3
+  local source=$1 target=$2 label=$3 warn_empty=${4:-true}
   local source_fd path_fd status current_uid
   local fd_metadata fd_device fd_inode fd_uid fd_mode fd_type
   local path_metadata path_device path_inode path_uid path_mode path_type
@@ -557,7 +569,7 @@ copy_secret_or_empty() {
     umask 077
     : >"$target"
     chmod 400 "$target"
-    echo "warning: $label is an empty protected placeholder; replace it before model acceptance" >&2
+    [ "$warn_empty" != true ] || echo "warning: $label is an empty protected placeholder; replace it before model acceptance" >&2
     return
   fi
 
@@ -882,8 +894,10 @@ fi
 copy_secret_or_empty "$openrouter_source" "$out/openrouter-api-key" "OpenRouter API key"
 copy_secret_or_empty "$embedding_source" "$out/embedding-api-key" "embedding API key"
 copy_secret_or_empty "$tavily_source" "$out/tavily-api-key" "Tavily API key"
-copy_secret_or_empty "$message_tls_cert_source" "$message_tls_cert_file" "external message-server TLS certificate"
-copy_secret_or_empty "$message_tls_key_source" "$message_tls_key_file" "external message-server TLS private key"
+tls_placeholder_warning=true
+[ "$message_tls_mode" != edge-terminated ] || tls_placeholder_warning=false
+copy_secret_or_empty "$message_tls_cert_source" "$message_tls_cert_file" "external message-server TLS certificate" "$tls_placeholder_warning"
+copy_secret_or_empty "$message_tls_key_source" "$message_tls_key_file" "external message-server TLS private key" "$tls_placeholder_warning"
 copy_secret_or_empty "$image_attestation_source" "$image_attestation_file" "production image attestation"
 
 if [ "$compose_mode" = production ]; then

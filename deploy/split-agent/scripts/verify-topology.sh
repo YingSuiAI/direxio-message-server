@@ -29,10 +29,18 @@ rendered=$run_dir/compose.json
 production_rendered=$run_dir/production-compose.json
 
 cd "$stack_dir"
-docker compose --env-file "$env_file" -f compose.yaml -f compose.local.yaml config --quiet
-docker compose --env-file "$env_file" -f compose.yaml -f compose.local.yaml config --format json >"$rendered"
-docker compose --env-file "$env_file" -f compose.yaml config --quiet
-docker compose --env-file "$env_file" -f compose.yaml config --format json >"$production_rendered"
+docker compose --env-file "$env_file" -f compose.yaml -f compose.direct-tls.yaml -f compose.local.yaml config --quiet
+docker compose --env-file "$env_file" -f compose.yaml -f compose.direct-tls.yaml -f compose.local.yaml config --format json >"$rendered"
+DIREXTALK_SPLIT_COMPOSE_MODE=production \
+DIREXTALK_MESSAGE_TLS_MODE=edge-terminated \
+DIREXTALK_MESSAGE_SERVER_NAME=message.example.com \
+DIREXTALK_MESSAGE_CLIENT_BASE_URL=https://message.example.com \
+  docker compose --env-file "$env_file" -f compose.yaml config --quiet
+DIREXTALK_SPLIT_COMPOSE_MODE=production \
+DIREXTALK_MESSAGE_TLS_MODE=edge-terminated \
+DIREXTALK_MESSAGE_SERVER_NAME=message.example.com \
+DIREXTALK_MESSAGE_CLIENT_BASE_URL=https://message.example.com \
+  docker compose --env-file "$env_file" -f compose.yaml config --format json >"$production_rendered"
 
 agent_instance=$(sed -n 's/^DIREXTALK_AGENT_INSTANCE_ID=//p' "$env_file")
 message_instance=$(sed -n 's/^DIREXTALK_MESSAGE_SERVER_INSTANCE_ID=//p' "$env_file")
@@ -130,6 +138,7 @@ shellcheck \
   "$script_dir/initialize-capability-ca.sh" \
   "$script_dir/initialize-capability-ca.test.sh" \
   "$script_dir/initialize-message-server.sh" \
+  "$script_dir/initialize-message-server.test.sh" \
   "$script_dir/materialize-agent-secrets.sh" \
   "$script_dir/message-server-entrypoint.sh" \
   "$script_dir/message-server-entrypoint.test.sh" \
@@ -139,6 +148,7 @@ shellcheck \
 "$script_dir/message-server-entrypoint.test.sh" >/dev/null
 "$script_dir/message-server-healthcheck.test.sh" >/dev/null
 "$script_dir/initialize-capability-ca.test.sh" >/dev/null
+"$script_dir/initialize-message-server.test.sh" >/dev/null
 "$script_dir/accept-local.test.sh" >/dev/null
 "$script_dir/start-local.test.sh" >/dev/null
 "$script_dir/cleanup-provision-failure.test.sh" >/dev/null
@@ -167,6 +177,15 @@ jq -e --arg http "$http_bind" --arg https "$https_bind" '
   exit 1
 }
 
+jq -e --arg http "$http_bind" '
+  ([.services["message-server"].ports[] | {published, host_ip, target}]) ==
+    [{"published":$http,"host_ip":"127.0.0.1","target":8008}] and
+  ([.services | to_entries[] | select(.key != "message-server") | .value.ports // [] | length] | add // 0) == 0
+' "$production_rendered" >/dev/null || {
+  echo "edge-terminated production must publish only loopback HTTP :8008" >&2
+  exit 1
+}
+
 jq -e '
   .services.agent.ports == null and
   .services.agent["expose"] == ["9443","50052","8444"] and
@@ -191,7 +210,8 @@ jq -e '
   ([.services["agent-secret-init"].configs[] | select(.target == "/usr/local/bin/materialize-agent-secrets" and .mode == "0555")] | length) == 1 and
   ([.services["message-server-init"].secrets[] | select(.target == "/run/secrets/message_registration_shared_secret")] | length) == 1 and
   ([.services["message-server-init"].secrets[] | select(.target == "/run/secrets/message_database_url")] | length) == 0 and
-  (.services["message-server-init"].environment.MESSAGE_SERVER_TLS_MODE == "local") and
+  (.services["message-server-init"].environment.MESSAGE_SERVER_TLS_MODE == "edge-terminated") and
+  (.services["message-server-init"].environment.MESSAGE_DEPLOYMENT_MODE == "production") and
   (.services["message-server-init"].environment.MESSAGE_LOCAL_BOOTSTRAP_ENABLED == "false") and
   ([.services["message-server-init"].volumes[] | select(.target == "/bootstrap/external/server.crt")] | length) == 1 and
   ([.services["message-server-init"].volumes[] | select(.target == "/bootstrap/external/server.key")] | length) == 1 and
@@ -201,14 +221,10 @@ jq -e '
   (.services["message-server"].entrypoint == ["/usr/local/bin/message-server-entrypoint"]) and
   (.services["message-server"].init == true) and
   (.services["message-server"].command == [
-    "--http-bind-address", ":8008",
-    "--https-bind-address", ":8448",
-    "--tls-cert", "/etc/dirextalk-message-server/server.crt",
-    "--tls-key", "/etc/dirextalk-message-server/server.key"
+    "--http-bind-address", ":8008"
   ]) and
   (.services["message-server"].healthcheck.test == [
-    "CMD-SHELL",
-    "wget -q -O - http://127.0.0.1:8008/_p2p/health >/dev/null && wget --no-check-certificate -q -O - https://127.0.0.1:8448/_p2p/health >/dev/null"
+    "CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8008/_p2p/health"
   ]) and
   ([.services["message-server"].configs[] | select(.target == "/usr/local/bin/message-server-entrypoint")] | length) == 1 and
   ([.services["message-server"].secrets[] | select(.target == "/run/secrets/message_database_url")] | length) == 1 and

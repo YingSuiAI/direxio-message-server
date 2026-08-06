@@ -23,6 +23,7 @@ DIREXTALK_MESSAGE_TLS_MODE=external
 DIREXTALK_MESSAGE_TLS_CERT_FILE=$cert
 DIREXTALK_MESSAGE_TLS_KEY_FILE=$key
 DIREXTALK_MESSAGE_SERVER_NAME=message.example.com
+DIREXTALK_MESSAGE_CLIENT_BASE_URL=https://message.example.com
 EOF
 chmod 400 "$env_file"
 
@@ -66,6 +67,29 @@ chmod 400 "$env_file"
 sed -i 's/DIREXTALK_MESSAGE_TLS_MODE=external/DIREXTALK_MESSAGE_TLS_MODE=local/' "$env_file"
 if "$script_dir/verify-production-tls.sh" "$env_file" >/dev/null 2>&1; then
   echo "local self-signed TLS unexpectedly passed production gate" >&2
+  exit 1
+fi
+
+edge_cert=$tmp_dir/edge.crt
+edge_key=$tmp_dir/edge.key
+: >"$edge_cert"
+: >"$edge_key"
+chmod 400 "$edge_cert" "$edge_key"
+chmod 600 "$env_file"
+cat >"$env_file" <<EOF
+DIREXTALK_MESSAGE_TLS_MODE=edge-terminated
+DIREXTALK_MESSAGE_TLS_CERT_FILE=$edge_cert
+DIREXTALK_MESSAGE_TLS_KEY_FILE=$edge_key
+DIREXTALK_MESSAGE_SERVER_NAME=message.example.com
+DIREXTALK_MESSAGE_CLIENT_BASE_URL=https://message.example.com
+EOF
+chmod 400 "$env_file"
+"$script_dir/verify-production-tls.sh" "$env_file" >/dev/null
+chmod 600 "$edge_cert"
+printf 'unexpected certificate' >"$edge_cert"
+chmod 400 "$edge_cert"
+if "$script_dir/verify-production-tls.sh" "$env_file" >/dev/null 2>&1; then
+  echo "non-empty edge-terminated certificate placeholder unexpectedly passed" >&2
   exit 1
 fi
 

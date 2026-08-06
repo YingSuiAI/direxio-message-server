@@ -22,6 +22,28 @@ binary=${MESSAGE_SERVER_BINARY:-/usr/bin/dirextalk-message-server}
 [ -r "$secret" ] || die "database URL secret is not readable: $secret"
 [ "$output" != "$template" ] || die "runtime config must be separate from the template"
 
+tls_mode=${MESSAGE_SERVER_TLS_MODE:?set MESSAGE_SERVER_TLS_MODE}
+https_flag=false
+cert_flag=false
+key_flag=false
+for arg in "$@"; do
+  case "$arg" in
+    --https-bind-address) https_flag=true ;;
+    --tls-cert) cert_flag=true ;;
+    --tls-key) key_flag=true ;;
+    --https-bind-address=*|--tls-cert=*|--tls-key=*) die "TLS listener flags must use the canonical separate-argument form" ;;
+  esac
+done
+case "$tls_mode" in
+  edge-terminated)
+    [ "$https_flag:$cert_flag:$key_flag" = false:false:false ] || die "edge-terminated mode forbids direct TLS listener flags"
+    ;;
+  local|external)
+    [ "$https_flag:$cert_flag:$key_flag" = true:true:true ] || die "$tls_mode mode requires the direct-TLS Compose overlay"
+    ;;
+  *) die "MESSAGE_SERVER_TLS_MODE must be local, external, or edge-terminated" ;;
+esac
+
 # Command substitution strips trailing newlines.  Reject any other
 # non-printable byte so the value cannot break the generated YAML scalar.
 db_url=$(cat "$secret")

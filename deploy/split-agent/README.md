@@ -2,10 +2,11 @@
 
 This directory is the fresh-data deployment boundary for the split architecture:
 
-- Flutter and every public client connect only to message-server on the
-  provisioned host ports. Internal container listeners remain 8008 (HTTP) and
-  8448 (HTTPS); host ports are validated and may be changed per fresh stack to
-  avoid an existing service (the acceptance example uses 18008/18448).
+- Flutter and every public client connect through the canonical public base
+  URL. In edge-terminated production, message-server has only internal HTTP
+  `:8008` plus a loopback host binding; Caddy owns public HTTPS. Explicit
+  direct-TLS modes additionally enable internal `:8448` and its loopback host
+  binding (the local acceptance example uses 18008/18448).
 - message-server owns Matrix/ProductCore, the public action envelope, the
   external Native Agent facade, and Product Capability on private port 50053.
 - dirextalk-agent owns Native Agent Core on private port 9443 and Agent
@@ -23,14 +24,14 @@ This directory is the fresh-data deployment boundary for the split architecture:
   message-server because rootless Docker needs one non-internal bridge for
   host-port forwarding. Agent, database, Qdrant, and capability networks stay
   internal; no other service joins this edge network.
-- message-server serves the same routes on both listeners: HTTP `:8008` for
-  local acceptance and HTTPS `:8448` for public clients. Compose passes the
-  existing server TLS flags (`--tls-cert`/`--tls-key`) explicitly. In `local`
-  mode the init service generates a disposable certificate into the protected
-  config volume; in `external` mode it copies the provisioned certificate and
-  key there. The key value is never placed in `.env`, Compose interpolation, or
-  logs. The message-server healthcheck probes both internal listeners, so a
-  stack cannot become healthy while HTTPS is absent.
+- The canonical production mode is `edge-terminated`: message-server listens
+  only on HTTP `:8008`, publishes that listener only on host loopback, and is
+  reachable from Caddy only through the dedicated `message_public` bridge.
+  Caddy alone owns public ports 80/443 and ACME state; the canonical client URL
+  remains `https://<DIREXTALK_MESSAGE_SERVER_NAME>`. No certificate or private
+  key is provisioned into message-server in this mode. `local` and `external`
+  direct TLS remain explicit test/operator modes through
+  `compose.direct-tls.yaml`; their healthcheck probes both internal listeners.
 - AWS is deliberately disabled in the baseline. No file here creates or changes
   AWS resources.
 
@@ -79,7 +80,17 @@ argv, environment, `.env`, logs, or stdout. The provisioner also creates
 disposable certs/tokens, two PostgreSQL URLs, UUIDs, the non-secret Agent YAML,
 and a path-only `.env`.
 
-For an external-TLS first provision, set
+For a canonical production first provision behind Caddy, set
+`DIREXTALK_SPLIT_COMPOSE_MODE=production`,
+`DIREXTALK_MESSAGE_TLS_MODE=edge-terminated`, and
+`DIREXTALK_MESSAGE_SERVER_NAME`. Do not set either message TLS certificate
+source variable. Provisioning records `https://<server-name>` as
+`DIREXTALK_MESSAGE_CLIENT_BASE_URL`, creates protected empty certificate/key
+placeholders for identity fencing, and fails if direct certificate material is
+supplied. Caddy must use `reverse_proxy message-server:8008` on the named
+public bridge.
+
+For an explicit direct-TLS provision, set
 `DIREXTALK_MESSAGE_TLS_MODE=external`,
 `DIREXTALK_MESSAGE_SERVER_NAME`,
 `DIREXTALK_MESSAGE_TLS_CERT_SOURCE_FILE`, and
@@ -332,7 +343,7 @@ step:
 
 The same consumer wrapper is the production Docker Hub path. Set
 `DIREXTALK_FIRST_FRESH_COMPOSE_MODE=production`, provide the two application
-digests, the protected image-attestation source, and the external TLS inputs.
+digests, the protected image-attestation source, and the public server name.
 Production provisioning records that mode in both `.env` and `.manifest`.
 `start-local.sh` then renders `compose.yaml` alone, verifies the protected TLS
 and attestation identities, pulls every digest-pinned public image, runs the
@@ -347,10 +358,8 @@ host:
     DIREXTALK_MESSAGE_SERVER_IMAGE_IMMUTABLE=docker.io/dirextalk/message-server@sha256:<digest> \
     DIREXTALK_AGENT_IMAGE_IMMUTABLE=docker.io/dirextalk/agent@sha256:<digest> \
     DIREXTALK_IMAGE_ATTESTATION_SOURCE_FILE=/absolute/path/image-attestation \
-    DIREXTALK_MESSAGE_TLS_MODE=external \
+    DIREXTALK_MESSAGE_TLS_MODE=edge-terminated \
     DIREXTALK_MESSAGE_SERVER_NAME=s1.dirextalk.ai \
-    DIREXTALK_MESSAGE_TLS_CERT_SOURCE_FILE=/absolute/path/server.crt \
-    DIREXTALK_MESSAGE_TLS_KEY_SOURCE_FILE=/absolute/path/server.key \
       deploy/split-agent/scripts/verify-first-fresh.sh \
       --execute-first-fresh /absolute/path/to/new-run \
       /absolute/path/openrouter.key \
@@ -601,18 +610,22 @@ the Agent digest for `/usr/local/bin/dirextalk-agent`,
 `/usr/local/bin/dirextalk-core-runner`; a missing binary, unexpected exit, or
 metadata mismatch blocks the production render.
 
-Production also requires `DIREXTALK_MESSAGE_TLS_MODE=external`, a trusted
-certificate whose SAN/CN matches `DIREXTALK_MESSAGE_SERVER_NAME`, a matching
-certificate and private key (each mode 0400), and a certificate with at least
-seven days remaining:
+Production requires either the canonical
+`DIREXTALK_MESSAGE_TLS_MODE=edge-terminated` contract or the explicit
+`external` direct-TLS contract. The gate checks that edge-terminated mode has
+an `https://` canonical client URL, empty protected message-server TLS
+placeholders, and no direct certificate input. External mode instead requires
+a trusted certificate whose SAN/CN matches `DIREXTALK_MESSAGE_SERVER_NAME`, a
+matching certificate/private key pair (each mode 0400), and at least seven
+days remaining:
 
     deploy/split-agent/scripts/verify-production-tls.sh \
       /absolute/path/.run/split/.env
 
 The `local` TLS mode intentionally generates a disposable self-signed
-certificate and is never a trusted-public production claim. An ALB/reverse
-proxy may terminate public TLS, but the deployment still must supply and verify
-the internal certificate boundary described above.
+certificate and is never a trusted-public production claim. Edge termination
+does not weaken the independent Agent/Product Capability mTLS, exact direction
+tokens, instance/generation fencing, or signed capability grants.
 
 Run config --quiet before any migration or service start. The migration services
 use the exact same application image as their serving process. A rollback is a
@@ -629,13 +642,15 @@ binary's file capability can bind ports 80/443 while `no-new-privileges` is
 enabled, and joins only the fresh message-server `message_public` network.
 Caddy data
 and config are explicitly named external volumes. The Caddyfile is a reviewed,
-mode-0400 regular file and must reverse-proxy to `message-server:8008` or
-`message-server:8448`.
+mode-0400 regular file and, for the canonical edge-terminated contract, must
+reverse-proxy only to `message-server:8008`.
 
 `adopt-edge.sh` is the one-shot first-edge adoption procedure. It is followed
 by `cutover-edge.sh` for later fresh-stack switches; adoption is not a
-cutover compatibility fallback. Prepare a mode-0400 edge environment and a
-mode-0700 receipt directory, then probe the exact full legacy Caddy ID:
+cutover compatibility fallback. Prepare a mode-0400 edge environment with
+`DIREXTALK_MESSAGE_TLS_MODE=edge-terminated` and a mode-0700 receipt directory,
+then probe the exact full legacy Caddy ID. Adoption fails closed unless the
+reviewed Caddyfile proxies exactly to `message-server:8008`:
 
     deploy/split-agent/scripts/adopt-edge.sh probe \
       /absolute/path/.run/legacy-edge.env \
@@ -700,8 +715,9 @@ paths:
       /absolute/path/.run/edge/active.receipt \
       /absolute/path/.run/edge/cutover.receipt
 
-The new message stack must already be healthy and its host HTTP/HTTPS ports
-must be loopback-only. The edge environment names the new edge Compose project,
+The new message stack must already be healthy, use
+`DIREXTALK_MESSAGE_TLS_MODE=edge-terminated`, and publish only its HTTP port on
+host loopback; port 8448 must be absent. The edge environment names the new edge Compose project,
 public domain, fresh message public network, immutable Caddy image, reviewed
 Caddyfile, and the existing external Caddy data/config volumes. The active
 receipt records the exact current Caddy container ID, immutable image, Compose
@@ -710,7 +726,7 @@ UID and the path must be mode 0400 and non-symlink.
 
 Before stopping anything, the helper renders both Compose files and verifies
 the fresh message-server/Agent container and network identities, host health,
-and TLS. It then re-inspects the exact recorded old Caddy ID immediately before
+and the private HTTP health boundary. It then re-inspects the exact recorded old Caddy ID immediately before
 stopping it, starts the new edge with `up -d --wait caddy`, and checks public
 health, Matrix well-known, and certificate validation. A failed cutover removes
 or stops only a newly verified Caddy container and starts the exact old ID;

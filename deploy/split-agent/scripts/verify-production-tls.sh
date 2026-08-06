@@ -33,12 +33,13 @@ read_env_value() {
 }
 
 mode=$(read_env_value DIREXTALK_MESSAGE_TLS_MODE)
-[ "$mode" = external ] || die "production requires DIREXTALK_MESSAGE_TLS_MODE=external; self-signed local TLS is not trusted"
 cert=$(read_env_value DIREXTALK_MESSAGE_TLS_CERT_FILE)
 key=$(read_env_value DIREXTALK_MESSAGE_TLS_KEY_FILE)
 server_name=$(read_env_value DIREXTALK_MESSAGE_SERVER_NAME)
+client_base_url=$(read_env_value DIREXTALK_MESSAGE_CLIENT_BASE_URL)
 printf '%s\n' "$server_name" | grep -Eq '^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*$' || \
   die "DIREXTALK_MESSAGE_SERVER_NAME must be a DNS host name without a scheme, port, or wildcard"
+[ "$client_base_url" = "https://$server_name" ] || die "DIREXTALK_MESSAGE_CLIENT_BASE_URL must be the canonical https:// server URL"
 case "$cert:$key" in
   /*:/*) ;;
   *) die "TLS certificate and key paths must be absolute" ;;
@@ -63,8 +64,23 @@ cert_uid=$(awk '{print $3}' <<<"$cert_identity")
 cert_mode=$(awk '{print $4}' <<<"$cert_identity")
 key_uid=$(awk '{print $3}' <<<"$key_identity")
 key_mode=$(awk '{print $4}' <<<"$key_identity")
-[ "$cert_type" = "regular file" ] && [ "$cert_uid" = "$current_uid" ] || die "TLS certificate owner or type is invalid"
-[ "$key_type" = "regular file" ] && [ "$key_uid" = "$current_uid" ] || die "TLS private key owner or type is invalid"
+case "$cert_type:$key_type" in
+  regular\ file:regular\ file|regular\ empty\ file:regular\ empty\ file|regular\ file:regular\ empty\ file|regular\ empty\ file:regular\ file) ;;
+  *) die "TLS certificate or private key type is invalid" ;;
+esac
+[ "$cert_uid" = "$current_uid" ] || die "TLS certificate owner is invalid"
+[ "$key_uid" = "$current_uid" ] || die "TLS private key owner is invalid"
+
+if [ "$mode" = edge-terminated ]; then
+  [ ! -s "$cert" ] || die "edge-terminated mode forbids a message-server TLS certificate"
+  [ ! -s "$key" ] || die "edge-terminated mode forbids a message-server TLS private key"
+  [ "$(stat -c '%d %i %u %a' -- "$cert")" = "$cert_identity" ] || die "TLS certificate placeholder identity changed during verification"
+  [ "$(stat -c '%d %i %u %a' -- "$key")" = "$key_identity" ] || die "TLS private-key placeholder identity changed during verification"
+  [ "$(stat -c '%d %i %u %a' -- "$env_file")" = "$env_identity" ] || die "environment file identity changed during verification"
+  printf 'production edge-terminated TLS contract checks passed\n'
+  exit 0
+fi
+[ "$mode" = external ] || die "production requires DIREXTALK_MESSAGE_TLS_MODE=external or edge-terminated; self-signed local TLS is not trusted"
 
 openssl x509 -in "$cert" -noout >/dev/null 2>&1 || die "TLS certificate cannot be parsed"
 openssl pkey -in "$key" -noout >/dev/null 2>&1 || die "TLS private key cannot be parsed"

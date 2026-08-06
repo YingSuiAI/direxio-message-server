@@ -160,6 +160,42 @@ grep -Fqx "DIREXTALK_IMAGE_ATTESTATION_FILE=$production_dir/image-attestation" "
 cmp -- "$attestation_source" "$production_dir/image-attestation"
 [ "$(stat -c '%a' "$production_dir/image-attestation")" = 400 ]
 
+edge_production_dir=$tmp_dir/production-edge-terminated
+DIREXTALK_SPLIT_FIXTURE_MODE=true \
+DIREXTALK_SPLIT_TEST_MODE=true \
+DIREXTALK_SPLIT_COMPOSE_MODE=production \
+DIREXTALK_CORE_EXTENSION_ENABLED=true \
+DIREXTALK_CORE_WORKLOAD_ENABLED=true \
+DIREXTALK_MESSAGE_SERVER_IMAGE_IMMUTABLE=docker.io/dirextalk/message-server@sha256:$image_digest \
+DIREXTALK_AGENT_IMAGE_IMMUTABLE=docker.io/dirextalk/agent@sha256:$image_digest \
+DIREXTALK_IMAGE_ATTESTATION_SOURCE_FILE=$attestation_source \
+DIREXTALK_MESSAGE_TLS_MODE=edge-terminated \
+DIREXTALK_MESSAGE_SERVER_NAME=message.example.com \
+  "$script" "$edge_production_dir" >/dev/null
+grep -Fqx 'DIREXTALK_MESSAGE_TLS_MODE=edge-terminated' "$edge_production_dir/.env"
+grep -Fqx 'DIREXTALK_MESSAGE_CLIENT_BASE_URL=https://message.example.com' "$edge_production_dir/.env"
+grep -Fqx 'message_tls_mode=edge-terminated' "$edge_production_dir/.manifest"
+[ ! -s "$edge_production_dir/message-tls-external-cert.pem" ]
+[ ! -s "$edge_production_dir/message-tls-external-key.pem" ]
+"$script_dir/verify-production-tls.sh" "$edge_production_dir/.env" >/dev/null
+
+if DIREXTALK_MESSAGE_TLS_MODE=edge-terminated \
+  DIREXTALK_MESSAGE_SERVER_NAME=message.example.com \
+  "$script" "$tmp_dir/local-edge-terminated" >/dev/null 2>&1; then
+  echo "edge-terminated TLS outside production unexpectedly passed" >&2
+  exit 1
+fi
+if DIREXTALK_SPLIT_COMPOSE_MODE=production \
+  DIREXTALK_CORE_EXTENSION_ENABLED=true \
+  DIREXTALK_CORE_WORKLOAD_ENABLED=true \
+  DIREXTALK_MESSAGE_TLS_MODE=edge-terminated \
+  DIREXTALK_MESSAGE_SERVER_NAME=message.example.com \
+  DIREXTALK_MESSAGE_TLS_CERT_SOURCE_FILE=$tls_cert_source \
+  "$script" "$tmp_dir/edge-terminated-with-cert" >/dev/null 2>&1; then
+  echo "edge-terminated TLS with a direct certificate source unexpectedly passed" >&2
+  exit 1
+fi
+
 if DIREXTALK_MESSAGE_TLS_MODE=external \
   DIREXTALK_MESSAGE_SERVER_NAME=message.example.com \
   DIREXTALK_MESSAGE_TLS_KEY_SOURCE_FILE=$tls_key_source \

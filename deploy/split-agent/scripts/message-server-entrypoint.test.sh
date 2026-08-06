@@ -52,6 +52,7 @@ MESSAGE_SERVER_DATABASE_URL_FILE=$secret \
 MESSAGE_SERVER_RUNTIME_CONFIG=$runtime \
 MESSAGE_SERVER_BINARY=$binary \
 MESSAGE_SERVER_ENTRYPOINT_TEST_OBSERVED=$observed \
+MESSAGE_SERVER_TLS_MODE=external \
   "$entrypoint" \
     --http-bind-address :18008 \
     --https-bind-address :18448 \
@@ -60,4 +61,16 @@ MESSAGE_SERVER_ENTRYPOINT_TEST_OBSERVED=$observed \
 
 [ "$(cat "$observed")" = ok ]
 [ "$(stat -c '%a' "$runtime")" = 400 ]
+
+if MESSAGE_SERVER_CONFIG_TEMPLATE=$template \
+  MESSAGE_SERVER_DATABASE_URL_FILE=$secret \
+  MESSAGE_SERVER_RUNTIME_CONFIG=$tmp_dir/edge-runtime.yaml \
+  MESSAGE_SERVER_BINARY=$binary \
+  MESSAGE_SERVER_ENTRYPOINT_TEST_OBSERVED=$observed \
+  MESSAGE_SERVER_TLS_MODE=edge-terminated \
+  "$entrypoint" --http-bind-address :18008 --https-bind-address :18448 \
+    --tls-cert /tmp/server.crt --tls-key /tmp/server.key >/dev/null 2>&1; then
+  echo 'edge-terminated entrypoint unexpectedly accepted direct TLS flags' >&2
+  exit 1
+fi
 printf 'message-server entrypoint secret-file substitution verified\n'
