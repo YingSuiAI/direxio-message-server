@@ -86,6 +86,14 @@ update_status() {
   mv -- "$tmp" "$state"
 }
 json_for_role() {
+  if [ -f "$DIREXTALK_FAKE_STATE/restart-policy-race" ]; then
+    IFS='|' read -r race_role race_status race_health <"$DIREXTALK_FAKE_STATE/restart-policy-race"
+    update_status "$race_role" "$race_status" "$race_health"
+    if [ "$race_status" = restarting ] && [ "$DIREXTALK_FAKE_SETTLE_ROLE" = "$race_role" ]; then
+      printf '0\n' >"$DIREXTALK_FAKE_STATE/settle-$race_role"
+    fi
+    rm -f -- "$DIREXTALK_FAKE_STATE/restart-policy-race"
+  fi
   record=$(awk -F'|' -v wanted="$1" '$1 == wanted { print; exit }' "$state")
   [ -n "$record" ] || return 1
   IFS='|' read -r role id status health <<<"$record"
@@ -144,6 +152,11 @@ case "$1" in
     if [ "$action" = stop ]; then
       [ "$DIREXTALK_FAKE_FAIL_STOP_ROLE" != "$role" ] || { printf 'injected stop failure\n' >&2; exit 1; }
       update_status "$role" exited none
+      if [ "$DIREXTALK_FAKE_RESTART_POLICY_AFTER_STOP_ROLE" = "$role" ]; then
+        printf '%s|%s|%s\n' "$DIREXTALK_FAKE_RESTART_POLICY_ROLE" \
+          "$DIREXTALK_FAKE_RESTART_POLICY_STATUS" "$DIREXTALK_FAKE_RESTART_POLICY_HEALTH" \
+          >"$DIREXTALK_FAKE_STATE/restart-policy-race"
+      fi
     elif [ "$action" = start ]; then
       [ "$DIREXTALK_FAKE_FAIL_START_ROLE" != "$role" ] || { printf 'injected start failure\n' >&2; exit 1; }
       if [ "$DIREXTALK_FAKE_SETTLE_ROLE" = "$role" ]; then
@@ -185,6 +198,8 @@ export DIREXTALK_FAKE_STATE=$fixture/state DIREXTALK_FAKE_STACK=$stack_name DIRE
 export DIREXTALK_FAKE_AGENT_IMAGE=$agent_image DIREXTALK_FAKE_AGENT_IMAGE_ID=$agent_image_id
 export DIREXTALK_FAKE_REPLACEMENT_ROLE='' DIREXTALK_FAKE_FAIL_STOP_ROLE='' DIREXTALK_FAKE_FAIL_START_ROLE=''
 export DIREXTALK_FAKE_SETTLE_ROLE='' DIREXTALK_FAKE_START_MODE='transient'
+export DIREXTALK_FAKE_RESTART_POLICY_AFTER_STOP_ROLE='' DIREXTALK_FAKE_RESTART_POLICY_ROLE=''
+export DIREXTALK_FAKE_RESTART_POLICY_STATUS=running DIREXTALK_FAKE_RESTART_POLICY_HEALTH=healthy
 
 tampered_env_fixture=$tmp_dir/tampered-env
 write_fixture "$tampered_env_fixture"
@@ -212,6 +227,47 @@ run_expect 0 "$stop_script" "$fixture"
 sequence=$(grep -E '^(container stop|container start)' "$fixture/state/docker.log" | tr '\n' ' ')
 [ "$sequence" = "container stop $agent_id container stop $extension_id container stop $core_id " ]
 run_expect 3 "$stop_script" "$fixture"
+
+# A restart policy can relaunch an exact receipt-bound runner after the stop
+# phase has completed but before its ordered start call. The wrapper must
+# accept that active state, prove it healthy, and continue core -> Agent
+# without starting the already active extension runner again.
+cat >"$fixture/state/containers" <<EOF
+message|$message_id|running|healthy
+agent|$agent_id|running|healthy
+extension-runner|$extension_id|running|healthy
+core-runner|$core_id|running|healthy
+EOF
+rm -f -- "$fixture/state/restart-policy-race"
+: >"$fixture/state/docker.log"
+run_expect 0 "$restart_script" "$fixture" \
+  DIREXTALK_FAKE_RESTART_POLICY_AFTER_STOP_ROLE=core-runner \
+  DIREXTALK_FAKE_RESTART_POLICY_ROLE=extension-runner \
+  DIREXTALK_FAKE_RESTART_POLICY_STATUS=running \
+  DIREXTALK_FAKE_RESTART_POLICY_HEALTH=healthy
+sequence=$(grep -E '^(container stop|container start)' "$fixture/state/docker.log" | tr '\n' ' ')
+[ "$sequence" = "container stop $agent_id container stop $extension_id container stop $core_id container start $core_id container start $agent_id " ]
+
+# The same race may be observed as `restarting`; settling is still ordered and
+# must not advance to core until the exact extension container is healthy.
+cat >"$fixture/state/containers" <<EOF
+message|$message_id|running|healthy
+agent|$agent_id|running|healthy
+extension-runner|$extension_id|running|healthy
+core-runner|$core_id|running|healthy
+EOF
+rm -f -- "$fixture/state/restart-policy-race" "$fixture/state/settle-"*
+: >"$fixture/state/docker.log"
+run_expect 0 "$restart_script" "$fixture" \
+  DIREXTALK_FAKE_RESTART_POLICY_AFTER_STOP_ROLE=core-runner \
+  DIREXTALK_FAKE_RESTART_POLICY_ROLE=extension-runner \
+  DIREXTALK_FAKE_RESTART_POLICY_STATUS=restarting \
+  DIREXTALK_FAKE_RESTART_POLICY_HEALTH=starting \
+  DIREXTALK_FAKE_SETTLE_ROLE=extension-runner \
+  DIREXTALK_AGENT_RUNTIME_HEALTH_TIMEOUT_SECONDS=4
+sequence=$(grep -E '^(container stop|container start)' "$fixture/state/docker.log" | tr '\n' ' ')
+[ "$sequence" = "container stop $agent_id container stop $extension_id container stop $core_id container start $core_id container start $agent_id " ]
+[ "$(grep -Fc "inspect $extension_id" "$fixture/state/docker.log")" -ge 3 ]
 
 # Docker may report an exact restart-policy container as `restarting` while
 # both runners remain stopped. It is an active state that must first cross the

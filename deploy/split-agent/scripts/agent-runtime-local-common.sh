@@ -214,13 +214,17 @@ agent_runtime_wait_healthy() {
 }
 
 agent_runtime_start_one() {
-  local role=$1 id=${agent_runtime_ids[$1]}
+  local role=$1 id=${agent_runtime_ids[$1]} status
   agent_runtime_before_mutation
-  agent_runtime_is_stopped "${agent_runtime_target_status[$role]}" || agent_runtime_die "$role is not stopped before start"
-  if docker container start "$id" >/dev/null; then
-    :
-  else
-    agent_runtime_die "exact $role start failed"
+  status=${agent_runtime_target_status[$role]}
+  if agent_runtime_is_stopped "$status"; then
+    if docker container start "$id" >/dev/null; then
+      :
+    else
+      agent_runtime_die "exact $role start failed"
+    fi
+  elif ! agent_runtime_is_active "$status"; then
+    agent_runtime_die "$role is neither stopped nor active before start"
   fi
   agent_runtime_wait_healthy "$role"
 }
