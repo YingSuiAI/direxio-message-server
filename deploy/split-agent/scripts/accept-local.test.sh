@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016
 set -euo pipefail
 
 script_dir=$(cd -- "$(dirname -- "$0")" && pwd -P)
 script=$script_dir/accept-local.sh
+readme=$script_dir/../README.md
 provision_script=$script_dir/provision-local.sh
 provision_test=$script_dir/provision-local.test.sh
 [ -x "$script" ] || { echo "accept-local.sh must be executable" >&2; exit 1; }
@@ -27,6 +29,8 @@ grep -Fq -- "account_delete_enabled=\$(env_or DIREXTALK_ACCEPTANCE_ACCOUNT_DELET
 grep -Fq -- "case \"\$account_delete_enabled\" in true|false)" "$script"
 grep -Fq -- 'DIREXTALK_ACCEPTANCE_CLEANUP_AFTER=true is incompatible with account deletion disabled' "$script"
 grep -Fq -- 'agent.knowledge.upload.start' "$script"
+grep -Fq -- 'agent.knowledge.status' "$script"
+grep -Fq -- 'agent.knowledge.search' "$script"
 grep -Fq -- 'agent.knowledge.memory.create' "$script"
 grep -Fq -- 'agent.knowledge.memories.update' "$script"
 grep -Fq -- 'embedding_dimension' "$script"
@@ -35,6 +39,14 @@ grep -Fq -- 'memory-search true' "$script"
 grep -Fq -- 'agent.messages.send' "$script"
 grep -Fq -- 'agent.core.model_profiles.sync' "$script"
 grep -Fq -- 'agent.models.list' "$script"
+grep -Fq -- 'agent.model_profiles.list' "$script"
+grep -Fq -- 'agent.model_profiles.get' "$script"
+grep -Fq -- '.api_key_configured == true and (has("api_key") | not)' "$script"
+grep -Fq -- '.profile.api_key_configured == true and (.profile | has("api_key") | not)' "$script"
+grep -Fq -- 'agent.chat.conversations.create' "$script"
+grep -Fq -- 'agent.chat.conversations.list' "$script"
+grep -Fq -- 'agent.chat.conversations.get' "$script"
+grep -Fq -- 'any(.messages[]?; (.content // "") | contains($marker))' "$script"
 grep -Fq -- 'DIREXTALK_TAVILY_API_KEY_FILE' "$script"
 grep -Fq -- 'agent.web_search.config.get' "$script"
 grep -Fq -- 'agent.web_search.config.update' "$script"
@@ -42,6 +54,9 @@ grep -Fq -- 'agent.web_search.test' "$script"
 grep -Fq -- 'core_web_search_configs' "$script"
 grep -Fq -- 'core_web_search_replays' "$script"
 grep -Fq -- 'ACCEPT_WEB_SEARCH_OK' "$script"
+grep -Fq -- 'ACCEPT_KNOWLEDGE_' "$script"
+grep -Fq -- 'ACCEPT_MEMORY_NEW_' "$script"
+grep -Fq -- 'fresh Native Agent conversation did not recall the updated long-term-memory marker' "$script"
 grep -Fq -- 'core_message_tool_results' "$script"
 grep -Fq -- 'DIREXTALK_MESSAGE_SERVER_NAME' "$script"
 grep -Fq -- "--resolve \"\${resolve_host}:\${https_bind}:127.0.0.1\"" "$script"
@@ -51,6 +66,41 @@ grep -Fq -- '"$tmp/request-web-search-config-update.json") continue' "$script"
 # The raw provider catalog request is also a protected credential input.
 # shellcheck disable=SC2016
 grep -Fq -- '"$tmp/request-model-sync.json"|"$tmp/request-model-catalog.json") continue' "$script"
+
+# Every HTTP agent.chat request is built through one closed helper. It always
+# supplies the complete persisted server profile triple and accepts only the
+# documented chat fields; request-scoped history, profiles, and credentials
+# must not reappear.
+chat_builder=$(sed -n '/^write_chat_params() {/,/^}/p' "$script")
+for required_chat_field in model_profile_id model_profile_revision credential_version turn_id message; do
+  grep -Fq -- "$required_chat_field" <<<"$chat_builder"
+done
+grep -Fq -- 'conversation_id' <<<"$chat_builder"
+if grep -Eq -- 'messages|conversation_context|tool_credentials|inline_profile|api_key|base_url|provider' <<<"$chat_builder"; then
+  echo "chat request builder contains a forbidden inline context/profile/credential field" >&2
+  exit 1
+fi
+chat_call_count=$(grep -Ec -- '^call agent\.chat ' "$script")
+chat_request_count=$(grep -E -- '^call agent\.chat ' "$script" | awk '{print $3}' | sort -u | wc -l | tr -d '[:space:]')
+chat_builder_call_count=$(grep -Ec -- '^write_chat_params ' "$script")
+[ "$chat_call_count" -ge "$chat_request_count" ] && [ "$chat_request_count" -eq "$chat_builder_call_count" ] || {
+  echo "an agent.chat call bypasses the closed chat request builder" >&2
+  exit 1
+}
+
+# Knowledge evidence is only the public source search marker; no chat prompt
+# may claim to ground on or reproduce the uploaded marker. Memory recall is the
+# inverse: the fresh-chat prompt must not contain the generated memory marker.
+if grep -E -- '^write_chat_params ' "$script" | grep -Fq -- '$knowledge_phrase'; then
+  echo "a chat prompt leaks the Knowledge marker" >&2
+  exit 1
+fi
+grep -Fq -- 'write_chat_params "$memory_recall_chat"' "$script"
+memory_recall_builder=$(sed -n '/^write_chat_params "$memory_recall_chat"/,/^call agent\.chat "$memory_recall_chat"/p' "$script")
+if grep -Fq -- '$new_memory_phrase' <<<"$memory_recall_builder"; then
+  echo "memory recall chat prompt leaks the expected marker" >&2
+  exit 1
+fi
 
 # Account deletion remains the default disposable-account gate, but the final
 # persistent-account lane must be able to skip only the deprovision assertions.
@@ -96,6 +146,13 @@ if grep -Fq -- 'agent.knowledge.index' "$script"; then
   echo "accept-local.sh must not invoke the retired knowledge index action" >&2
   exit 1
 fi
+if grep -Eq -- 'model profile create/list/get|model connection test' "$readme"; then
+  echo "README claims a model-profile operation that acceptance does not execute" >&2
+  exit 1
+fi
+grep -Fq -- 'does not automatically inject ordinary uploaded Knowledge' "$readme"
+grep -Fq -- 'does not claim Native Agent WebSocket streaming' "$readme"
+grep -Fq -- 'an HTTP `agent.chat` response cannot' "$readme"
 if grep -Eiq -- 'https?://(agent|qdrant)(:|/)' "$script"; then
   echo "accept-local.sh must not bypass message-server with direct Agent/Qdrant HTTP" >&2
   exit 1

@@ -98,6 +98,8 @@ shellcheck \
   "$script_dir/provision-local.sh" \
   "$script_dir/verify-topology.sh" \
   "$script_dir/cleanup-local.sh" \
+  "$script_dir/cleanup-provision-failure.sh" \
+  "$script_dir/cleanup-provision-failure.test.sh" \
   "$script_dir/accept-local.sh" \
   "$script_dir/accept-local.test.sh" \
   "$script_dir/bootstrap-local-account.sh" \
@@ -135,6 +137,7 @@ shellcheck \
 "$script_dir/initialize-capability-ca.test.sh" >/dev/null
 "$script_dir/accept-local.test.sh" >/dev/null
 "$script_dir/start-local.test.sh" >/dev/null
+"$script_dir/cleanup-provision-failure.test.sh" >/dev/null
 "$script_dir/agent-runtime-local.test.sh" >/dev/null
 "$script_dir/verify-first-fresh.test.sh" >/dev/null
 "$script_dir/prepare-runner-cgroups.test.sh" >/dev/null

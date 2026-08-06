@@ -189,6 +189,24 @@ uuid4() {
     cat /proc/sys/kernel/random/uuid
   fi
 }
+write_chat_params() {
+  local file=$1 conversation_id=$2 turn_id=$3 message=$4
+  new_file "$file"
+  if [ -n "$conversation_id" ]; then
+    jq -n --arg conversation "$conversation_id" --arg turn "$turn_id" --arg message "$message" \
+      --arg profile "$chat_model_profile_id" --argjson revision "$chat_model_profile_revision" \
+      --argjson credential "$chat_credential_version" \
+      '{conversation_id:$conversation,turn_id:$turn,model_profile_id:$profile,model_profile_revision:$revision,credential_version:$credential,message:$message}' \
+      >"$file"
+  else
+    jq -n --arg turn "$turn_id" --arg message "$message" \
+      --arg profile "$chat_model_profile_id" --argjson revision "$chat_model_profile_revision" \
+      --argjson credential "$chat_credential_version" \
+      '{turn_id:$turn,model_profile_id:$profile,model_profile_revision:$revision,credential_version:$credential,message:$message}' \
+      >"$file"
+  fi
+  chmod 400 "$file"
+}
 assert_secret_absent() {
   local file=$1
   if [ -s "$file" ] && grep -F -q -f "$openrouter_key" "$file"; then
@@ -486,6 +504,41 @@ jq -e '
   (.models | type == "array" and length > 0) and
   all(.models[]; (.id | type == "string" and length > 0) and (.provider | type == "string" and length > 0))
 ' "$last_response" >/dev/null || die "stored OpenRouter profile model catalog returned no canonical conversation models"
+
+# Read back the persisted profile through the same public profile surface used
+# by Flutter. Chat requests must carry only this server-owned triple; never
+# infer revisions or credential versions from the sync request.
+profile_list_params=$tmp/model-profile-list.params.json
+jq -n '{page_size:100}' >"$profile_list_params"
+chmod 400 "$profile_list_params"
+call agent.model_profiles.list "$profile_list_params" model-profile-list
+jq -e --arg client "$chat_profile" '
+  ([.profiles[]? | select(.client_profile_id == $client)] | length == 1) and
+  (any(.profiles[]?; .client_profile_id == $client and
+    (.profile_id | type == "string" and length > 0) and
+    (.revision | type == "number" and . > 0) and
+    (.credential_version | type == "number" and . > 0) and
+    .api_key_configured == true and (has("api_key") | not)))
+' "$last_response" >/dev/null || die "model profile list did not return one redacted configured chat profile"
+chat_model_profile_id=$(jq -r --arg client "$chat_profile" '.profiles[] | select(.client_profile_id == $client) | .profile_id' "$last_response" | head -n 1)
+chat_model_profile_revision=$(jq -r --arg client "$chat_profile" '.profiles[] | select(.client_profile_id == $client) | .revision' "$last_response" | head -n 1)
+chat_credential_version=$(jq -r --arg client "$chat_profile" '.profiles[] | select(.client_profile_id == $client) | .credential_version' "$last_response" | head -n 1)
+printf '%s\n' "$chat_model_profile_id" | grep -Eiq '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' || die "model profile list returned no canonical chat profile id"
+case "$chat_model_profile_revision" in ''|*[!0-9]*) die "model profile list returned an invalid chat profile revision" ;; esac
+[ "$chat_model_profile_revision" -gt 0 ] 2>/dev/null || die "chat profile revision is not positive"
+case "$chat_credential_version" in ''|*[!0-9]*) die "model profile list returned an invalid chat credential version" ;; esac
+[ "$chat_credential_version" -gt 0 ] 2>/dev/null || die "chat credential version is not positive"
+
+profile_get_params=$tmp/model-profile-get.params.json
+jq -n --arg profile "$chat_model_profile_id" '{profile_id:$profile}' >"$profile_get_params"
+chmod 400 "$profile_get_params"
+call agent.model_profiles.get "$profile_get_params" model-profile-get
+jq -e --arg profile "$chat_model_profile_id" --arg client "$chat_profile" \
+  --argjson revision "$chat_model_profile_revision" --argjson credential "$chat_credential_version" \
+  '.profile.profile_id == $profile and .profile.client_profile_id == $client and
+   .profile.api_key_configured == true and (.profile | has("api_key") | not) and
+   .profile.revision == $revision and .profile.credential_version == $credential' \
+  "$last_response" >/dev/null || die "model profile get did not return a redacted configured chat profile"
 config_params=$tmp/config.params.json
 printf '%s\n' '{}' >"$config_params"
 chmod 400 "$config_params"
@@ -496,9 +549,7 @@ jq -e --arg embed "$embed_internal" --argjson dimension "$embedding_dimension" \
 
 turn_id=$(uuid4)
 chat_params=$tmp/chat.params.json
-new_file "$chat_params"
-jq -n --arg turn "$turn_id" '{turn_id:$turn,message:"Reply with exactly ACCEPT_CHAT_OK"}' >"$chat_params"
-chmod 400 "$chat_params"
+write_chat_params "$chat_params" '' "$turn_id" 'Reply with exactly ACCEPT_CHAT_OK'
 call agent.chat "$chat_params" chat-first
 jq -e '.text|type=="string" and length>0' "$last_response" >/dev/null || die "Native Agent chat returned no text"
 jq -r '.text' "$last_response" >"$tmp/chat-text-1"
@@ -509,6 +560,40 @@ jq -r '.text' "$last_response" >"$tmp/chat-text-2"
 chmod 400 "$tmp/chat-text-2"
 cmp -s "$tmp/chat-text-1" "$tmp/chat-text-2" || die "identical turn replay returned different text"
 
+history_conversation_id=$(uuid4)
+history_create=$tmp/history-conversation-create.params.json
+history_create_key=$(uuid4)
+jq -n --arg id "$history_conversation_id" --arg idem "$history_create_key" \
+  '{conversation_id:$id,title:"Split acceptance history",idempotency_key:$idem}' >"$history_create"
+chmod 400 "$history_create"
+call agent.chat.conversations.create "$history_create" history-conversation-create
+jq -e --arg id "$history_conversation_id" \
+  '.conversation.conversation_id == $id and .conversation.status == "active"' \
+  "$last_response" >/dev/null || die "conversation.create did not return the active acceptance conversation"
+
+history_marker=ACCEPT_HISTORY_$(date +%s)_$(od -An -N3 -tx1 /dev/urandom | tr -d '[:space:]')
+history_turn_id=$(uuid4)
+history_chat=$tmp/history-chat.params.json
+write_chat_params "$history_chat" "$history_conversation_id" "$history_turn_id" \
+  "Reply with exactly ACCEPT_HISTORY_OK and include this marker: $history_marker"
+call agent.chat "$history_chat" history-chat
+jq -e --arg marker "$history_marker" '.text|type=="string" and contains("ACCEPT_HISTORY_OK") and contains($marker)' "$last_response" >/dev/null || die "history conversation chat did not return its marker"
+
+history_list=$tmp/history-conversation-list.params.json
+jq -n '{page_size:100}' >"$history_list"
+chmod 400 "$history_list"
+call agent.chat.conversations.list "$history_list" history-conversation-list
+jq -e --arg id "$history_conversation_id" 'any(.conversations[]?; .conversation_id == $id)' "$last_response" >/dev/null || die "conversation.list did not return the acceptance conversation"
+
+history_get=$tmp/history-conversation-get.params.json
+jq -n --arg id "$history_conversation_id" '{conversation_id:$id,message_limit:200}' >"$history_get"
+chmod 400 "$history_get"
+call agent.chat.conversations.get "$history_get" history-conversation-get
+jq -e --arg id "$history_conversation_id" --arg marker "$history_marker" \
+  '.conversation.conversation_id == $id and (.messages | type == "array") and
+   any(.messages[]?; (.content // "") | contains($marker))' \
+  "$last_response" >/dev/null || die "conversation.get did not return persisted history"
+
 db_query agent-postgres dirextalk_agent dirextalk_agent \
   "SELECT count(*) FROM core_message_tool_results WHERE result_json->>'tool_name'='web_search' AND COALESCE((result_json->>'is_error')::boolean,false)=false;" \
   "$tmp/web-search-tool-before.count"
@@ -516,11 +601,8 @@ web_search_tool_before=$(tr -d '[:space:]' <"$tmp/web-search-tool-before.count")
 case "$web_search_tool_before" in ''|*[!0-9]*) die "could not read the pre-chat Web Search tool count" ;; esac
 web_search_turn_id=$(uuid4)
 web_search_chat_params=$tmp/web-search-chat.params.json
-new_file "$web_search_chat_params"
-jq -n --arg turn "$web_search_turn_id" \
-  '{turn_id:$turn,message:"You must use the web_search tool to search the live web for the official OpenAI homepage. Do not answer from memory. After the tool succeeds, reply with ACCEPT_WEB_SEARCH_OK followed by one https:// source URL from the tool result."}' \
-  >"$web_search_chat_params"
-chmod 400 "$web_search_chat_params"
+write_chat_params "$web_search_chat_params" '' "$web_search_turn_id" \
+  'You must use the web_search tool to search the live web for the official OpenAI homepage. Do not answer from memory. After the tool succeeds, reply with ACCEPT_WEB_SEARCH_OK followed by one https:// source URL from the tool result.'
 call agent.chat "$web_search_chat_params" web-search-chat
 jq -e '.text|type=="string" and contains("ACCEPT_WEB_SEARCH_OK")' "$last_response" >/dev/null || \
   die "Native Agent Web Search chat did not return the acceptance marker"
@@ -572,9 +654,11 @@ while :; do
 done
 
 knowledge_phrase=ACCEPT_KNOWLEDGE_$(date +%s)_$(od -An -N4 -tx1 /dev/urandom | tr -d '[:space:]')
+knowledge_question='What is the unique answer recorded by the split acceptance knowledge document?'
 knowledge_file=$tmp/knowledge.txt
 knowledge_b64=$tmp/knowledge.b64
-printf 'Split acceptance knowledge phrase %s.\nThis file verifies upload, automatic indexing, search and deletion.\n' "$knowledge_phrase" >"$knowledge_file"
+printf 'Question: %s\nAnswer: %s\nThis file verifies upload, automatic indexing, search and deletion.\n' \
+  "$knowledge_question" "$knowledge_phrase" >"$knowledge_file"
 chmod 400 "$knowledge_file"
 size=$(wc -c <"$knowledge_file" | tr -d '[:space:]')
 content_sha=$(sha256sum "$knowledge_file" | awk '{print $1}')
@@ -620,7 +704,7 @@ while :; do
   i=$((i + 2))
 done
 search_params=$tmp/knowledge-search.params.json
-jq -n --arg query "$knowledge_phrase" '{query:$query,page_size:20}' >"$search_params"
+jq -n --arg query "$knowledge_question" '{query:$query,page_size:20}' >"$search_params"
 chmod 400 "$search_params"
 i=0
 while :; do
@@ -708,7 +792,27 @@ while ! agent_health; do
 done
 call agent.core.status.get "$params" core-status-after-restart
 call agent.knowledge.search "$memory_search" memory-search-after-restart
-jq -e --arg id "$memory_id" --arg phrase "$new_memory_phrase" 'any(.items[]?; (.source_id == $id) and ((.snippet // .content // "") | contains($phrase)))' "$last_response" >/dev/null || die "updated memory was not recalled after Agent restart"
+jq -e --arg id "$memory_id" --arg phrase "$new_memory_phrase" 'any(.items[]?; (.source_id == $id) and ((.snippet // .content // "") | contains($phrase)))' "$last_response" >/dev/null || die "updated memory was not searchable after Agent restart"
+
+# A new conversation has no transcript to leak the marker. Its first turn asks
+# for the stored fact without including the value, so observing the unique
+# marker proves the production long-term-memory recall path reached the model.
+memory_recall_conversation_id=$(uuid4)
+memory_recall_create=$tmp/memory-recall-conversation-create.params.json
+memory_recall_create_key=$(uuid4)
+jq -n --arg id "$memory_recall_conversation_id" --arg idem "$memory_recall_create_key" \
+  '{conversation_id:$id,title:"Split acceptance memory recall",idempotency_key:$idem}' >"$memory_recall_create"
+chmod 400 "$memory_recall_create"
+call agent.chat.conversations.create "$memory_recall_create" memory-recall-conversation-create
+jq -e --arg id "$memory_recall_conversation_id" '.conversation.conversation_id == $id and .conversation.status == "active"' \
+  "$last_response" >/dev/null || die "fresh memory recall conversation was not created"
+memory_recall_turn_id=$(uuid4)
+memory_recall_chat=$tmp/memory-recall-chat.params.json
+write_chat_params "$memory_recall_chat" "$memory_recall_conversation_id" "$memory_recall_turn_id" \
+  'What is the exact unique phrase in the updated long-term memory titled Split acceptance memory updated? Reply with only that stored phrase.'
+call agent.chat "$memory_recall_chat" memory-recall-chat
+jq -e --arg phrase "$new_memory_phrase" '.text | type == "string" and contains($phrase)' "$last_response" >/dev/null || \
+  die "fresh Native Agent conversation did not recall the updated long-term-memory marker"
 call agent.knowledge.search "$search_params" knowledge-search-after-restart
 jq -e --arg sid "$source_id" 'any(.items[]?; .source_id == $sid)' "$last_response" >/dev/null || die "knowledge source was not searchable after Agent restart"
 call agent.web_search.config.get "$params" web-search-config-after-restart

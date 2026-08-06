@@ -314,6 +314,21 @@ host:
       /absolute/path/portal-password \
       openai/gpt-4o-mini openai/text-embedding-3-small
 
+If a provisioned first-fresh run fails before `start-local.sh` creates its
+cleanup receipt, use the provision-only failure wrapper against that existing
+run directory:
+
+    deploy/split-agent/scripts/cleanup-provision-failure.sh \
+      /absolute/path/to/failed-run
+
+This path is only for the old/failed provision state with no cleanup receipt.
+It revalidates the manifest, `.env`, host machine-id, local Docker Engine,
+runner units, fragments, and control groups, and refuses mutation unless every
+planned container, network, and volume is absent. It disables only the exact
+stack runner units; the mode-0700 run directory and protected failure log are
+left in place for audit. Use `cleanup-local.sh` for a run that has a normal
+cleanup receipt.
+
 The helper must be executed from this root-owned release path; it rejects a
 user-owned checkout, symlinked asset, or group/world-writable parent before
 touching users, units, or cgroups. The helper prints only `KEY=VALUE` lines. In addition to the two canonical
@@ -406,16 +421,25 @@ files. The embedding profile request must use the exact generated
 core_knowledge_embedding_profile_id from agent-config.yaml; the chat profile
 may use a separate UUID. Then run:
 
-1. live provider model catalog before save, model profile create/list/get, and
-   a second model catalog read through the stored client profile (responses
-   must be non-empty and must not return key bytes);
-2. model connection test for chat and embedding;
-3. one chat request through message-server, followed by an identical
+1. live provider model catalog before save, model profile sync/list/get, and a
+   second model catalog read through the stored client profile (responses must
+   be non-empty, report configured credentials, and omit key bytes);
+2. one chat request through message-server using the exact persisted profile
+   ID/revision/credential-version triple, followed by an identical
    idempotency retry, plus a live Tavily-backed `web_search` tool turn whose
    persisted successful tool result is verified independently;
+3. conversation create/list/get with persisted message-history readback;
 4. Knowledge source upload, index task completion, semantic search, restart,
    and delete;
-5. long-term memory create, search/list, restart recall, and delete.
+5. long-term memory create, update/re-index/search, then automatic recall of a
+   unique stored marker in the first turn of a fresh conversation after Agent
+   restart, followed by delete.
+
+Interactive Native Agent chat currently auto-recalls only long-term Memory; it
+does not automatically inject ordinary uploaded Knowledge. The Knowledge gate
+therefore proves only the real upload/index/status/search path and its returned
+source marker; it is not evidence of chat-time Knowledge grounding or automatic
+RAG.
 
 Use the same embedding API key for OpenRouter-compatible embeddings when the
 provider permits it; keep the two protected host files separate so rotation
@@ -443,19 +467,27 @@ directly and never prints a token.
 
 The lane verifies both health listeners, Compose port/network isolation,
 OpenRouter live/stored-profile model catalogs, chat and embedding profile sync,
-stored Tavily configuration/test
+redacted configured profile list/get readback, stored Tavily configuration/test
 across Agent restart, a real Native Agent chat that persists a successful
 Tavily `web_search` tool result, automatic Knowledge embedding binding, native
-chat plus identical-turn replay, Product contacts and
+chat plus identical-turn replay, conversation create/list/get and message
+history, Product contacts and
 prepared-message exact-once replay, forged-owner rejection, Knowledge upload
-and automatic indexing/search, long-term memory update/re-index/search,
-Agent restart recall, source/memory deletion, database-role/table isolation,
+and automatic indexing/search, long-term memory update/re-index/search and
+fresh-conversation automatic recall
+after Agent restart, source/memory deletion, database-role/table isolation,
 Qdrant cleanup, and a key/log/config canary. By default it also performs the
 final `portal.account.delete` and verifies the sealed Agent, deprovision ledger,
 business-table purge, and base/stage Qdrant cleanup; post-delete checks use only
 Compose exec and private volumes. There is intentionally no
 `agent.knowledge.index` workaround: a binding mismatch is a hard contract
 failure.
+
+This HTTP acceptance lane does not claim Native Agent WebSocket streaming,
+reconnect/resume, or cancellation coverage. Those behaviors require a later
+dedicated gate using real `client.native_agent_stream` and
+`server.native_agent_stream.*` frames; an HTTP `agent.chat` response cannot
+stand in for that protocol evidence.
 
 For the final persistent-account acceptance, set
 `DIREXTALK_ACCEPTANCE_ACCOUNT_DELETE=false`. This keeps the configured model
