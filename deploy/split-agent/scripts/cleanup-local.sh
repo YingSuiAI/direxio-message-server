@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+script_dir=$(cd -- "$(dirname -- "$0")" && pwd -P)
+
 usage() {
   echo "usage: $0 [--purge] OUTPUT_DIR" >&2
   exit 2
@@ -112,8 +114,7 @@ receipt_context_endpoint=$(read_pair "$receipt" docker.context_endpoint)
 receipt_context_socket=$(read_pair "$receipt" docker.context_socket)
 [ "$receipt_stack" = "$stack_name" ] || die "cleanup receipt stack identity differs from manifest"
 case "$receipt_state" in
-  complete|incomplete) ;;
-  starting) die "startup journal is incomplete; resource identity capture did not finish" ;;
+  complete|incomplete|starting) ;;
   *) die "cleanup receipt state is unsupported" ;;
 esac
 [ "$receipt_env_identity" = "$env_identity" ] || die "cleanup receipt was not created for this .env"
@@ -204,6 +205,26 @@ for pair in "${volume_pairs[@]}"; do
   volumes+=("$(bind_resource "$pair")")
 done
 
+if [ "$receipt_state" = starting ]; then
+  planned_network_count=$(read_pair "$receipt" planned.network.count)
+  planned_volume_count=$(read_pair "$receipt" planned.volume.count)
+  [ "$planned_network_count" -eq "${#networks[@]}" ] || die "startup journal planned network count differs from manifest"
+  [ "$planned_volume_count" -eq "${#volumes[@]}" ] || die "startup journal planned volume count differs from manifest"
+  for ((index = 0; index < planned_network_count; index++)); do
+    [ "$(read_pair "$receipt" "planned.network.$index.name")" = "${networks[index]}" ] || \
+      die "startup journal planned network differs from manifest"
+  done
+  for ((index = 0; index < planned_volume_count; index++)); do
+    [ "$(read_pair "$receipt" "planned.volume.$index.name")" = "${volumes[index]}" ] || \
+      die "startup journal planned volume differs from manifest"
+  done
+  "$script_dir/recover-starting-cleanup-receipt.sh" "$out"
+  if [ "$purge" = true ]; then
+    exec "$0" --purge "$out"
+  fi
+  exec "$0" "$out"
+fi
+
 container_count=$(read_pair "$receipt" container.count)
 network_count=$(read_pair "$receipt" network.count)
 volume_count=$(read_pair "$receipt" volume.count)
@@ -287,6 +308,10 @@ runner_control_groups=("$(read_pair "$receipt" runner.extension.control_group)" 
 runner_main_pids=("$(read_pair "$receipt" runner.extension.main_pid)" "$(read_pair "$receipt" runner.core.main_pid)")
 runner_fragment_paths=("$(read_pair "$receipt" runner.extension.fragment_path)" "$(read_pair "$receipt" runner.core.fragment_path)")
 runner_fragment_hashes=("$(read_pair "$receipt" runner.extension.fragment_sha256)" "$(read_pair "$receipt" runner.core.fragment_sha256)")
+runner_parent_roots=("$(read_pair "$manifest" runner.extension.parent_root)" "$(read_pair "$manifest" runner.core.parent_root)")
+runner_parent_procs=("$(read_pair "$manifest" runner.extension.parent_procs)" "$(read_pair "$manifest" runner.core.parent_procs)")
+runner_parent_procs_owners=("$(read_pair "$manifest" runner.extension.parent_procs_owner)" "$(read_pair "$manifest" runner.core.parent_procs_owner)")
+runner_parent_procs_modes=("$(read_pair "$manifest" runner.extension.parent_procs_mode)" "$(read_pair "$manifest" runner.core.parent_procs_mode)")
 for ((index = 0; index < 2; index++)); do
   role=${runner_units[index]}
   printf '%s\n' "${runner_unit_names[index]}" | grep -Eq "^dirextalk-${role}-runner@${stack_name}\.service$" || die "$role runner unit is not stack-bound"
@@ -297,6 +322,10 @@ for ((index = 0; index < 2; index++)); do
   [ "$(stat -c '%u:%g' "${runner_fragment_paths[index]}")" = 0:0 ] || die "$role runner fragment is not root-owned"
   [ "$(stat -c '%a' "${runner_fragment_paths[index]}")" = 644 ] || die "$role runner fragment mode is not 0644"
   [ "$(sha256sum -- "${runner_fragment_paths[index]}" | awk '{print $1}')" = "${runner_fragment_hashes[index]}" ] || die "$role runner fragment hash changed"
+  [ "${runner_parent_roots[index]}" = "/sys/fs/cgroup${runner_control_groups[index]%/*}" ] || die "$role runner parent root is not receipt-bound"
+  [ "${runner_parent_procs[index]}" = "${runner_parent_roots[index]}/cgroup.procs" ] || die "$role runner parent process control path is not exact"
+  printf '%s\n' "${runner_parent_procs_owners[index]}" | grep -Eq '^[0-9]+:[0-9]+$' || die "$role runner parent process control owner is invalid"
+  [ "${runner_parent_procs_modes[index]}" = 644 ] || die "$role runner parent process control mode is invalid"
 done
 
 command -v docker >/dev/null 2>&1 || die "docker is required for exact-target cleanup"
@@ -588,6 +617,20 @@ for ((index = 0; index < 2; index++)); do
     verify_runner_unit_disabled "$index"
   fi
 done
+
+# The profile is host-global, so removal is attempted only after every exact
+# stack container is gone. The manager returns 3 when another stopped/running
+# container or process still references it; that is an expected shared-host
+# state, while identity or Docker/AppArmor failures remain fatal.
+if apparmor_cleanup_output=$("$script_dir/manage-runner-apparmor.sh" remove 2>&1); then
+  :
+else
+  apparmor_cleanup_status=$?
+  case "$apparmor_cleanup_status" in
+    3) printf '%s\n' "$apparmor_cleanup_output" >&2 ;;
+    *) die "runner AppArmor cleanup failed (status $apparmor_cleanup_status): $apparmor_cleanup_output" ;;
+  esac
+fi
 
 for ((index = 0; index < network_count; index++)); do
   if inspect_network_exact "$index"; then

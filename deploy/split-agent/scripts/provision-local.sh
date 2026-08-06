@@ -716,18 +716,40 @@ extension_fragment_path=${DIREXTALK_EXTENSION_RUNNER_FRAGMENT_PATH:-/etc/systemd
 core_fragment_path=${DIREXTALK_CORE_RUNNER_FRAGMENT_PATH:-/etc/systemd/system/dirextalk-core-runner@.service}
 extension_fragment_sha256=${DIREXTALK_EXTENSION_RUNNER_FRAGMENT_SHA256:-$(sha256sum -- "$split_deploy_dir/systemd/dirextalk-extension-runner@.service" | awk '{print $1}')}
 core_fragment_sha256=${DIREXTALK_CORE_RUNNER_FRAGMENT_SHA256:-$(sha256sum -- "$split_deploy_dir/systemd/dirextalk-core-runner@.service" | awk '{print $1}')}
+runner_apparmor_profile=${DIREXTALK_RUNNER_APPARMOR_PROFILE:-dirextalk-runner-userns}
+runner_apparmor_profile_path=${DIREXTALK_RUNNER_APPARMOR_PROFILE_PATH:-/etc/apparmor.d/dirextalk-runner-userns}
+runner_apparmor_profile_sha256=${DIREXTALK_RUNNER_APPARMOR_PROFILE_SHA256:-$(sha256sum -- "$split_deploy_dir/apparmor.d/dirextalk-runner-userns" | awk '{print $1}')}
+runner_apparmor_manager_path=${DIREXTALK_RUNNER_APPARMOR_MANAGER_PATH:-$script_dir/manage-runner-apparmor.sh}
+runner_apparmor_manager_sha256=${DIREXTALK_RUNNER_APPARMOR_MANAGER_SHA256:-$(sha256sum -- "$runner_apparmor_manager_path" | awk '{print $1}')}
 runner_prep_helper_path=${DIREXTALK_RUNNER_PREP_HELPER_PATH:-$script_dir/prepare-runner-cgroups.sh}
 runner_prep_helper_sha256=${DIREXTALK_RUNNER_PREP_HELPER_SHA256:-$(sha256sum -- "$runner_prep_helper_path" | awk '{print $1}')}
 runner_prep_machine_id=${DIREXTALK_RUNNER_PREP_MACHINE_ID:-unknown}
 runner_prep_docker_engine_id=${DIREXTALK_RUNNER_PREP_DOCKER_ENGINE_ID:-unknown}
 extension_control_group=${DIREXTALK_EXTENSION_CONTROL_GROUP:-/system.slice/${extension_cgroup_parent}/${extension_runner_unit}}
 core_control_group=${DIREXTALK_CORE_RUNNER_CONTROL_GROUP:-/system.slice/${workload_cgroup_parent}/${core_runner_unit}}
+extension_parent_root=${DIREXTALK_EXTENSION_CGROUP_PARENT_ROOT:-/sys/fs/cgroup${extension_control_group%/*}}
+core_parent_root=${DIREXTALK_CORE_RUNNER_CGROUP_PARENT_ROOT:-/sys/fs/cgroup${core_control_group%/*}}
+extension_parent_procs=${DIREXTALK_EXTENSION_CGROUP_PARENT_PROCS:-$extension_parent_root/cgroup.procs}
+core_parent_procs=${DIREXTALK_CORE_RUNNER_CGROUP_PARENT_PROCS:-$core_parent_root/cgroup.procs}
+extension_parent_procs_owner=${DIREXTALK_EXTENSION_CGROUP_PARENT_PROCS_OWNER:-$extension_runner_uid:$extension_runner_uid}
+core_parent_procs_owner=${DIREXTALK_CORE_RUNNER_CGROUP_PARENT_PROCS_OWNER:-$workload_runner_uid:$workload_runner_uid}
+extension_parent_procs_mode=${DIREXTALK_EXTENSION_CGROUP_PARENT_PROCS_MODE:-644}
+core_parent_procs_mode=${DIREXTALK_CORE_RUNNER_CGROUP_PARENT_PROCS_MODE:-644}
 extension_runner_user=dirextalk-extension-runner
 core_runner_user=dirextalk-core-runner
 runner_host_prepared=true
 if [ "$runner_fixture_mode" = false ]; then
   [ -n "${DIREXTALK_EXTENSION_RUNNER_FRAGMENT_SHA256:-}" ] || die "DIREXTALK_EXTENSION_RUNNER_FRAGMENT_SHA256 must come from prepare-runner-cgroups.sh"
   [ -n "${DIREXTALK_CORE_RUNNER_FRAGMENT_SHA256:-}" ] || die "DIREXTALK_CORE_RUNNER_FRAGMENT_SHA256 must come from prepare-runner-cgroups.sh"
+  [ "$runner_apparmor_profile" = dirextalk-runner-userns ] || die "runner AppArmor profile name is not repository-fixed"
+  [ "$runner_apparmor_profile_path" = /etc/apparmor.d/dirextalk-runner-userns ] || die "runner AppArmor profile path is not repository-fixed"
+  [ "$runner_apparmor_manager_path" = "$script_dir/manage-runner-apparmor.sh" ] || die "runner AppArmor manager path is not the repository entrypoint"
+  printf '%s\n' "$runner_apparmor_profile_sha256" | grep -Eq '^[0-9a-f]{64}$' || die "runner AppArmor profile SHA-256 is invalid"
+  printf '%s\n' "$runner_apparmor_manager_sha256" | grep -Eq '^[0-9a-f]{64}$' || die "runner AppArmor manager SHA-256 is invalid"
+  validate_root_owned_asset DIREXTALK_RUNNER_APPARMOR_PROFILE_PATH "$runner_apparmor_profile_path"
+  validate_root_owned_asset DIREXTALK_RUNNER_APPARMOR_MANAGER_PATH "$runner_apparmor_manager_path"
+  [ "$(sha256sum -- "$runner_apparmor_profile_path" | awk '{print $1}')" = "$runner_apparmor_profile_sha256" ] || die "runner AppArmor installed profile hash differs from preparation receipt"
+  [ "$(sha256sum -- "$runner_apparmor_manager_path" | awk '{print $1}')" = "$runner_apparmor_manager_sha256" ] || die "runner AppArmor manager hash differs from preparation receipt"
   [ "$extension_cgroup_parent" = "$stack_name-extension.slice" ] || die "extension runner parent slice must be stack-bound"
   [ "$workload_cgroup_parent" = "$stack_name-core-runner.slice" ] || die "Core runner parent slice must be stack-bound"
   [ "$extension_runner_unit" = "dirextalk-extension-runner@${stack_name}.service" ] || die "extension runner unit is not stack-bound"
@@ -736,6 +758,22 @@ if [ "$runner_fixture_mode" = false ]; then
   validate_runner_control_group DIREXTALK_CORE_RUNNER_CONTROL_GROUP "$core_control_group" "$stack_name" "$workload_cgroup_parent" "$core_runner_unit"
   [ "$extension_cgroup_root" = "/sys/fs/cgroup${extension_control_group}" ] || die "extension cgroup root must bind its exact ControlGroup"
   [ "$core_runner_cgroup_root" = "/sys/fs/cgroup${core_control_group}" ] || die "Core runner cgroup root must bind its exact ControlGroup"
+  [ "$extension_parent_root" = "/sys/fs/cgroup${extension_control_group%/*}" ] || die "extension parent slice root must bind its exact ControlGroup parent"
+  [ "$core_parent_root" = "/sys/fs/cgroup${core_control_group%/*}" ] || die "Core parent slice root must bind its exact ControlGroup parent"
+  [ "$extension_parent_procs" = "$extension_parent_root/cgroup.procs" ] || die "extension parent process control path is not exact"
+  [ "$core_parent_procs" = "$core_parent_root/cgroup.procs" ] || die "Core parent process control path is not exact"
+  [ "$extension_parent_procs_owner" = "$extension_runner_uid:$extension_runner_uid" ] || die "extension parent process control owner binding is invalid"
+  [ "$core_parent_procs_owner" = "$workload_runner_uid:$workload_runner_uid" ] || die "Core parent process control owner binding is invalid"
+  [ "$extension_parent_procs_mode" = 644 ] || die "extension parent process control mode binding is invalid"
+  [ "$core_parent_procs_mode" = 644 ] || die "Core parent process control mode binding is invalid"
+  [ -d "$extension_parent_root" ] && [ ! -L "$extension_parent_root" ] || die "extension parent slice root is missing or symlinked"
+  [ -d "$core_parent_root" ] && [ ! -L "$core_parent_root" ] || die "Core parent slice root is missing or symlinked"
+  [ "$(stat -c '%u:%g' -- "$extension_parent_root")" = 0:0 ] || die "extension parent slice directory is not root-owned"
+  [ "$(stat -c '%u:%g' -- "$core_parent_root")" = 0:0 ] || die "Core parent slice directory is not root-owned"
+  [ "$(stat -c '%u:%g' -- "$extension_parent_procs")" = "$extension_parent_procs_owner" ] || die "extension parent process control owner differs from preparation receipt"
+  [ "$(stat -c '%u:%g' -- "$core_parent_procs")" = "$core_parent_procs_owner" ] || die "Core parent process control owner differs from preparation receipt"
+  [ "$(stat -c '%a' -- "$extension_parent_procs")" = "$extension_parent_procs_mode" ] || die "extension parent process control mode differs from preparation receipt"
+  [ "$(stat -c '%a' -- "$core_parent_procs")" = "$core_parent_procs_mode" ] || die "Core parent process control mode differs from preparation receipt"
   [ -n "${DIREXTALK_RUNNER_PREP_HELPER_SHA256:-}" ] || die "DIREXTALK_RUNNER_PREP_HELPER_SHA256 must come from prepare-runner-cgroups.sh"
   [ -n "${DIREXTALK_RUNNER_PREP_MACHINE_ID:-}" ] || die "DIREXTALK_RUNNER_PREP_MACHINE_ID must come from prepare-runner-cgroups.sh"
   [ -n "${DIREXTALK_RUNNER_PREP_DOCKER_ENGINE_ID:-}" ] || die "DIREXTALK_RUNNER_PREP_DOCKER_ENGINE_ID must come from prepare-runner-cgroups.sh"
@@ -1068,12 +1106,25 @@ DIREXTALK_EXTENSION_RUNNER_FRAGMENT_PATH=$extension_fragment_path
 DIREXTALK_CORE_RUNNER_FRAGMENT_PATH=$core_fragment_path
 DIREXTALK_EXTENSION_RUNNER_FRAGMENT_SHA256=$extension_fragment_sha256
 DIREXTALK_CORE_RUNNER_FRAGMENT_SHA256=$core_fragment_sha256
+DIREXTALK_RUNNER_APPARMOR_PROFILE=$runner_apparmor_profile
+DIREXTALK_RUNNER_APPARMOR_PROFILE_PATH=$runner_apparmor_profile_path
+DIREXTALK_RUNNER_APPARMOR_PROFILE_SHA256=$runner_apparmor_profile_sha256
+DIREXTALK_RUNNER_APPARMOR_MANAGER_PATH=$runner_apparmor_manager_path
+DIREXTALK_RUNNER_APPARMOR_MANAGER_SHA256=$runner_apparmor_manager_sha256
 DIREXTALK_RUNNER_PREP_HELPER_PATH=$runner_prep_helper_path
 DIREXTALK_RUNNER_PREP_HELPER_SHA256=$runner_prep_helper_sha256
 DIREXTALK_RUNNER_PREP_MACHINE_ID=$runner_prep_machine_id
 DIREXTALK_RUNNER_PREP_DOCKER_ENGINE_ID=$runner_prep_docker_engine_id
 DIREXTALK_EXTENSION_CONTROL_GROUP=$extension_control_group
 DIREXTALK_CORE_RUNNER_CONTROL_GROUP=$core_control_group
+DIREXTALK_EXTENSION_CGROUP_PARENT_ROOT=$extension_parent_root
+DIREXTALK_CORE_RUNNER_CGROUP_PARENT_ROOT=$core_parent_root
+DIREXTALK_EXTENSION_CGROUP_PARENT_PROCS=$extension_parent_procs
+DIREXTALK_CORE_RUNNER_CGROUP_PARENT_PROCS=$core_parent_procs
+DIREXTALK_EXTENSION_CGROUP_PARENT_PROCS_OWNER=$extension_parent_procs_owner
+DIREXTALK_CORE_RUNNER_CGROUP_PARENT_PROCS_OWNER=$core_parent_procs_owner
+DIREXTALK_EXTENSION_CGROUP_PARENT_PROCS_MODE=$extension_parent_procs_mode
+DIREXTALK_CORE_RUNNER_CGROUP_PARENT_PROCS_MODE=$core_parent_procs_mode
 DIREXTALK_EXTENSION_RUNNER_USER=$extension_runner_user
 DIREXTALK_CORE_RUNNER_USER=$core_runner_user
 DIREXTALK_CORE_EXTENSION_ENABLED=$core_extension_enabled
@@ -1151,10 +1202,19 @@ runner.extension.gid=$extension_runner_uid
 runner.extension.parent=$extension_cgroup_parent
 runner.extension.root=$extension_cgroup_root
 runner.extension.control_group=$extension_control_group
+runner.extension.parent_root=$extension_parent_root
+runner.extension.parent_procs=$extension_parent_procs
+runner.extension.parent_procs_owner=$extension_parent_procs_owner
+runner.extension.parent_procs_mode=$extension_parent_procs_mode
 runner.extension.fragment_path=$extension_fragment_path
 runner.extension.fragment_sha256=$extension_fragment_sha256
 runner.helper.path=$runner_prep_helper_path
 runner.helper.sha256=$runner_prep_helper_sha256
+runner.apparmor.profile=$runner_apparmor_profile
+runner.apparmor.path=$runner_apparmor_profile_path
+runner.apparmor.sha256=$runner_apparmor_profile_sha256
+runner.apparmor.manager_path=$runner_apparmor_manager_path
+runner.apparmor.manager_sha256=$runner_apparmor_manager_sha256
 runner.machine_id=$runner_prep_machine_id
 runner.docker_engine_id=$runner_prep_docker_engine_id
 runner.core.unit=$core_runner_unit
@@ -1165,6 +1225,10 @@ runner.core.gid=$workload_runner_uid
 runner.core.parent=$workload_cgroup_parent
 runner.core.root=$core_runner_cgroup_root
 runner.core.control_group=$core_control_group
+runner.core.parent_root=$core_parent_root
+runner.core.parent_procs=$core_parent_procs
+runner.core.parent_procs_owner=$core_parent_procs_owner
+runner.core.parent_procs_mode=$core_parent_procs_mode
 runner.core.fragment_path=$core_fragment_path
 runner.core.fragment_sha256=$core_fragment_sha256
 resource.network.message_private=$stack_name-message-private

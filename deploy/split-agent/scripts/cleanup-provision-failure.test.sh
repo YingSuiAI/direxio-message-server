@@ -10,6 +10,13 @@ shellcheck -x "$script"
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/dirextalk-provision-failure-cleanup.XXXXXX")
 trap 'rm -rf -- "$tmp"' EXIT
+mkdir -p "$tmp/apparmor.d"
+cp -- "$script_dir/../apparmor.d/dirextalk-runner-userns" "$tmp/apparmor.d/dirextalk-runner-userns"
+chmod 0644 "$tmp/apparmor.d/dirextalk-runner-userns"
+printf 'dirextalk-runner-userns (unconfined)\n' >"$tmp/apparmor-profiles"
+export DIREXTALK_SPLIT_TEST_MODE=true
+export DIREXTALK_APPARMOR_TARGET_DIR="$tmp/apparmor.d"
+export DIREXTALK_APPARMOR_LOADED_PROFILES="$tmp/apparmor-profiles"
 stack=d-aaaaaaaaaaaaaaaaaaaaaaaaaa
 machine=$(tr -d '[:space:]' </etc/machine-id)
 engine=cleanup-failure-engine
@@ -29,6 +36,8 @@ write_fixture() {
     printf 'DIREXTALK_EXTENSION_CGROUP_PARENT=%s-extension.slice\nDIREXTALK_CORE_RUNNER_CGROUP_PARENT=%s-core-runner.slice\n' "$stack" "$stack"
     printf 'DIREXTALK_EXTENSION_CONTROL_GROUP=/d.slice/%s.slice/%s-extension.slice/dirextalk-extension-runner@%s.service\nDIREXTALK_CORE_RUNNER_CONTROL_GROUP=/d.slice/%s.slice/%s-core-runner.slice/dirextalk-core-runner@%s.service\n' "$stack" "$stack" "$stack" "$stack" "$stack" "$stack"
     printf 'DIREXTALK_EXTENSION_CGROUP_ROOT=/sys/fs/cgroup/d.slice/%s.slice/%s-extension.slice/dirextalk-extension-runner@%s.service\nDIREXTALK_CORE_RUNNER_CGROUP_ROOT=/sys/fs/cgroup/d.slice/%s.slice/%s-core-runner.slice/dirextalk-core-runner@%s.service\n' "$stack" "$stack" "$stack" "$stack" "$stack" "$stack"
+    printf 'DIREXTALK_EXTENSION_CGROUP_PARENT_ROOT=/sys/fs/cgroup/d.slice/%s.slice/%s-extension.slice\nDIREXTALK_CORE_RUNNER_CGROUP_PARENT_ROOT=/sys/fs/cgroup/d.slice/%s.slice/%s-core-runner.slice\n' "$stack" "$stack" "$stack" "$stack"
+    printf 'DIREXTALK_EXTENSION_CGROUP_PARENT_PROCS=/sys/fs/cgroup/d.slice/%s.slice/%s-extension.slice/cgroup.procs\nDIREXTALK_CORE_RUNNER_CGROUP_PARENT_PROCS=/sys/fs/cgroup/d.slice/%s.slice/%s-core-runner.slice/cgroup.procs\n' "$stack" "$stack" "$stack" "$stack"
     for key in "${network_keys[@]}"; do
       printf 'DIREXTALK_%s_NETWORK=%s-%s\n' "$(printf '%s' "$key" | tr '[:lower:]' '[:upper:]' | tr '-' '_')" "$stack" "$key"
     done
@@ -51,7 +60,9 @@ write_fixture() {
   {
     printf '# dirextalk-split-manifest-v1\nstack_name=%s\nstack_nonce=%s\nagent_instance_id=11111111-1111-4111-8111-111111111111\nmessage_instance_id=22222222-2222-4222-8222-222222222222\naccount_generation=1\nrunner.machine_id=%s\nrunner.docker_engine_id=%s\n' "$stack" "${stack#d-}" "$machine" "$engine"
     printf 'runner.extension.unit=dirextalk-extension-runner@%s.service\nrunner.extension.parent=%s-extension.slice\nrunner.extension.control_group=/d.slice/%s.slice/%s-extension.slice/dirextalk-extension-runner@%s.service\nrunner.extension.fragment_path=%s\nrunner.extension.fragment_sha256=%s\n' "$stack" "$stack" "$stack" "$stack" "$stack" "$fragment" "$fragment_hash"
+    printf 'runner.extension.parent_root=/sys/fs/cgroup/d.slice/%s.slice/%s-extension.slice\nrunner.extension.parent_procs=/sys/fs/cgroup/d.slice/%s.slice/%s-extension.slice/cgroup.procs\nrunner.extension.parent_procs_owner=65531:65531\nrunner.extension.parent_procs_mode=644\n' "$stack" "$stack" "$stack" "$stack"
     printf 'runner.core.unit=dirextalk-core-runner@%s.service\nrunner.core.parent=%s-core-runner.slice\nrunner.core.control_group=/d.slice/%s.slice/%s-core-runner.slice/dirextalk-core-runner@%s.service\nrunner.core.fragment_path=%s\nrunner.core.fragment_sha256=%s\n' "$stack" "$stack" "$stack" "$stack" "$stack" "$fragment" "$fragment_hash"
+    printf 'runner.core.parent_root=/sys/fs/cgroup/d.slice/%s.slice/%s-core-runner.slice\nrunner.core.parent_procs=/sys/fs/cgroup/d.slice/%s.slice/%s-core-runner.slice/cgroup.procs\nrunner.core.parent_procs_owner=65530:65530\nrunner.core.parent_procs_mode=644\n' "$stack" "$stack" "$stack" "$stack"
     for key in "${network_keys[@]}"; do printf 'resource.network.%s=%s-%s\n' "$key" "$stack" "$key"; done
     for key in "${volume_keys[@]}"; do printf 'resource.volume.%s=%s-%s\n' "$key" "$stack" "$key"; done
   } >"$dir/.manifest"
@@ -88,6 +99,13 @@ case "$1" in
 esac
 EOF
   chmod 755 -- "$dir/bin/docker"
+  cat >"$dir/bin/apparmor_parser" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[ "$1" = --remove ] || exit 2
+: >"$DIREXTALK_APPARMOR_LOADED_PROFILES"
+EOF
+  chmod 755 -- "$dir/bin/apparmor_parser"
   cat >"$dir/bin/systemctl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail

@@ -9,6 +9,7 @@ usage() { echo "usage: $0 OUTPUT_DIR" >&2; exit 2; }
 die() { echo "split-stack provision-failure cleanup: $*" >&2; exit 1; }
 expected_negative() { echo "split-stack provision-failure cleanup: $*" >&2; exit 3; }
 [ "$#" -eq 1 ] || usage
+script_dir=$(cd -- "$(dirname -- "$0")" && pwd -P)
 
 case "$1" in
   /*) out=$(readlink -m -- "$1") ;;
@@ -90,12 +91,18 @@ runner_parents=("$(read_pair "$manifest" runner.extension.parent)" "$(read_pair 
 runner_groups=("$(read_pair "$manifest" runner.extension.control_group)" "$(read_pair "$manifest" runner.core.control_group)")
 runner_fragments=("$(read_pair "$manifest" runner.extension.fragment_path)" "$(read_pair "$manifest" runner.core.fragment_path)")
 runner_hashes=("$(read_pair "$manifest" runner.extension.fragment_sha256)" "$(read_pair "$manifest" runner.core.fragment_sha256)")
+runner_parent_roots=("$(read_pair "$manifest" runner.extension.parent_root)" "$(read_pair "$manifest" runner.core.parent_root)")
+runner_parent_procs=("$(read_pair "$manifest" runner.extension.parent_procs)" "$(read_pair "$manifest" runner.core.parent_procs)")
+runner_parent_procs_owners=("$(read_pair "$manifest" runner.extension.parent_procs_owner)" "$(read_pair "$manifest" runner.core.parent_procs_owner)")
+runner_parent_procs_modes=("$(read_pair "$manifest" runner.extension.parent_procs_mode)" "$(read_pair "$manifest" runner.core.parent_procs_mode)")
 env_runner_units=("$(read_pair "$env_file" DIREXTALK_EXTENSION_RUNNER_UNIT)" "$(read_pair "$env_file" DIREXTALK_CORE_RUNNER_UNIT)")
 env_runner_parents=("$(read_pair "$env_file" DIREXTALK_EXTENSION_CGROUP_PARENT)" "$(read_pair "$env_file" DIREXTALK_CORE_RUNNER_CGROUP_PARENT)")
 env_runner_groups=("$(read_pair "$env_file" DIREXTALK_EXTENSION_CONTROL_GROUP)" "$(read_pair "$env_file" DIREXTALK_CORE_RUNNER_CONTROL_GROUP)")
 env_runner_roots=("$(read_pair "$env_file" DIREXTALK_EXTENSION_CGROUP_ROOT)" "$(read_pair "$env_file" DIREXTALK_CORE_RUNNER_CGROUP_ROOT)")
 env_runner_fragments=("$(read_pair "$env_file" DIREXTALK_EXTENSION_RUNNER_FRAGMENT_PATH)" "$(read_pair "$env_file" DIREXTALK_CORE_RUNNER_FRAGMENT_PATH)")
 env_runner_hashes=("$(read_pair "$env_file" DIREXTALK_EXTENSION_RUNNER_FRAGMENT_SHA256)" "$(read_pair "$env_file" DIREXTALK_CORE_RUNNER_FRAGMENT_SHA256)")
+env_runner_parent_roots=("$(read_pair "$env_file" DIREXTALK_EXTENSION_CGROUP_PARENT_ROOT)" "$(read_pair "$env_file" DIREXTALK_CORE_RUNNER_CGROUP_PARENT_ROOT)")
+env_runner_parent_procs=("$(read_pair "$env_file" DIREXTALK_EXTENSION_CGROUP_PARENT_PROCS)" "$(read_pair "$env_file" DIREXTALK_CORE_RUNNER_CGROUP_PARENT_PROCS)")
 env_network_keys=(DIREXTALK_MESSAGE_PRIVATE_NETWORK DIREXTALK_MESSAGE_PUBLIC_NETWORK DIREXTALK_MESSAGE_DATABASE_NETWORK DIREXTALK_AGENT_PRIVATE_NETWORK DIREXTALK_AGENT_DATABASE_NETWORK DIREXTALK_AGENT_CALLER_NETWORK DIREXTALK_AGENT_EGRESS_NETWORK)
 env_volume_keys=(DIREXTALK_MESSAGE_POSTGRES_VOLUME DIREXTALK_MESSAGE_CONFIG_VOLUME DIREXTALK_MESSAGE_DATA_VOLUME DIREXTALK_MESSAGE_PLUGINS_VOLUME DIREXTALK_AGENT_POSTGRES_VOLUME DIREXTALK_AGENT_SECRET_VOLUME DIREXTALK_AGENT_CONFIG_VOLUME DIREXTALK_AGENT_CORE_DATA_VOLUME DIREXTALK_AGENT_SOCKET_VOLUME DIREXTALK_AGENT_INSTALL_VOLUME DIREXTALK_AGENT_STAGING_VOLUME DIREXTALK_AGENT_WORKSPACE_VOLUME DIREXTALK_AGENT_RUNNER_WORKSPACE_VOLUME DIREXTALK_AGENT_RUNNER_STATE_VOLUME DIREXTALK_AGENT_KNOWLEDGE_CONTENT_VOLUME DIREXTALK_AGENT_KNOWLEDGE_MOUNT_VOLUME DIREXTALK_AGENT_QDRANT_VOLUME DIREXTALK_CAPABILITY_AUTHORITY_VOLUME DIREXTALK_CAPABILITY_SHARED_VOLUME DIREXTALK_CAPABILITY_PRIVATE_VOLUME DIREXTALK_CORE_RUNNER_SOCKET_VOLUME DIREXTALK_CORE_RUNNER_INSTALL_VOLUME DIREXTALK_CORE_RUNNER_WORKSPACE_VOLUME DIREXTALK_CORE_RUNNER_STATE_VOLUME)
 for i in 0 1; do
@@ -106,6 +113,12 @@ for i in 0 1; do
   [ "${env_runner_roots[$i]}" = "/sys/fs/cgroup${runner_groups[$i]}" ] || die "$role runner root differs from ControlGroup"
   [ "${env_runner_fragments[$i]}" = "${runner_fragments[$i]}" ] || die "$role runner fragment path differs between .env and manifest"
   [ "${env_runner_hashes[$i]}" = "${runner_hashes[$i]}" ] || die "$role runner fragment hash differs between .env and manifest"
+  [ "${env_runner_parent_roots[$i]}" = "${runner_parent_roots[$i]}" ] || die "$role runner parent root differs between .env and manifest"
+  [ "${env_runner_parent_procs[$i]}" = "${runner_parent_procs[$i]}" ] || die "$role runner parent process control differs between .env and manifest"
+  [ "${runner_parent_roots[$i]}" = "/sys/fs/cgroup${runner_groups[$i]%/*}" ] || die "$role runner parent root differs from ControlGroup parent"
+  [ "${runner_parent_procs[$i]}" = "${runner_parent_roots[$i]}/cgroup.procs" ] || die "$role runner parent process control path is not exact"
+  case "$role:${runner_parent_procs_owners[$i]}" in extension:65531:65531|core:65530:65530) ;; *) die "$role runner parent process control owner is invalid" ;; esac
+  [ "${runner_parent_procs_modes[$i]}" = 644 ] || die "$role runner parent process control mode is invalid"
   printf '%s\n' "$unit" | grep -Eq "^dirextalk-${role}-runner@${stack_name}\.service$" || die "$role runner unit is not stack-bound"
   printf '%s\n' "${runner_parents[$i]}" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9_.-]*\.slice$' || die "$role runner parent is invalid"
   printf '%s\n' "${runner_groups[$i]}" | grep -Eq '^/[^/[:space:]][^[:space:]]*$' || die "$role runner ControlGroup is invalid"
@@ -285,6 +298,19 @@ verify_unit_disabled() {
   esac
 }
 
+cleanup_runner_apparmor() {
+  local output status
+  if output=$("$script_dir/manage-runner-apparmor.sh" remove 2>&1); then
+    return 0
+  else
+    status=$?
+  fi
+  case "$status" in
+    3) log "$output" ;;
+    *) die "runner AppArmor cleanup failed (status $status): $output" ;;
+  esac
+}
+
 unit_present=(false false)
 for i in 0 1; do
   revalidate_controls
@@ -293,6 +319,7 @@ for i in 0 1; do
   fi
 done
 if [ "${unit_present[0]}" = false ] && [ "${unit_present[1]}" = false ]; then
+  cleanup_runner_apparmor
   expected_negative "runner units are already absent or disabled"
 fi
 for i in 0 1; do
@@ -320,6 +347,7 @@ for i in 0 1; do
     log "disabled ${runner_names[$i]}"
   fi
 done
+cleanup_runner_apparmor
 chmod 400 -- "$log_file"
 log_file_mode=$(stat -c '%a' "$log_file")
 [ "$log_file_mode" = 400 ] || die "failure log mode could not be protected"

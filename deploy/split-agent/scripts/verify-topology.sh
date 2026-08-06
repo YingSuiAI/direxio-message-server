@@ -115,6 +115,8 @@ shellcheck \
   "$script_dir/verify-first-fresh.test.sh" \
   "$script_dir/prepare-runner-cgroups.sh" \
   "$script_dir/prepare-runner-cgroups.test.sh" \
+  "$script_dir/manage-runner-apparmor.sh" \
+  "$script_dir/manage-runner-apparmor.test.sh" \
   "$script_dir/provision-local.test.sh" \
   "$script_dir/verify-production-images.sh" \
   "$script_dir/verify-production-images.test.sh" \
@@ -141,6 +143,10 @@ shellcheck \
 "$script_dir/agent-runtime-local.test.sh" >/dev/null
 "$script_dir/verify-first-fresh.test.sh" >/dev/null
 "$script_dir/prepare-runner-cgroups.test.sh" >/dev/null
+"$script_dir/manage-runner-apparmor.test.sh" >/dev/null
+apparmor_parser --preprocess "$stack_dir/apparmor.d/dirextalk-runner-userns" >/dev/null
+grep -Fqx 'profile dirextalk-runner-userns flags=(unconfined) {' "$stack_dir/apparmor.d/dirextalk-runner-userns"
+grep -Fqx '  userns,' "$stack_dir/apparmor.d/dirextalk-runner-userns"
 "$script_dir/provision-local.test.sh" >/dev/null
 "$script_dir/verify-production-images.test.sh" >/dev/null
 "$script_dir/verify-production-tls.test.sh" >/dev/null
@@ -242,6 +248,13 @@ jq -e '
   .services["core-runner"].secrets == null and
   .services["extension-runner"].user == "65531:65531" and
   .services["core-runner"].user == "65530:65530" and
+  .services["extension-runner"].read_only == true and
+  .services["core-runner"].read_only == true and
+  .services["extension-runner"].cap_drop == ["ALL"] and
+  .services["core-runner"].cap_drop == ["ALL"] and
+  ([.services["extension-runner"].security_opt[], .services["core-runner"].security_opt[]] | map(select(. == "apparmor=dirextalk-runner-userns")) | length) == 2 and
+  ([.services["extension-runner"].security_opt[], .services["core-runner"].security_opt[]] | map(select(. == "seccomp=unconfined")) | length) == 2 and
+  ([.services["extension-runner"].security_opt[], .services["core-runner"].security_opt[]] | map(select(. == "no-new-privileges:true")) | length) == 2 and
   (.services["extension-runner"].group_add | index("65532")) != null and
   (.services["core-runner"].group_add | index("65532")) != null and
   .services["extension-runner"].build == null and
@@ -254,7 +267,17 @@ jq -e '
   (.services["extension-runner"].healthcheck.test[0] == "CMD") and
   (.services["core-runner"].healthcheck.test[0] == "CMD") and
   (.services["extension-runner"].depends_on["extension-socket-init"].condition == "service_completed_successfully") and
-  (.services["core-runner"].depends_on["core-runner-socket-init"].condition == "service_completed_successfully")
+  (.services["core-runner"].depends_on["core-runner-socket-init"].condition == "service_completed_successfully") and
+  (.services["extension-runner"].depends_on["extension-runner-storage-init"].condition == "service_completed_successfully") and
+  (.services["core-runner"].depends_on["core-runner-storage-init"].condition == "service_completed_successfully") and
+  (.services["extension-socket-init"].command | join(" ") | contains("chmod 2750 /socket")) and
+  (.services["core-runner-socket-init"].command | join(" ") | contains("chmod 2750 /socket")) and
+  (.services["extension-runner-storage-init"].network_mode == "none") and
+  (.services["core-runner-storage-init"].network_mode == "none") and
+  (.services["extension-runner-storage-init"].command | join(" ") | contains("chown 65531:65531 /install /workspace /state")) and
+  (.services["extension-runner-storage-init"].command | join(" ") | contains("chmod 0700 /install /workspace /state")) and
+  (.services["core-runner-storage-init"].command | join(" ") | contains("chown 65530:65530 /install /workspace /state")) and
+  (.services["core-runner-storage-init"].command | join(" ") | contains("chmod 0700 /install /workspace /state"))
 ' "$rendered" >/dev/null
 
 jq -e --arg http "$http_bind" --arg https "$https_bind" '

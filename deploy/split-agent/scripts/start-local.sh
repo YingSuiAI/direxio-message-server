@@ -53,6 +53,11 @@ verify_control_identity() {
   [ "$(sha256sum -- "$message_tls_cert" | awk '{print $1}')" = "$message_tls_cert_digest" ] || die "message TLS certificate changed during startup"
   [ "$(sha256sum -- "$message_tls_key" | awk '{print $1}')" = "$message_tls_key_digest" ] || die "message TLS key changed during startup"
   [ "$(sha256sum -- "$image_attestation" | awk '{print $1}')" = "$image_attestation_digest" ] || die "image attestation changed during startup"
+  [ "$(stat -c '%d:%i:%u:%g:%a' -- "$runner_apparmor_profile_path")" = "$runner_apparmor_profile_identity" ] || die "runner AppArmor profile identity changed during startup"
+  [ "$(stat -c '%d:%i:%u:%g:%a' -- "$runner_apparmor_manager_path")" = "$runner_apparmor_manager_identity" ] || die "runner AppArmor manager identity changed during startup"
+  [ "$(sha256sum -- "$runner_apparmor_profile_path" | awk '{print $1}')" = "$runner_apparmor_profile_sha256" ] || die "runner AppArmor profile changed during startup"
+  [ "$(sha256sum -- "$runner_apparmor_manager_path" | awk '{print $1}')" = "$runner_apparmor_manager_sha256" ] || die "runner AppArmor manager changed during startup"
+  "$runner_apparmor_manager_path" verify >/dev/null || die "runner AppArmor profile is no longer loaded and exact"
 }
 
 read_pair() {
@@ -102,6 +107,11 @@ bind_runner_manifest_value() {
 runner_host_prepared=$(bind_runner_manifest_value DIREXTALK_RUNNER_HOST_PREPARED runner_host_prepared)
 core_extension_enabled=$(bind_runner_manifest_value DIREXTALK_CORE_EXTENSION_ENABLED core_extension_enabled)
 core_workload_enabled=$(bind_runner_manifest_value DIREXTALK_CORE_WORKLOAD_ENABLED core_workload_enabled)
+runner_apparmor_profile=$(bind_runner_manifest_value DIREXTALK_RUNNER_APPARMOR_PROFILE runner.apparmor.profile)
+runner_apparmor_profile_path=$(bind_runner_manifest_value DIREXTALK_RUNNER_APPARMOR_PROFILE_PATH runner.apparmor.path)
+runner_apparmor_profile_sha256=$(bind_runner_manifest_value DIREXTALK_RUNNER_APPARMOR_PROFILE_SHA256 runner.apparmor.sha256)
+runner_apparmor_manager_path=$(bind_runner_manifest_value DIREXTALK_RUNNER_APPARMOR_MANAGER_PATH runner.apparmor.manager_path)
+runner_apparmor_manager_sha256=$(bind_runner_manifest_value DIREXTALK_RUNNER_APPARMOR_MANAGER_SHA256 runner.apparmor.manager_sha256)
 case "$runner_host_prepared" in true|false) ;; *) die "runner_host_prepared must be exactly true or false" ;; esac
 case "$core_extension_enabled" in true|false) ;; *) die "core_extension_enabled must be exactly true or false" ;; esac
 case "$core_workload_enabled" in true|false) ;; *) die "core_workload_enabled must be exactly true or false" ;; esac
@@ -347,6 +357,21 @@ validate_runner_control_group() {
   esac
 }
 
+validate_runner_parent_process_control() {
+  local role=$1 root=$2 procs=$3 control_group=$4 owner=$5 mode=$6 canonical fs_type
+  [ "$root" = "/sys/fs/cgroup${control_group%/*}" ] || die "$role runner parent slice root differs from ControlGroup parent"
+  [ "$procs" = "$root/cgroup.procs" ] || die "$role runner parent process control path is not exact"
+  [ -d "$root" ] && [ ! -L "$root" ] || die "$role runner parent slice root is missing or symlinked"
+  canonical=$(readlink -f -- "$root" 2>/dev/null || true)
+  [ "$canonical" = "$root" ] || die "$role runner parent slice root is not canonical"
+  fs_type=$(stat -fc '%T' "$root" 2>/dev/null || true)
+  [ "$fs_type" = cgroup2fs ] || die "$role runner parent slice root is not cgroup-v2"
+  [ "$(stat -c '%u:%g' -- "$root")" = 0:0 ] || die "$role runner parent slice directory is not root-owned"
+  [ -f "$procs" ] && [ ! -L "$procs" ] || die "$role runner parent process control is missing or symlinked"
+  [ "$(stat -c '%u:%g' -- "$procs")" = "$owner" ] || die "$role runner parent process control owner differs"
+  [ "$(stat -c '%a' -- "$procs")" = "$mode" ] || die "$role runner parent process control mode differs"
+}
+
 validate_root_owned_asset() {
   local name=$1 path=$2 current parent mode permissions
   [ -f "$path" ] && [ ! -L "$path" ] || die "$name must be a root-owned immutable regular file"
@@ -371,6 +396,7 @@ validate_root_owned_asset() {
 verify_runner_host_binding() {
   local role=$1 unit=$2 user=$3 parent=$4 uid=$5 root=$6 control_group=$7 fragment=$8 fragment_hash=$9
   local actual_fragment actual_hash actual_control_group active_state sub_state enabled main_pid keeper_owner
+  local parent_root=${10} parent_procs=${11} parent_procs_owner=${12} parent_procs_mode=${13}
   command -v systemctl >/dev/null 2>&1 || die "systemctl is required for runner host identity verification"
   command -v sha256sum >/dev/null 2>&1 || die "sha256sum is required for runner template verification"
   validate_root_owned_asset DIREXTALK_RUNNER_PREP_HELPER_PATH "$runner_prep_helper_path"
@@ -392,6 +418,7 @@ verify_runner_host_binding() {
   actual_control_group=$(runner_unit_property "$unit" ControlGroup)
   [ "$actual_control_group" = "$control_group" ] || die "$role runner ControlGroup differs from manifest"
   validate_runner_control_group "$role runner ControlGroup" "$actual_control_group" "$parent" "$unit"
+  validate_runner_parent_process_control "$role" "$parent_root" "$parent_procs" "$actual_control_group" "$parent_procs_owner" "$parent_procs_mode"
   active_state=$(runner_unit_property "$unit" ActiveState)
   sub_state=$(runner_unit_property "$unit" SubState)
   [ "$active_state" = active ] && [ "$sub_state" = running ] || die "$role runner unit is not active/running"
@@ -478,6 +505,31 @@ runner_prep_machine_id=$(bind_runner_manifest_value DIREXTALK_RUNNER_PREP_MACHIN
 runner_prep_docker_engine_id=$(bind_runner_manifest_value DIREXTALK_RUNNER_PREP_DOCKER_ENGINE_ID runner.docker_engine_id)
 extension_control_group=$(bind_runner_manifest_value DIREXTALK_EXTENSION_CONTROL_GROUP runner.extension.control_group)
 core_control_group=$(bind_runner_manifest_value DIREXTALK_CORE_RUNNER_CONTROL_GROUP runner.core.control_group)
+extension_parent_root=$(bind_runner_manifest_value DIREXTALK_EXTENSION_CGROUP_PARENT_ROOT runner.extension.parent_root)
+core_parent_root=$(bind_runner_manifest_value DIREXTALK_CORE_RUNNER_CGROUP_PARENT_ROOT runner.core.parent_root)
+extension_parent_procs=$(bind_runner_manifest_value DIREXTALK_EXTENSION_CGROUP_PARENT_PROCS runner.extension.parent_procs)
+core_parent_procs=$(bind_runner_manifest_value DIREXTALK_CORE_RUNNER_CGROUP_PARENT_PROCS runner.core.parent_procs)
+extension_parent_procs_owner=$(bind_runner_manifest_value DIREXTALK_EXTENSION_CGROUP_PARENT_PROCS_OWNER runner.extension.parent_procs_owner)
+core_parent_procs_owner=$(bind_runner_manifest_value DIREXTALK_CORE_RUNNER_CGROUP_PARENT_PROCS_OWNER runner.core.parent_procs_owner)
+extension_parent_procs_mode=$(bind_runner_manifest_value DIREXTALK_EXTENSION_CGROUP_PARENT_PROCS_MODE runner.extension.parent_procs_mode)
+core_parent_procs_mode=$(bind_runner_manifest_value DIREXTALK_CORE_RUNNER_CGROUP_PARENT_PROCS_MODE runner.core.parent_procs_mode)
+[ "$runner_apparmor_profile" = dirextalk-runner-userns ] || die "runner AppArmor profile name is not repository-fixed"
+[ "$runner_apparmor_profile_path" = /etc/apparmor.d/dirextalk-runner-userns ] || die "runner AppArmor profile path is not repository-fixed"
+[ "$runner_apparmor_manager_path" = "$script_dir/manage-runner-apparmor.sh" ] || die "runner AppArmor manager path is not the repository entrypoint"
+printf '%s\n' "$runner_apparmor_profile_sha256" | grep -Eq '^[0-9a-f]{64}$' || die "runner AppArmor profile SHA-256 is invalid"
+printf '%s\n' "$runner_apparmor_manager_sha256" | grep -Eq '^[0-9a-f]{64}$' || die "runner AppArmor manager SHA-256 is invalid"
+for runner_apparmor_asset in "$runner_apparmor_profile_path" "$runner_apparmor_manager_path"; do
+  [ -f "$runner_apparmor_asset" ] && [ ! -L "$runner_apparmor_asset" ] || die "runner AppArmor asset is missing or symlinked: $runner_apparmor_asset"
+  [ "$(stat -c '%u:%g' -- "$runner_apparmor_asset")" = 0:0 ] || die "runner AppArmor asset is not root-owned: $runner_apparmor_asset"
+  runner_apparmor_mode=$((8#$(stat -c '%a' -- "$runner_apparmor_asset")))
+  (( (runner_apparmor_mode & 18) == 0 )) || die "runner AppArmor asset is group/world writable: $runner_apparmor_asset"
+done
+[ "$(stat -c '%a' -- "$runner_apparmor_profile_path")" = 644 ] || die "runner AppArmor installed profile mode is not 0644"
+[ "$(sha256sum -- "$runner_apparmor_profile_path" | awk '{print $1}')" = "$runner_apparmor_profile_sha256" ] || die "runner AppArmor installed profile hash differs from manifest"
+[ "$(sha256sum -- "$runner_apparmor_manager_path" | awk '{print $1}')" = "$runner_apparmor_manager_sha256" ] || die "runner AppArmor manager hash differs from manifest"
+runner_apparmor_profile_identity=$(stat -c '%d:%i:%u:%g:%a' -- "$runner_apparmor_profile_path")
+runner_apparmor_manager_identity=$(stat -c '%d:%i:%u:%g:%a' -- "$runner_apparmor_manager_path")
+"$runner_apparmor_manager_path" verify >/dev/null || die "runner AppArmor loaded-profile verification failed"
 [ "$(read_pair "$manifest" runner.extension.group)" = "$extension_runner_user" ] || die "extension runner group manifest differs"
 [ "$(read_pair "$manifest" runner.core.group)" = "$core_runner_user" ] || die "Core runner group manifest differs"
 [ "$(read_pair "$manifest" runner.extension.uid)" = "$extension_runner_uid" ] || die "extension runner UID manifest differs"
@@ -498,10 +550,12 @@ validate_delegated_cgroup_root DIREXTALK_CORE_RUNNER_CGROUP_ROOT "$core_runner_c
 [ "$runner_host_prepared" = true ] || die "runner host was not prepared by prepare-runner-cgroups.sh"
 verify_runner_host_binding extension "$extension_runner_unit" "$extension_runner_user" \
   "$extension_cgroup_parent" "$extension_runner_uid" "$extension_cgroup_root" \
-  "$extension_control_group" "$extension_fragment_path" "$extension_fragment_hash"
+  "$extension_control_group" "$extension_fragment_path" "$extension_fragment_hash" \
+  "$extension_parent_root" "$extension_parent_procs" "$extension_parent_procs_owner" "$extension_parent_procs_mode"
 verify_runner_host_binding core "$core_runner_unit" "$core_runner_user" \
   "$core_runner_cgroup_parent" "$workload_runner_uid" "$core_runner_cgroup_root" \
-  "$core_control_group" "$core_fragment_path" "$core_fragment_hash"
+  "$core_control_group" "$core_fragment_path" "$core_fragment_hash" \
+  "$core_parent_root" "$core_parent_procs" "$core_parent_procs_owner" "$core_parent_procs_mode"
 
 command -v ss >/dev/null 2>&1 || die "ss is required for host-port ownership checks"
 verify_local_docker_identity
@@ -570,10 +624,12 @@ fi
 verify_control_identity
 verify_runner_host_binding extension "$extension_runner_unit" "$extension_runner_user" \
   "$extension_cgroup_parent" "$extension_runner_uid" "$extension_cgroup_root" \
-  "$extension_control_group" "$extension_fragment_path" "$extension_fragment_hash"
+  "$extension_control_group" "$extension_fragment_path" "$extension_fragment_hash" \
+  "$extension_parent_root" "$extension_parent_procs" "$extension_parent_procs_owner" "$extension_parent_procs_mode"
 verify_runner_host_binding core "$core_runner_unit" "$core_runner_user" \
   "$core_runner_cgroup_parent" "$workload_runner_uid" "$core_runner_cgroup_root" \
-  "$core_control_group" "$core_fragment_path" "$core_fragment_hash"
+  "$core_control_group" "$core_fragment_path" "$core_fragment_hash" \
+  "$core_parent_root" "$core_parent_procs" "$core_parent_procs_owner" "$core_parent_procs_mode"
 verify_local_docker_identity
 require_free_host_ports
 require_fresh_stack

@@ -3,14 +3,24 @@ set -euo pipefail
 
 script_dir=$(cd -- "$(dirname -- "$0")" && pwd -P)
 script=$script_dir/cleanup-local.sh
+recovery_script=$script_dir/recover-starting-cleanup-receipt.sh
 [ -x "$script" ] || { echo "cleanup-local.sh must be executable" >&2; exit 1; }
+[ -x "$recovery_script" ] || { echo "recover-starting-cleanup-receipt.sh must be executable" >&2; exit 1; }
 bash -n "$script"
+bash -n "$recovery_script"
 if command -v shellcheck >/dev/null 2>&1; then
-  shellcheck -x "$script"
+  shellcheck -x "$script" "$recovery_script"
 fi
 
 tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/dirextalk-cleanup-local.XXXXXX")
 trap 'rm -rf -- "$tmp_dir"' EXIT
+mkdir -p "$tmp_dir/apparmor.d"
+cp -- "$script_dir/../apparmor.d/dirextalk-runner-userns" "$tmp_dir/apparmor.d/dirextalk-runner-userns"
+chmod 0644 "$tmp_dir/apparmor.d/dirextalk-runner-userns"
+printf 'dirextalk-runner-userns (unconfined)\n' >"$tmp_dir/apparmor-profiles"
+export DIREXTALK_SPLIT_TEST_MODE=true
+export DIREXTALK_APPARMOR_TARGET_DIR="$tmp_dir/apparmor.d"
+export DIREXTALK_APPARMOR_LOADED_PROFILES="$tmp_dir/apparmor-profiles"
 
 network_suffixes=(message-private message-public message-db agent-private agent-db agent-caller agent-egress)
 volume_suffixes=(
@@ -150,6 +160,14 @@ write_fixture() {
     esac
     printf 'resource.volume.%s=%s-%s\n' "$key" "$stack_name" "$suffix" >>"$manifest"
   done
+  {
+    printf 'runner.extension.parent_root=/sys/fs/cgroup/%s-extension.slice\n' "$stack_name"
+    printf 'runner.extension.parent_procs=/sys/fs/cgroup/%s-extension.slice/cgroup.procs\n' "$stack_name"
+    printf 'runner.extension.parent_procs_owner=65531:65531\nrunner.extension.parent_procs_mode=644\n'
+    printf 'runner.core.parent_root=/sys/fs/cgroup/%s-core-runner.slice\n' "$stack_name"
+    printf 'runner.core.parent_procs=/sys/fs/cgroup/%s-core-runner.slice/cgroup.procs\n' "$stack_name"
+    printf 'runner.core.parent_procs_owner=65530:65530\nrunner.core.parent_procs_mode=644\n'
+  } >>"$manifest"
   chmod 400 -- "$manifest"
   env_identity=$(stat -c '%d:%i:%u' "$env_file")
   manifest_identity=$(stat -c '%d:%i:%u' "$manifest")
@@ -228,7 +246,12 @@ case "$1" in
     [ -n "$id" ] || { id=$target; target=$(awk -F'|' -v wanted="$id" '$2 == wanted {print $1; exit}' "$DIREXTALK_FAKE_STATE/networks"); }
     [ -n "$target" ] || { printf 'Error response from daemon: No such network: %s\n' "$3" >&2; exit 1; }
     [ "${DIREXTALK_FAKE_NETWORK_REPLACE:-false}" != true ] || id=ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
-    printf '[{"Id":"%s","Name":"%s","Labels":{"com.docker.compose.project":"%s"}}]\n' "$id" "$target" "$DIREXTALK_FAKE_STACK" ;;
+    if [ "${DIREXTALK_FAKE_NETWORK_DRIFT:-false}" = true ]; then
+      count=$(cat "$DIREXTALK_FAKE_STATE/network-inspect-count" 2>/dev/null || printf 0)
+      count=$((count + 1)); printf '%s\n' "$count" >"$DIREXTALK_FAKE_STATE/network-inspect-count"
+      [ "$count" -le 7 ] || id=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+    fi
+    printf '[{"Id":"%s","Name":"%s","Labels":{"com.docker.compose.project":"%s"}}]\n' "$id" "$target" "${DIREXTALK_FAKE_PROJECT_LABEL:-$DIREXTALK_FAKE_STACK}" ;;
   volume)
     target=$3
     case "${DIREXTALK_FAKE_VOLUME_ERROR:-}" in
@@ -245,6 +268,13 @@ case "$1" in
 esac
 EOF
   chmod 755 -- "$fixture/bin/docker"
+  cat >"$fixture/bin/apparmor_parser" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[ "$1" = --remove ] || exit 2
+: >"$DIREXTALK_APPARMOR_LOADED_PROFILES"
+EOF
+  chmod 755 -- "$fixture/bin/apparmor_parser"
   cat >"$fixture/bin/systemctl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -265,6 +295,27 @@ case "$property" in
 esac
 EOF
   chmod 755 -- "$fixture/bin/systemctl"
+}
+
+make_starting_receipt() {
+  local fixture=$1 receipt=$1/.cleanup-receipt env_file=$1/.env manifest=$1/.manifest
+  local extension_fragment=/usr/lib/systemd/system/systemd-journald.service extension_hash index suffix
+  extension_hash=$(sha256sum -- "$extension_fragment" | awk '{print $1}')
+  chmod 600 -- "$receipt"
+  {
+    printf '# dirextalk-split-cleanup-receipt-v1\nstack_name=%s\nstate=starting\n' "$stack_name"
+    printf 'control.env_identity=%s\ncontrol.manifest_identity=%s\n' "$(stat -c '%d:%i:%u' "$env_file")" "$(stat -c '%d:%i:%u' "$manifest")"
+    printf 'control.env_sha256=%s\ncontrol.manifest_sha256=%s\n' "$(sha256sum -- "$env_file" | awk '{print $1}')" "$(sha256sum -- "$manifest" | awk '{print $1}')"
+    printf 'host.machine_id=%s\ndocker.engine_id=%s\ndocker.context_endpoint=unix:///run/docker.sock\ndocker.context_socket=/run/docker.sock\n' "$machine_id" "$engine_id"
+    printf 'container.count=0\nnetwork.count=0\nvolume.count=0\n'
+    printf 'planned.network.count=%s\n' "${#network_suffixes[@]}"
+    index=0; for suffix in "${network_suffixes[@]}"; do printf 'planned.network.%s.name=%s-%s\n' "$index" "$stack_name" "$suffix"; index=$((index+1)); done
+    printf 'planned.volume.count=%s\n' "${#volume_suffixes[@]}"
+    index=0; for suffix in "${volume_suffixes[@]}"; do printf 'planned.volume.%s.name=%s-%s\n' "$index" "$stack_name" "$suffix"; index=$((index+1)); done
+    printf 'runner.extension.unit=dirextalk-extension-runner@%s.service\nrunner.extension.control_group=/%s-extension.slice/dirextalk-extension-runner@%s.service\nrunner.extension.main_pid=101\nrunner.extension.fragment_path=%s\nrunner.extension.fragment_sha256=%s\n' "$stack_name" "$stack_name" "$stack_name" "$extension_fragment" "$extension_hash"
+    printf 'runner.core.unit=dirextalk-core-runner@%s.service\nrunner.core.control_group=/%s-core-runner.slice/dirextalk-core-runner@%s.service\nrunner.core.main_pid=102\nrunner.core.fragment_path=%s\nrunner.core.fragment_sha256=%s\n' "$stack_name" "$stack_name" "$stack_name" "$extension_fragment" "$extension_hash"
+  } >"$receipt"
+  chmod 400 -- "$receipt"
 }
 
 fixture=$tmp_dir/normal
@@ -398,6 +449,82 @@ for inspect_error in permission daemon; do
     exit 1
   fi
 done
+
+# A crash after Compose created objects but before start-local finalized its
+# receipt is recoverable from the old receipt-v1 fields alone.  The helper must
+# not require the newer parent-cgroup manifest fields needed by cleanup-local.
+starting_wrapper_fixture=$tmp_dir/starting-wrapper
+write_fixture "$starting_wrapper_fixture"
+make_starting_receipt "$starting_wrapper_fixture"
+export PATH=$starting_wrapper_fixture/bin:$PATH
+export DIREXTALK_FAKE_STATE=$starting_wrapper_fixture/state
+unset DIREXTALK_FAKE_PROJECT_LABEL DIREXTALK_FAKE_NETWORK_DRIFT DIREXTALK_FAKE_NETWORK_ERROR
+"$script" "$starting_wrapper_fixture" >"$starting_wrapper_fixture/output"
+grep -Fq 'captured exact partial-stack identities' "$starting_wrapper_fixture/output"
+grep -Fq 'split-stack cleanup complete' "$starting_wrapper_fixture/output"
+grep -Eq '^container rm -f [0-9a-f]{64}$' "$starting_wrapper_fixture/state/docker.log"
+
+starting_fixture=$tmp_dir/starting
+write_fixture "$starting_fixture"
+chmod 600 -- "$starting_fixture/.manifest"
+sed -i '/^runner\..*\.parent_\(root\|procs\|procs_owner\|procs_mode\)=/d' "$starting_fixture/.manifest"
+chmod 400 -- "$starting_fixture/.manifest"
+make_starting_receipt "$starting_fixture"
+export PATH=$starting_fixture/bin:$PATH
+export DIREXTALK_FAKE_STATE=$starting_fixture/state
+unset DIREXTALK_FAKE_PROJECT_LABEL DIREXTALK_FAKE_NETWORK_DRIFT DIREXTALK_FAKE_NETWORK_ERROR
+"$recovery_script" "$starting_fixture" >"$starting_fixture/recovery.out"
+grep -Fqx 'state=incomplete' "$starting_fixture/.cleanup-receipt"
+grep -Fqx 'container.count=2' "$starting_fixture/.cleanup-receipt"
+grep -Fqx "network.count=${#network_suffixes[@]}" "$starting_fixture/.cleanup-receipt"
+grep -Fqx "volume.count=${#volume_suffixes[@]}" "$starting_fixture/.cleanup-receipt"
+if grep -Eq '^mutation |^container rm |^network rm |^volume rm |^systemctl disable' "$starting_fixture/state/docker.log"; then
+  echo "starting receipt recovery mutated runtime resources" >&2
+  exit 1
+fi
+
+wrong_label_fixture=$tmp_dir/starting-wrong-label
+write_fixture "$wrong_label_fixture"
+make_starting_receipt "$wrong_label_fixture"
+export PATH=$wrong_label_fixture/bin:$PATH DIREXTALK_FAKE_STATE=$wrong_label_fixture/state
+if DIREXTALK_FAKE_PROJECT_LABEL=d-otherprojectaaaaaaaaaaaaaaa "$recovery_script" "$wrong_label_fixture" >/dev/null 2>"$wrong_label_fixture/error"; then
+  echo "starting recovery accepted an incorrect Compose project label" >&2
+  exit 1
+fi
+grep -Fqx 'state=starting' "$wrong_label_fixture/.cleanup-receipt"
+
+drift_fixture=$tmp_dir/starting-drift
+write_fixture "$drift_fixture"
+make_starting_receipt "$drift_fixture"
+export PATH=$drift_fixture/bin:$PATH DIREXTALK_FAKE_STATE=$drift_fixture/state
+if DIREXTALK_FAKE_NETWORK_DRIFT=true "$recovery_script" "$drift_fixture" >/dev/null 2>"$drift_fixture/error"; then
+  echo "starting recovery accepted same-name network identity drift" >&2
+  exit 1
+fi
+grep -Fq 'Docker object identity drifted during recovery' "$drift_fixture/error"
+grep -Fqx 'state=starting' "$drift_fixture/.cleanup-receipt"
+
+recovery_infra_fixture=$tmp_dir/starting-infra
+write_fixture "$recovery_infra_fixture"
+make_starting_receipt "$recovery_infra_fixture"
+export PATH=$recovery_infra_fixture/bin:$PATH DIREXTALK_FAKE_STATE=$recovery_infra_fixture/state
+if DIREXTALK_FAKE_NETWORK_ERROR=permission "$recovery_script" "$recovery_infra_fixture" >/dev/null 2>"$recovery_infra_fixture/error"; then
+  echo "starting recovery accepted Docker infrastructure failure" >&2
+  exit 1
+fi
+grep -Fq 'Docker infrastructure or object ownership inspection failed' "$recovery_infra_fixture/error"
+grep -Fqx 'state=starting' "$recovery_infra_fixture/.cleanup-receipt"
+
+recovery_host_fixture=$tmp_dir/starting-host-drift
+write_fixture "$recovery_host_fixture"
+make_starting_receipt "$recovery_host_fixture"
+export PATH=$recovery_host_fixture/bin:$PATH DIREXTALK_FAKE_STATE=$recovery_host_fixture/state
+if DIREXTALK_FAKE_ENGINE=engine-replaced "$recovery_script" "$recovery_host_fixture" >/dev/null 2>"$recovery_host_fixture/error"; then
+  echo "starting recovery accepted Docker Engine identity drift" >&2
+  exit 1
+fi
+grep -Fq 'Docker Engine ID changed' "$recovery_host_fixture/error"
+grep -Fqx 'state=starting' "$recovery_host_fixture/.cleanup-receipt"
 
 incomplete_fixture=$tmp_dir/incomplete
 write_fixture "$incomplete_fixture"

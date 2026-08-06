@@ -32,6 +32,10 @@ fi
 grep -Fq -- "[ -n \"\$controllers\" ]" "$script"
 grep -Fq -- 'validate_target_write_access' "$script"
 grep -Fq -- 'getfacl -cp' "$script"
+grep -Fq -- 'bind_runner_manifest_value DIREXTALK_RUNNER_APPARMOR_PROFILE runner.apparmor.profile' "$script"
+grep -Fq -- 'bind_runner_manifest_value DIREXTALK_RUNNER_APPARMOR_PROFILE_SHA256 runner.apparmor.sha256' "$script"
+grep -Fq -- 'bind_runner_manifest_value DIREXTALK_RUNNER_APPARMOR_MANAGER_SHA256 runner.apparmor.manager_sha256' "$script"
+grep -Fq -- "\"\$runner_apparmor_manager_path\" verify" "$script"
 
 # Keep startup bound to cgroupfs contents, whose virtual stat size is zero.
 if [ "$(stat -fc '%T' /sys/fs/cgroup 2>/dev/null || true)" = cgroup2fs ] &&
@@ -206,12 +210,12 @@ fi
 
 : >"$docker_log"
 if output=$("$script" "$env_file" 2>&1); then
-  echo "missing delegated cgroup roots were unexpectedly accepted" >&2
+  echo "missing host AppArmor profile was unexpectedly accepted" >&2
   exit 1
 fi
-printf '%s\n' "$output" | grep -Fq 'must already exist as a delegated cgroup-v2 directory'
+printf '%s\n' "$output" | grep -Fq 'runner AppArmor asset is missing or symlinked'
 if grep -Eq '^compose .* (build|up) ' "$docker_log"; then
-  echo "cgroup preflight failure mutated Docker state" >&2
+  echo "AppArmor preflight failure mutated Docker state" >&2
   exit 1
 fi
 

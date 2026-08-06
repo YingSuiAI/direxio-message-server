@@ -45,9 +45,14 @@ sysusers_file=dirextalk-split-agent.conf
 script_dir=$(cd -- "$(dirname -- "$0")" && pwd -P)
 systemd_source_dir=$(cd -- "$script_dir/../systemd" && pwd -P)
 sysusers_source_dir=$(cd -- "$script_dir/../sysusers.d" && pwd -P)
+apparmor_source_dir=$(cd -- "$script_dir/../apparmor.d" && pwd -P)
 extension_source=$systemd_source_dir/$extension_template
 core_source=$systemd_source_dir/$core_template
 sysusers_source=$sysusers_source_dir/$sysusers_file
+apparmor_profile_name=dirextalk-runner-userns
+apparmor_source=$apparmor_source_dir/$apparmor_profile_name
+apparmor_manager=$script_dir/manage-runner-apparmor.sh
+apparmor_target=/etc/apparmor.d/$apparmor_profile_name
 helper_path=$(readlink -f -- "$0" 2>/dev/null || true)
 helper_hash=$(sha256sum -- "$helper_path" 2>/dev/null | awk '{print $1}' || true)
 case "$helper_path" in
@@ -75,12 +80,25 @@ print_env() {
   printf 'DIREXTALK_CORE_RUNNER_FRAGMENT_PATH=%s\n' "$unit_dir/$core_template"
   printf 'DIREXTALK_EXTENSION_RUNNER_FRAGMENT_SHA256=%s\n' "$extension_hash"
   printf 'DIREXTALK_CORE_RUNNER_FRAGMENT_SHA256=%s\n' "$core_hash"
+  printf 'DIREXTALK_RUNNER_APPARMOR_PROFILE=%s\n' "$apparmor_profile_name"
+  printf 'DIREXTALK_RUNNER_APPARMOR_PROFILE_PATH=%s\n' "$apparmor_target"
+  printf 'DIREXTALK_RUNNER_APPARMOR_PROFILE_SHA256=%s\n' "$apparmor_hash"
+  printf 'DIREXTALK_RUNNER_APPARMOR_MANAGER_PATH=%s\n' "$apparmor_manager"
+  printf 'DIREXTALK_RUNNER_APPARMOR_MANAGER_SHA256=%s\n' "$apparmor_manager_hash"
   printf 'DIREXTALK_RUNNER_PREP_HELPER_PATH=%s\n' "$helper_path"
   printf 'DIREXTALK_RUNNER_PREP_HELPER_SHA256=%s\n' "$helper_hash"
   printf 'DIREXTALK_RUNNER_PREP_MACHINE_ID=%s\n' "$machine_id"
   printf 'DIREXTALK_RUNNER_PREP_DOCKER_ENGINE_ID=%s\n' "$docker_engine_id"
   printf 'DIREXTALK_EXTENSION_CONTROL_GROUP=%s\n' "$extension_cgroup"
   printf 'DIREXTALK_CORE_RUNNER_CONTROL_GROUP=%s\n' "$core_cgroup"
+  printf 'DIREXTALK_EXTENSION_CGROUP_PARENT_ROOT=%s\n' "${extension_parent_root:-unknown}"
+  printf 'DIREXTALK_CORE_RUNNER_CGROUP_PARENT_ROOT=%s\n' "${core_parent_root:-unknown}"
+  printf 'DIREXTALK_EXTENSION_CGROUP_PARENT_PROCS=%s\n' "${extension_parent_procs:-unknown}"
+  printf 'DIREXTALK_CORE_RUNNER_CGROUP_PARENT_PROCS=%s\n' "${core_parent_procs:-unknown}"
+  printf 'DIREXTALK_EXTENSION_CGROUP_PARENT_PROCS_OWNER=%s:%s\n' "$extension_uid" "$extension_gid"
+  printf 'DIREXTALK_CORE_RUNNER_CGROUP_PARENT_PROCS_OWNER=%s:%s\n' "$core_uid" "$core_gid"
+  printf 'DIREXTALK_EXTENSION_CGROUP_PARENT_PROCS_MODE=644\n'
+  printf 'DIREXTALK_CORE_RUNNER_CGROUP_PARENT_PROCS_MODE=644\n'
 }
 
 source_hash() {
@@ -93,6 +111,10 @@ source_hash() {
   die "missing repository-owned Core template: $core_source"
 [ -f "$sysusers_source" ] && [ ! -L "$sysusers_source" ] || \
   die "missing repository-owned sysusers file: $sysusers_source"
+[ -f "$apparmor_source" ] && [ ! -L "$apparmor_source" ] || \
+  die "missing repository-owned AppArmor profile: $apparmor_source"
+[ -f "$apparmor_manager" ] && [ ! -L "$apparmor_manager" ] || \
+  die "missing repository-owned AppArmor manager: $apparmor_manager"
 
 require_root_owned_immutable() {
   local path=$1 current parent mode permissions
@@ -122,6 +144,8 @@ require_root_owned_immutable() {
 
 extension_hash=$(source_hash "$extension_source")
 core_hash=$(source_hash "$core_source")
+apparmor_hash=$(source_hash "$apparmor_source")
+apparmor_manager_hash=$(source_hash "$apparmor_manager")
 
 if [ "$dry_run" = true ]; then
   # A dry run is deliberately deterministic and has no host side effects.
@@ -142,9 +166,15 @@ require_root_owned_immutable "$helper_path"
 require_root_owned_immutable "$extension_source"
 require_root_owned_immutable "$core_source"
 require_root_owned_immutable "$sysusers_source"
+require_root_owned_immutable "$apparmor_source"
+require_root_owned_immutable "$apparmor_manager"
 if [ -z "$helper_hash" ] || ! printf '%s\n' "$helper_hash" | grep -Eq '^[0-9a-f]{64}$'; then
   die "helper package SHA-256 is unavailable"
 fi
+
+# Install/reload the fixed userns exception before creating runner units. The
+# manager refuses same-name policy drift and verifies the loaded profile.
+"$apparmor_manager" install >/dev/null || die "runner AppArmor profile installation failed"
 
 [ "$(id -u)" = 0 ] || die "root is required to install static users and system units"
 
@@ -589,6 +619,44 @@ prepare_root() {
   printf '%s' "$root"
 }
 
+prepare_parent_process_control() {
+  local role=$1 uid=$2 gid=$3 parent=$4 control_group=$5
+  local parent_group parent_root parent_procs canonical fs_type owner mode
+  parent_group=${control_group%/*}
+  [ "$parent_group" != "$control_group" ] && [ "$parent_group" != / ] || \
+    die "$role parent ControlGroup cannot be derived safely"
+  case "$parent_group" in
+    *"/$parent") ;;
+    *) die "$role parent ControlGroup is not the exact stack slice: $parent_group" ;;
+  esac
+  parent_root=$cgroup_fs$parent_group
+  [ -d "$parent_root" ] && [ ! -L "$parent_root" ] || \
+    die "$role parent slice is not a directory: $parent_root"
+  canonical=$(readlink -f -- "$parent_root" 2>/dev/null || true)
+  [ "$canonical" = "$parent_root" ] || die "$role parent slice is not canonical: $parent_root"
+  fs_type=$(stat -fc '%T' "$parent_root" 2>/dev/null || true)
+  [ "$fs_type" = cgroup2fs ] || die "$role parent slice is not cgroup-v2: $parent_root"
+  [ "$(stat -c '%u:%g' -- "$parent_root")" = 0:0 ] || \
+    die "$role parent slice directory must remain root-owned"
+  parent_procs=$parent_root/cgroup.procs
+  [ -f "$parent_procs" ] && [ ! -L "$parent_procs" ] || \
+    die "$role parent process control is missing: $parent_procs"
+  owner=$(stat -c '%u:%g' -- "$parent_procs" 2>/dev/null || true)
+  case "$owner" in
+    0:0|"$uid:$gid") ;;
+    *) die "$role parent process control has unexpected owner $owner" ;;
+  esac
+  mode=$(stat -c '%a' -- "$parent_procs" 2>/dev/null || true)
+  [ "$mode" = 644 ] || die "$role parent process control has unexpected mode $mode"
+  chown "$uid:$gid" -- "$parent_procs" || die "$role parent process control ownership update failed"
+  chmod 0644 -- "$parent_procs" || die "$role parent process control mode update failed"
+  [ "$(stat -c '%u:%g' -- "$parent_procs")" = "$uid:$gid" ] || \
+    die "$role parent process control owner postcondition failed"
+  [ "$(stat -c '%a' -- "$parent_procs")" = 644 ] || \
+    die "$role parent process control mode postcondition failed"
+  printf '%s\n%s' "$parent_root" "$parent_procs"
+}
+
 # Refuse to touch a same-name service until its exact, repository-owned
 # definition has been loaded and verified.  In particular, this helper never
 # stops, resets, disables, or removes a pre-existing instance.
@@ -605,6 +673,10 @@ verify_unit_definition "$extension_unit" "$extension_template" "$extension_user"
 extension_control_group=$(unit_control_group "$extension_unit")
 require_control_group_identity extension "$extension_unit" "$extension_parent" "$extension_control_group"
 extension_main_pid=$(unit_property "$extension_unit" MainPID)
+extension_parent_output=$(prepare_parent_process_control extension "$extension_uid" "$extension_gid" "$extension_parent" "$extension_control_group")
+mapfile -t extension_parent_metadata <<<"$extension_parent_output"
+extension_parent_root=${extension_parent_metadata[0]}
+extension_parent_procs=${extension_parent_metadata[1]}
 extension_root=$(prepare_root extension "$extension_uid" "$extension_gid" "$extension_unit" "$extension_parent" "$extension_control_group" "$extension_main_pid")
 
 systemctl start "$core_unit" >/dev/null 2>&1 || die "failed to start $core_unit"
@@ -613,6 +685,10 @@ verify_unit_definition "$core_unit" "$core_template" "$core_user" "$core_parent"
 core_control_group=$(unit_control_group "$core_unit")
 require_control_group_identity core "$core_unit" "$core_parent" "$core_control_group"
 core_main_pid=$(unit_property "$core_unit" MainPID)
+core_parent_output=$(prepare_parent_process_control core "$core_uid" "$core_gid" "$core_parent" "$core_control_group")
+mapfile -t core_parent_metadata <<<"$core_parent_output"
+core_parent_root=${core_parent_metadata[0]}
+core_parent_procs=${core_parent_metadata[1]}
 core_root=$(prepare_root core "$core_uid" "$core_gid" "$core_unit" "$core_parent" "$core_control_group" "$core_main_pid")
 
 # The success channel is machine-readable by design: no status text, unit

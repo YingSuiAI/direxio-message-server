@@ -1,0 +1,17 @@
+# The outer runner must create the user/pid/ipc/net/mount namespaces used by
+# its inner workload sandbox. Ubuntu 24.04's restricted-unprivileged-userns
+# policy requires a named AppArmor profile with an explicit userns grant.
+#
+# File mediation remains unconfined here because the runner executes arbitrary
+# installed workloads and constructs their mount trees dynamically. The outer
+# container boundary still drops every capability, has no network or Docker
+# socket, uses a read-only root filesystem and dedicated UID/cgroup mounts, and
+# the runner applies the restrictive workload seccomp policy inside the new
+# namespaces.
+
+abi <abi/4.0>,
+include <tunables/global>
+
+profile dirextalk-runner-userns flags=(unconfined) {
+  userns,
+}

@@ -43,10 +43,22 @@ x-message-hardening: &message-hardening
 x-extension-runner-hardening: &extension-runner-hardening
   <<: *hardened-service
   user: "65531:65531"
+  # The runner is an outer sandbox constructor: Docker's default seccomp
+  # blocks required clone/unshare/mount/chroot operations before the runner can
+  # apply its stricter inner workload sandbox. AppArmor remains bound to one
+  # repository-installed profile that grants the Ubuntu userns exception.
+  security_opt:
+    - no-new-privileges:true
+    - apparmor=dirextalk-runner-userns
+    - seccomp=unconfined
 
 x-core-runner-hardening: &core-runner-hardening
   <<: *hardened-service
   user: "65530:65530"
+  security_opt:
+    - no-new-privileges:true
+    - apparmor=dirextalk-runner-userns
+    - seccomp=unconfined
 
 x-postgres-service: &postgres-service
   image: ${DIREXTALK_POSTGRES_IMAGE_IMMUTABLE:?set an immutable PostgreSQL image reference}
@@ -65,6 +77,16 @@ x-socket-init: &socket-init
   user: "0:0"
   cap_drop: ["ALL"]
   cap_add: ["CHOWN", "FOWNER", "FSETID"]
+  security_opt: ["no-new-privileges:true"]
+  network_mode: "none"
+  restart: "no"
+
+x-runner-storage-init: &runner-storage-init
+  image: ${DIREXTALK_UTILITY_IMAGE_IMMUTABLE:?set an immutable utility image reference}
+  entrypoint: ["sh"]
+  user: "0:0"
+  cap_drop: ["ALL"]
+  cap_add: ["CHOWN", "FOWNER", "DAC_OVERRIDE"]
   security_opt: ["no-new-privileges:true"]
   network_mode: "none"
   restart: "no"
@@ -259,17 +281,33 @@ services:
     depends_on:
       extension-socket-init:
         condition: service_completed_successfully
+      extension-runner-storage-init:
+        condition: service_completed_successfully
 
   extension-socket-init:
     <<: *socket-init
     command:
       - -ec
       - >-
-        install -d -m 3770 /socket;
+        install -d -m 2750 /socket;
         chown 65531:65532 /socket;
-        chmod 3770 /socket
+        chmod 2750 /socket
     volumes:
       - agent_extension_socket:/socket
+
+  # Named-volume roots are initialized explicitly. This avoids Docker's image
+  # copy-up ownership and makes the first fresh-state start deterministic.
+  extension-runner-storage-init:
+    <<: *runner-storage-init
+    command:
+      - -ec
+      - >-
+        chown 65531:65531 /install /workspace /state;
+        chmod 0700 /install /workspace /state
+    volumes:
+      - agent_extension_install:/install
+      - agent_runner_workspaces:/workspace
+      - agent_extension_state:/state
 
   # Isolated local workload provider. It is separate from the Agent process and
   # starts with the default three-container Agent runtime. It has no network,
@@ -317,17 +355,31 @@ services:
     depends_on:
       core-runner-socket-init:
         condition: service_completed_successfully
+      core-runner-storage-init:
+        condition: service_completed_successfully
 
   core-runner-socket-init:
     <<: *socket-init
     command:
       - -ec
       - >-
-        install -d -m 3770 /socket;
+        install -d -m 2750 /socket;
         chown 65530:65532 /socket;
-        chmod 3770 /socket
+        chmod 2750 /socket
     volumes:
       - core_runner_socket:/socket
+
+  core-runner-storage-init:
+    <<: *runner-storage-init
+    command:
+      - -ec
+      - >-
+        chown 65530:65530 /install /workspace /state;
+        chmod 0700 /install /workspace /state
+    volumes:
+      - core_runner_installs:/install
+      - core_runner_workspaces:/workspace
+      - core_runner_state:/state
 
   message-server-init:
     <<: *message-image
