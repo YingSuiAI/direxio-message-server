@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Receipt-bound Agent runtime update adapter. The host updater supplies only a
-# canonical target version from its authenticated release job; repository,
-# Compose path, services, image reference, and health order remain code-owned.
+# Receipt-bound Agent runtime update adapter. The host updater supplies the
+# canonical target and minimum message-server versions from its authenticated,
+# persisted release plan; repository, Compose path, services, image reference,
+# and health order remain code-owned.
 set -euo pipefail
 
 script_dir=$(cd "$(dirname "$0")" && pwd -P)
@@ -9,7 +10,7 @@ compose_file=$(cd "$script_dir/.." && pwd -P)/compose.yaml
 
 die() { printf 'split-agent update: %s\n' "$*" >&2; exit 1; }
 negative() { printf 'split-agent update: %s\n' "$*" >&2; exit 3; }
-usage() { printf 'usage: %s OUTPUT_DIR vX.Y.Z\n' "${0##*/}" >&2; exit 2; }
+usage() { printf 'usage: %s OUTPUT_DIR target_version minimum_server_version\n' "${0##*/}" >&2; exit 2; }
 read_pair() {
   local file=$1 key=$2 count value
   count=$(awk -F= -v wanted="$key" '$0 !~ /^[[:space:]]*#/ && index($0,wanted "=")==1 {n++} END {print n+0}' "$file")
@@ -25,10 +26,12 @@ semver_ge() {
 }
 canonical_version() { printf '%s\n' "$1" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; }
 
-[ "$#" -eq 2 ] || usage
+[ "$#" -eq 3 ] || usage
 out=$(readlink -m -- "$1")
 target_version=$2
+minimum_server_version=$3
 canonical_version "$target_version" || usage
+canonical_version "$minimum_server_version" || usage
 [ -d "$out" ] && [ ! -L "$out" ] && [ "$(stat -c '%a' "$out")" = 700 ] || die 'OUTPUT_DIR must be a mode-0700 non-symlink directory'
 env_file=$out/.env; manifest=$out/.manifest; receipt=$out/.cleanup-receipt
 for file in "$env_file" "$manifest" "$receipt"; do
@@ -44,27 +47,6 @@ grep -Fqx '# dirextalk-split-cleanup-receipt-v1' "$receipt" || die 'cleanup rece
 [ "$(read_pair "$manifest" compose_mode)" = production ] || negative 'Agent release updates apply only to production stacks'
 stack=$(read_pair "$manifest" stack_name)
 [ "$stack" = "$(read_pair "$receipt" stack_name)" ] || die 'stack identity mismatch'
-
-channel_dir=${DIREXTALK_AGENT_CHANNEL_DIR:-/usr/local/share/dirextalk/agent-channel}
-case "$channel_dir" in /*) ;; *) die 'Agent channel directory must be absolute' ;; esac
-metadata=$channel_dir/$target_version.json
-[ -f "$metadata" ] && [ ! -L "$metadata" ] || die 'Agent release metadata is unavailable'
-if [ "${DIREXTALK_AGENT_UPDATE_TEST_FIXTURE:-false}" != true ]; then
-  [ "$(stat -c '%u:%g' "$channel_dir" "$metadata" | sort -u)" = 0:0 ] || die 'Agent channel metadata must be root-owned'
-  [ $((8#$(stat -c '%a' "$channel_dir") & 18)) -eq 0 ] && [ $((8#$(stat -c '%a' "$metadata") & 18)) -eq 0 ] || die 'Agent channel metadata must not be group/world writable'
-fi
-metadata_values=$(python3 - "$metadata" "$target_version" <<'PY'
-import json,re,sys
-raw=open(sys.argv[1],"rb").read(); value=json.loads(raw)
-if set(value)!={"version","minimum_server_version"} or raw!=json.dumps(value,separators=(",",":"),sort_keys=True).encode()+b"\n":
-    raise SystemExit("Agent release metadata is not canonical")
-p=r"^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$"
-if value["version"]!=sys.argv[2] or not re.fullmatch(p,value["version"]) or not re.fullmatch(p,value["minimum_server_version"]):
-    raise SystemExit("Agent release metadata value is invalid")
-print(value["minimum_server_version"])
-PY
-) || die 'Agent release metadata is invalid'
-minimum_server_version=$metadata_values
 
 container_count=$(read_pair "$receipt" container.count)
 message_id=''

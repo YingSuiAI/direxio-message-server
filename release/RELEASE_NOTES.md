@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+1. Authorize Agent release discovery from the fixed central `agents` channel and pass only its canonical target and minimum message-server version to the root-owned updater and receipt-bound update wrapper, without local channel metadata fallback.
+
 ## v1.1.1
 
 1. Add Native Gemini model listing, chat, and streaming support for Gemini-native endpoints.

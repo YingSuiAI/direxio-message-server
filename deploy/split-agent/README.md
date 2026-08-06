@@ -152,21 +152,24 @@ status `3` as an expected negative state, and fail on other non-zero statuses.
 Flutter and other public clients must connect to message-server and must never
 call these scripts or Docker directly.
 
-The same root-owned integration point can apply a formal Agent version. A
-release operator first installs the canonical channel file (for example
-`scripts/release/agent-channel/v1.0.0.json`) into the fixed root-owned
-`/usr/local/share/dirextalk/agent-channel` directory, then invokes:
+The same root-owned integration point can apply a formal Agent version. After
+authenticating central release discovery, the updater persists the exact Agent
+plan and invokes the wrapper with its canonical target and minimum
+message-server versions as direct argv:
 
     deploy/split-agent/scripts/update-agent-local.sh \
-      /absolute/path/.run/split v1.0.0
+      /absolute/path/.run/split v1.0.1 v1.1.1
 
-The channel file contains only `version` and `minimum_server_version`. The
-wrapper compares that minimum to the OCI version label of the exact
-receipt-bound running message-server container; it never compares a Flutter or
-other client version. An unmet minimum, a non-newer Agent target, or a
-non-production stack is an expected negative result (exit `3`) before pull or
-mutation. Exit `1` is an identity, metadata, Docker, migration, health, or
-rollback infrastructure failure. A successful update pulls the fixed
+The wrapper accepts exactly `OUTPUT_DIR target_version minimum_server_version`;
+both version values must be canonical stable `vX.Y.Z`. It performs no channel
+directory, metadata file, path, or environment discovery. The minimum comes
+directly from the authenticated updater's persisted plan and is compared to
+the OCI version label of the exact receipt-bound running message-server
+container; it never compares a Flutter or other client version. An unmet
+minimum, a non-newer Agent target, or a non-production stack is an expected
+negative result (exit `3`) before pull or mutation. Exit `1` is an identity,
+Docker, migration, health, or rollback infrastructure failure. A successful
+update pulls the fixed
 `docker.io/dirextalk/agent:<version>` repository, resolves it to an immutable
 digest, migrates Agent storage, recreates both runners and then Agent from that
 one digest, verifies all three healthy, and updates the receipt binding. A
@@ -175,9 +178,9 @@ post-mutation failure recreates and health-checks the previous immutable image.
 This wrapper is the host execution adapter only. The current message-server
 `release.v1`/`release.v2` actions continue to delegate exclusively to the
 root-owned updater Unix contract, and Flutter never calls this wrapper or Agent
-directly. Automatic scheduling of Agent updates from an updater job still
-requires a reviewed integration in the `dirextalk-updater` repository; these
-scripts do not claim that integration already exists.
+directly. The updater remains responsible for binding this argv invocation to
+the same authenticated persisted plan used for discovery; public requests
+cannot supply these wrapper arguments directly.
 
 Formal Agent images are built from the sibling `dirextalk-agent` repository.
 The first channel version is `v1.0.0`:

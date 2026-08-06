@@ -59,6 +59,8 @@ func TestUnixControllerStatusApplyAndDesiredState(t *testing.T) {
 		CurrentSchemaVersion:       1,
 		CurrentSchemaCompatVersion: 1,
 		ClientVersion:              "v1.2.0",
+		AgentVersion:               "v1.0.1",
+		AgentMinimumServerVersion:  "v1.1.1",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -90,7 +92,7 @@ func TestUnixControllerStatusApplyAndDesiredState(t *testing.T) {
 	statusRequest := <-requests
 	applyRequest := <-requests
 	desiredRequest := <-requests
-	if statusRequest["path"] != ControlStatusPath || statusRequest["current_version"] != "v1.0.0" || statusRequest["client_version"] != "v1.2.0" {
+	if statusRequest["path"] != ControlStatusPath || statusRequest["current_version"] != "v1.0.0" || statusRequest["client_version"] != "v1.2.0" || statusRequest["agent_version"] != "v1.0.1" || statusRequest["agent_minimum_server_version"] != "v1.1.1" || len(statusRequest) != 7 {
 		t.Fatalf("unexpected status request: %#v", statusRequest)
 	}
 	if applyRequest["path"] != ControlJobsPath || applyRequest["plan_token"] != "opaque-plan" || applyRequest["confirm"] != ApplyConfirmation {
@@ -115,19 +117,39 @@ func TestUnixControllerErrorsNeverContainControlToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	controller := NewUnixController(UnixControllerConfig{SocketPath: filepath.Join(dir, "missing.sock"), ControlTokenPath: tokenPath})
-	_, err := controller.Status(context.Background(), StatusRequest{})
+	_, err := controller.Status(context.Background(), StatusRequest{AgentVersion: "v1.0.1", AgentMinimumServerVersion: "v1.1.1"})
 	if err == nil || strings.Contains(err.Error(), "control-secret") {
 		t.Fatalf("expected redacted unavailable error, got %v", err)
 	}
 }
 
-func TestStatusRequestAlwaysReportsClientVersionField(t *testing.T) {
+func TestStatusRequestAlwaysReportsRequiredVersionFields(t *testing.T) {
 	raw, err := json.Marshal(StatusRequest{CurrentVersion: "v1.0.0", CurrentSchemaVersion: 1, CurrentSchemaCompatVersion: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(raw), `"client_version":""`) {
 		t.Fatalf("empty client version must still be sent to updater: %s", raw)
+	}
+	if !strings.Contains(string(raw), `"agent_version":""`) || !strings.Contains(string(raw), `"agent_minimum_server_version":""`) {
+		t.Fatalf("empty Agent central fields must still be encoded: %s", raw)
+	}
+}
+
+func TestUnixControllerStatusRejectsMissingOrNoncanonicalAgentVersions(t *testing.T) {
+	controller := NewUnixController(UnixControllerConfig{})
+	for name, request := range map[string]StatusRequest{
+		"missing":             {},
+		"noncanonical_agent":  {AgentVersion: "1.0.1", AgentMinimumServerVersion: "v1.1.1"},
+		"development_minimum": {AgentVersion: "v1.0.1", AgentMinimumServerVersion: "dev1.1.1"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := controller.Status(context.Background(), request)
+			controllerErr, ok := AsControllerError(err)
+			if !ok || controllerErr.Status != http.StatusBadRequest || controllerErr.Code != "updater_request_invalid" {
+				t.Fatalf("unexpected error: %#v", err)
+			}
+		})
 	}
 }
 

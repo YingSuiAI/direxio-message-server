@@ -52,6 +52,75 @@ func TestCentralVersionSourceAcceptsDevelopmentServerVersion(t *testing.T) {
 	}
 }
 
+func TestCentralAgentVersionSourceValidatesFixedAgentRecord(t *testing.T) {
+	client := &http.Client{Transport: centralRoundTripper(func(request *http.Request) (*http.Response, error) {
+		if request.Method != http.MethodGet || request.URL.String() != CentralAgentVersionURL {
+			t.Fatalf("unexpected central Agent request: %s %s", request.Method, request.URL)
+		}
+		return centralHTTPResponse(http.StatusOK, `{
+			"code":0,
+			"data":{"appId":"1","channelId":"agents","version":"v1.0.1","preVersion":"v1.1.1","url":"https://untrusted.invalid/agent","image":"must-not-forward","digest":"must-not-forward"},
+			"msg":"success"
+		}`), nil
+	})}
+	version, err := NewCentralAgentVersionSource(CentralVersionSourceConfig{HTTPClient: client}).CurrentAgentVersion(context.Background())
+	if err != nil {
+		t.Fatalf("CurrentAgentVersion: %v", err)
+	}
+	if version != (CentralAgentVersion{AppID: "1", ChannelID: "agents", Version: "v1.0.1", PreVersion: "v1.1.1"}) {
+		t.Fatalf("unexpected central Agent version: %#v", version)
+	}
+}
+
+func TestCentralAgentVersionSourceRejectsMalformedAndUntrustedRecords(t *testing.T) {
+	for name, response := range map[string]*http.Response{
+		"business_error":      centralHTTPResponse(http.StatusOK, `{"code":7,"data":{"appId":"1","channelId":"agents","version":"v1.0.1","preVersion":"v1.1.1"}}`),
+		"wrong_app":           centralHTTPResponse(http.StatusOK, `{"code":0,"data":{"appId":"2","channelId":"agents","version":"v1.0.1","preVersion":"v1.1.1"}}`),
+		"wrong_channel":       centralHTTPResponse(http.StatusOK, `{"code":0,"data":{"appId":"1","channelId":"server","version":"v1.0.1","preVersion":"v1.1.1"}}`),
+		"development_version": centralHTTPResponse(http.StatusOK, `{"code":0,"data":{"appId":"1","channelId":"agents","version":"dev1.0.1","preVersion":"v1.1.1"}}`),
+		"bad_minimum":         centralHTTPResponse(http.StatusOK, `{"code":0,"data":{"appId":"1","channelId":"agents","version":"v1.0.1","preVersion":"1.1.1"}}`),
+		"bad_type":            centralHTTPResponse(http.StatusOK, `{"code":"0","data":{"appId":"1","channelId":"agents","version":"v1.0.1","preVersion":"v1.1.1"}}`),
+		"trailing_json":       centralHTTPResponse(http.StatusOK, `{"code":0,"data":{"appId":"1","channelId":"agents","version":"v1.0.1","preVersion":"v1.1.1"}} {}`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			client := &http.Client{Transport: centralRoundTripper(func(*http.Request) (*http.Response, error) { return response, nil })}
+			_, err := NewCentralAgentVersionSource(CentralVersionSourceConfig{HTTPClient: client}).CurrentAgentVersion(context.Background())
+			centralErr, ok := AsCentralVersionError(err)
+			if !ok || centralErr.Code != CentralVersionInvalidCode {
+				t.Fatalf("unexpected error: %#v", err)
+			}
+		})
+	}
+}
+
+func TestCentralAgentVersionSourceDoesNotFollowRedirects(t *testing.T) {
+	followed := false
+	client := &http.Client{
+		Transport: centralRoundTripper(func(*http.Request) (*http.Response, error) {
+			response := centralHTTPResponse(http.StatusFound, "redirect")
+			response.Header.Set("Location", "https://attacker.invalid/version")
+			return response, nil
+		}),
+		CheckRedirect: func(*http.Request, []*http.Request) error { followed = true; return nil },
+	}
+	_, err := NewCentralAgentVersionSource(CentralVersionSourceConfig{HTTPClient: client}).CurrentAgentVersion(context.Background())
+	centralErr, ok := AsCentralVersionError(err)
+	if !ok || centralErr.Code != CentralVersionUnavailableCode || followed {
+		t.Fatalf("redirect must fail closed without following: followed=%v err=%#v", followed, err)
+	}
+}
+
+func TestCentralAgentVersionSourceRejectsOversizedResponse(t *testing.T) {
+	client := &http.Client{Transport: centralRoundTripper(func(*http.Request) (*http.Response, error) {
+		return centralHTTPResponse(http.StatusOK, strings.Repeat("x", maxCentralVersionResponseBytes+1)), nil
+	})}
+	_, err := NewCentralAgentVersionSource(CentralVersionSourceConfig{HTTPClient: client}).CurrentAgentVersion(context.Background())
+	centralErr, ok := AsCentralVersionError(err)
+	if !ok || centralErr.Code != CentralVersionInvalidCode {
+		t.Fatalf("unexpected oversized-response error: %#v", err)
+	}
+}
+
 func TestCentralVersionSourceRejectsMalformedAndUntrustedRecords(t *testing.T) {
 	for name, response := range map[string]*http.Response{
 		"business_error":         centralHTTPResponse(http.StatusOK, `{"code":7,"data":{"appId":"1","channelId":"server","version":"v1.0.3","preVersion":"v1.0.0"}}`),

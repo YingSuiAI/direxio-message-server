@@ -79,9 +79,10 @@ type Config struct {
 	// NativeAgentCatalogProbe is a test/deployment seam for a bounded catalog
 	// probe when the concrete gateway client is supplied elsewhere. Production
 	// normally leaves it nil and uses NativeAgentRunner's ProbeCatalog method.
-	NativeAgentCatalogProbe func(context.Context, []agentgateway.CatalogRequirement) error
-	ReleaseController       releasecontrol.Controller
-	CentralVersionSource    releasecontrol.CentralVersionSource
+	NativeAgentCatalogProbe   func(context.Context, []agentgateway.CatalogRequirement) error
+	ReleaseController         releasecontrol.Controller
+	CentralVersionSource      releasecontrol.CentralVersionSource
+	CentralAgentVersionSource releasecontrol.CentralAgentVersionSource
 	// AllowAccountDeleteWithoutUpdater is an explicit standalone deployment
 	// opt-in. Production deployments with an updater keep the fail-closed
 	// watchdog; isolated local stacks rely on the durable Agent/message-server
@@ -764,9 +765,10 @@ func newService(cfg Config, store Store, transport Transport, state portalState,
 		},
 	)
 	service.releaseModule = releasemodule.New(serviceReleasePort{service: service}, releasemodule.Config{
-		SessionLocker:        &service.matrixSessionMu,
-		Now:                  time.Now,
-		CentralVersionSource: cfg.CentralVersionSource,
+		SessionLocker:             &service.matrixSessionMu,
+		Now:                       time.Now,
+		CentralVersionSource:      cfg.CentralVersionSource,
+		CentralAgentVersionSource: cfg.CentralAgentVersionSource,
 	})
 	service.profileModule = profilemodule.New(serviceProfilePort{service: service})
 	var joinDirectRoom contactsmodule.DirectRoomJoiner

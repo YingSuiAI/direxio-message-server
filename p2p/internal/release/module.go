@@ -55,15 +55,17 @@ type StatePort interface {
 }
 
 type Config struct {
-	SessionLocker        sync.Locker
-	Now                  func() time.Time
-	CentralVersionSource releasecontrol.CentralVersionSource
+	SessionLocker             sync.Locker
+	Now                       func() time.Time
+	CentralVersionSource      releasecontrol.CentralVersionSource
+	CentralAgentVersionSource releasecontrol.CentralAgentVersionSource
 }
 
 type Module struct {
-	state         StatePort
-	cfg           Config
-	centralSource releasecontrol.CentralVersionSource
+	state              StatePort
+	cfg                Config
+	centralSource      releasecontrol.CentralVersionSource
+	centralAgentSource releasecontrol.CentralAgentVersionSource
 }
 
 func New(state StatePort, cfg Config) *Module {
@@ -71,7 +73,11 @@ func New(state StatePort, cfg Config) *Module {
 	if centralSource == nil {
 		centralSource = releasecontrol.NewCentralVersionSource(releasecontrol.CentralVersionSourceConfig{})
 	}
-	return &Module{state: state, cfg: cfg, centralSource: centralSource}
+	centralAgentSource := cfg.CentralAgentVersionSource
+	if centralAgentSource == nil {
+		centralAgentSource = releasecontrol.NewCentralAgentVersionSource(releasecontrol.CentralVersionSourceConfig{})
+	}
+	return &Module{state: state, cfg: cfg, centralSource: centralSource, centralAgentSource: centralAgentSource}
 }
 
 func (m *Module) Handlers() map[string]actionbase.Handler {
@@ -138,7 +144,17 @@ func (m *Module) status(ctx context.Context, _ map[string]any) (any, *actionbase
 		CurrentSchemaCompatVersion: buildInfo.SchemaCompatVersion,
 		ClientVersion:              snapshot.Client.Version,
 	}
-	status := unavailableStatus(request)
+	centralAgent, err := m.centralAgentSource.CurrentAgentVersion(ctx)
+	if err != nil || validateCentralAgentVersion(centralAgent) != nil {
+		reason := releasecontrol.CentralVersionInvalidCode
+		if centralErr, ok := releasecontrol.AsCentralVersionError(err); ok {
+			reason = centralErr.Code
+		}
+		return statusMap(unavailableStatus(request, reason), buildInfo.SchemaVersion, buildInfo.SchemaCompatVersion, snapshot.Client, snapshot.DeviceID), nil
+	}
+	request.AgentVersion = centralAgent.Version
+	request.AgentMinimumServerVersion = centralAgent.PreVersion
+	status := unavailableStatus(request, UpdaterUnavailableCode)
 	if snapshot.Controller != nil {
 		if current, err := snapshot.Controller.Status(ctx, request); err == nil {
 			status = current
@@ -146,6 +162,8 @@ func (m *Module) status(ctx context.Context, _ map[string]any) (any, *actionbase
 	}
 	status.CurrentVersion = request.CurrentVersion
 	status.ClientVersion = request.ClientVersion
+	status.Agent.LatestVersion = request.AgentVersion
+	status.Agent.MinimumServerVersion = request.AgentMinimumServerVersion
 	return statusMap(status, buildInfo.SchemaVersion, buildInfo.SchemaCompatVersion, snapshot.Client, snapshot.DeviceID), nil
 }
 
@@ -270,13 +288,26 @@ func unavailableError() *actionbase.Error {
 	return actionbase.CodedError(http.StatusServiceUnavailable, UpdaterUnavailableCode, "updater is unavailable")
 }
 
-func unavailableStatus(request releasecontrol.StatusRequest) releasecontrol.UpdaterStatus {
+func unavailableStatus(request releasecontrol.StatusRequest, reason string) releasecontrol.UpdaterStatus {
 	return releasecontrol.UpdaterStatus{
 		Available: false, ReleaseAvailable: false, UpdateAvailable: false,
 		DiscoveryStatus: "unavailable", CurrentVersion: request.CurrentVersion,
 		ClientVersion: request.ClientVersion, Compatibility: "unknown",
-		Reasons: []string{UpdaterUnavailableCode}, Operations: []releasecontrol.Operation{},
+		Reasons: []string{reason}, Operations: []releasecontrol.Operation{},
 	}
+}
+
+func validateCentralAgentVersion(version releasecontrol.CentralAgentVersion) error {
+	if version.AppID != "1" || version.ChannelID != "agents" {
+		return &releasecontrol.CentralVersionError{Code: releasecontrol.CentralVersionInvalidCode, Message: "central version response is invalid"}
+	}
+	if _, err := releasecontrol.CanonicalStableVersion("agent_version", version.Version); err != nil {
+		return err
+	}
+	if _, err := releasecontrol.CanonicalStableVersion("agent_minimum_server_version", version.PreVersion); err != nil {
+		return err
+	}
+	return nil
 }
 
 func validateV2ApplyRequest(params map[string]any) (releasecontrol.DirectApplyRequest, *actionbase.Error) {

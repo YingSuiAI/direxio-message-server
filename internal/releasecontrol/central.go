@@ -12,7 +12,10 @@ import (
 	"time"
 )
 
-const CentralServerVersionURL = "https://imadmin.dirextalk.ai/api/appVersion/current?appId=1&channelId=server"
+const (
+	CentralServerVersionURL = "https://imadmin.dirextalk.ai/api/appVersion/current?appId=1&channelId=server"
+	CentralAgentVersionURL  = "https://imadmin.dirextalk.ai/api/appVersion/current?appId=1&channelId=agents"
+)
 
 const maxCentralVersionResponseBytes = 64 * 1024
 
@@ -33,11 +36,25 @@ type CentralServerVersion struct {
 	UpdateNotes string
 }
 
+// CentralAgentVersion is the safe subset of the centrally owned Agent release
+// record. PreVersion is the minimum compatible message-server version.
+type CentralAgentVersion struct {
+	AppID      string
+	ChannelID  string
+	Version    string
+	PreVersion string
+}
+
 // CentralVersionSource retrieves the fixed appId=1/server release record.
 // Its small interface lets ProductCore tests exercise compatibility gates
 // without making network requests.
 type CentralVersionSource interface {
 	CurrentServerVersion(context.Context) (CentralServerVersion, error)
+}
+
+// CentralAgentVersionSource retrieves only the fixed appId=1/agents record.
+type CentralAgentVersionSource interface {
+	CurrentAgentVersion(context.Context) (CentralAgentVersion, error)
 }
 
 type CentralVersionSourceConfig struct {
@@ -48,43 +65,79 @@ type centralVersionSource struct {
 	client *http.Client
 }
 
+type centralAgentVersionSource struct {
+	client *http.Client
+}
+
 // NewCentralVersionSource always targets the configured Dirextalk admin
 // endpoint. Callers cannot change this URL through ProductCore parameters.
 func NewCentralVersionSource(config CentralVersionSourceConfig) CentralVersionSource {
-	client := config.HTTPClient
-	if client == nil {
-		client = &http.Client{
-			Timeout: 10 * time.Second,
-			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
-				return http.ErrUseLastResponse
-			},
-		}
+	return &centralVersionSource{client: boundedCentralHTTPClient(config.HTTPClient)}
+}
+
+// NewCentralAgentVersionSource always targets the fixed Dirextalk Agent
+// channel. Neither callers nor ProductCore parameters can change its URL.
+func NewCentralAgentVersionSource(config CentralVersionSourceConfig) CentralAgentVersionSource {
+	return &centralAgentVersionSource{client: boundedCentralHTTPClient(config.HTTPClient)}
+}
+
+func boundedCentralHTTPClient(input *http.Client) *http.Client {
+	client := &http.Client{}
+	if input != nil {
+		*client = *input
 	}
-	return &centralVersionSource{client: client}
+	if client.Timeout <= 0 || client.Timeout > 10*time.Second {
+		client.Timeout = 10 * time.Second
+	}
+	client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	return client
 }
 
 func (s *centralVersionSource) CurrentServerVersion(ctx context.Context) (CentralServerVersion, error) {
-	if s == nil || s.client == nil {
+	if s == nil {
 		return CentralServerVersion{}, centralVersionError(CentralVersionUnavailableCode, "central version service is unavailable", nil)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, CentralServerVersionURL, nil)
+	data, err := fetchCentralVersion(ctx, s.client, CentralServerVersionURL)
 	if err != nil {
-		return CentralServerVersion{}, centralVersionError(CentralVersionUnavailableCode, "central version request could not be created", err)
+		return CentralServerVersion{}, err
 	}
-	response, err := s.client.Do(req)
+	return decodeCentralServerVersion(data)
+}
+
+func (s *centralAgentVersionSource) CurrentAgentVersion(ctx context.Context) (CentralAgentVersion, error) {
+	if s == nil {
+		return CentralAgentVersion{}, centralVersionError(CentralVersionUnavailableCode, "central version service is unavailable", nil)
+	}
+	data, err := fetchCentralVersion(ctx, s.client, CentralAgentVersionURL)
 	if err != nil {
-		return CentralServerVersion{}, centralVersionError(CentralVersionUnavailableCode, "central version service is unavailable", err)
+		return CentralAgentVersion{}, err
+	}
+	return decodeCentralAgentVersion(data)
+}
+
+func fetchCentralVersion(ctx context.Context, client *http.Client, endpoint string) ([]byte, error) {
+	if client == nil {
+		return nil, centralVersionError(CentralVersionUnavailableCode, "central version service is unavailable", nil)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, centralVersionError(CentralVersionUnavailableCode, "central version request could not be created", err)
+	}
+	response, err := client.Do(req)
+	if err != nil {
+		return nil, centralVersionError(CentralVersionUnavailableCode, "central version service is unavailable", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return CentralServerVersion{}, centralVersionError(CentralVersionUnavailableCode, "central version service returned an unexpected status", nil)
+		return nil, centralVersionError(CentralVersionUnavailableCode, "central version service returned an unexpected status", nil)
 	}
-
 	data, err := io.ReadAll(io.LimitReader(response.Body, maxCentralVersionResponseBytes+1))
 	if err != nil || len(data) > maxCentralVersionResponseBytes {
-		return CentralServerVersion{}, centralVersionError(CentralVersionInvalidCode, "central version response is invalid", err)
+		return nil, centralVersionError(CentralVersionInvalidCode, "central version response is invalid", err)
 	}
-	return decodeCentralServerVersion(data)
+	return data, nil
 }
 
 func decodeCentralServerVersion(data []byte) (CentralServerVersion, error) {
@@ -125,6 +178,40 @@ func decodeCentralServerVersion(data []byte) (CentralServerVersion, error) {
 		Version:     version,
 		PreVersion:  preVersion,
 		UpdateNotes: response.Data.UpdateContent,
+	}, nil
+}
+
+func decodeCentralAgentVersion(data []byte) (CentralAgentVersion, error) {
+	var response struct {
+		Code *int `json:"code"`
+		Data *struct {
+			AppID      string `json:"appId"`
+			ChannelID  string `json:"channelId"`
+			Version    string `json:"version"`
+			PreVersion string `json:"preVersion"`
+		} `json:"data"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	if err := decoder.Decode(&response); err != nil {
+		return CentralAgentVersion{}, centralVersionError(CentralVersionInvalidCode, "central version response is invalid", err)
+	}
+	if err := ensureJSONEOF(decoder); err != nil {
+		return CentralAgentVersion{}, centralVersionError(CentralVersionInvalidCode, "central version response is invalid", err)
+	}
+	if response.Code == nil || *response.Code != 0 || response.Data == nil || response.Data.AppID != "1" || response.Data.ChannelID != "agents" {
+		return CentralAgentVersion{}, centralVersionError(CentralVersionInvalidCode, "central version response is invalid", nil)
+	}
+	version, err := CanonicalStableVersion("version", response.Data.Version)
+	if err != nil {
+		return CentralAgentVersion{}, centralVersionError(CentralVersionInvalidCode, "central version response is invalid", err)
+	}
+	minimumServerVersion, err := CanonicalStableVersion("pre_version", response.Data.PreVersion)
+	if err != nil {
+		return CentralAgentVersion{}, centralVersionError(CentralVersionInvalidCode, "central version response is invalid", err)
+	}
+	return CentralAgentVersion{
+		AppID: response.Data.AppID, ChannelID: response.Data.ChannelID,
+		Version: version, PreVersion: minimumServerVersion,
 	}, nil
 }
 

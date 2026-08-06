@@ -47,6 +47,8 @@ type StatusRequest struct {
 	CurrentSchemaVersion       int    `json:"current_schema_version"`
 	CurrentSchemaCompatVersion int    `json:"current_schema_compat_version"`
 	ClientVersion              string `json:"client_version"`
+	AgentVersion               string `json:"agent_version"`
+	AgentMinimumServerVersion  string `json:"agent_minimum_server_version"`
 }
 
 type Operation struct {
@@ -207,6 +209,12 @@ func NewUnixController(config UnixControllerConfig) Controller {
 
 func (c *unixController) Status(ctx context.Context, request StatusRequest) (UpdaterStatus, error) {
 	var status UpdaterStatus
+	if _, err := CanonicalStableVersion("agent_version", request.AgentVersion); err != nil {
+		return UpdaterStatus{}, &ControllerError{Status: http.StatusBadRequest, Code: "updater_request_invalid", Message: "updater request is invalid"}
+	}
+	if _, err := CanonicalStableVersion("agent_minimum_server_version", request.AgentMinimumServerVersion); err != nil {
+		return UpdaterStatus{}, &ControllerError{Status: http.StatusBadRequest, Code: "updater_request_invalid", Message: "updater request is invalid"}
+	}
 	if err := c.post(ctx, ControlStatusPath, request, &status); err != nil {
 		return UpdaterStatus{}, err
 	}
