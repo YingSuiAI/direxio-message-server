@@ -39,8 +39,8 @@ var actionSpecs = []ActionSpec{
 	{Name: "portal.account.delete", Auth: ActionAuthOwner, Transport: ActionTransportHTTPOnly},
 	{Name: RealtimeWSTicketAction, Auth: ActionAuthOwner, Transport: ActionTransportHTTPOnly},
 	{Name: "client.version.report", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
-	{Name: "release.v1.status", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
-	{Name: "release.v1.apply", Auth: ActionAuthOwner, Transport: ActionTransportHTTPOnly},
+	{Name: "release.v1.status", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: releaseStatusSchema()},
+	{Name: "release.v1.apply", Auth: ActionAuthOwner, Transport: ActionTransportHTTPOnly, Schema: releaseApplySchema()},
 	{Name: "release.v2.status", Auth: ActionAuthOwner, Transport: ActionTransportHTTPOnly},
 	{Name: "release.v2.apply", Auth: ActionAuthOwner, Transport: ActionTransportHTTPOnly},
 

@@ -412,10 +412,8 @@ func knownJobStatus(value string) bool {
 }
 
 func statusMap(status releasecontrol.UpdaterStatus, schemaVersion, schemaCompatVersion int, client dirextalkdomain.ClientBuild, deviceID string) map[string]any {
-	operations := status.Operations
-	if operations == nil {
-		operations = []releasecontrol.Operation{}
-	}
+	agentStatus := agentReleaseStatusMap(status.Agent, status.CurrentVersion)
+	operations := releaseOperations(status.Operations, agentStatus)
 	reasons := status.Reasons
 	if reasons == nil {
 		reasons = []string{}
@@ -431,7 +429,89 @@ func statusMap(status releasecontrol.UpdaterStatus, schemaVersion, schemaCompatV
 		"compatibility": status.Compatibility, "reasons": reasons,
 		"release_notes_url": status.ReleaseNotesURL, "operations": operations,
 		"watchdog": watchdogMap(status.Watchdog),
+		"agent":    agentStatus,
 	}
+}
+
+func releaseOperations(operations []releasecontrol.Operation, agentStatus map[string]any) []releasecontrol.Operation {
+	result := make([]releasecontrol.Operation, 0, len(operations))
+	agentUpdateAvailable, _ := agentStatus["update_available"].(bool)
+	agentTarget, _ := agentStatus["latest_version"].(string)
+	for _, operation := range operations {
+		if operation.Kind == "agent_upgrade" && (!agentUpdateAvailable || operation.TargetVersion != agentTarget) {
+			continue
+		}
+		result = append(result, operation)
+	}
+	return result
+}
+
+func agentReleaseStatusMap(status releasecontrol.AgentReleaseStatus, currentServerVersion string) map[string]any {
+	reasons := []string{"agent_release_unavailable"}
+	result := map[string]any{
+		"available": false, "current_version": "", "latest_version": "",
+		"minimum_server_version": "", "update_available": false,
+		"compatibility": "unknown", "reasons": reasons,
+	}
+	if !status.Available {
+		return result
+	}
+	current, err := releasecontrol.CanonicalStableVersion("agent.current_version", status.CurrentVersion)
+	if err != nil {
+		return result
+	}
+	latest, err := releasecontrol.CanonicalStableVersion("agent.latest_version", status.LatestVersion)
+	if err != nil {
+		return result
+	}
+	minimumServer, err := releasecontrol.CanonicalStableVersion("agent.minimum_server_version", status.MinimumServerVersion)
+	if err != nil {
+		return result
+	}
+	runningServer, err := releasecontrol.CanonicalStableVersion("current_version", currentServerVersion)
+	if err != nil {
+		return result
+	}
+	serverComparison, err := releasecontrol.CompareCanonicalStableVersions(runningServer, minimumServer)
+	if err != nil {
+		return result
+	}
+	agentComparison, err := releasecontrol.CompareCanonicalStableVersions(latest, current)
+	if err != nil {
+		return result
+	}
+	compatibility := "compatible"
+	reasons = normalizedAgentReleaseReasons(status.Reasons)
+	if serverComparison < 0 {
+		compatibility = "incompatible"
+		reasons = appendReason(reasons, "agent_requires_newer_server")
+	}
+	return map[string]any{
+		"available": true, "current_version": current, "latest_version": latest,
+		"minimum_server_version": minimumServer,
+		"update_available":       status.UpdateAvailable && agentComparison > 0 && serverComparison >= 0,
+		"compatibility":          compatibility, "reasons": reasons,
+	}
+}
+
+func normalizedAgentReleaseReasons(values []string) []string {
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		switch value {
+		case "agent_update_available", "agent_up_to_date", "agent_requires_newer_server":
+			result = appendReason(result, value)
+		}
+	}
+	return result
+}
+
+func appendReason(values []string, value string) []string {
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
 }
 
 func watchdogMap(status releasecontrol.WatchdogStatus) map[string]any {

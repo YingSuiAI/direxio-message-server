@@ -122,6 +122,11 @@ func TestReleaseActionsOwnerAuthTransportAndPersistence(t *testing.T) {
 			ClientVersion:    "v2.3.4",
 			Compatibility:    "compatible",
 			Operations:       []releasecontrol.Operation{{Kind: "upgrade", PlanToken: "opaque-plan", TargetVersion: "v1.1.0"}},
+			Agent: releasecontrol.AgentReleaseStatus{
+				Available: true, CurrentVersion: "v1.0.0", LatestVersion: "v1.1.0",
+				MinimumServerVersion: "v1.1.0", UpdateAvailable: true,
+				Reasons: []string{"agent_update_available"},
+			},
 			Watchdog: releasecontrol.WatchdogStatus{
 				Status:         "degraded",
 				Degraded:       true,
@@ -153,6 +158,10 @@ func TestReleaseActionsOwnerAuthTransportAndPersistence(t *testing.T) {
 	status := releaseRoute(t, router, service.AccessToken(), "release.v1.status", nil)
 	if status["available"] != true || status["release_available"] != true || status["compatibility"] != "compatible" {
 		t.Fatalf("unexpected release status: %#v", status)
+	}
+	agentStatus, ok := status["agent"].(map[string]any)
+	if !ok || agentStatus["available"] != true || agentStatus["current_version"] != "v1.0.0" || agentStatus["latest_version"] != "v1.1.0" || agentStatus["minimum_server_version"] != "v1.1.0" || agentStatus["compatibility"] != "compatible" || agentStatus["update_available"] != true {
+		t.Fatalf("unexpected Agent release status: %#v", status["agent"])
 	}
 	watchdog, ok := status["watchdog"].(map[string]any)
 	if !ok || watchdog["status"] != "degraded" || watchdog["degraded"] != true || watchdog["error_code"] != "repair_failed" {
@@ -206,9 +215,56 @@ func TestReleaseStatusUnavailableIsParseable(t *testing.T) {
 	if status["available"] != false || status["release_available"] != false || status["discovery_status"] != "unavailable" || status["compatibility"] != "unknown" {
 		t.Fatalf("unexpected unavailable status: %#v", status)
 	}
+	agentStatus, ok := status["agent"].(map[string]any)
+	if !ok || agentStatus["available"] != false || agentStatus["current_version"] != "" || agentStatus["latest_version"] != "" || agentStatus["compatibility"] != "unknown" {
+		t.Fatalf("unavailable updater must produce honest Agent status: %#v", status["agent"])
+	}
 	raw, _ := json.Marshal(status)
 	if strings.Contains(string(raw), "secret-token") {
 		t.Fatalf("controller error leaked into status: %s", raw)
+	}
+}
+
+func TestReleaseStatusGatesAgentUpgradeAgainstMessageServerVersionOnly(t *testing.T) {
+	controller := &recordingReleaseController{status: releasecontrol.UpdaterStatus{
+		Available: true, DiscoveryStatus: "fresh", Compatibility: "compatible",
+		Operations: []releasecontrol.Operation{
+			{Kind: "agent_upgrade", PlanToken: "agent-plan", TargetVersion: "v1.1.0"},
+		},
+		Agent: releasecontrol.AgentReleaseStatus{
+			Available: true, CurrentVersion: "v1.0.0", LatestVersion: "v1.1.0",
+			MinimumServerVersion: "v1.1.2", UpdateAvailable: true,
+		},
+	}}
+	service := NewService(Config{ServerName: "example.com", ReleaseController: controller})
+	service.mu.Lock()
+	service.clientBuild = clientBuild{Version: "v999.0.0"}
+	service.mu.Unlock()
+
+	status := mustHandle[map[string]any](t, service, "release.v1.status", nil)
+	agentStatus := status["agent"].(map[string]any)
+	if agentStatus["compatibility"] != "incompatible" || agentStatus["update_available"] != false {
+		t.Fatalf("Agent gate did not use running message-server v1.1.1: %#v", agentStatus)
+	}
+	operations := status["operations"].([]releasecontrol.Operation)
+	if len(operations) != 0 {
+		t.Fatalf("incompatible Agent operation was exposed: %#v", operations)
+	}
+}
+
+func TestReleaseStatusRejectsNoncanonicalAgentVersions(t *testing.T) {
+	controller := &recordingReleaseController{status: releasecontrol.UpdaterStatus{
+		Available: true, DiscoveryStatus: "fresh", Compatibility: "compatible",
+		Agent: releasecontrol.AgentReleaseStatus{
+			Available: true, CurrentVersion: "1.0.0", LatestVersion: "v1.1.0",
+			MinimumServerVersion: "v1.1.1", UpdateAvailable: true,
+		},
+	}}
+	service := NewService(Config{ServerName: "example.com", ReleaseController: controller})
+	status := mustHandle[map[string]any](t, service, "release.v1.status", nil)
+	agentStatus := status["agent"].(map[string]any)
+	if agentStatus["available"] != false || agentStatus["current_version"] != "" || agentStatus["latest_version"] != "" {
+		t.Fatalf("noncanonical Agent version was exposed: %#v", agentStatus)
 	}
 }
 

@@ -102,6 +102,23 @@ func TestActionSpecsReturnsStableOrderedCopy(t *testing.T) {
 	}
 }
 
+func TestReleaseV1SchemasPublishAgentStatusAndOpaqueApply(t *testing.T) {
+	status, ok := ActionSpecFor("release.v1.status")
+	if !ok || status.Schema == nil || !status.Schema.Response["agent"].Required {
+		t.Fatalf("release.v1.status schema = %#v", status.Schema)
+	}
+	agent := status.Schema.Response["agent"]
+	for _, field := range []string{"available", "current_version", "latest_version", "minimum_server_version", "update_available", "compatibility", "reasons"} {
+		if !agent.Properties[field].Required {
+			t.Errorf("release.v1.status agent.%s must be required", field)
+		}
+	}
+	apply, ok := ActionSpecFor("release.v1.apply")
+	if !ok || apply.Schema == nil || !apply.Schema.Request["plan_token"].WriteOnly || !apply.Schema.Response["job_token"].WriteOnly {
+		t.Fatalf("release.v1.apply schema = %#v", apply.Schema)
+	}
+}
+
 func TestActionSpecForFindsEveryRegisteredAction(t *testing.T) {
 	for _, want := range ActionSpecs() {
 		got, ok := ActionSpecFor(" \t" + want.Name + "\n")

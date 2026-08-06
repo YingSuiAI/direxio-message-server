@@ -58,19 +58,33 @@ type Operation struct {
 }
 
 type UpdaterStatus struct {
-	Available        bool           `json:"available"`
-	ReleaseAvailable bool           `json:"release_available"`
-	UpdateAvailable  bool           `json:"update_available"`
-	DiscoveryStatus  string         `json:"discovery_status"`
-	CheckedAt        string         `json:"checked_at,omitempty"`
-	CurrentVersion   string         `json:"current_version"`
-	LatestVersion    string         `json:"latest_version,omitempty"`
-	ClientVersion    string         `json:"client_version,omitempty"`
-	Compatibility    string         `json:"compatibility"`
-	Reasons          []string       `json:"reasons"`
-	ReleaseNotesURL  string         `json:"release_notes_url,omitempty"`
-	Operations       []Operation    `json:"operations"`
-	Watchdog         WatchdogStatus `json:"watchdog"`
+	Available        bool               `json:"available"`
+	ReleaseAvailable bool               `json:"release_available"`
+	UpdateAvailable  bool               `json:"update_available"`
+	DiscoveryStatus  string             `json:"discovery_status"`
+	CheckedAt        string             `json:"checked_at,omitempty"`
+	CurrentVersion   string             `json:"current_version"`
+	LatestVersion    string             `json:"latest_version,omitempty"`
+	ClientVersion    string             `json:"client_version,omitempty"`
+	Compatibility    string             `json:"compatibility"`
+	Reasons          []string           `json:"reasons"`
+	ReleaseNotesURL  string             `json:"release_notes_url,omitempty"`
+	Operations       []Operation        `json:"operations"`
+	Watchdog         WatchdogStatus     `json:"watchdog"`
+	Agent            AgentReleaseStatus `json:"agent"`
+}
+
+// AgentReleaseStatus is the updater-owned, non-secret Agent release
+// projection. The updater observes the receipt-bound runtime and central
+// Agent channel; message-server validates these values again before exposing
+// them to Flutter.
+type AgentReleaseStatus struct {
+	Available            bool     `json:"available"`
+	CurrentVersion       string   `json:"current_version,omitempty"`
+	LatestVersion        string   `json:"latest_version,omitempty"`
+	MinimumServerVersion string   `json:"minimum_server_version,omitempty"`
+	UpdateAvailable      bool     `json:"update_available"`
+	Reasons              []string `json:"reasons"`
 }
 
 type WatchdogStatus struct {

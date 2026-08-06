@@ -40,12 +40,92 @@
     {
       "name": "release.v1.status",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_and_ws_request",
+      "schema": {
+        "response": {
+          "agent": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "available": {
+                "type": "boolean",
+                "required": true
+              },
+              "compatibility": {
+                "type": "string",
+                "required": true
+              },
+              "current_version": {
+                "type": "string",
+                "required": true
+              },
+              "latest_version": {
+                "type": "string",
+                "required": true
+              },
+              "minimum_server_version": {
+                "type": "string",
+                "required": true
+              },
+              "reasons": {
+                "type": "array",
+                "required": true,
+                "items": {
+                  "type": "string"
+                }
+              },
+              "update_available": {
+                "type": "boolean",
+                "required": true
+              }
+            }
+          },
+          "client_version": {
+            "type": "string"
+          },
+          "current_version": {
+            "type": "string",
+            "required": true
+          }
+        }
+      }
     },
     {
       "name": "release.v1.apply",
       "auth": "owner",
-      "transport": "http_only"
+      "transport": "http_only",
+      "schema": {
+        "request": {
+          "confirm": {
+            "type": "string",
+            "required": true
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          },
+          "plan_token": {
+            "type": "string",
+            "required": true,
+            "write_only": true
+          }
+        },
+        "response": {
+          "job_id": {
+            "type": "string",
+            "required": true
+          },
+          "job_token": {
+            "type": "string",
+            "required": true,
+            "write_only": true
+          },
+          "status_url": {
+            "type": "string",
+            "required": true
+          }
+        }
+      }
     },
     {
       "name": "release.v2.status",
