@@ -6,6 +6,10 @@ script=$script_dir/cleanup-local.sh
 recovery_script=$script_dir/recover-starting-cleanup-receipt.sh
 [ -x "$script" ] || { echo "cleanup-local.sh must be executable" >&2; exit 1; }
 [ -x "$recovery_script" ] || { echo "recover-starting-cleanup-receipt.sh must be executable" >&2; exit 1; }
+grep -Fq 'docker ps --no-trunc -aq' "$recovery_script" || {
+  echo "starting receipt recovery must capture full immutable container IDs" >&2
+  exit 1
+}
 bash -n "$script"
 bash -n "$recovery_script"
 if command -v shellcheck >/dev/null 2>&1; then

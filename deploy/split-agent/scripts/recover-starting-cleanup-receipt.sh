@@ -155,7 +155,9 @@ volume_fingerprint() {
 capture_objects() {
   local ids id data status actual_id raw name service project replica planned network_id network_name network_project volume_name volume_project fingerprint record i
   local -a sorted=() containers=() found_networks=() found_volumes=()
-  ids=$(docker ps -aq --filter "label=com.docker.compose.project=$stack_name") || return 2
+  # Cleanup receipts bind the immutable full container ID. Docker's default
+  # quiet listing is truncated, so request the full value before validation.
+  ids=$(docker ps --no-trunc -aq --filter "label=com.docker.compose.project=$stack_name") || return 2
   [ -z "$ids" ] || mapfile -t sorted < <(printf '%s\n' "$ids" | sed '/^$/d' | sort -u)
   for id in "${sorted[@]}"; do
     printf '%s\n' "$id" | grep -Eq '^[0-9a-f]{64}$' || return 2
