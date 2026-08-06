@@ -35,12 +35,12 @@ DIREXTALK_SPLIT_COMPOSE_MODE=production \
 DIREXTALK_MESSAGE_TLS_MODE=edge-terminated \
 DIREXTALK_MESSAGE_SERVER_NAME=message.example.com \
 DIREXTALK_MESSAGE_CLIENT_BASE_URL=https://message.example.com \
-  docker compose --env-file "$env_file" -f compose.yaml config --quiet
+  docker compose --env-file "$env_file" -f compose.yaml -f compose.production.yaml config --quiet
 DIREXTALK_SPLIT_COMPOSE_MODE=production \
 DIREXTALK_MESSAGE_TLS_MODE=edge-terminated \
 DIREXTALK_MESSAGE_SERVER_NAME=message.example.com \
 DIREXTALK_MESSAGE_CLIENT_BASE_URL=https://message.example.com \
-  docker compose --env-file "$env_file" -f compose.yaml config --format json >"$production_rendered"
+  docker compose --env-file "$env_file" -f compose.yaml -f compose.production.yaml config --format json >"$production_rendered"
 
 agent_instance=$(sed -n 's/^DIREXTALK_AGENT_INSTANCE_ID=//p' "$env_file")
 message_instance=$(sed -n 's/^DIREXTALK_MESSAGE_SERVER_INSTANCE_ID=//p' "$env_file")
@@ -101,6 +101,14 @@ grep -Fqx 'core_secret_master_key_file: /run/secrets/core_secret_master_key' "$r
 grep -Fqx 'core_secret_master_key_version: 1' "$run_dir/provision/agent-config.yaml"
 printf '%s\n' "$account_generation" | grep -Eq '^[1-9][0-9]*$'
 jq -e --arg generation "$account_generation" '.services["message-server"].environment.P2P_ACCOUNT_GENERATION == $generation' "$production_rendered" >/dev/null
+jq -e '
+  def required_bind($target; $source):
+    [.services["message-server"].volumes[] |
+      select(.type == "bind" and .target == $target and .source == $source and .read_only == true and .bind.create_host_path == false)] |
+    length == 1;
+  required_bind("/run/dirextalk-updater"; "/run/dirextalk-updater") and
+  required_bind("/etc/dirextalk-updater/control-token"; "/etc/dirextalk-updater/control-token")
+' "$production_rendered" >/dev/null
 
 shellcheck \
   "$script_dir/provision-local.sh" \

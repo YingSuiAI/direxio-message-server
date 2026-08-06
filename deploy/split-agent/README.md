@@ -182,6 +182,23 @@ directly. The updater remains responsible for binding this argv invocation to
 the same authenticated persisted plan used for discovery; public requests
 cannot supply these wrapper arguments directly.
 
+Formal production message-server updates use the sibling receipt-bound host
+adapter with exactly `OUTPUT_DIR target_version`:
+
+    deploy/split-agent/scripts/update-message-server-local.sh \
+      /absolute/path/.run/split v1.0.1
+
+The target is canonical stable `vX.Y.Z`; repository, image, Compose files,
+project, and service are code-owned and are never argv inputs. Status `0`
+means only message-server was recreated healthy, `3` is an expected
+non-production or non-newer result, and `1` is an identity, Docker, health, or
+recovery failure. The adapter atomically binds the resolved image digest and
+OCI revision through the protected image attestation, manifest, environment,
+cleanup receipt, and new container ID. A fixed root-owned journal and lock
+resume an interrupted transaction by completing an exact healthy target or
+restoring the exact old image and receipt; Agent and database containers are
+never recreated.
+
 Formal Agent images are built from the sibling `dirextalk-agent` repository.
 The first channel version is `v1.0.0`:
 
@@ -348,9 +365,12 @@ The same consumer wrapper is the production Docker Hub path. Set
 `DIREXTALK_FIRST_FRESH_COMPOSE_MODE=production`, provide the two application
 digests, the protected image-attestation source, and the public server name.
 Production provisioning records that mode in both `.env` and `.manifest`.
-`start-local.sh` then renders `compose.yaml` alone, verifies the protected TLS
-and attestation identities, pulls every digest-pinned public image, runs the
-three-binary Agent smoke gate, and starts with `--no-build --pull never`.
+`start-local.sh` then renders `compose.yaml` with
+`compose.production.yaml`, verifies the protected TLS and attestation
+identities, pulls every digest-pinned public image, runs the three-binary Agent
+smoke gate, and starts with `--no-build --pull never`. The production override
+binds only the host updater socket directory and control-token file into
+message-server; local mode does not consume those host paths.
 Neither the Agent nor message-server Git checkout is required on the target
 host:
 
@@ -584,7 +604,8 @@ must require `github.com/YingSuiAI/dirextalk-capability-api v1.0.3`. The image
 attestation therefore includes `capability_api_source=published`; the verifier
 rejects `local-relative-replace`.
 
-Use compose.yaml alone with a reviewed .env containing:
+Use `compose.yaml` together with `compose.production.yaml` and a reviewed
+`.env` containing:
 
 - immutable digest-pinned application images for message-server and Agent; the
   extension-runner and Core workload-runner containers resolve the exact same

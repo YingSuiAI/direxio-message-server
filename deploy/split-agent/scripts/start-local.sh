@@ -603,6 +603,10 @@ case "$message_tls_mode" in
 esac
 [ "$(read_pair "$env_file" DIREXTALK_MESSAGE_TLS_MODE)" = "$message_tls_mode" ] || die ".env message TLS mode differs from manifest"
 compose=(docker compose --project-name "$stack_name" --env-file "$env_file" -f "$stack_dir/compose.yaml")
+if [ "$compose_mode" = production ]; then
+  [ -f "$stack_dir/compose.production.yaml" ] || die "production Compose override is missing"
+  compose+=(-f "$stack_dir/compose.production.yaml")
+fi
 if [ "$message_tls_mode" != edge-terminated ]; then
   compose+=(-f "$stack_dir/compose.direct-tls.yaml")
 fi

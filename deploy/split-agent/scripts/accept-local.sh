@@ -152,12 +152,15 @@ case "$embedding_dimension" in ''|0*|*[!0-9]*) die "Agent config has an invalid 
 script_dir=$(cd -- "$(dirname -- "$0")" && pwd -P)
 deploy_dir=$(cd -- "$script_dir/.." && pwd -P)
 compose_yaml=$deploy_dir/compose.yaml
+compose_production_yaml=$deploy_dir/compose.production.yaml
 compose_direct_tls_yaml=$deploy_dir/compose.direct-tls.yaml
 compose_local_yaml=$deploy_dir/compose.local.yaml
 require_compose_inputs() {
   [ -f "$compose_yaml" ] || die "compose.yaml is missing"
   [ -f "$compose_direct_tls_yaml" ] || die "compose.direct-tls.yaml is missing"
-  if [ "$compose_mode" = local ]; then
+  if [ "$compose_mode" = production ]; then
+    [ -f "$compose_production_yaml" ] || die "compose.production.yaml is missing"
+  else
     [ -f "$compose_local_yaml" ] || die "compose.local.yaml is missing"
   fi
 }
@@ -169,6 +172,9 @@ command -v sha256sum >/dev/null 2>&1 || die "sha256sum is required"
 
 run_compose() {
   local compose=(docker compose --project-name "$stack_name" --env-file "$env_file" -f "$compose_yaml")
+  if [ "$compose_mode" = production ]; then
+    compose+=(-f "$compose_production_yaml")
+  fi
   [ "$tls_mode" = edge-terminated ] || compose+=(-f "$compose_direct_tls_yaml")
   if [ "$compose_mode" = local ]; then
     compose+=(-f "$compose_local_yaml")

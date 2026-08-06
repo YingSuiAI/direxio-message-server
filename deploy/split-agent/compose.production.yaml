@@ -1,0 +1,18 @@
+# Host integration required by the production split deployment. The updater
+# runs as a root-owned systemd service outside Compose; message-server receives
+# only its control socket directory and control token.
+services:
+  message-server:
+    volumes:
+      - type: bind
+        source: /run/dirextalk-updater
+        target: /run/dirextalk-updater
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /etc/dirextalk-updater/control-token
+        target: /etc/dirextalk-updater/control-token
+        read_only: true
+        bind:
+          create_host_path: false

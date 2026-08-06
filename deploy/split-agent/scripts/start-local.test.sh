@@ -53,6 +53,8 @@ if [ "$(stat -fc '%T' /sys/fs/cgroup 2>/dev/null || true)" = cgroup2fs ] &&
   [ -n "$live_processes" ]
 fi
 grep -Fq -- 'DIREXTALK_SPLIT_COMPOSE_MODE' "$script"
+grep -Fq -- 'compose.production.yaml' "$script"
+grep -Fq -- 'production Compose override is missing' "$script"
 grep -Fq -- 'verify-production-tls.sh' "$script"
 grep -Fq -- 'verify-production-images.sh' "$script"
 grep -Fq -- 'pull --policy always' "$script"
