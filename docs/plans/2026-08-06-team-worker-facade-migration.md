@@ -32,6 +32,31 @@ Agent-to-Product completion uses `product.agent_team.v1/completion_record`. Its 
 - Modify `p2p/product_capability.go` and `p2p/storage/storage_migrations.go`; create `p2p/storage/agent_team_receipts.go` for durable dedupe and ProductCore invalidation events.
 - Regenerate `docs/product-action-contract.json` and update `docs/agent-core-integration-development-contract.md`.
 
+## Mandatory Reuse Gate
+
+The reviewed Message Server migration source is the read-only worktree
+`/Users/liyanan/Documents/Dirextalk项目监控分析/repos/dirextalk-message-server-central-agent`
+at `7f3aa36d03190ee81ebb61381036123bf6c757a9`.
+
+Port compatible validators, projection code, fixtures, and replay tests from:
+
+- `p2p/internal/agentgrpc/team_actions.go` and
+  `team_actions_test.go`: strict Plan/execution/result/artifact mapping,
+  owner binding, malformed response rejection, and secret-safe errors;
+- `p2p/internal/agentcompletion/relay.go` and `relay_test.go`: exact
+  execution/conversation correlation, cursor replay, dedupe, restart, and
+  terminal-event validation;
+- `p2p/serviceapi/actions*`: existing public action names, owner-only
+  registration, and transport tests; and
+- Agent event-cursor storage tests: replay and monotonic persistence behavior.
+
+Rewire those behaviors to `agentgateway` and
+`product.agent_team.v1/completion_record`. Do not port the old direct
+`TeamPlanService` client, Team-specific approval device/prepare/approve
+actions, synchronous Agent polling relay, local Agent history, or full Team
+execution storage. The new minimal receipt and ProductCore invalidation event
+remain the only Message Server durable Team facts.
+
 ### Task 1: Register The Four ProductCore Actions And Strict Schemas
 
 **Files:**
