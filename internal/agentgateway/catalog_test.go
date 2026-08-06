@@ -177,3 +177,23 @@ func TestValidateCatalogRequiresChatSchemaPins(t *testing.T) {
 		t.Fatal("chat catalog accepted drifted input schema")
 	}
 }
+
+func TestValidateCatalogAcceptsCanonicalCreateConversationSchema(t *testing.T) {
+	const input = `{"type":"object","properties":{"title":{"type":"string"},"conversation_id":{"type":"string","format":"uuid"},"idempotency_key":{"type":"string","format":"uuid"}},"required":["conversation_id","idempotency_key"]}`
+	const result = `{"type":"object"}`
+	descriptor := catalogTestDescriptor("agent.chat.v1", "create_conversation", input, result)
+	requirement := NewCatalogRequirement("agent.chat.conversations.create")
+	catalog := catalogTestWithDigest(t, descriptor)
+
+	if err := ValidateCatalog(catalog, []CatalogRequirement{requirement}); err != nil {
+		t.Fatalf("current Agent create-conversation catalog rejected: %v", err)
+	}
+
+	descriptor.Operations[0].InputSchemaJson = `{"type":"object","properties":{"title":{"type":"string"},"conversation_id":{"type":"string"},"idempotency_key":{"type":"string"}},"required":["idempotency_key"]}`
+	drifted := sha256.Sum256([]byte(descriptor.Operations[0].InputSchemaJson))
+	descriptor.Operations[0].InputSchemaDigest = drifted[:]
+	catalog.CatalogDigest = computeCatalogDigest(catalog.Capabilities)
+	if err := ValidateCatalog(catalog, []CatalogRequirement{requirement}); err == nil {
+		t.Fatal("legacy create-conversation schema was accepted")
+	}
+}
