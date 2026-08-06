@@ -10,8 +10,22 @@ if grep -Fq -- "[ -w \"\$value/cgroup.subtree_control\" ]" "$script" || \
   echo "start-local.sh must not test cgroup writability as the current user" >&2
   exit 1
 fi
+if grep -Fq -- "[ -s \"\$value/cgroup.controllers\" ]" "$script"; then
+  echo "start-local.sh must read cgroupfs controller contents instead of using stat size" >&2
+  exit 1
+fi
+grep -Fq -- "[ -n \"\$controllers\" ]" "$script"
 grep -Fq -- 'validate_target_write_access' "$script"
 grep -Fq -- 'getfacl -cp' "$script"
+
+# Keep startup bound to cgroupfs contents, whose virtual stat size is zero.
+if [ "$(stat -fc '%T' /sys/fs/cgroup 2>/dev/null || true)" = cgroup2fs ] &&
+   [ -f /sys/fs/cgroup/cgroup.controllers ] &&
+   [ -r /sys/fs/cgroup/cgroup.controllers ]; then
+  [ ! -s /sys/fs/cgroup/cgroup.controllers ]
+  live_controllers=$(tr '\n' ' ' </sys/fs/cgroup/cgroup.controllers)
+  [ -n "$live_controllers" ]
+fi
 grep -Fq -- 'DIREXTALK_SPLIT_COMPOSE_MODE' "$script"
 grep -Fq -- 'verify-production-tls.sh' "$script"
 grep -Fq -- 'verify-production-images.sh' "$script"

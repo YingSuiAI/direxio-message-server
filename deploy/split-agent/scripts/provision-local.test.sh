@@ -13,8 +13,24 @@ if grep -Fq -- "[ -w \"\$value/cgroup.subtree_control\" ]" "$script" || \
   echo "provision-local.sh must not test cgroup writability as the current user" >&2
   exit 1
 fi
+if grep -Fq -- "[ -s \"\$value/cgroup.controllers\" ]" "$script"; then
+  echo "provision-local.sh must read cgroupfs controller contents instead of using stat size" >&2
+  exit 1
+fi
+grep -Fq -- "[ -n \"\$controllers\" ]" "$script"
 grep -Fq -- 'validate_target_write_access' "$script"
 grep -Fq -- 'getfacl -cp' "$script"
+
+# cgroup-v2 controller pseudo-files report stat size zero even when readable
+# controller content is present. Exercise the real filesystem semantic that
+# the production consumer must handle rather than relying on regular fixtures.
+if [ "$(stat -fc '%T' /sys/fs/cgroup 2>/dev/null || true)" = cgroup2fs ] &&
+   [ -f /sys/fs/cgroup/cgroup.controllers ] &&
+   [ -r /sys/fs/cgroup/cgroup.controllers ]; then
+  [ ! -s /sys/fs/cgroup/cgroup.controllers ]
+  live_controllers=$(tr '\n' ' ' </sys/fs/cgroup/cgroup.controllers)
+  [ -n "$live_controllers" ]
+fi
 
 tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/dirextalk-provision-local.XXXXXX")
 cleanup() {

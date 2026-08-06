@@ -278,8 +278,10 @@ validate_delegated_cgroup_root() {
   [ "$canonical" = "$value" ] || die "$name must be a canonical path without symlink indirection: $value"
   fs_type=$(stat -fc '%T' "$value" 2>/dev/null || true)
   [ "$fs_type" = cgroup2fs ] || die "$name is not on a cgroup-v2 filesystem: $value"
-  [ -s "$value/cgroup.controllers" ] || die "$name has no delegated controllers: $value"
+  [ -f "$value/cgroup.controllers" ] && [ -r "$value/cgroup.controllers" ] || \
+    die "$name controllers file is missing or unreadable: $value"
   controllers=$(tr '\n' ' ' <"$value/cgroup.controllers" 2>/dev/null || true)
+  [ -n "$controllers" ] || die "$name has no delegated controllers: $value"
   for required in cpu memory pids; do
     printf ' %s ' "$controllers" | grep -Fq " $required " || die "$name does not expose controller $required: $value"
   done
