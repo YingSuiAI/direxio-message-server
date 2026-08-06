@@ -305,6 +305,38 @@ runner_unit_property() {
   printf '%s' "$value"
 }
 
+validate_runner_delegate() {
+  local role=$1 unit=$2 delegate delegate_controllers controller
+  local -a controller_items
+  delegate=$(runner_unit_property "$unit" Delegate)
+  [ "$delegate" = yes ] || die "$role runner Delegate property is not enabled"
+  delegate_controllers=$(runner_unit_property "$unit" DelegateControllers)
+  read -r -a controller_items <<<"$delegate_controllers"
+  [ "${#controller_items[@]}" -eq 3 ] || \
+    die "$role runner DelegateControllers must contain exactly cpu memory pids"
+  for controller in "${controller_items[@]}"; do
+    case "$controller" in
+      cpu|memory|pids) ;;
+      *) die "$role runner DelegateControllers contains unsupported controller $controller" ;;
+    esac
+  done
+  for controller in cpu memory pids; do
+    printf ' %s ' "$delegate_controllers" | grep -Fq " $controller " || \
+      die "$role runner DelegateControllers is missing $controller"
+  done
+}
+
+require_empty_cgroup_procs() {
+  local label=$1 path=$2 contents read_status
+  if contents=$(tr -d '[:space:]' <"$path" 2>/dev/null); then
+    :
+  else
+    read_status=$?
+    die "$label process control read failed (status $read_status)"
+  fi
+  [ -z "$contents" ] || die "$label has an unexpected direct process"
+}
+
 validate_runner_control_group() {
   local name=$1 value=$2 parent=$3 unit=$4
   printf '%s\n' "$value" | grep -Eq '^/[^/[:space:]][^[:space:]]*$' || die "$name is not an absolute ControlGroup path"
@@ -355,7 +387,7 @@ verify_runner_host_binding() {
   [ "$(runner_unit_property "$unit" User)" = "$user" ] || die "$role runner User property differs"
   [ "$(runner_unit_property "$unit" Group)" = "$user" ] || die "$role runner Group property differs"
   [ "$(runner_unit_property "$unit" Slice)" = "$parent" ] || die "$role runner Slice property differs"
-  [ "$(runner_unit_property "$unit" Delegate)" = 'cpu memory pids' ] || die "$role runner Delegate property differs"
+  validate_runner_delegate "$role" "$unit"
   [ "$(runner_unit_property "$unit" DelegateSubgroup)" = keeper ] || die "$role runner DelegateSubgroup differs"
   actual_control_group=$(runner_unit_property "$unit" ControlGroup)
   [ "$actual_control_group" = "$control_group" ] || die "$role runner ControlGroup differs from manifest"
@@ -370,7 +402,7 @@ verify_runner_host_binding() {
   [ -d "$root/keeper" ] && [ ! -L "$root/keeper" ] || die "$role runner keeper subgroup is missing"
   keeper_owner=$(stat -c '%u:%g' -- "$root/keeper")
   [ "$keeper_owner" = "$uid:$uid" ] || die "$role runner keeper owner differs"
-  [ ! -s "$root/cgroup.procs" ] || die "$role runner delegated root has an unexpected direct process"
+  require_empty_cgroup_procs "$role runner delegated root" "$root/cgroup.procs"
   main_pid=$(runner_unit_property "$unit" MainPID)
   printf '%s\n' "$main_pid" | grep -Eq '^[1-9][0-9]*$' || die "$role runner MainPID is invalid"
   grep -Fxq "$main_pid" "$root/keeper/cgroup.procs" || die "$role runner MainPID is not held in keeper subgroup"

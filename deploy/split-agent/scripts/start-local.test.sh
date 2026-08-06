@@ -14,6 +14,21 @@ if grep -Fq -- "[ -s \"\$value/cgroup.controllers\" ]" "$script"; then
   echo "start-local.sh must read cgroupfs controller contents instead of using stat size" >&2
   exit 1
 fi
+if grep -Fq -- "[ ! -s \"\$root/cgroup.procs\" ]" "$script"; then
+  echo "start-local.sh must read cgroupfs process contents instead of using stat size" >&2
+  exit 1
+fi
+if grep -Fq -- "[ \"\$(runner_unit_property \"\$unit\" Delegate)\" = 'cpu memory pids' ]" "$script"; then
+  echo "start-local.sh must validate Delegate plus DelegateControllers separately" >&2
+  exit 1
+fi
+grep -Fq -- 'DelegateControllers' "$script"
+grep -Fq -- "validate_runner_delegate \"\$role\" \"\$unit\"" "$script"
+grep -Fq -- "require_empty_cgroup_procs \"\$role runner delegated root\"" "$script"
+if grep -Fq -- 'cgroup.procs" 2>/dev/null || true' "$script"; then
+  echo "start-local.sh must fail closed when cgroup.procs cannot be read" >&2
+  exit 1
+fi
 grep -Fq -- "[ -n \"\$controllers\" ]" "$script"
 grep -Fq -- 'validate_target_write_access' "$script"
 grep -Fq -- 'getfacl -cp' "$script"
@@ -25,6 +40,13 @@ if [ "$(stat -fc '%T' /sys/fs/cgroup 2>/dev/null || true)" = cgroup2fs ] &&
   [ ! -s /sys/fs/cgroup/cgroup.controllers ]
   live_controllers=$(tr '\n' ' ' </sys/fs/cgroup/cgroup.controllers)
   [ -n "$live_controllers" ]
+fi
+if [ "$(stat -fc '%T' /sys/fs/cgroup 2>/dev/null || true)" = cgroup2fs ] &&
+   [ -f /sys/fs/cgroup/cgroup.procs ] &&
+   [ -r /sys/fs/cgroup/cgroup.procs ]; then
+  [ ! -s /sys/fs/cgroup/cgroup.procs ]
+  live_processes=$(tr -d '[:space:]' </sys/fs/cgroup/cgroup.procs)
+  [ -n "$live_processes" ]
 fi
 grep -Fq -- 'DIREXTALK_SPLIT_COMPOSE_MODE' "$script"
 grep -Fq -- 'verify-production-tls.sh' "$script"
@@ -40,6 +62,63 @@ trap cleanup EXIT
 mkdir -p "$tmp_dir/bin"
 docker_log=$tmp_dir/docker.log
 docker_state=$tmp_dir/up.state
+
+cat >"$tmp_dir/runner-binding-functions.sh" <<'EOF'
+die() {
+  printf '%s\n' "$*" >&2
+  exit 1
+}
+runner_unit_property() {
+  case "$2" in
+    Delegate) printf '%s\n' "${DIREXTALK_FAKE_DELEGATE:-yes}" ;;
+    DelegateControllers) printf '%s\n' "${DIREXTALK_FAKE_DELEGATE_CONTROLLERS:-pids cpu memory}" ;;
+    *) exit 2 ;;
+  esac
+}
+EOF
+sed -n '/^validate_runner_delegate() {/,/^}$/p' "$script" >>"$tmp_dir/runner-binding-functions.sh"
+sed -n '/^require_empty_cgroup_procs() {/,/^}$/p' "$script" >>"$tmp_dir/runner-binding-functions.sh"
+
+bash -c 'source "$1"; validate_runner_delegate extension fixture.service' \
+  _ "$tmp_dir/runner-binding-functions.sh"
+for delegate_case in disabled old-shape missing extra duplicate; do
+  delegate=yes
+  controllers='pids cpu memory'
+  case "$delegate_case" in
+    disabled) delegate=no ;;
+    old-shape) delegate='cpu memory pids' ;;
+    missing) controllers='cpu memory' ;;
+    extra) controllers='cpu memory pids io' ;;
+    duplicate) controllers='cpu memory memory' ;;
+  esac
+  if DIREXTALK_FAKE_DELEGATE="$delegate" DIREXTALK_FAKE_DELEGATE_CONTROLLERS="$controllers" \
+    bash -c 'source "$1"; validate_runner_delegate extension fixture.service' \
+      _ "$tmp_dir/runner-binding-functions.sh" \
+      >"$tmp_dir/delegate-$delegate_case.stdout" 2>"$tmp_dir/delegate-$delegate_case.stderr"; then
+    echo "invalid start-local Delegate case was unexpectedly accepted: $delegate_case" >&2
+    exit 1
+  fi
+  grep -Fq 'Delegate' "$tmp_dir/delegate-$delegate_case.stderr"
+done
+
+: >"$tmp_dir/empty-cgroup.procs"
+printf '123\n' >"$tmp_dir/nonempty-cgroup.procs"
+bash -c 'source "$1"; require_empty_cgroup_procs fixture "$2"' \
+  _ "$tmp_dir/runner-binding-functions.sh" "$tmp_dir/empty-cgroup.procs"
+if bash -c 'source "$1"; require_empty_cgroup_procs fixture "$2"' \
+  _ "$tmp_dir/runner-binding-functions.sh" "$tmp_dir/nonempty-cgroup.procs" \
+  >"$tmp_dir/nonempty-procs.stdout" 2>"$tmp_dir/nonempty-procs.stderr"; then
+  echo "nonempty cgroup.procs was unexpectedly accepted" >&2
+  exit 1
+fi
+grep -Fq 'unexpected direct process' "$tmp_dir/nonempty-procs.stderr"
+if bash -c 'source "$1"; require_empty_cgroup_procs fixture "$2"' \
+  _ "$tmp_dir/runner-binding-functions.sh" "$tmp_dir/missing-cgroup.procs" \
+  >"$tmp_dir/missing-procs.stdout" 2>"$tmp_dir/missing-procs.stderr"; then
+  echo "missing cgroup.procs was unexpectedly accepted" >&2
+  exit 1
+fi
+grep -Fq 'process control read failed' "$tmp_dir/missing-procs.stderr"
 
 cat >"$tmp_dir/bin/docker" <<'EOF'
 #!/usr/bin/env bash

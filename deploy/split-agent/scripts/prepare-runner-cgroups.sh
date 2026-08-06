@@ -527,6 +527,17 @@ require_control_group_identity() {
   [ "$control_group" != / ] || die "$role ControlGroup cannot be the cgroup root"
 }
 
+require_empty_cgroup_procs() {
+  local label=$1 path=$2 contents read_status
+  if contents=$(tr -d '[:space:]' <"$path" 2>/dev/null); then
+    :
+  else
+    read_status=$?
+    die "$label process control read failed (status $read_status)"
+  fi
+  [ -z "$contents" ] || die "$label has an unexpected direct process"
+}
+
 prepare_root() {
   local role=$1 uid=$2 gid=$3 unit=$4 parent=$5 control_group=$6 main_pid=$7 root canonical fs_type owner controllers subtree required keeper_owner
   root=$cgroup_fs$control_group
@@ -551,7 +562,7 @@ prepare_root() {
     die "$role DelegateSubgroup=keeper is missing: $root/keeper"
   keeper_owner=$(stat -c '%u:%g' -- "$root/keeper" 2>/dev/null || true)
   [ "$keeper_owner" = "$uid:$gid" ] || die "$role keeper owner is $keeper_owner, expected $uid:$gid"
-  [ ! -s "$root/cgroup.procs" ] || die "$role delegated root has an unexpected direct process"
+  require_empty_cgroup_procs "$role delegated root" "$root/cgroup.procs"
   printf '%s\n' "$main_pid" | grep -Eq '^[1-9][0-9]*$' || die "$role MainPID is invalid"
   grep -Fxq "$main_pid" "$root/keeper/cgroup.procs" || die "$role MainPID is not held in keeper subgroup"
   probe_runner_write() {

@@ -65,6 +65,22 @@ if grep -Eq 'systemctl[[:space:]]+stop|systemctl[[:space:]]+disable|rm[[:space:]
   echo "same-name unit stop/disable or host deletion is forbidden" >&2
   exit 1
 fi
+if grep -Fq -- "[ ! -s \"\$root/cgroup.procs\" ]" "$script"; then
+  echo "prepare-runner-cgroups.sh must read cgroupfs process contents instead of using stat size" >&2
+  exit 1
+fi
+grep -Fq -- "require_empty_cgroup_procs \"\$role delegated root\"" "$script"
+if grep -Fq -- 'cgroup.procs" 2>/dev/null || true' "$script"; then
+  echo "prepare-runner-cgroups.sh must fail closed when cgroup.procs cannot be read" >&2
+  exit 1
+fi
+if [ "$(stat -fc '%T' /sys/fs/cgroup 2>/dev/null || true)" = cgroup2fs ] &&
+   [ -f /sys/fs/cgroup/cgroup.procs ] &&
+   [ -r /sys/fs/cgroup/cgroup.procs ]; then
+  [ ! -s /sys/fs/cgroup/cgroup.procs ]
+  live_processes=$(tr -d '[:space:]' </sys/fs/cgroup/cgroup.procs)
+  [ -n "$live_processes" ]
+fi
 grep -Fq -- "setpriv --reuid=\"\$uid\"" "$script"
 grep -Fq -- "runuser -u \"#\$uid\"" "$script"
 
@@ -79,6 +95,32 @@ fi
 runner_test_tmp=$(mktemp -d "${TMPDIR:-/tmp}/dirextalk-runner-prep-test.XXXXXX")
 runner_test_cleanup() { rm -rf -- "$runner_test_tmp"; }
 trap runner_test_cleanup EXIT
+
+cat >"$runner_test_tmp/cgroup-procs-function.sh" <<'EOF'
+die() {
+  printf '%s\n' "$*" >&2
+  exit 1
+}
+EOF
+sed -n '/^require_empty_cgroup_procs() {/,/^}$/p' "$script" >>"$runner_test_tmp/cgroup-procs-function.sh"
+: >"$runner_test_tmp/empty-cgroup.procs"
+printf '456\n' >"$runner_test_tmp/nonempty-cgroup.procs"
+bash -c 'source "$1"; require_empty_cgroup_procs fixture "$2"' \
+  _ "$runner_test_tmp/cgroup-procs-function.sh" "$runner_test_tmp/empty-cgroup.procs"
+if bash -c 'source "$1"; require_empty_cgroup_procs fixture "$2"' \
+  _ "$runner_test_tmp/cgroup-procs-function.sh" "$runner_test_tmp/nonempty-cgroup.procs" \
+  >"$runner_test_tmp/nonempty-procs.stdout" 2>"$runner_test_tmp/nonempty-procs.stderr"; then
+  echo "nonempty delegated cgroup.procs was unexpectedly accepted" >&2
+  exit 1
+fi
+grep -Fq 'unexpected direct process' "$runner_test_tmp/nonempty-procs.stderr"
+if bash -c 'source "$1"; require_empty_cgroup_procs fixture "$2"' \
+  _ "$runner_test_tmp/cgroup-procs-function.sh" "$runner_test_tmp/missing-cgroup.procs" \
+  >"$runner_test_tmp/missing-procs.stdout" 2>"$runner_test_tmp/missing-procs.stderr"; then
+  echo "missing delegated cgroup.procs was unexpectedly accepted" >&2
+  exit 1
+fi
+grep -Fq 'process control read failed' "$runner_test_tmp/missing-procs.stderr"
 cat >"$runner_test_tmp/prepare-function.sh" <<'EOF'
 die() {
   printf '%s\n' "$*" >&2
