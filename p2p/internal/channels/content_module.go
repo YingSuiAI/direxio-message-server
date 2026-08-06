@@ -16,6 +16,7 @@ import (
 const (
 	actionPostsList       = "channels.posts.list"
 	actionPostsCreate     = "channels.posts.create"
+	actionPostUpdate      = "channels.posts.update"
 	actionPostsRecall     = "channels.posts.recall"
 	actionCommentsRecall  = "channels.comments.recall"
 	actionCommentsList    = "channels.comments.list"
@@ -30,25 +31,26 @@ const (
 // durable record deliberately excludes request-scoped reaction and
 // conversation enrichment.
 type Post struct {
-	PostID         string                            `json:"post_id"`
-	ChannelID      string                            `json:"channel_id"`
-	RoomID         string                            `json:"room_id"`
-	EventID        string                            `json:"event_id"`
-	AuthorMXID     string                            `json:"author_mxid"`
-	AuthorName     string                            `json:"author_name"`
-	Body           string                            `json:"body"`
-	MessageType    string                            `json:"message_type"`
-	MediaJSON      string                            `json:"media_json"`
-	Visibility     string                            `json:"visibility"`
-	OriginServerTS int64                             `json:"origin_server_ts"`
-	CommentCount   int64                             `json:"comment_count"`
-	ReactionCount  int64                             `json:"reaction_count"`
-	LikeCount      int64                             `json:"like_count"`
-	ReactedByMe    bool                              `json:"reacted_by_me"`
-	FavoriteCount  int64                             `json:"favorite_count"`
-	FavoritedByMe  bool                              `json:"favorited_by_me"`
-	Operation      map[string]any                    `json:"operation,omitempty"`
-	Conversation   *dirextalkdomain.ConversationView `json:"conversation,omitempty"`
+	PostID          string                            `json:"post_id"`
+	ChannelID       string                            `json:"channel_id"`
+	RoomID          string                            `json:"room_id"`
+	EventID         string                            `json:"event_id"`
+	AuthorMXID      string                            `json:"author_mxid"`
+	AuthorName      string                            `json:"author_name"`
+	Body            string                            `json:"body"`
+	MessageType     string                            `json:"message_type"`
+	MediaJSON       string                            `json:"media_json"`
+	Visibility      string                            `json:"visibility"`
+	CommentsEnabled bool                              `json:"comments_enabled"`
+	OriginServerTS  int64                             `json:"origin_server_ts"`
+	CommentCount    int64                             `json:"comment_count"`
+	ReactionCount   int64                             `json:"reaction_count"`
+	LikeCount       int64                             `json:"like_count"`
+	ReactedByMe     bool                              `json:"reacted_by_me"`
+	FavoriteCount   int64                             `json:"favorite_count"`
+	FavoritedByMe   bool                              `json:"favorited_by_me"`
+	Operation       map[string]any                    `json:"operation,omitempty"`
+	Conversation    *dirextalkdomain.ConversationView `json:"conversation,omitempty"`
 }
 
 // Comment is the ProductCore response shape for a durable channel comment.
@@ -83,6 +85,7 @@ type ReactionHistory struct {
 // by the Matrix projector/backfill adapters in the root package.
 type ContentStore interface {
 	InsertChannelPost(context.Context, dirextalkdomain.ChannelPostRecord) error
+	UpdateChannelPostSettings(context.Context, string, string, *string, *bool) (bool, error)
 	GetChannelPostByID(context.Context, string, string) (dirextalkdomain.ChannelPostRecord, bool, error)
 	GetChannelPostByEventID(context.Context, string, string) (dirextalkdomain.ChannelPostRecord, bool, error)
 	ListChannelPosts(context.Context, string) ([]dirextalkdomain.ChannelPostRecord, error)
@@ -158,6 +161,7 @@ func (m *ContentModule) Handlers() map[string]actionbase.Handler {
 	return map[string]actionbase.Handler{
 		actionPostsList:       m.Posts,
 		actionPostsCreate:     m.CreatePost,
+		actionPostUpdate:      m.UpdatePost,
 		actionPostsRecall:     m.recall(actionPostsRecall),
 		actionCommentsRecall:  m.recall(actionCommentsRecall),
 		actionCommentsList:    m.Comments,
@@ -245,8 +249,9 @@ func postFromRecord(record dirextalkdomain.ChannelPostRecord) Post {
 		PostID: record.PostID, ChannelID: record.ChannelID, RoomID: record.RoomID,
 		EventID: record.EventID, AuthorMXID: record.AuthorMXID, AuthorName: record.AuthorName,
 		Body: record.Body, MessageType: record.MessageType, MediaJSON: record.MediaJSON,
-		Visibility:     dirextalkdomain.NormalizeChannelPostVisibility(record.Visibility),
-		OriginServerTS: record.OriginServerTS, CommentCount: record.CommentCount,
+		Visibility:      dirextalkdomain.NormalizeChannelPostVisibility(record.Visibility),
+		CommentsEnabled: record.CommentsEnabled,
+		OriginServerTS:  record.OriginServerTS, CommentCount: record.CommentCount,
 	}
 }
 
@@ -260,7 +265,8 @@ func postRecord(post Post) dirextalkdomain.ChannelPostRecord {
 		PostID: post.PostID, ChannelID: post.ChannelID, RoomID: post.RoomID,
 		EventID: post.EventID, AuthorMXID: post.AuthorMXID, AuthorName: post.AuthorName,
 		Body: post.Body, MessageType: post.MessageType, MediaJSON: post.MediaJSON,
-		Visibility:     dirextalkdomain.NormalizeChannelPostVisibility(post.Visibility),
+		Visibility:      dirextalkdomain.NormalizeChannelPostVisibility(post.Visibility),
+		CommentsEnabled: post.CommentsEnabled, CommentsEnabledSet: true,
 		OriginServerTS: post.OriginServerTS, CommentCount: post.CommentCount,
 	}
 }

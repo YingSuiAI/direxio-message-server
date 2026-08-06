@@ -273,12 +273,17 @@ func (m *ContentModule) ProjectPost(ctx context.Context, event ProjectionEvent) 
 	if postID == "" {
 		postID = "post_" + strings.TrimPrefix(event.EventID, "$")
 	}
+	commentsEnabled := true
+	if _, exists := event.Content["comments_enabled"]; exists {
+		commentsEnabled = params.Bool("comments_enabled")
+	}
 	return m.store.InsertChannelPost(ctx, dirextalkdomain.ChannelPostRecord{
 		PostID: postID, ChannelID: params.String("channel_id"), RoomID: event.RoomID,
 		EventID: event.EventID, AuthorMXID: event.SenderMXID,
 		AuthorName: params.String("sender_name"), Body: event.Body,
 		MessageType: event.MessageType, MediaJSON: params.String("media_json"),
-		Visibility:     dirextalkdomain.NormalizeChannelPostVisibility(params.String("visibility")),
+		Visibility:      dirextalkdomain.NormalizeChannelPostVisibility(params.String("visibility")),
+		CommentsEnabled: commentsEnabled, CommentsEnabledSet: true,
 		OriginServerTS: event.OriginServerTS,
 	})
 }

@@ -233,7 +233,7 @@ func (c *unixController) StatusDirect(ctx context.Context) (DirectStatus, error)
 }
 
 func (c *unixController) ApplyDirect(ctx context.Context, request DirectApplyRequest) (JobTicket, error) {
-	if _, err := CanonicalStableVersion("target_version", request.TargetVersion); err != nil {
+	if _, err := CanonicalServerVersion("target_version", request.TargetVersion); err != nil {
 		return JobTicket{}, &ControllerError{Status: http.StatusBadRequest, Code: "updater_request_invalid", Message: "updater request is invalid"}
 	}
 	parsedID, err := uuid.Parse(request.IdempotencyKey)

@@ -404,10 +404,11 @@ func TestReleaseV2ApplyRejectsUnsafeParamsAndCompatibilityFailures(t *testing.T)
 		})
 	}
 	for name, mutate := range map[string]func(map[string]any){
-		"noncanonical_target": func(params map[string]any) { params["target_version"] = "1.0.4" },
-		"uppercase_uuid":      func(params map[string]any) { params["idempotency_key"] = "31A20813-C5D9-4F6D-B4F0-CDF8CFC75C6E" },
-		"wrong_confirm":       func(params map[string]any) { params["confirm"] = "confirm" },
-		"nonstring_target":    func(params map[string]any) { params["target_version"] = 104 },
+		"noncanonical_target":     func(params map[string]any) { params["target_version"] = "1.0.4" },
+		"noncanonical_dev_target": func(params map[string]any) { params["target_version"] = "dev01.0.4" },
+		"uppercase_uuid":          func(params map[string]any) { params["idempotency_key"] = "31A20813-C5D9-4F6D-B4F0-CDF8CFC75C6E" },
+		"wrong_confirm":           func(params map[string]any) { params["confirm"] = "confirm" },
+		"nonstring_target":        func(params map[string]any) { params["target_version"] = 104 },
 	} {
 		t.Run(name, func(t *testing.T) {
 			central := &recordingCentralVersionSource{version: validCentral}
@@ -435,6 +436,7 @@ func TestReleaseV2ApplyRejectsUnsafeParamsAndCompatibilityFailures(t *testing.T)
 		"client_too_old":         {central: releasecontrol.CentralServerVersion{AppID: "1", ChannelID: "server", Version: "v1.1.2", PreVersion: "v1.0.3"}, client: "v1.0.2", target: "v1.1.2", wantStatus: http.StatusConflict, wantCode: "client_version_incompatible"},
 		"central_invalid":        {central: releasecontrol.CentralServerVersion{AppID: "1", ChannelID: "google", Version: "v1.1.2", PreVersion: "v1.0.2"}, client: "v1.0.2", target: "v1.1.2", wantStatus: http.StatusBadGateway, wantCode: "central_version_invalid"},
 		"target_not_newer":       {central: releasecontrol.CentralServerVersion{AppID: "1", ChannelID: "server", Version: "v1.1.1", PreVersion: "v1.0.2"}, client: "v1.0.2", target: "v1.1.1", wantStatus: http.StatusConflict, wantCode: "release_target_not_newer"},
+		"cross_channel_target":   {central: releasecontrol.CentralServerVersion{AppID: "1", ChannelID: "server", Version: "dev1.1.2", PreVersion: "v1.0.2"}, client: "v1.0.2", target: "dev1.1.2", wantStatus: http.StatusConflict, wantCode: "release_target_not_newer"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			central := &recordingCentralVersionSource{version: testCase.central}

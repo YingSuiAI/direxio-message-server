@@ -111,7 +111,7 @@ func decodeCentralServerVersion(data []byte) (CentralServerVersion, error) {
 	if response.Data.AppID != "1" || response.Data.ChannelID != "server" {
 		return CentralServerVersion{}, centralVersionError(CentralVersionInvalidCode, "central version response is invalid", nil)
 	}
-	version, err := CanonicalStableVersion("version", response.Data.Version)
+	version, err := CanonicalServerVersion("version", response.Data.Version)
 	if err != nil {
 		return CentralServerVersion{}, centralVersionError(CentralVersionInvalidCode, "central version response is invalid", err)
 	}
@@ -130,12 +130,24 @@ func decodeCentralServerVersion(data []byte) (CentralServerVersion, error) {
 
 // CanonicalStableVersion rejects whitespace, prereleases, and build metadata.
 // It is stricter than the historical client-report normalizer because central
-// records and direct updater targets are unambiguous release identifiers.
+// records that require stable versions are unambiguous release identifiers.
 func CanonicalStableVersion(field, value string) (string, error) {
 	if value != strings.TrimSpace(value) {
 		return "", fmt.Errorf("%s must not contain surrounding whitespace", field)
 	}
 	if _, err := parseCanonicalVersion(field, value); err != nil {
+		return "", err
+	}
+	return value, nil
+}
+
+// CanonicalServerVersion accepts canonical stable and development server
+// versions while continuing to reject whitespace and other SemVer variants.
+func CanonicalServerVersion(field, value string) (string, error) {
+	if value != strings.TrimSpace(value) {
+		return "", fmt.Errorf("%s must not contain surrounding whitespace", field)
+	}
+	if _, err := parseCanonicalServerVersion(field, value); err != nil {
 		return "", err
 	}
 	return value, nil
@@ -156,6 +168,39 @@ func CompareCanonicalStableVersions(left, right string) (int, error) {
 		return 0, err
 	}
 	rightVersion, err := parseCanonicalVersion("right_version", right)
+	if err != nil {
+		return 0, err
+	}
+	switch {
+	case leftVersion.LessThan(rightVersion):
+		return -1, nil
+	case leftVersion.GreaterThan(rightVersion):
+		return 1, nil
+	default:
+		return 0, nil
+	}
+}
+
+// CompareCanonicalServerVersions compares canonical server versions within the
+// same release channel. Stable and development channels are intentionally not
+// comparable because servers cannot upgrade across channels.
+func CompareCanonicalServerVersions(left, right string) (int, error) {
+	left, err := CanonicalServerVersion("left_version", left)
+	if err != nil {
+		return 0, err
+	}
+	right, err = CanonicalServerVersion("right_version", right)
+	if err != nil {
+		return 0, err
+	}
+	if strings.HasPrefix(left, "dev") != strings.HasPrefix(right, "dev") {
+		return 0, fmt.Errorf("server versions must use the same release channel")
+	}
+	leftVersion, err := parseCanonicalServerVersion("left_version", left)
+	if err != nil {
+		return 0, err
+	}
+	rightVersion, err := parseCanonicalServerVersion("right_version", right)
 	if err != nil {
 		return 0, err
 	}

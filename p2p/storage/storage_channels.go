@@ -256,8 +256,8 @@ func (s *DatabaseStore) InsertChannelPost(ctx context.Context, post channelPostR
 		_, err := s.db.ExecContext(ctx, `
 			INSERT INTO p2p_channel_posts (
 				post_id, channel_id, room_id, event_id, author_mxid, author_name,
-				body, message_type, media_json, visibility, origin_server_ts, comment_count
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+				body, message_type, media_json, visibility, comments_enabled, settings_updated, origin_server_ts, comment_count
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 			ON CONFLICT(post_id) DO UPDATE SET
 				channel_id = EXCLUDED.channel_id,
 				room_id = EXCLUDED.room_id,
@@ -267,13 +267,46 @@ func (s *DatabaseStore) InsertChannelPost(ctx context.Context, post channelPostR
 				body = EXCLUDED.body,
 				message_type = EXCLUDED.message_type,
 				media_json = EXCLUDED.media_json,
-				visibility = EXCLUDED.visibility,
+				visibility = CASE WHEN p2p_channel_posts.settings_updated THEN p2p_channel_posts.visibility ELSE EXCLUDED.visibility END,
+				comments_enabled = CASE WHEN p2p_channel_posts.settings_updated THEN p2p_channel_posts.comments_enabled ELSE EXCLUDED.comments_enabled END,
+				settings_updated = p2p_channel_posts.settings_updated OR EXCLUDED.settings_updated,
 				origin_server_ts = EXCLUDED.origin_server_ts,
 				comment_count = EXCLUDED.comment_count
 		`, post.PostID, post.ChannelID, post.RoomID, post.EventID, post.AuthorMXID, post.AuthorName,
-			post.Body, post.MessageType, post.MediaJSON, post.Visibility, post.OriginServerTS, post.CommentCount)
+			post.Body, post.MessageType, post.MediaJSON, post.Visibility, post.CommentsEnabled, post.SettingsUpdated, post.OriginServerTS, post.CommentCount)
 		return err
 	})
+}
+
+func (s *DatabaseStore) UpdateChannelPostSettings(ctx context.Context, postID, eventID string, visibility *string, commentsEnabled *bool) (bool, error) {
+	var visibilityValue any
+	if visibility != nil {
+		visibilityValue = normalizeChannelPostRecord(channelPostRecord{Visibility: *visibility}).Visibility
+	}
+	var commentsEnabledValue any
+	if commentsEnabled != nil {
+		commentsEnabledValue = *commentsEnabled
+	}
+	var updated bool
+	err := s.writer.Do(nil, nil, func(txn *sql.Tx) error {
+		result, err := s.db.ExecContext(ctx, `
+			UPDATE p2p_channel_posts
+			SET visibility = COALESCE($1, visibility),
+				comments_enabled = COALESCE($2, comments_enabled),
+				settings_updated = TRUE
+			WHERE post_id = $3 AND event_id = $4
+		`, visibilityValue, commentsEnabledValue, postID, eventID)
+		if err != nil {
+			return err
+		}
+		rows, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		updated = rows == 1
+		return nil
+	})
+	return updated, err
 }
 
 func (s *DatabaseStore) GetChannelPostByID(ctx context.Context, postID, channelID string) (channelPostRecord, bool, error) {
@@ -409,14 +442,15 @@ func (s *DatabaseStore) ListChannelPostsByVisibilityPage(ctx context.Context, ch
 	return posts, hasMore, nil
 }
 
-const listPostsSelect = `SELECT post_id, channel_id, room_id, event_id, author_mxid, author_name, body, message_type, media_json, visibility, origin_server_ts, comment_count FROM p2p_channel_posts`
+const listPostsSelect = `SELECT post_id, channel_id, room_id, event_id, author_mxid, author_name, body, message_type, media_json, visibility, comments_enabled, settings_updated, origin_server_ts, comment_count FROM p2p_channel_posts`
 
 func scanChannelPost(row channelScanner) (channelPostRecord, error) {
 	var post channelPostRecord
 	if err := row.Scan(&post.PostID, &post.ChannelID, &post.RoomID, &post.EventID, &post.AuthorMXID, &post.AuthorName,
-		&post.Body, &post.MessageType, &post.MediaJSON, &post.Visibility, &post.OriginServerTS, &post.CommentCount); err != nil {
+		&post.Body, &post.MessageType, &post.MediaJSON, &post.Visibility, &post.CommentsEnabled, &post.SettingsUpdated, &post.OriginServerTS, &post.CommentCount); err != nil {
 		return channelPostRecord{}, err
 	}
+	post.CommentsEnabledSet = true
 	return post, nil
 }
 

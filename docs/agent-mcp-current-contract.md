@@ -72,8 +72,9 @@ capability live.
   plans ask the owner to choose an existing server-owned API-key secret
   reference or an interactive authorization gate and never collect secret
   plaintext in chat.
-- If AWS credential inventory is empty, Native Agent directs the owner to the
-  AWS credential management surface and does not reserve a target. A listed
+- If AWS credential inventory is empty, Native Agent fails closed and does not
+  reserve a target. The Agent-owned AWS credential API contract remains, but
+  the current Flutter release does not expose its management UI. A listed
   credential is eligible only when `verified_revision == revision`. Credential
   and model-secret readback exposes configured state and conservative display
   hints only; display masks are never accepted as replacement secret values.
@@ -81,6 +82,11 @@ capability live.
   the full Skills lifecycle. `mcp` is advertised only when MCP lifecycle
   operations are published. A product-capability bridge by itself advertises
   neither token.
+- The current Flutter release hides AWS management/planning UI, and the
+  external Agent registry release-hides AWS-specific Skills: they are not
+  listed, selected explicitly or by intent, added to bootstrap metadata, or
+  injected into the Native Agent prompt. Message Server does not recreate an
+  embedded Planning Skill catalog or runtime fallback for this visibility gate.
 - Supported model-provider identifiers are `openai`, `anthropic`, `deepseek`, `gemini`, `xai`, `openai_compatible`, and `openrouter`. `litellm`, `vertex`, and unknown identifiers are rejected; clients use `openai_compatible` for custom compatible endpoints.
 - `agent.models.list` is the provider/runtime catalog backed by Agent Core
   `agent.info.v1/list_models`; it returns `models` and `providers` and remains

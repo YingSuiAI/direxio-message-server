@@ -62,6 +62,16 @@ func TestFreshProductBaselineIsSingleVersionAndReopenIdempotent(t *testing.T) {
 	} {
 		assertRelationAbsent(t, store.DB(), forbidden)
 	}
+	for _, column := range []string{"visibility", "comments_enabled", "settings_updated"} {
+		var present bool
+		if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='p2p_channel_posts' AND column_name=$1)`, column).Scan(&present); err != nil {
+			t.Fatal(err)
+		}
+		if !present {
+			t.Fatalf("fresh ProductCore baseline missing p2p_channel_posts.%s", column)
+		}
+	}
+	assertRelationPresent(t, store.DB(), "p2p_channel_posts_channel_visibility_idx")
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}

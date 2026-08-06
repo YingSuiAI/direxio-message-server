@@ -232,3 +232,35 @@ func TestMemoryStoreChannelContentOrderUpsertPaginationAndDelete(t *testing.T) {
 		t.Fatalf("comment page = %#v more=%v", commentPage, more)
 	}
 }
+
+func TestMemoryStoreChannelPostSettingsOverrideOnlyAfterExplicitUpdate(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := NewMemoryStore()
+	placeholder := channelPostRecord{PostID: "post", EventID: "$post", Visibility: "private"}
+	if err := store.InsertChannelPost(ctx, placeholder); err != nil {
+		t.Fatal(err)
+	}
+	projected := channelPostRecord{
+		PostID: "post", EventID: "$post", Visibility: "public",
+		CommentsEnabled: false, CommentsEnabledSet: true,
+	}
+	if err := store.InsertChannelPost(ctx, projected); err != nil {
+		t.Fatal(err)
+	}
+	post, found, err := store.GetChannelPostByID(ctx, "post", "")
+	if err != nil || !found || post.Visibility != "public" || post.CommentsEnabled {
+		t.Fatalf("authoritative projection did not replace placeholder: post=%#v found=%v err=%v", post, found, err)
+	}
+	visibility, commentsEnabled := "private", true
+	if updated, err := store.UpdateChannelPostSettings(ctx, "post", "$post", &visibility, &commentsEnabled); err != nil || !updated {
+		t.Fatalf("update settings = (%v, %v)", updated, err)
+	}
+	if err := store.InsertChannelPost(ctx, projected); err != nil {
+		t.Fatal(err)
+	}
+	post, found, err = store.GetChannelPostByID(ctx, "post", "")
+	if err != nil || !found || post.Visibility != "private" || !post.CommentsEnabled || !post.SettingsUpdated {
+		t.Fatalf("projection overwrote explicit settings: post=%#v found=%v err=%v", post, found, err)
+	}
+}

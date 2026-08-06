@@ -242,6 +242,53 @@ func TestDatabaseStoreGetsChannelContentByIDAndEventID(t *testing.T) {
 	}
 }
 
+func TestDatabaseStorePersistsChannelPostSettingsAcrossReplayAndReopen(t *testing.T) {
+	ctx := context.Background()
+	connStr, closeDB := test.PrepareDBConnectionString(t, test.DBTypePostgres)
+	defer closeDB()
+	dbOpts := config.DatabaseOptions{ConnectionString: config.DataSource(connStr)}
+	store, err := NewDatabaseStore(ctx, sqlutil.NewConnectionManager(nil, dbOpts), &dbOpts)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	original := channelPostRecord{
+		PostID: "post_settings", ChannelID: "ch_settings", RoomID: "!settings:example.com",
+		EventID: "$settings", AuthorMXID: "@owner:example.com", Visibility: "private",
+		CommentsEnabled: true, CommentsEnabledSet: true, OriginServerTS: 1,
+	}
+	if err := store.InsertChannelPost(ctx, original); err != nil {
+		t.Fatal(err)
+	}
+	visibility, commentsEnabled := "public", false
+	updated, err := store.UpdateChannelPostSettings(ctx, original.PostID, original.EventID, &visibility, &commentsEnabled)
+	if err != nil || !updated {
+		t.Fatalf("update settings = (%v, %v), want (true, nil)", updated, err)
+	}
+	if updated, err = store.UpdateChannelPostSettings(ctx, original.PostID, "$replacement", &visibility, nil); err != nil || updated {
+		t.Fatalf("replacement event update = (%v, %v), want (false, nil)", updated, err)
+	}
+	if err := store.InsertChannelPost(ctx, original); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := NewDatabaseStore(ctx, sqlutil.NewConnectionManager(nil, dbOpts), &dbOpts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	post, found, err := reopened.GetChannelPostByID(ctx, original.PostID, original.ChannelID)
+	if err != nil || !found {
+		t.Fatalf("reopen post = (%#v, %v, %v)", post, found, err)
+	}
+	if post.Visibility != "public" || post.CommentsEnabled {
+		t.Fatalf("replay or reopen reset post settings: %#v", post)
+	}
+}
+
 func TestDatabaseStoreListsChannelPostsByVisibilityPage(t *testing.T) {
 	ctx := context.Background()
 	connStr, closeDB := test.PrepareDBConnectionString(t, test.DBTypePostgres)

@@ -222,7 +222,7 @@ func TestUnixControllerDirectStatusAndApplyUseOnlyV2Fields(t *testing.T) {
 		t.Fatalf("unsafe direct-status fields entered message-server DTO: %s", statusRaw)
 	}
 	ticket, err := direct.ApplyDirect(context.Background(), DirectApplyRequest{
-		TargetVersion: "v1.0.4", IdempotencyKey: "31a20813-c5d9-4f6d-b4f0-cdf8cfc75c6e", Confirm: ApplyConfirmation,
+		TargetVersion: "dev1.0.4", IdempotencyKey: "31a20813-c5d9-4f6d-b4f0-cdf8cfc75c6e", Confirm: ApplyConfirmation,
 	})
 	if err != nil {
 		t.Fatalf("direct apply: %v", err)
@@ -235,13 +235,18 @@ func TestUnixControllerDirectStatusAndApplyUseOnlyV2Fields(t *testing.T) {
 	}); err == nil {
 		t.Fatal("direct apply accepted a noncanonical UUID")
 	}
+	if _, err := direct.ApplyDirect(context.Background(), DirectApplyRequest{
+		TargetVersion: "dev01.0.4", IdempotencyKey: "31a20813-c5d9-4f6d-b4f0-cdf8cfc75c6e", Confirm: ApplyConfirmation,
+	}); err == nil {
+		t.Fatal("direct apply accepted a noncanonical development version")
+	}
 
 	statusRequest := <-requests
 	applyRequest := <-requests
 	if statusRequest.path != ControlStatusPath || len(statusRequest.body) != 0 {
 		t.Fatalf("direct status must send exactly an empty object: %#v", statusRequest)
 	}
-	if applyRequest.path != ControlJobsPath || applyRequest.body["target_version"] != "v1.0.4" || applyRequest.body["plan_token"] != nil || len(applyRequest.body) != 3 {
+	if applyRequest.path != ControlJobsPath || applyRequest.body["target_version"] != "dev1.0.4" || applyRequest.body["plan_token"] != nil || len(applyRequest.body) != 3 {
 		t.Fatalf("unexpected direct apply request: %#v", applyRequest)
 	}
 	if applyRequest.body["idempotency_key"] != "31a20813-c5d9-4f6d-b4f0-cdf8cfc75c6e" || applyRequest.body["confirm"] != ApplyConfirmation {
