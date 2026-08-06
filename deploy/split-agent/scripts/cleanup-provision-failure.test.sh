@@ -67,7 +67,7 @@ fi
 case "$1" in
   context)
     case "$2" in
-      inspect) printf 'unix:///run/docker.sock\n' ;;
+      inspect) printf 'unix:///var/run/docker.sock\n' ;;
       show) printf '%s\n' "${DIREXTALK_FAKE_CONTEXT:-default}" ;;
       *) exit 2 ;;
     esac

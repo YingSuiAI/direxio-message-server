@@ -150,14 +150,18 @@ log() { printf '%s\n' "$*" >>"$log_file"; }
 
 revalidate_controls
 endpoint=$(docker context inspect default --format '{{(index .Endpoints "docker").Host}}' 2>/dev/null) || die "Docker context inspection failed"
-[ "$endpoint" = unix:///run/docker.sock ] || die "Docker context is not the local rootful socket"
+case "$endpoint" in
+  unix:///*) context_socket=${endpoint#unix://} ;;
+  *) die "Docker context is not a local Unix endpoint" ;;
+esac
 context=$(docker context show 2>/dev/null) || die "Docker current-context query failed"
 [ "$context" = default ] || die "Docker current context must be default"
-[ -S /run/docker.sock ] || die "Docker socket is unavailable"
-socket_canonical=$(readlink -f -- /run/docker.sock 2>/dev/null) || die "Docker socket canonicalization failed"
+[ -S "$context_socket" ] || die "Docker socket is unavailable"
+socket_canonical=$(readlink -f -- "$context_socket" 2>/dev/null) || die "Docker socket canonicalization failed"
 [ "$socket_canonical" = /run/docker.sock ] || die "Docker socket identity changed"
-[ "$(stat -Lc '%u' /run/docker.sock 2>/dev/null)" = 0 ] || die "Docker socket is not root-owned"
-socket_identity=$(stat -Lc '%d:%i:%u:%g' /run/docker.sock 2>/dev/null) || die "Docker socket identity query failed"
+[ "$(stat -Lc '%u' "$context_socket" 2>/dev/null)" = 0 ] || die "Docker socket is not root-owned"
+socket_identity=$(stat -Lc '%d:%i:%u:%g' "$context_socket" 2>/dev/null) || die "Docker socket identity query failed"
+context_endpoint=$endpoint
 [ -f /etc/machine-id ] && [ ! -L /etc/machine-id ] || die "host machine-id is unavailable"
 [ "$(stat -c '%u:%g' /etc/machine-id 2>/dev/null)" = 0:0 ] || die "host machine-id is not root-owned"
 machine_identity=$(stat -c '%d:%i:%u:%g' /etc/machine-id 2>/dev/null) || die "host machine-id identity query failed"
@@ -295,10 +299,15 @@ for i in 0 1; do
   if [ "${unit_present[$i]}" = true ]; then
     revalidate_controls
     endpoint=$(docker context inspect default --format '{{(index .Endpoints "docker").Host}}' 2>/dev/null) || die "Docker context revalidation failed"
-    [ "$endpoint" = unix:///run/docker.sock ] || die "Docker context changed before runner cleanup"
+    [ "$endpoint" = "$context_endpoint" ] || die "Docker context changed before runner cleanup"
+    case "$endpoint" in
+      unix:///*) context_socket=${endpoint#unix://} ;;
+      *) die "Docker context stopped using a local Unix endpoint" ;;
+    esac
     context=$(docker context show 2>/dev/null) || die "Docker current-context revalidation failed"
     [ "$context" = default ] || die "Docker current context changed before runner cleanup"
-    [ "$(stat -Lc '%d:%i:%u:%g' /run/docker.sock 2>/dev/null)" = "$socket_identity" ] || die "Docker socket identity changed before runner cleanup"
+    [ "$(readlink -f -- "$context_socket" 2>/dev/null)" = /run/docker.sock ] || die "Docker socket canonical path changed before runner cleanup"
+    [ "$(stat -Lc '%d:%i:%u:%g' "$context_socket" 2>/dev/null)" = "$socket_identity" ] || die "Docker socket identity changed before runner cleanup"
     [ "$(stat -c '%d:%i:%u:%g' /etc/machine-id 2>/dev/null)" = "$machine_identity" ] || die "host machine-id identity changed before runner cleanup"
     machine=$(cat /etc/machine-id 2>/dev/null | tr -d '[:space:]') || die "host machine-id revalidation failed"
     [ "$machine" = "$manifest_machine" ] || die "host machine-id changed before runner cleanup"
