@@ -48,6 +48,20 @@ read_pair() {
   printf '%s' "$value"
 }
 
+validate_https_manifest_binding() {
+  local tls_mode=$1 server_name=$2 client_base_url=$3 status
+  if printf '%s\n' "$server_name" | grep -Eq '^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$'; then
+    :
+  else
+    status=$?
+    if [ "$status" -eq 1 ]; then
+      die "$tls_mode manifest server name is invalid"
+    fi
+    die "$tls_mode manifest server-name validation infrastructure failure (grep status $status)"
+  fi
+  [ "$client_base_url" = "https://$server_name" ] || die "$tls_mode manifest client URL is not bound to its server name"
+}
+
 grep -Fqx '# dirextalk-split-cleanup-receipt-v1' "$receipt" || die "cleanup receipt version is unsupported"
 
 stack_name=$(read_pair "$manifest" stack_name)
@@ -84,9 +98,8 @@ case "$manifest_tls_mode" in
     [ "$manifest_server_name" = localhost ] || die "local TLS manifest server name must be localhost"
     [ "$manifest_client_base_url" = "http://localhost:$manifest_http_bind" ] || die "local manifest client URL is not derived from its HTTP host port"
     ;;
-  external)
-    printf '%s\n' "$manifest_server_name" | grep -Eq '^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$' || die "external manifest server name is invalid"
-    [ "$manifest_client_base_url" = "https://$manifest_server_name" ] || die "external manifest client URL is not bound to its server name"
+  external|edge-terminated)
+    validate_https_manifest_binding "$manifest_tls_mode" "$manifest_server_name" "$manifest_client_base_url"
     ;;
   *) die "manifest TLS mode is invalid" ;;
 esac

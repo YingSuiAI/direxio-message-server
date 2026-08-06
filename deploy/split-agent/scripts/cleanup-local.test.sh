@@ -36,6 +36,8 @@ volume_suffixes=(
 )
 machine_id=$(tr -d '[:space:]' </etc/machine-id)
 engine_id=engine-cleanup-test-1
+real_grep=$(command -v grep)
+export DIREXTALK_REAL_GREP=$real_grep
 unset DIREXTALK_FAKE_NETWORK_ERROR DIREXTALK_FAKE_VOLUME_ERROR DIREXTALK_FAKE_VOLUME_REPLACE DIREXTALK_FAKE_NETWORK_REPLACE
 stack_name=d-aaaaaaaaaaaaaaaaaaaaaaaaaa
 
@@ -47,11 +49,10 @@ write_fixture() {
   local suffix index id name fingerprint_json fingerprint
   local extension_fragment=/usr/lib/systemd/system/systemd-journald.service
   local extension_hash
-  if [ "$tls_mode" = external ]; then
-    client_base_url=https://$server_name
-  else
-    client_base_url=http://localhost:18008
-  fi
+  case "$tls_mode" in
+    external|edge-terminated) client_base_url=https://$server_name ;;
+    *) client_base_url=http://localhost:18008 ;;
+  esac
   mkdir -m 700 -- "$fixture"
   master_key=$fixture/core-secret-master-key
   dd if=/dev/zero of="$master_key" bs=32 count=1 status=none
@@ -297,6 +298,18 @@ case "$property" in
 esac
 EOF
   chmod 755 -- "$fixture/bin/systemctl"
+  cat >"$fixture/bin/grep" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+tls_hostname_pattern='^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$'
+if [ "${DIREXTALK_FAKE_TLS_GREP_STATUS:-0}" -ne 0 ] &&
+    [ "$#" -eq 2 ] && [ "$1" = -Eq ] && [ "$2" = "$tls_hostname_pattern" ]; then
+  while IFS= read -r _; do :; done
+  exit "$DIREXTALK_FAKE_TLS_GREP_STATUS"
+fi
+exec "$DIREXTALK_REAL_GREP" "$@"
+EOF
+  chmod 755 -- "$fixture/bin/grep"
 }
 
 make_starting_receipt() {
@@ -364,6 +377,40 @@ write_fixture "$external_fixture" external chat.example.test
 export PATH=$external_fixture/bin:$PATH
 export DIREXTALK_FAKE_STATE=$external_fixture/state
 "$script" "$external_fixture" >/dev/null
+
+edge_fixture=$tmp_dir/edge-terminated
+write_fixture "$edge_fixture" edge-terminated chat.example.test
+export PATH=$edge_fixture/bin:$PATH
+export DIREXTALK_FAKE_STATE=$edge_fixture/state
+"$script" "$edge_fixture" >/dev/null
+
+edge_negative_fixture=$tmp_dir/edge-terminated-negative
+write_fixture "$edge_negative_fixture" edge-terminated -invalid.example.test
+export PATH=$edge_negative_fixture/bin:$PATH
+export DIREXTALK_FAKE_STATE=$edge_negative_fixture/state
+if "$script" "$edge_negative_fixture" >/dev/null 2>"$edge_negative_fixture/error"; then
+  echo "edge-terminated invalid server name was unexpectedly accepted" >&2
+  exit 1
+fi
+grep -Fq 'edge-terminated manifest server name is invalid' "$edge_negative_fixture/error"
+if [ -s "$edge_negative_fixture/state/docker.log" ]; then
+  echo "edge-terminated expected-negative validation reached Docker" >&2
+  exit 1
+fi
+
+edge_infra_fixture=$tmp_dir/edge-terminated-infrastructure
+write_fixture "$edge_infra_fixture" edge-terminated chat.example.test
+export PATH=$edge_infra_fixture/bin:$PATH
+export DIREXTALK_FAKE_STATE=$edge_infra_fixture/state
+if DIREXTALK_FAKE_TLS_GREP_STATUS=42 "$script" "$edge_infra_fixture" >/dev/null 2>"$edge_infra_fixture/error"; then
+  echo "edge-terminated hostname validation infrastructure failure was unexpectedly accepted" >&2
+  exit 1
+fi
+grep -Fq 'edge-terminated manifest server-name validation infrastructure failure (grep status 42)' "$edge_infra_fixture/error"
+if [ -s "$edge_infra_fixture/state/docker.log" ]; then
+  echo "edge-terminated validation infrastructure failure reached Docker" >&2
+  exit 1
+fi
 
 purge_fixture=$tmp_dir/purge
 write_fixture "$purge_fixture"
