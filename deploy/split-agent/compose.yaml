@@ -302,8 +302,10 @@ services:
     command:
       - -ec
       - >-
-        chown 65531:65531 /install /workspace /state;
-        chmod 0700 /install /workspace /state
+        chown 65531:65531 /install /state;
+        chmod 0700 /install /state;
+        chown 65531:65532 /workspace;
+        chmod 0770 /workspace
     volumes:
       - agent_extension_install:/install
       - agent_runner_workspaces:/workspace

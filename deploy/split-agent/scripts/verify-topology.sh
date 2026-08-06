@@ -277,8 +277,10 @@ jq -e '
   (.services["core-runner-socket-init"].command | join(" ") | contains("chmod 2750 /socket")) and
   (.services["extension-runner-storage-init"].network_mode == "none") and
   (.services["core-runner-storage-init"].network_mode == "none") and
-  (.services["extension-runner-storage-init"].command | join(" ") | contains("chown 65531:65531 /install /workspace /state")) and
-  (.services["extension-runner-storage-init"].command | join(" ") | contains("chmod 0700 /install /workspace /state")) and
+  (.services["extension-runner-storage-init"].command | join(" ") | contains("chown 65531:65531 /install /state")) and
+  (.services["extension-runner-storage-init"].command | join(" ") | contains("chmod 0700 /install /state")) and
+  (.services["extension-runner-storage-init"].command | join(" ") | contains("chown 65531:65532 /workspace")) and
+  (.services["extension-runner-storage-init"].command | join(" ") | contains("chmod 0770 /workspace")) and
   (.services["core-runner-storage-init"].command | join(" ") | contains("chown 65530:65530 /install /workspace /state")) and
   (.services["core-runner-storage-init"].command | join(" ") | contains("chmod 0700 /install /workspace /state"))
 ' "$rendered" >/dev/null
