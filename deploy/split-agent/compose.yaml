@@ -370,6 +370,11 @@ services:
 
   message-server:
     <<: [*message-image, *message-hardening]
+    # Docker healthchecks run as descendants of the application process.  The
+    # BusyBox HTTPS probe may leave its ssl_client child orphaned when the
+    # health timeout interrupts a handshake; a real init reaps those adopted
+    # children so repeated probes cannot exhaust the container PID limit.
+    init: true
     restart: unless-stopped
     environment:
       <<: *message-capability-environment

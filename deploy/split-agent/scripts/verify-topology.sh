@@ -127,9 +127,11 @@ shellcheck \
   "$script_dir/materialize-agent-secrets.sh" \
   "$script_dir/message-server-entrypoint.sh" \
   "$script_dir/message-server-entrypoint.test.sh" \
+  "$script_dir/message-server-healthcheck.test.sh" \
   "$stack_dir/aws/validate-policy.sh" \
   "$stack_dir/aws/validate-policy.test.sh"
 "$script_dir/message-server-entrypoint.test.sh" >/dev/null
+"$script_dir/message-server-healthcheck.test.sh" >/dev/null
 "$script_dir/initialize-capability-ca.test.sh" >/dev/null
 "$script_dir/accept-local.test.sh" >/dev/null
 "$script_dir/start-local.test.sh" >/dev/null
@@ -185,6 +187,7 @@ jq -e '
   (.services["message-server"].environment.P2P_PORTAL_PASSWORD_FILE == "/run/secrets/message_portal_password") and
   (.services["message-server"].cap_add | index("DAC_READ_SEARCH")) != null and
   (.services["message-server"].entrypoint == ["/usr/local/bin/message-server-entrypoint"]) and
+  (.services["message-server"].init == true) and
   (.services["message-server"].command == [
     "--http-bind-address", ":8008",
     "--https-bind-address", ":8448",
