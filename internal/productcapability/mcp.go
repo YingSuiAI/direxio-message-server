@@ -113,9 +113,8 @@ func NewRegistryWithInvokerAndOptionsChecked(invoker ProductInvoker, options Reg
 					return nil, fmt.Errorf("invalid operation input: %w", err)
 				}
 			}
-			// Owner identity is injected by the ProductCore service. Reject
-			// identity-shaped request fields instead of allowing Agent JSON to
-			// select another account or sender.
+			// The gRPC consumer validates this before delegation. Keep the same
+			// check here as a defense for direct internal Provider invocation.
 			if err := rejectForgedIdentity(params); err != nil {
 				return nil, err
 			}
@@ -216,6 +215,8 @@ func NewRegistryWithInvokerAndOptionsChecked(invoker ProductInvoker, options Reg
 					return nil, err
 				}
 			}
+			// Keep the provider boundary fail-closed even when an internal caller
+			// invokes it without going through the gRPC input validator.
 			if err := rejectForgedIdentity(params); err != nil {
 				return nil, err
 			}
@@ -327,16 +328,6 @@ func findBinding(bindings []operationBinding, operation string) (operationBindin
 		}
 	}
 	return operationBinding{}, false
-}
-
-func rejectForgedIdentity(params map[string]any) error {
-	for key := range params {
-		switch strings.ToLower(strings.TrimSpace(key)) {
-		case "owner_id", "owner_mxid", "authenticated_owner_id", "sender", "sender_mxid", "account_generation":
-			return fmt.Errorf("request field %q is server-derived", key)
-		}
-	}
-	return nil
 }
 
 func capabilitySlug(action string) string {

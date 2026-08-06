@@ -33,6 +33,9 @@ func validateOperationInput(operation *capv1.OperationDescriptor, raw []byte) er
 	if err := decoder.Decode(&input); err != nil || input == nil {
 		return fmt.Errorf("request_json must be a JSON object")
 	}
+	if err := rejectForgedIdentity(input); err != nil {
+		return err
+	}
 	var schema map[string]any
 	if err := json.Unmarshal([]byte(operation.GetInputSchemaJson()), &schema); err != nil {
 		return fmt.Errorf("operation input schema is invalid")
@@ -55,6 +58,16 @@ func validateOperationInput(operation *capv1.OperationDescriptor, raw []byte) er
 		}
 		if expected, _ := property["type"].(string); expected != "" && !jsonSchemaTypeMatches(expected, value) {
 			return fmt.Errorf("field %q has invalid type", name)
+		}
+	}
+	return nil
+}
+
+func rejectForgedIdentity(params map[string]any) error {
+	for key := range params {
+		switch strings.ToLower(strings.TrimSpace(key)) {
+		case "owner_id", "owner_mxid", "authenticated_owner_id", "sender", "sender_mxid", "account_generation":
+			return fmt.Errorf("request field %q is server-derived", key)
 		}
 	}
 	return nil

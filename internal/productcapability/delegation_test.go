@@ -10,7 +10,9 @@ import (
 
 	capv1 "github.com/YingSuiAI/dirextalk-capability-api/gen/go/dirextalk/capability/v1"
 	"github.com/google/uuid"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 func newDelegationTestServer(t *testing.T) (*Server, ed25519.PrivateKey, time.Time) {
@@ -169,6 +171,90 @@ func TestProductDelegationRejectsMalformedAndRequestDigestMismatch(t *testing.T)
 	}
 	if started == nil || started.GetError() == nil || started.GetError().GetCode() != capv1.ErrorCode_ERROR_CODE_CONFLICT {
 		t.Fatalf("digest mismatch was not rejected: %#v", started)
+	}
+}
+
+func TestProductDelegationRejectsServerDerivedIdentityBeforeExchange(t *testing.T) {
+	server, privateKey, now := newDelegationTestServer(t)
+	callCtx := delegationTestCallContext(now)
+	parent := delegationTestParent(t, callCtx, privateKey, now)
+
+	_, err := server.ExchangeProductDelegation(delegationTestContext(), &capv1.ExchangeProductDelegationRequest{
+		CallContext: callCtx, ParentPermission: parent,
+		CapabilityId: "product.test.v1", Operation: "list", RequestJson: []byte(`{"owner_id":"attacker"}`),
+		TargetKind: capv1.ExchangeProductTargetKind_EXCHANGE_PRODUCT_TARGET_KIND_QUERY,
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("forged owner exchange error = %v, want InvalidArgument", err)
+	}
+}
+
+func TestProductQueryRejectsServerDerivedIdentityBeforeProvider(t *testing.T) {
+	publicKey, privateKey, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.UnixMilli(1_700_000_000_000)
+	invoked := false
+	registry, err := NewRegistryWithInvokerChecked(func(context.Context, string, map[string]any) (any, error) {
+		invoked = true
+		return map[string]any{"contacts": []any{}}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	codec := capv1.GrantCodec{Now: func() time.Time { return now }, MaxTTL: 10 * time.Minute}
+	server := &Server{
+		config:   &Config{GrantPublicKey: publicKey, GrantPrivateKey: privateKey, GrantCodec: codec},
+		registry: registry, readSem: make(chan struct{}, 1),
+	}
+	callCtx := delegationTestCallContext(now)
+	requestJSON := []byte(`{"query":"alice","owner_mxid":"@attacker:example.test"}`)
+	descriptor := registry.GetMust("product.contacts.v1").Descriptor
+	operation := registry.OperationMust("product.contacts.v1", "list")
+	rootDigest, err := rootRequestDigest(descriptor, operation, requestJSON, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentRootDigest := sha256.Sum256([]byte("agent-root"))
+	parentClaims := capv1.GrantClaims{
+		ChainID: callCtx.ChainId, RootOperationID: callCtx.RootOperationId,
+		GrantKind: capv1.GrantKindRoot,
+		OwnerID:   "owner-1", AccountGeneration: 1, Scopes: []string{"agent:product:execute", "product:contacts:read"},
+		RootCapabilityID: "agent.skills.v1", RootOperation: "invoke_product",
+		RootRequestDigest: parentRootDigest[:], CatalogDigest: bytes.Repeat([]byte{1}, sha256.Size), SchemaDigest: bytes.Repeat([]byte{2}, sha256.Size),
+		IssuedAtUnixMs: now.UnixMilli(), ExpiresAtUnixMs: now.Add(2 * time.Minute).UnixMilli(),
+		EntryRoute: capv1.NodeMessage, EntryHop: 1, MaxHop: capv1.MaxCallHop, MaxRouteLength: capv1.MaxRouteLength,
+		EntryDeadlineUnixMs: callCtx.DeadlineUnixMs,
+	}
+	schemaDigest := sha256.Sum256([]byte(operation.GetInputSchemaJson()))
+	grant, err := codec.SignProductDelegationFromParent(capv1.ProductDelegationIssue{
+		ParentClaims: parentClaims, CallContext: callCtx,
+		CapabilityID: descriptor.GetCapabilityId(), Operation: operation.GetOperationId(),
+		RequiredScopes: operation.GetRequiredScopes(), TargetKind: capv1.ExchangeProductTargetKind_EXCHANGE_PRODUCT_TARGET_KIND_QUERY,
+		RootRequestDigest: rootDigest, CatalogDigest: server.catalogDigest(), SchemaDigest: schemaDigest[:],
+	}, privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	permission := &capv1.PermissionContext{
+		AuthenticatedOwnerId: "owner-1", AccountGeneration: 1,
+		GrantedScopes: operation.GetRequiredScopes(), CapabilityGrant: grant, RootRequestDigest: rootDigest,
+	}
+
+	response, err := server.Query(delegationTestContext(), &capv1.QueryRequest{
+		CallContext: callCtx, Permission: permission,
+		CapabilityId: "product.contacts.v1", OperationId: "list",
+		RequestJson: requestJSON,
+	})
+	if err != nil {
+		t.Fatalf("query returned transport error: %v", err)
+	}
+	if response.GetError().GetCode() != capv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT {
+		t.Fatalf("forged owner query error = %#v, want INVALID_ARGUMENT", response.GetError())
+	}
+	if invoked {
+		t.Fatal("forged owner query reached the Product provider")
 	}
 }
 
