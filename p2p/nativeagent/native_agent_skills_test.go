@@ -35,6 +35,13 @@ func TestSkillsListUsesOnlyBuiltInDeclarativeManifests(t *testing.T) {
 		if strings.Contains(strings.ToLower(trimString(skill["id"])), "geolibre") {
 			t.Fatalf("fixture skill leaked into default list: %#v", skill)
 		}
+		encoded, err := json.Marshal(skill)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(strings.ToLower(string(encoded)), "aws") {
+			t.Fatalf("AWS skill leaked into this release: %#v", skill)
+		}
 	}
 }
 
@@ -65,14 +72,13 @@ func TestEnabledSkillsPromptSelectsExplicitOrIntentSkillsFailClosed(t *testing.T
 	}
 }
 
-func TestHistoricalSelectedSkillIDsResolveArchivedManifests(t *testing.T) {
+func TestHistoricalNonAWSSelectedSkillIDsResolveArchivedManifests(t *testing.T) {
 	runtime := New(Config{})
 	cases := []struct {
 		selected, id, version, digest string
 	}{
 		{"placement-advisor", "placement-advisor", "1.0.0", "8ba47184e18c1ce354a1d5af106fc706ae9003dd4984dc1a4cfc757c238cbb99"},
 		{"resource-sizing", "resource-sizing", "1.0.0", "28bdc0b940968fb4ad2e63c1cd364f6c7538e6cd826fa2140b19e320f8608ccf"},
-		{"aws-target-advisor@1.1.0#bcb4aae7ae549146342b4bc7b23f2161cdb8f5d9f41a631bc046db1ea3b65763", "aws-target-advisor", "1.1.0", "bcb4aae7ae549146342b4bc7b23f2161cdb8f5d9f41a631bc046db1ea3b65763"},
 	}
 	for _, test := range cases {
 		selected, err := runtime.selectPlanningSkills(context.Background(), nil, map[string]any{"selected_skill_ids": []any{test.selected}})
@@ -83,12 +89,15 @@ func TestHistoricalSelectedSkillIDsResolveArchivedManifests(t *testing.T) {
 			t.Fatalf("select historical %q = %#v, want %s@%s/%s", test.selected, selected, test.id, test.version, test.digest)
 		}
 	}
-	selected, err := runtime.selectPlanningSkills(context.Background(), nil, map[string]any{"selected_skill_ids": []any{"aws-target-advisor"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(selected) != 1 || selected[0].Version != "1.2.0" {
-		t.Fatalf("bare active selection = %#v, want aws-target-advisor@1.2.0", selected)
+	for _, id := range []string{
+		"aws-target-advisor",
+		"aws-target-advisor@1.1.0#bcb4aae7ae549146342b4bc7b23f2161cdb8f5d9f41a631bc046db1ea3b65763",
+		"container-service-deploy",
+		"source-build-systemd",
+	} {
+		if _, err := runtime.selectPlanningSkills(context.Background(), nil, map[string]any{"selected_skill_ids": []any{id}}); err == nil {
+			t.Fatalf("hidden AWS skill %q was explicitly selectable", id)
+		}
 	}
 }
 

@@ -109,18 +109,21 @@ type Channel struct {
 }
 
 type ChannelPostRecord struct {
-	PostID         string `json:"post_id"`
-	ChannelID      string `json:"channel_id"`
-	RoomID         string `json:"room_id"`
-	EventID        string `json:"event_id"`
-	AuthorMXID     string `json:"author_mxid"`
-	AuthorName     string `json:"author_name"`
-	Body           string `json:"body"`
-	MessageType    string `json:"message_type"`
-	MediaJSON      string `json:"media_json"`
-	Visibility     string `json:"visibility"`
-	OriginServerTS int64  `json:"origin_server_ts"`
-	CommentCount   int64  `json:"comment_count"`
+	PostID             string `json:"post_id"`
+	ChannelID          string `json:"channel_id"`
+	RoomID             string `json:"room_id"`
+	EventID            string `json:"event_id"`
+	AuthorMXID         string `json:"author_mxid"`
+	AuthorName         string `json:"author_name"`
+	Body               string `json:"body"`
+	MessageType        string `json:"message_type"`
+	MediaJSON          string `json:"media_json"`
+	Visibility         string `json:"visibility"`
+	CommentsEnabled    bool   `json:"comments_enabled"`
+	CommentsEnabledSet bool   `json:"-"`
+	SettingsUpdated    bool   `json:"-"`
+	OriginServerTS     int64  `json:"origin_server_ts"`
+	CommentCount       int64  `json:"comment_count"`
 }
 
 type ChannelCommentRecord struct {

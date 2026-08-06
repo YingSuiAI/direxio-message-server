@@ -50,6 +50,10 @@ func normalizeMemberRecord(record memberRecord) memberRecord {
 
 func normalizeChannelPostRecord(record channelPostRecord) channelPostRecord {
 	record.Visibility = dirextalkdomain.NormalizeChannelPostVisibility(record.Visibility)
+	if !record.CommentsEnabledSet {
+		record.CommentsEnabled = true
+		record.CommentsEnabledSet = true
+	}
 	return record
 }
 

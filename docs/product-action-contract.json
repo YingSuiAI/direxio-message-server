@@ -8149,6 +8149,11 @@
       "transport": "http_and_ws_request"
     },
     {
+      "name": "channels.posts.update",
+      "auth": "owner",
+      "transport": "http_and_ws_request"
+    },
+    {
       "name": "channels.posts.recall",
       "auth": "owner",
       "transport": "http_and_ws_request"

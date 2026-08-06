@@ -11,6 +11,14 @@ func (s *MemoryStore) InsertChannelPost(ctx context.Context, post channelPostRec
 	s.mu.Lock()
 	for i := range s.posts {
 		if s.posts[i].PostID == post.PostID {
+			if s.posts[i].SettingsUpdated {
+				// Matrix replay/backfill must not undo explicit ProductCore
+				// settings for this immutable post event.
+				post.Visibility = s.posts[i].Visibility
+				post.CommentsEnabled = s.posts[i].CommentsEnabled
+				post.CommentsEnabledSet = true
+				post.SettingsUpdated = true
+			}
 			s.posts[i] = post
 			s.mu.Unlock()
 			return nil
@@ -19,6 +27,25 @@ func (s *MemoryStore) InsertChannelPost(ctx context.Context, post channelPostRec
 	s.posts = append(s.posts, post)
 	s.mu.Unlock()
 	return nil
+}
+
+func (s *MemoryStore) UpdateChannelPostSettings(_ context.Context, postID, eventID string, visibility *string, commentsEnabled *bool) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.posts {
+		if s.posts[i].PostID == postID && s.posts[i].EventID == eventID {
+			if visibility != nil {
+				s.posts[i].Visibility = normalizeChannelPostRecord(channelPostRecord{Visibility: *visibility}).Visibility
+			}
+			if commentsEnabled != nil {
+				s.posts[i].CommentsEnabled = *commentsEnabled
+				s.posts[i].CommentsEnabledSet = true
+			}
+			s.posts[i].SettingsUpdated = true
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (s *MemoryStore) GetChannelPostByID(ctx context.Context, postID, channelID string) (channelPostRecord, bool, error) {

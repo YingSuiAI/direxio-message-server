@@ -850,6 +850,19 @@ func (s *DatabaseStore) migrate(ctx context.Context) error {
 			})
 		},
 	})
+	m.AddMigrations(sqlutil.Migration{
+		Version: "p2p: channel post settings v80",
+		Up: func(ctx context.Context, txn *sql.Tx) error {
+			exists, err := productTableExists(ctx, txn, "p2p_channel_posts")
+			if err != nil || !exists {
+				return err
+			}
+			return execMigrationStatements(ctx, txn, []string{
+				`ALTER TABLE p2p_channel_posts ADD COLUMN IF NOT EXISTS comments_enabled BOOLEAN NOT NULL DEFAULT TRUE`,
+				`ALTER TABLE p2p_channel_posts ADD COLUMN IF NOT EXISTS settings_updated BOOLEAN NOT NULL DEFAULT FALSE`,
+			})
+		},
+	})
 	return m.Up(ctx)
 }
 

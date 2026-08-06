@@ -138,6 +138,21 @@ agent-secretctl init|upgrade|verify|rotate
 `rotate` remains the separate stopped-service active-key rotation workflow and
 is not a substitute for the legacy model-secret upgrade.
 
+## 2026-08-06 Channel Post Settings And AWS Skill Release Gate
+
+The new owner action `channels.posts.update` accepts `post_id` and at least one
+of `visibility="public"|"private"` or boolean `comments_enabled`. Authorization
+is limited to the post author or channel owner. Disabling comments rejects new
+comments only for that post; it does not mute channel chat, the discussion
+surface, or other posts. PostgreSQL stores the settings independently from the
+immutable Matrix post event, and replay/backfill preserves explicit updates.
+
+AWS-specific built-in Planning Skills are hidden for this release. They are
+excluded from `agent.skills.list`, bootstrap metadata, explicit and
+intent-based selection, and prompt injection. The built-in Native Agent system
+prompt no longer advertises AWS workflows. Non-Skill AWS credential and
+Execution V2 contracts are unchanged.
+
 ## 2026-07-30 Channel Post Visibility And Public-Post Paging
 
 `channels.posts.create` accepts optional `visibility="public"|"private"`.

@@ -110,12 +110,12 @@ func TestIntentSelectionExcludesFixtureManifest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fixtureRegistry, err := agentskills.NewRegistry(raw, mustManifestJSON(t, manifests, "container-service-deploy"))
+	fixtureRegistry, err := agentskills.NewRegistry(raw, mustManifestJSON(t, manifests, "health-verifier"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	runtime := New(Config{PlanningSkills: fixtureRegistry})
-	selected, err := runtime.selectPlanningSkills(WithRequestContext(context.Background(), "owner", "conversation", "deploy service"), nil, nil)
+	selected, err := runtime.selectPlanningSkills(WithRequestContext(context.Background(), "owner", "conversation", "verify service health"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,12 +124,12 @@ func TestIntentSelectionExcludesFixtureManifest(t *testing.T) {
 			t.Fatalf("fixture manifest selected: %#v", selected)
 		}
 	}
-	if len(selected) != 1 || selected[0].ID != "container-service-deploy" {
-		t.Fatalf("selected manifests = %#v, want only container-service-deploy", selected)
+	if len(selected) != 1 || selected[0].ID != "health-verifier" {
+		t.Fatalf("selected manifests = %#v, want only health-verifier", selected)
 	}
 }
 
-func TestDeploymentIntentSelectsAnalysisAWSTargetAndOneRecipe(t *testing.T) {
+func TestDeploymentIntentHidesAWSPlanningSkills(t *testing.T) {
 	runtime := New(Config{})
 	selected, err := runtime.selectPlanningSkills(WithRequestContext(context.Background(), "owner", "conversation", "请把这个 Docker 服务部署到 AWS"), nil, nil)
 	if err != nil {
@@ -139,7 +139,7 @@ func TestDeploymentIntentSelectsAnalysisAWSTargetAndOneRecipe(t *testing.T) {
 	for _, manifest := range selected {
 		ids = append(ids, manifest.ID)
 	}
-	want := []string{"project-intake-analyzer", "aws-target-advisor", "container-service-deploy"}
+	want := []string{"project-intake-analyzer"}
 	if strings.Join(ids, ",") != strings.Join(want, ",") {
 		t.Fatalf("deployment skills = %#v, want %#v", ids, want)
 	}
@@ -148,12 +148,12 @@ func TestDeploymentIntentSelectsAnalysisAWSTargetAndOneRecipe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(selected) != 3 || selected[2].ID != "source-build-systemd" {
+	if len(selected) != 1 || selected[0].ID != "project-intake-analyzer" {
 		t.Fatalf("source deployment skills = %#v", selected)
 	}
 }
 
-func TestPlacementAndSizingIntentSelectConsolidatedAWSTargetAdvisor(t *testing.T) {
+func TestPlacementAndSizingIntentHideAWSTargetAdvisor(t *testing.T) {
 	runtime := New(Config{})
 	for _, intent := range []string{"placement", "sizing"} {
 		selected, err := runtime.selectPlanningSkills(
@@ -164,8 +164,8 @@ func TestPlacementAndSizingIntentSelectConsolidatedAWSTargetAdvisor(t *testing.T
 		if err != nil {
 			t.Fatalf("select %s: %v", intent, err)
 		}
-		if len(selected) != 1 || selected[0].ID != "aws-target-advisor" {
-			t.Fatalf("select %s = %#v, want aws-target-advisor only", intent, selected)
+		if len(selected) != 0 {
+			t.Fatalf("select %s = %#v, want no AWS skills", intent, selected)
 		}
 	}
 }

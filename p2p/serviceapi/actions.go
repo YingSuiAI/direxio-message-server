@@ -292,6 +292,7 @@ var actionSpecs = []ActionSpec{
 	{Name: "users.public_channels", Auth: ActionAuthPublic, Transport: ActionTransportHTTPAndWS},
 	{Name: "channels.posts.list", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
 	{Name: "channels.posts.create", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
+	{Name: "channels.posts.update", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
 	{Name: "channels.posts.recall", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
 	{Name: "channels.comments.recall", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
 	{Name: "channels.comments.list", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},

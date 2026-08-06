@@ -541,6 +541,7 @@ func TestFreshAgentExecutionV2SchemaRegistersOnceWithoutV1Ledgers(t *testing.T) 
 
 	const version = "p2p: agent and execution v2 fresh schema v78"
 	const terminalImmutabilityVersion = "p2p: execution run stage terminal immutability v79"
+	const channelPostSettingsVersion = "p2p: channel post settings v80"
 	for _, run := range []int{1, 2} {
 		if run == 2 {
 			if err := store.Migrate(ctx); err != nil {
@@ -563,12 +564,13 @@ func TestFreshAgentExecutionV2SchemaRegistersOnceWithoutV1Ledgers(t *testing.T) 
 		t.Fatalf("close/reopen fresh schema: %v", err)
 	}
 	defer store.Close()
-	expectedMigrations := make(map[string]struct{}, len(frozenUpstreamMigrationVersions)+2)
+	expectedMigrations := make(map[string]struct{}, len(frozenUpstreamMigrationVersions)+3)
 	for _, frozen := range frozenUpstreamMigrationVersions {
 		expectedMigrations[frozen] = struct{}{}
 	}
 	expectedMigrations[version] = struct{}{}
 	expectedMigrations[terminalImmutabilityVersion] = struct{}{}
+	expectedMigrations[channelPostSettingsVersion] = struct{}{}
 	rows, err := store.DB().QueryContext(ctx, `SELECT version FROM db_migrations`)
 	if err != nil {
 		t.Fatal(err)
@@ -586,7 +588,7 @@ func TestFreshAgentExecutionV2SchemaRegistersOnceWithoutV1Ledgers(t *testing.T) 
 		t.Fatal(err)
 	}
 	if len(actualMigrations) != len(expectedMigrations) {
-		t.Fatalf("migration registrations = %d, want exactly frozen upstream + v78/v79 = %d: %#v", len(actualMigrations), len(expectedMigrations), actualMigrations)
+		t.Fatalf("migration registrations = %d, want exactly frozen upstream + v78/v79/v80 = %d: %#v", len(actualMigrations), len(expectedMigrations), actualMigrations)
 	}
 	for expected := range expectedMigrations {
 		if _, ok := actualMigrations[expected]; !ok {
@@ -613,15 +615,21 @@ func TestFreshAgentExecutionV2SchemaRegistersOnceWithoutV1Ledgers(t *testing.T) 
 			t.Fatalf("fresh V2 table %s present=%v err=%v", table, present, err)
 		}
 	}
-	var channelPostVisibilityColumn, channelPostVisibilityIndex bool
+	var channelPostVisibilityColumn, channelPostCommentsEnabledColumn, channelPostSettingsUpdatedColumn, channelPostVisibilityIndex bool
 	if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='p2p_channel_posts' AND column_name='visibility')`).Scan(&channelPostVisibilityColumn); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.DB().QueryRowContext(ctx, `SELECT to_regclass('p2p_channel_posts_channel_visibility_idx') IS NOT NULL`).Scan(&channelPostVisibilityIndex); err != nil {
 		t.Fatal(err)
 	}
-	if !channelPostVisibilityColumn || !channelPostVisibilityIndex {
-		t.Fatalf("fresh v78/v79 channel post visibility column=%v index=%v", channelPostVisibilityColumn, channelPostVisibilityIndex)
+	if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='p2p_channel_posts' AND column_name='comments_enabled')`).Scan(&channelPostCommentsEnabledColumn); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='p2p_channel_posts' AND column_name='settings_updated')`).Scan(&channelPostSettingsUpdatedColumn); err != nil {
+		t.Fatal(err)
+	}
+	if !channelPostVisibilityColumn || !channelPostCommentsEnabledColumn || !channelPostSettingsUpdatedColumn || !channelPostVisibilityIndex {
+		t.Fatalf("fresh v78/v79/v80 channel post visibility=%v comments_enabled=%v settings_updated=%v index=%v", channelPostVisibilityColumn, channelPostCommentsEnabledColumn, channelPostSettingsUpdatedColumn, channelPostVisibilityIndex)
 	}
 	for _, forbidden := range []string{
 		"core_aws_changes", "core_aws_plans", "core_aws_ec2_provisions",

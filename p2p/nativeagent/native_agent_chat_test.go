@@ -24,12 +24,7 @@ func TestAgentSystemPromptPrependsNativeProductRules(t *testing.T) {
 		"Treat returned results as evidence",
 		"tool is unavailable or fails",
 		"do not claim to have browsed",
-		"Reserving target revision 1 does not create or purchase AWS resources",
-		"empty target list is not a terminal blocker",
-		"Agent Management > AWS credentials",
-		"verified_revision does not equal revision",
-		"target reservation tool",
-		"compute.provision Run",
+		"discover exact target IDs",
 		"provider API key or an interactive auth gate",
 		"User configured system prompt.",
 		"Request scoped system prompt.",
@@ -49,5 +44,8 @@ func TestAgentSystemPromptPrependsNativeProductRules(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "Execution V2 tools") || strings.Contains(prompt, "Workload apply/destroy tools") {
 		t.Fatalf("system prompt must describe the Execution V2 planning boundary: %q", prompt)
+	}
+	if strings.Contains(strings.ToLower(prompt), "aws") {
+		t.Fatalf("system prompt must not advertise AWS in this release: %q", prompt)
 	}
 }

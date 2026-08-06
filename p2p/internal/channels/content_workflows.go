@@ -44,6 +44,7 @@ func (m *ContentModule) CreatePost(ctx context.Context, raw map[string]any) (any
 		content["channel_id"] = channelID
 		content["post_id"] = postID
 		content["visibility"] = visibility
+		content["comments_enabled"] = true
 		result, err := matrix.SendMessage(ctx, dirextalktransport.SendMessageRequest{
 			SenderMXID: owner.MXID, RoomID: roomID, MessageType: messageType,
 			Timestamp: now, Content: content,
@@ -57,7 +58,7 @@ func (m *ContentModule) CreatePost(ctx context.Context, raw map[string]any) (any
 	post := Post{
 		PostID: postID, ChannelID: channelID, RoomID: roomID, EventID: eventID,
 		AuthorMXID: owner.MXID, AuthorName: owner.DisplayName, Body: body,
-		MessageType: messageType, MediaJSON: mediaJSON, Visibility: visibility,
+		MessageType: messageType, MediaJSON: mediaJSON, Visibility: visibility, CommentsEnabled: true,
 		OriginServerTS: originServerTS,
 	}
 	if m.store == nil {
@@ -67,6 +68,76 @@ func (m *ContentModule) CreatePost(ctx context.Context, raw map[string]any) (any
 		return nil, actionbase.InternalError(err)
 	}
 	if err := m.attachPostOperation(ctx, &post, actionPostsCreate, "ok", roomID); err != nil {
+		return nil, actionbase.InternalError(err)
+	}
+	return post, nil
+}
+
+// UpdatePost changes the mutable ProductCore settings for an
+// existing Matrix-backed post. The original timeline event remains immutable;
+// public listing and comment creation read this durable settings projection.
+func (m *ContentModule) UpdatePost(ctx context.Context, raw map[string]any) (any, *actionbase.Error) {
+	params := actionbase.Params(raw)
+	postID := params.String("post_id")
+	if postID == "" {
+		return nil, actionbase.BadRequest("post_id is required")
+	}
+	var visibility *string
+	if value, exists := raw["visibility"]; exists {
+		if _, ok := value.(string); !ok {
+			return nil, actionbase.BadRequest("visibility must be public or private")
+		}
+		normalized, ok := validatedPostVisibility(params.String("visibility"))
+		if !ok || strings.TrimSpace(params.String("visibility")) == "" {
+			return nil, actionbase.BadRequest("visibility must be public or private")
+		}
+		visibility = &normalized
+	}
+	var commentsEnabled *bool
+	if value, exists := raw["comments_enabled"]; exists {
+		enabled, ok := value.(bool)
+		if !ok {
+			return nil, actionbase.BadRequest("comments_enabled must be boolean")
+		}
+		commentsEnabled = &enabled
+	}
+	if visibility == nil && commentsEnabled == nil {
+		return nil, actionbase.BadRequest("visibility or comments_enabled is required")
+	}
+	if m.store == nil {
+		return nil, actionbase.InternalError(errors.New("channel content store is not configured"))
+	}
+	record, found, err := m.store.GetChannelPostByID(ctx, postID, params.String("channel_id"))
+	if err != nil {
+		return nil, actionbase.InternalError(err)
+	}
+	if !found {
+		return nil, actionbase.StatusError(http.StatusNotFound, "post not found")
+	}
+	if m.config.AuthorizeRecall != nil {
+		if actionErr := m.config.AuthorizeRecall(ctx, record.RoomID, record.AuthorMXID); actionErr != nil {
+			return nil, actionErr
+		}
+	}
+	updated, err := m.store.UpdateChannelPostSettings(ctx, record.PostID, record.EventID, visibility, commentsEnabled)
+	if err != nil {
+		return nil, actionbase.InternalError(err)
+	}
+	if !updated {
+		return nil, actionbase.StatusError(http.StatusConflict, "post changed before settings update")
+	}
+	if visibility != nil {
+		record.Visibility = *visibility
+	}
+	if commentsEnabled != nil {
+		record.CommentsEnabled = *commentsEnabled
+		record.CommentsEnabledSet = true
+	}
+	post := postFromRecord(record)
+	posts := []Post{post}
+	m.EnrichPosts(ctx, posts, m.owner().MXID)
+	post = posts[0]
+	if err := m.attachPostOperation(ctx, &post, actionPostUpdate, "ok", record.RoomID); err != nil {
 		return nil, actionbase.InternalError(err)
 	}
 	return post, nil
@@ -228,6 +299,9 @@ func (m *ContentModule) CreateComment(ctx context.Context, raw map[string]any) (
 	}
 	if !ok {
 		return nil, actionbase.StatusError(http.StatusNotFound, "post not found")
+	}
+	if !post.CommentsEnabled {
+		return nil, actionbase.StatusError(http.StatusForbidden, "comments are disabled for this post")
 	}
 	channelID = fallback(channelID, post.ChannelID)
 	body := fallback(params.String("body"), params.String("content"))

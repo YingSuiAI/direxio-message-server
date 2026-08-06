@@ -53,7 +53,9 @@ capability live.
   hints only; display masks are never accepted as replacement secret values.
 - `planning.skills` gates the read-only built-in Planning Skill catalog exposed
   by `agent.skills.list`. These records are immutable planning metadata, not
-  locally executable or user-installable Skills.
+  locally executable or user-installable Skills. AWS-specific Planning Skills
+  are release-hidden: they are not listed, selected explicitly or by intent,
+  added to bootstrap metadata, or injected into the Native Agent prompt.
 - Supported model-provider identifiers are `openai`, `anthropic`, `deepseek`, `gemini`, `xai`, `openai_compatible`, and `openrouter`. `litellm`, `vertex`, and unknown identifiers are rejected; clients use `openai_compatible` for custom compatible endpoints.
 - `agent.models.list` preserves upstream `input_modalities` only when the
   provider explicitly returns it on the model or its `architecture`. The

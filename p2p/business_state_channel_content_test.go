@@ -302,6 +302,93 @@ func TestChannelPostVisibilityDefaultsPrivateAndAuthenticatedListOptionallyPagin
 	}
 }
 
+func TestChannelPostVisibilityCanSwitchPublicAndPrivate(t *testing.T) {
+	service := NewService(Config{ServerName: "example.com"})
+	bootstrapService(t, service)
+	ch := mustHandle[channel](t, service, "channels.create", map[string]any{
+		"channel_id": "ch_visibility_switch",
+		"room_id":    "!visibility-switch:example.com",
+		"name":       "Visibility Switch",
+	})
+	post := mustHandle[channelPostRecord](t, service, "channels.posts.create", map[string]any{
+		"channel_id": ch.ChannelID,
+		"body":       "switch me",
+	})
+	otherPost := mustHandle[channelPostRecord](t, service, "channels.posts.create", map[string]any{
+		"channel_id": ch.ChannelID,
+		"body":       "comments stay enabled",
+	})
+	if !post.CommentsEnabled || !otherPost.CommentsEnabled {
+		t.Fatalf("new posts must allow comments by default: post=%#v other=%#v", post, otherPost)
+	}
+
+	updated := mustHandle[channelPostRecord](t, service, "channels.posts.update", map[string]any{
+		"channel_id":       ch.ChannelID,
+		"post_id":          post.PostID,
+		"visibility":       "public",
+		"comments_enabled": false,
+	})
+	if updated.Visibility != "public" || updated.CommentsEnabled {
+		t.Fatalf("updated post settings = %#v, want public with comments disabled", updated)
+	}
+	if _, apiErr := service.Handle(context.Background(), "channels.comments.create", map[string]any{
+		"channel_id": ch.ChannelID, "post_id": post.PostID, "body": "blocked",
+	}); apiErr == nil || apiErr.Status != http.StatusForbidden {
+		t.Fatalf("disabled post comment error = %#v, want 403", apiErr)
+	}
+	mustHandle[channelCommentRecord](t, service, "channels.comments.create", map[string]any{
+		"channel_id": ch.ChannelID, "post_id": otherPost.PostID, "body": "still allowed",
+	})
+	listed := mustHandle[map[string]any](t, service, "channels.posts.list", map[string]any{"channel_id": ch.ChannelID})["posts"].([]channelPostRecord)
+	listedSettings := make(map[string]bool, len(listed))
+	for _, item := range listed {
+		listedSettings[item.PostID] = item.CommentsEnabled
+	}
+	if listedSettings[post.PostID] || !listedSettings[otherPost.PostID] {
+		t.Fatalf("post list comments_enabled = %#v", listedSettings)
+	}
+	publicPage := mustHandle[map[string]any](t, service, "channels.public.posts.list", map[string]any{"room_id": ch.RoomID})
+	publicPosts := publicPage["posts"].([]channelPostRecord)
+	if len(publicPosts) != 1 || publicPosts[0].PostID != post.PostID || publicPosts[0].CommentsEnabled {
+		t.Fatalf("public page after publish = %#v", publicPage)
+	}
+
+	// Replaying the immutable Matrix event must preserve the explicit
+	// ProductCore visibility switch.
+	mustInsertChannelPost(t, service, post)
+	replayed := mustHandle[map[string]any](t, service, "channels.public.posts.list", map[string]any{"room_id": ch.RoomID})
+	if posts := replayed["posts"].([]channelPostRecord); len(posts) != 1 || posts[0].Visibility != "public" {
+		t.Fatalf("Matrix replay reset switched visibility: %#v", replayed)
+	}
+
+	updated = mustHandle[channelPostRecord](t, service, "channels.posts.update", map[string]any{
+		"post_id":          post.PostID,
+		"visibility":       "private",
+		"comments_enabled": true,
+	})
+	if updated.Visibility != "private" || !updated.CommentsEnabled {
+		t.Fatalf("updated post settings = %#v, want private with comments enabled", updated)
+	}
+	mustHandle[channelCommentRecord](t, service, "channels.comments.create", map[string]any{
+		"channel_id": ch.ChannelID, "post_id": post.PostID, "body": "enabled again",
+	})
+	privatePage := mustHandle[map[string]any](t, service, "channels.public.posts.list", map[string]any{"room_id": ch.RoomID})
+	if posts := privatePage["posts"].([]channelPostRecord); len(posts) != 0 {
+		t.Fatalf("private post remained publicly listed: %#v", privatePage)
+	}
+
+	for _, params := range []map[string]any{
+		{"post_id": post.PostID},
+		{"post_id": post.PostID, "visibility": "friends"},
+		{"post_id": post.PostID, "visibility": true},
+		{"post_id": post.PostID, "comments_enabled": "false"},
+	} {
+		if _, apiErr := service.Handle(context.Background(), "channels.posts.update", params); apiErr == nil || apiErr.Status != http.StatusBadRequest {
+			t.Fatalf("invalid visibility update %#v error = %#v, want 400", params, apiErr)
+		}
+	}
+}
+
 func TestPublicChannelPostsAreReadableButNonMembersCannotInteract(t *testing.T) {
 	service := NewService(Config{ServerName: "example.com"})
 	bootstrapService(t, service)

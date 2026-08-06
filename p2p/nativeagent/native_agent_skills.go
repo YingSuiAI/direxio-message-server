@@ -31,7 +31,7 @@ func (r *Runtime) builtinSkillMetadata() []map[string]any {
 	manifests := r.planningSkills.Manifests()
 	result := make([]map[string]any, 0, len(manifests))
 	for _, manifest := range manifests {
-		if isFixtureSkill(manifest) {
+		if isFixtureSkill(manifest) || isAWSPlanningSkill(manifest) {
 			continue
 		}
 		result = append(result, skillMetadata(manifest))
@@ -89,6 +89,9 @@ func (r *Runtime) selectPlanningSkills(ctx context.Context, config, params map[s
 	capabilities := make([]string, 0)
 	seen := map[string]struct{}{}
 	for _, manifest := range r.planningSkills.Manifests() {
+		if isAWSPlanningSkill(manifest) {
+			continue
+		}
 		for _, capability := range manifest.RequiredTargetCapabilities {
 			if _, ok := seen[capability]; ok {
 				continue
@@ -104,7 +107,7 @@ func (r *Runtime) selectPlanningSkills(ctx context.Context, config, params map[s
 	}
 	result := make([]agentskills.Manifest, 0, len(selected))
 	for _, manifest := range selected {
-		if isFixtureSkill(manifest) {
+		if isFixtureSkill(manifest) || isAWSPlanningSkill(manifest) {
 			continue
 		}
 		result = append(result, manifest)
@@ -115,7 +118,7 @@ func (r *Runtime) selectPlanningSkills(ctx context.Context, config, params map[s
 func (r *Runtime) selectDeploymentPlanningSkills(userText string) []agentskills.Manifest {
 	byID := map[string]agentskills.Manifest{}
 	for _, manifest := range r.planningSkills.Manifests() {
-		if !isFixtureSkill(manifest) {
+		if !isFixtureSkill(manifest) && !isAWSPlanningSkill(manifest) {
 			byID[manifest.ID] = manifest
 		}
 	}
@@ -144,7 +147,7 @@ func (r *Runtime) resolveSelectedSkills(ids []string) ([]agentskills.Manifest, e
 		if err != nil {
 			return nil, err
 		}
-		if isFixtureSkill(manifest) {
+		if isFixtureSkill(manifest) || isAWSPlanningSkill(manifest) {
 			return nil, fmt.Errorf("planning skill %q is not built in", id)
 		}
 		result = append(result, manifest)
@@ -289,6 +292,23 @@ func isFixtureSkill(manifest agentskills.Manifest) bool {
 	for _, tag := range manifest.IntentTags {
 		if tag == "fixture" {
 			return true
+		}
+	}
+	return false
+}
+
+// isAWSPlanningSkill is the release visibility gate for AWS-specific skills.
+// Keep the manifests compiled for a later release, but never list, select, or
+// inject them into the Agent prompt while the product surface is disabled.
+func isAWSPlanningSkill(manifest agentskills.Manifest) bool {
+	if strings.Contains(strings.ToLower(manifest.ID), "aws") {
+		return true
+	}
+	for _, values := range [][]string{manifest.IntentTags, manifest.RequiredTargetCapabilities} {
+		for _, value := range values {
+			if strings.Contains(strings.ToLower(value), "aws") {
+				return true
+			}
 		}
 	}
 	return false
