@@ -2,6 +2,15 @@
 
 本文是当前代码与接口的事实源。历史变更记录只用于审计，不作为当前接口或实现依据。
 
+## 2026-08-06 Release V2 服务端版本格式
+
+`release.v2.apply.target_version` 接受 canonical 稳定版 `vX.Y.Z` 和测试版
+`devX.Y.Z`。中台 server `version`、updater status/current version 以及
+active-job 服务端版本使用相同格式。升级通道严格隔离：`v` 运行版本只能
+升级到更高的 `v` 版本，`dev` 运行版本只能升级到更高的 `dev` 版本，禁止
+跨通道升级。客户端版本与中台 server `preVersion` 仍只接受稳定版
+`vX.Y.Z`。
+
 ## 1. 项目定位
 
 本仓库是 Dirextalk 对 Element Dendrite 的集成式 fork：同一个 Go monolith 同时提供 Matrix homeserver 能力和 Dirextalk P2P 产品 API。

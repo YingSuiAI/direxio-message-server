@@ -5,6 +5,16 @@
 > generated contract metadata, `README.md`, and maintained current docs take
 > precedence. Git history is the complete audit trail.
 
+## 2026-08-06 Release V2 development server versions
+
+`release.v2.apply.target_version` now accepts canonical stable `vX.Y.Z` and
+development `devX.Y.Z` server versions. The central server `version`, updater
+status/current version, and active-job server versions use the same format.
+Upgrade channels are isolated: a running `v` server accepts only newer `v`
+targets, while a running `dev` server accepts only newer `dev` targets. Cross-
+channel upgrades are rejected. Client versions and the central server
+`preVersion` remain stable-only `vX.Y.Z` values.
+
 ## 2026-08-03 Dual Agent identities
 
 `agent.config.get` and `agent.config.update` support mode-specific Agent identity objects. `native_agent_identity` owns Ying / Native Agent `display_name` and `avatar_url`; `online_agent_identity` owns Your Agent / Matrix bridge `display_name` and `avatar_url`. The existing top-level `display_name` and `avatar_url` remain for legacy clients and mirror the effective Native Agent identity in responses.

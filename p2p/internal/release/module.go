@@ -230,7 +230,7 @@ func (m *Module) applyV2(ctx context.Context, params map[string]any) (any, *acti
 	if err != nil || comparison < 0 {
 		return nil, actionbase.CodedError(http.StatusConflict, clientVersionIncompatible, "current client version is not compatible with the server update")
 	}
-	comparison, err = releasecontrol.CompareCanonicalStableVersions(request.TargetVersion, buildInfo.Version)
+	comparison, err = releasecontrol.CompareCanonicalServerVersions(request.TargetVersion, buildInfo.Version)
 	if err != nil || comparison <= 0 {
 		return nil, actionbase.CodedError(http.StatusConflict, releaseTargetNotNewer, "target_version must be newer than the running server")
 	}
@@ -290,7 +290,7 @@ func validateV2ApplyRequest(params map[string]any) (releasecontrol.DirectApplyRe
 	if !ok {
 		return releasecontrol.DirectApplyRequest{}, v2InvalidParamsError()
 	}
-	targetVersion, err := releasecontrol.CanonicalStableVersion("target_version", targetVersion)
+	targetVersion, err := releasecontrol.CanonicalServerVersion("target_version", targetVersion)
 	if err != nil {
 		return releasecontrol.DirectApplyRequest{}, v2InvalidParamsError()
 	}
@@ -327,7 +327,7 @@ func validateCentralServerVersion(version releasecontrol.CentralServerVersion) e
 	if version.AppID != "1" || version.ChannelID != "server" {
 		return &releasecontrol.CentralVersionError{Code: releasecontrol.CentralVersionInvalidCode, Message: "central version response is invalid"}
 	}
-	if _, err := releasecontrol.CanonicalStableVersion("version", version.Version); err != nil {
+	if _, err := releasecontrol.CanonicalServerVersion("version", version.Version); err != nil {
 		return &releasecontrol.CentralVersionError{Code: releasecontrol.CentralVersionInvalidCode, Message: "central version response is invalid"}
 	}
 	if _, err := releasecontrol.CanonicalStableVersion("pre_version", version.PreVersion); err != nil {
@@ -368,7 +368,7 @@ func validDirectUpdaterStatus(status releasecontrol.DirectStatus, currentVersion
 	if !status.Available {
 		return false
 	}
-	updaterVersion, err := releasecontrol.CanonicalStableVersion("current_version", status.CurrentVersion)
+	updaterVersion, err := releasecontrol.CanonicalServerVersion("current_version", status.CurrentVersion)
 	if err != nil || updaterVersion != currentVersion {
 		return false
 	}
@@ -393,10 +393,10 @@ func directActiveJobMap(job *releasecontrol.ActiveJob) any {
 		"status":            job.Status,
 		"service_available": job.ServiceAvailable,
 	}
-	if version, err := releasecontrol.CanonicalStableVersion("current_version", job.CurrentVersion); err == nil && version != "" {
+	if version, err := releasecontrol.CanonicalServerVersion("current_version", job.CurrentVersion); err == nil && version != "" {
 		result["current_version"] = version
 	}
-	if version, err := releasecontrol.CanonicalStableVersion("target_version", job.TargetVersion); err == nil && version != "" {
+	if version, err := releasecontrol.CanonicalServerVersion("target_version", job.TargetVersion); err == nil && version != "" {
 		result["target_version"] = version
 	}
 	return result
