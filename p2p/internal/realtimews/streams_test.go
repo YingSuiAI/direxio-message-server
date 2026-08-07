@@ -51,6 +51,26 @@ func (agentStreamPortStub) Stream(
 	return emit(agentstream.Event{Event: "delta", Data: map[string]any{"text": "agent"}})
 }
 
+type sequencedDurableAgent struct {
+	params chan map[string]any
+}
+
+func (sequencedDurableAgent) Stream(context.Context, string, map[string]any, func(agentstream.Event) error) error {
+	return nil
+}
+
+func (a sequencedDurableAgent) DurableStream(_ context.Context, _ string, _ string, params map[string]any, emit func(agentstream.StreamEvent) error) error {
+	if a.params != nil {
+		a.params <- cloneMap(params)
+	}
+	turn := agentstream.Turn{State: agentstream.StateAccepted}
+	if err := emit(agentstream.StreamEvent{Kind: agentstream.EventAccepted, Turn: turn, TurnID: "turn-1", ConversationID: "conversation-1", Seq: 41, Event: "accepted"}); err != nil {
+		return err
+	}
+	turn.State = agentstream.StateSucceeded
+	return emit(agentstream.StreamEvent{Kind: agentstream.EventRuntime, Turn: turn, TurnID: "turn-1", ConversationID: "conversation-1", Seq: 42, Event: "done", Data: map[string]any{"done": true}})
+}
+
 type validatingNativeAgentRunner struct {
 	streamCalls int
 }
@@ -248,6 +268,32 @@ func TestNativeAgentStreamValidatesImmediatelyAndDetachesDurableTurn(t *testing.
 	}
 	if agent.cancelCalls != 0 {
 		t.Fatalf("attachment detach stopped durable turn: params=%#v calls=%d", agent.cancelParams, agent.cancelCalls)
+	}
+}
+
+func TestNativeAgentDurableFramesExposeSequenceCursor(t *testing.T) {
+	receivedParams := make(chan map[string]any, 1)
+	module := New(Dependencies{Agent: sequencedDurableAgent{params: receivedParams}}, Config{})
+	connection := newConnection("session", Ticket{Role: "owner", UserID: "@owner:example.test"})
+	module.startNativeAgentStream(context.Background(), connection, map[string]any{
+		"id": "sequenced", "action": "agent.chat", "params": map[string]any{
+			"message": "hello", "model_profile_id": "profile-id",
+			"model_profile_revision": int64(1), "credential_version": int64(1),
+			"turn_id": "turn-1", "conversation_id": "conversation-1", "after_seq": int64(40),
+		},
+	})
+	params := <-receivedParams
+	if params["after_seq"] != int64(40) {
+		t.Fatalf("durable stream after_seq = %#v, want 40", params["after_seq"])
+	}
+
+	accepted := nextOutbound(t, connection)
+	if accepted["type"] != "server.native_agent_stream.accepted" || accepted["seq"] != int64(41) {
+		t.Fatalf("accepted frame = %#v, want seq 41", accepted)
+	}
+	done := nextOutbound(t, connection)
+	if done["type"] != "server.native_agent_stream.event" || done["event"] != "done" || done["seq"] != int64(42) {
+		t.Fatalf("done frame = %#v, want seq 42", done)
 	}
 }
 

@@ -72,6 +72,38 @@ type requestValidationRunner struct {
 	streamCalls int
 }
 
+type sequenceRunner struct{}
+
+func (sequenceRunner) Apply(context.Context, string) error { return nil }
+func (sequenceRunner) Invoke(context.Context, string, map[string]any) (map[string]any, error) {
+	return nil, nil
+}
+func (sequenceRunner) Stream(_ context.Context, _ string, _ map[string]any, emit func(agentstream.Event) error) error {
+	return emit(agentstream.Event{Event: "done", Seq: 31, Data: map[string]any{"done": true}})
+}
+
+func TestDurableStreamProjectsRunnerSequence(t *testing.T) {
+	module := New(Config{Runner: sequenceRunner{}})
+	params := map[string]any{
+		"message":                "hello",
+		"model_profile_id":       "profile-id",
+		"model_profile_revision": int64(2),
+		"credential_version":     int64(3),
+		"turn_id":                "turn-1",
+		"conversation_id":        "conversation-1",
+	}
+	var received agentstream.StreamEvent
+	if err := module.DurableStream(context.Background(), "@owner:example.test", "agent.chat.stream", params, func(event agentstream.StreamEvent) error {
+		received = event
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if received.Seq != 31 || received.Event != "done" || received.Turn.State != agentstream.StateSucceeded {
+		t.Fatalf("durable stream event = %#v, want done seq 31", received)
+	}
+}
+
 func (r *requestValidationRunner) Apply(context.Context, string) error { return nil }
 
 func (r *requestValidationRunner) Invoke(context.Context, string, map[string]any) (map[string]any, error) {

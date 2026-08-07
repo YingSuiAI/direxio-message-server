@@ -146,7 +146,7 @@ func (r *Runner) Stream(ctx context.Context, action string, params map[string]an
 			continue
 		}
 		if result, ok := event.Event.(*capv1.WatchOperationEvent_Result); ok && result.Result != nil {
-			for _, nativeEvent := range nativeEventsFromResult(result.Result.ResultJson) {
+			for _, nativeEvent := range nativeEventsFromResult(result.Result.ResultJson, event.Sequence) {
 				if err := emit(nativeEvent); err != nil {
 					return err
 				}
@@ -614,10 +614,14 @@ func afterSequence(params map[string]any) int64 {
 // nativeEventsFromResult flattens the Core chat adapter's collected stream
 // result. The wire contract exposes top-level accepted/delta/tool/done/error
 // events; the internal `{events:[...]}` envelope must never leak to Flutter.
-func nativeEventsFromResult(resultJSON []byte) []agentstream.Event {
+func nativeEventsFromResult(resultJSON []byte, resultSequence int64) []agentstream.Event {
 	var envelope map[string]json.RawMessage
 	if len(resultJSON) == 0 || json.Unmarshal(resultJSON, &envelope) != nil {
-		return []agentstream.Event{{Event: "done", Data: map[string]any{}}}
+		return []agentstream.Event{{Event: "done", Seq: positiveSequence(resultSequence), Data: map[string]any{}}}
+	}
+	sequence := positiveSequence(resultSequence)
+	if sequence == 0 {
+		sequence = positiveJSONSequence(envelope["sequence"])
 	}
 	var rawEvents []json.RawMessage
 	_ = json.Unmarshal(envelope["events"], &rawEvents)
@@ -627,28 +631,36 @@ func nativeEventsFromResult(resultJSON []byte) []agentstream.Event {
 		if payload == nil {
 			payload = map[string]any{}
 		}
-		return []agentstream.Event{{Event: "done", Data: payload}}
+		return []agentstream.Event{{Event: "done", Seq: sequence, Data: payload}}
 	}
 	out := make([]agentstream.Event, 0, len(rawEvents)+1)
+	lastSequence := sequence
 	for _, raw := range rawEvents {
 		var payload map[string]any
 		if json.Unmarshal(raw, &payload) != nil || payload == nil {
 			continue
 		}
+		eventSequence := sequence
+		if eventSequence == 0 {
+			eventSequence = positiveJSONSequence(rawSequence(raw))
+		}
+		if eventSequence > 0 {
+			lastSequence = eventSequence
+		}
 		kind := strings.ToLower(strings.TrimSpace(fmt.Sprint(payload["kind"])))
 		switch kind {
 		case "started":
-			out = append(out, agentstream.Event{Event: "accepted", Data: payload})
+			out = append(out, agentstream.Event{Event: "accepted", Seq: eventSequence, Data: payload})
 		case "delta":
-			out = append(out, agentstream.Event{Event: "delta", Data: payload})
+			out = append(out, agentstream.Event{Event: "delta", Seq: eventSequence, Data: payload})
 		case "tool_call", "tool_result", "tool":
-			out = append(out, agentstream.Event{Event: "tool", Data: payload})
+			out = append(out, agentstream.Event{Event: "tool", Seq: eventSequence, Data: payload})
 		case "error":
-			out = append(out, agentstream.Event{Event: "error", Data: payload})
+			out = append(out, agentstream.Event{Event: "error", Seq: eventSequence, Data: payload})
 		case "done":
-			out = append(out, agentstream.Event{Event: "done", Data: payload})
+			out = append(out, agentstream.Event{Event: "done", Seq: eventSequence, Data: payload})
 		default:
-			out = append(out, agentstream.Event{Event: "delta", Data: payload})
+			out = append(out, agentstream.Event{Event: "delta", Seq: eventSequence, Data: payload})
 		}
 	}
 	if len(out) == 0 || out[len(out)-1].Event != "done" {
@@ -658,19 +670,56 @@ func nativeEventsFromResult(resultJSON []byte) []agentstream.Event {
 		if response != nil {
 			data["response"] = response
 		}
-		out = append(out, agentstream.Event{Event: "done", Data: data})
+		out = append(out, agentstream.Event{Event: "done", Seq: lastSequence, Data: data})
 	}
 	return out
+}
+
+func rawSequence(raw json.RawMessage) json.RawMessage {
+	var payload map[string]json.RawMessage
+	if json.Unmarshal(raw, &payload) != nil {
+		return nil
+	}
+	return payload["sequence"]
+}
+
+func positiveJSONSequence(raw json.RawMessage) int64 {
+	if len(raw) == 0 {
+		return 0
+	}
+	var value any
+	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	decoder.UseNumber()
+	if err := decoder.Decode(&value); err != nil {
+		return 0
+	}
+	number, ok := value.(json.Number)
+	if !ok {
+		return 0
+	}
+	parsed, err := number.Int64()
+	if err != nil {
+		return 0
+	}
+	return positiveSequence(parsed)
+}
+
+func positiveSequence(sequence int64) int64 {
+	if sequence > 0 {
+		return sequence
+	}
+	return 0
 }
 
 func nativeEventFromProto(event *capv1.WatchOperationEvent) (*agentstream.Event, bool, error) {
 	if event == nil {
 		return nil, false, nil
 	}
-	base := map[string]any{"operation_id": event.OperationId, "sequence": event.Sequence}
+	sequence := positiveSequence(event.Sequence)
+	base := map[string]any{"operation_id": event.OperationId, "sequence": sequence}
 	switch value := event.Event.(type) {
 	case *capv1.WatchOperationEvent_Accepted:
-		return &agentstream.Event{Event: "accepted", Data: base}, false, nil
+		return &agentstream.Event{Event: "accepted", Seq: sequence, Data: base}, false, nil
 	case *capv1.WatchOperationEvent_Progress:
 		var payload map[string]any
 		if len(value.Progress.EventJson) > 0 {
@@ -688,15 +737,15 @@ func nativeEventFromProto(event *capv1.WatchOperationEvent) (*agentstream.Event,
 		}
 		switch eventName {
 		case "accepted", "started":
-			return &agentstream.Event{Event: "accepted", Data: payload}, false, nil
+			return &agentstream.Event{Event: "accepted", Seq: sequence, Data: payload}, false, nil
 		case "tool", "tool_call", "tool_result":
-			return &agentstream.Event{Event: "tool", Data: payload}, false, nil
+			return &agentstream.Event{Event: "tool", Seq: sequence, Data: payload}, false, nil
 		case "error":
-			return &agentstream.Event{Event: "error", Data: payload}, true, fmt.Errorf("agent operation failed")
+			return &agentstream.Event{Event: "error", Seq: sequence, Data: payload}, true, fmt.Errorf("agent operation failed")
 		case "done":
-			return &agentstream.Event{Event: "done", Data: payload}, true, nil
+			return &agentstream.Event{Event: "done", Seq: sequence, Data: payload}, true, nil
 		default:
-			return &agentstream.Event{Event: "delta", Data: payload}, false, nil
+			return &agentstream.Event{Event: "delta", Seq: sequence, Data: payload}, false, nil
 		}
 	case *capv1.WatchOperationEvent_Result:
 		var payload map[string]any
@@ -711,21 +760,21 @@ func nativeEventFromProto(event *capv1.WatchOperationEvent) (*agentstream.Event,
 		for key, item := range base {
 			payload[key] = item
 		}
-		return &agentstream.Event{Event: "done", Data: payload}, true, nil
+		return &agentstream.Event{Event: "done", Seq: sequence, Data: payload}, true, nil
 	case *capv1.WatchOperationEvent_Error:
 		code := capv1.ErrorCode_ERROR_CODE_UPSTREAM_FAILED
 		if value.Error != nil && value.Error.Error != nil {
 			code = value.Error.Error.GetCode()
 		}
 		base["error"] = (&CapabilityError{Code: code}).Error()
-		return &agentstream.Event{Event: "error", Data: base}, true, capabilityError(code)
+		return &agentstream.Event{Event: "error", Seq: sequence, Data: base}, true, capabilityError(code)
 	case *capv1.WatchOperationEvent_Cancelled:
 		base["reason"] = "external native agent operation was cancelled"
-		return &agentstream.Event{Event: "cancelled", Data: base}, true, capabilityError(capv1.ErrorCode_ERROR_CODE_CONFLICT)
+		return &agentstream.Event{Event: "cancelled", Seq: sequence, Data: base}, true, capabilityError(capv1.ErrorCode_ERROR_CODE_CONFLICT)
 	case *capv1.WatchOperationEvent_Gap:
 		base["earliest_sequence"] = value.Gap.EarliestAvailableSequence
 		base["latest_sequence"] = value.Gap.LatestAvailableSequence
-		return &agentstream.Event{Event: "gap", Data: base}, false, nil
+		return &agentstream.Event{Event: "gap", Seq: sequence, Data: base}, false, nil
 	default:
 		return nil, false, nil
 	}

@@ -108,7 +108,7 @@ func (m *Module) DurableStream(ctx context.Context, ownerID, action string, para
 			kind = agentstream.EventError
 		}
 		turn := agentstream.Turn{OwnerID: strings.TrimSpace(ownerID), TurnID: turnID, ConversationID: conversationID, Action: action, State: state, UpdatedAt: time.Now().UTC()}
-		return emit(agentstream.StreamEvent{Kind: kind, Turn: turn, TurnID: turnID, ConversationID: conversationID, Event: event.Event, Data: event.Data})
+		return emit(agentstream.StreamEvent{Kind: kind, Turn: turn, TurnID: turnID, ConversationID: conversationID, Seq: event.Seq, Event: event.Event, Data: event.Data})
 	})
 }
 

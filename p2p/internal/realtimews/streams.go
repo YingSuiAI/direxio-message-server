@@ -325,7 +325,7 @@ func (m *Module) startNativeAgentStream(ctx context.Context, client *connection,
 					return client.sendBlocking(streamCtx, map[string]any{
 						"type": "server.native_agent_stream.accepted", "id": id,
 						"action": wireAction, "turn_id": event.TurnID,
-						"conversation_id": event.ConversationID, "state": string(event.Turn.State),
+						"conversation_id": event.ConversationID, "state": string(event.Turn.State), "seq": event.Seq,
 					})
 				case agentstream.EventError:
 					message := actionbase.String(event.Data["error"])

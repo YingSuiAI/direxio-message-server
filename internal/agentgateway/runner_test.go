@@ -96,7 +96,7 @@ func TestRunnerOperationIDForTurnIsStableAndCanonical(t *testing.T) {
 
 func TestNativeEventsFromResultFlattensCoreChatEnvelope(t *testing.T) {
 	result := []byte(`{"events":[{"kind":"started","request_id":"r"},{"kind":"delta","text":"hi"},{"kind":"tool_call","tool_call":{"name":"search"}},{"kind":"done"}],"response":{"done":true}}`)
-	events := nativeEventsFromResult(result)
+	events := nativeEventsFromResult(result, 17)
 	if len(events) != 4 {
 		t.Fatalf("flattened event count = %d, want 4", len(events))
 	}
@@ -105,9 +105,55 @@ func TestNativeEventsFromResultFlattensCoreChatEnvelope(t *testing.T) {
 		if event.Event != want[i] {
 			t.Errorf("event[%d] = %q, want %q", i, event.Event, want[i])
 		}
+		if event.Seq != 17 {
+			t.Errorf("event[%d] seq = %d, want outer result sequence 17", i, event.Seq)
+		}
 	}
 	if _, ok := any(events[1].Data["events"]).([]any); ok {
 		t.Fatal("flattened delta must not contain nested events")
+	}
+}
+
+func TestNativeEventsFromResultProjectsOnlyPositiveIntegerSequences(t *testing.T) {
+	events := nativeEventsFromResult([]byte(`{"events":[{"kind":"delta","sequence":7},{"kind":"delta","sequence":2.5},{"kind":"delta","sequence":"8"},{"kind":"delta","sequence":-1},{"kind":"delta","sequence":9223372036854775808},{"kind":"done","sequence":9223372036854775807}]}`), 0)
+	if len(events) != 6 {
+		t.Fatalf("event count = %d, want 6", len(events))
+	}
+	want := []int64{7, 0, 0, 0, 0, 9223372036854775807}
+	for i, event := range events {
+		if event.Seq != want[i] {
+			t.Errorf("event[%d] seq = %d, want %d", i, event.Seq, want[i])
+		}
+	}
+
+	envelopeEvents := nativeEventsFromResult([]byte(`{"sequence":9,"events":[{"kind":"delta"},{"kind":"done"}]}`), 0)
+	for i, event := range envelopeEvents {
+		if event.Seq != 9 {
+			t.Errorf("envelope event[%d] seq = %d, want 9", i, event.Seq)
+		}
+	}
+}
+
+func TestNativeEventFromProtoProjectsSequence(t *testing.T) {
+	event, terminal, err := nativeEventFromProto(&capv1.WatchOperationEvent{
+		OperationId: "operation-1",
+		Sequence:    23,
+		Event:       &capv1.WatchOperationEvent_Progress{Progress: &capv1.ProgressEvent{EventJson: []byte(`{"kind":"delta","text":"hi"}`)}},
+	})
+	if err != nil || terminal || event == nil {
+		t.Fatalf("native event = %#v, terminal=%v, err=%v", event, terminal, err)
+	}
+	if event.Seq != 23 || event.Data["sequence"] != int64(23) {
+		t.Fatalf("native event sequence = %#v, want 23", event)
+	}
+
+	event, _, _ = nativeEventFromProto(&capv1.WatchOperationEvent{
+		OperationId: "operation-1",
+		Sequence:    -1,
+		Event:       &capv1.WatchOperationEvent_Accepted{Accepted: &capv1.AcceptedEvent{}},
+	})
+	if event == nil || event.Seq != 0 || event.Data["sequence"] != int64(0) {
+		t.Fatalf("non-positive proto sequence was projected: %#v", event)
 	}
 }
 

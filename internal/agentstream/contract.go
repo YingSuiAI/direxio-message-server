@@ -10,10 +10,13 @@ import (
 	"time"
 )
 
-// Event is one non-durable Native Agent stream event.
+// Event is one Native Agent runner stream event.
 type Event struct {
 	Event string
-	Data  map[string]any
+	// Seq is the positive remote-operation cursor for a durable stream. It is
+	// zero for non-durable streams and for malformed upstream cursor values.
+	Seq  int64
+	Data map[string]any
 }
 
 // State is the remote durable-turn state projected on the websocket facade.
