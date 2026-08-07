@@ -1396,6 +1396,33 @@
       }
     },
     {
+      "name": "agent.model_profiles.test",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          },
+          "profile_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "error_code": {
+            "type": "string",
+            "required": true
+          },
+          "reachable": {
+            "type": "boolean",
+            "required": true
+          }
+        }
+      }
+    },
+    {
       "name": "agent.model_profiles.delete",
       "auth": "owner",
       "transport": "http_and_ws_request",

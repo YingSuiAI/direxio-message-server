@@ -111,6 +111,19 @@ func modelProfileGetSchema() *ActionSchema {
 	}
 }
 
+func modelProfileTestSchema() *ActionSchema {
+	return &ActionSchema{
+		Request: map[string]ActionFieldSchema{
+			"idempotency_key": {Type: "string", Required: true},
+			"profile_id":      {Type: "string", Required: true},
+		},
+		Response: map[string]ActionFieldSchema{
+			"reachable":  {Type: "boolean", Required: true},
+			"error_code": {Type: "string", Required: true},
+		},
+	}
+}
+
 func modelProfileDeleteSchema() *ActionSchema {
 	return &ActionSchema{
 		Request: map[string]ActionFieldSchema{

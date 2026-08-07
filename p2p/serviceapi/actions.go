@@ -64,6 +64,7 @@ var actionSpecs = []ActionSpec{
 	{Name: "agent.model_profiles.sync", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: modelProfileSyncSchema()},
 	{Name: "agent.model_profiles.list", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: modelProfileListSchema()},
 	{Name: "agent.model_profiles.get", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: modelProfileGetSchema()},
+	{Name: "agent.model_profiles.test", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: modelProfileTestSchema()},
 	{Name: "agent.model_profiles.delete", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: modelProfileDeleteSchema()},
 	{Name: "agent.schedules.create", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: embeddedScheduleCreateSchema()},
 	{Name: "agent.schedules.update", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: embeddedScheduleUpdateSchema()},

@@ -22,6 +22,24 @@ func TestActionRegistryCoversPublicAndAgentActions(t *testing.T) {
 	}
 }
 
+func TestModelProfileTestActionIsPubliclyRegistered(t *testing.T) {
+	const action = "agent.model_profiles.test"
+	spec, ok := serviceapi.ActionSpecFor(action)
+	if !ok {
+		t.Fatalf("%s is missing from the public ProductCore action contract", action)
+	}
+	if spec.Auth != serviceapi.ActionAuthOwner || spec.Transport != serviceapi.ActionTransportHTTPAndWS {
+		t.Fatalf("%s metadata = %#v, want owner HTTP+WS action", action, spec)
+	}
+	if spec.Schema == nil || !spec.Schema.Request["idempotency_key"].Required || !spec.Schema.Request["profile_id"].Required || !spec.Schema.Response["reachable"].Required || !spec.Schema.Response["error_code"].Required {
+		t.Fatalf("%s schema = %#v, want strict test request and response", action, spec.Schema)
+	}
+	service := NewService(Config{ServerName: "example.com"})
+	if _, ok := service.actions[action]; !ok {
+		t.Fatalf("%s has no registered ProductCore handler", action)
+	}
+}
+
 func TestFixedMCPBodyActionsAreRemovedFromProductRegistry(t *testing.T) {
 	service := NewService(Config{ServerName: "example.com"})
 
