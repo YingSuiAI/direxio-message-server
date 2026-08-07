@@ -207,7 +207,7 @@ func (r *Runner) invokeOperationWithReplay(ctx context.Context, action string, p
 			return nil, false, fmt.Errorf("agent returned an empty query response")
 		}
 		if response.Error != nil {
-			return nil, false, capabilityError(response.Error.GetCode())
+			return nil, false, capabilityErrorFromProto(response.Error)
 		}
 		return response.ResultJson, false, nil
 	}
@@ -247,7 +247,7 @@ func (r *Runner) invokeOperationWithReplay(ctx context.Context, action string, p
 			return value.Result.ResultJson, response.GetReplayed(), nil
 		case *capv1.WatchOperationEvent_Error:
 			if value.Error != nil && value.Error.Error != nil {
-				return nil, false, capabilityError(value.Error.Error.GetCode())
+				return nil, false, capabilityErrorFromProto(value.Error.Error)
 			}
 			return nil, false, capabilityError(capv1.ErrorCode_ERROR_CODE_UPSTREAM_FAILED)
 		case *capv1.WatchOperationEvent_Cancelled:
@@ -561,7 +561,7 @@ func operationResponseError(response *capv1.StartOperationResponse) error {
 		return fmt.Errorf("agent returned an empty operation response")
 	}
 	if response.Error != nil {
-		return capabilityError(response.Error.GetCode())
+		return capabilityErrorFromProto(response.Error)
 	}
 	return nil
 }
@@ -762,12 +762,17 @@ func nativeEventFromProto(event *capv1.WatchOperationEvent) (*agentstream.Event,
 		}
 		return &agentstream.Event{Event: "done", Seq: sequence, Data: payload}, true, nil
 	case *capv1.WatchOperationEvent_Error:
-		code := capv1.ErrorCode_ERROR_CODE_UPSTREAM_FAILED
-		if value.Error != nil && value.Error.Error != nil {
-			code = value.Error.Error.GetCode()
+		capabilityErr := capabilityErrorFromProto(nil)
+		if value.Error != nil {
+			capabilityErr = capabilityErrorFromProto(value.Error.Error)
 		}
-		base["error"] = (&CapabilityError{Code: code}).Error()
-		return &agentstream.Event{Event: "error", Seq: sequence, Data: base}, true, capabilityError(code)
+		var typedErr *CapabilityError
+		if errors.As(capabilityErr, &typedErr) && typedErr.ClientCode != "" {
+			base["code"] = typedErr.ClientCode
+			base["error_code"] = typedErr.ClientCode
+		}
+		base["error"] = capabilityErr.Error()
+		return &agentstream.Event{Event: "error", Seq: sequence, Data: base}, true, capabilityErr
 	case *capv1.WatchOperationEvent_Cancelled:
 		base["reason"] = "external native agent operation was cancelled"
 		return &agentstream.Event{Event: "cancelled", Seq: sequence, Data: base}, true, capabilityError(capv1.ErrorCode_ERROR_CODE_CONFLICT)

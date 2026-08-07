@@ -103,7 +103,7 @@ capability live.
 - Native Agent knowledge is an owner-scoped server surface. Source upload uses
   `agent.knowledge.sources.list`, `.delete`, `agent.knowledge.upload.start`,
   `.chunk`, and `.finish`; V1 accepts valid UTF-8 `text/plain`,
-  `text/markdown`, `text/csv`, and `application/json` files up to 10 MiB, with
+  `text/markdown`, and `application/json` files up to 16 MiB, with
   canonical base64 chunks no larger than 256 KiB. `upload.start` requires the
   complete content SHA-256 before any session is created; upload progress is
   byte-based, and a source is `ready` only after all vectors and the source
@@ -112,7 +112,12 @@ capability live.
   credentials, provider settings, or base URLs. Config reads/writes expose the
   non-secret profile id/revision, model, collection digest, and config revision;
   search pages additionally expose the exact embedding generation and replay
-  those values from opaque cursor snapshots.
+  those values from opaque cursor snapshots. Retained Knowledge content has a
+  64 MiB owner quota. `agent.knowledge.status` strictly projects the Agent-owned
+  `quota_used_bytes`, `quota_limit_bytes`, `quota_remaining_bytes`, and
+  `max_source_bytes` counters. Agent `RESOURCE_EXHAUSTED` failures carrying
+  `details.code=knowledge_quota_exceeded` map to ProductCore HTTP 413 with both
+  `code` and `error_code` set to `knowledge_quota_exceeded`.
 - `agent.knowledge.memory.create` is the singular Eino remember/recall write
   tool. `agent.knowledge.memories.list`, `.update`, and `.delete` expose the
   editable durable-memory records; they are distinct from conversation

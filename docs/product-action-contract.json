@@ -6750,6 +6750,22 @@
           "embedding_stale": {
             "type": "integer"
           },
+          "max_source_bytes": {
+            "type": "integer",
+            "required": true
+          },
+          "quota_limit_bytes": {
+            "type": "integer",
+            "required": true
+          },
+          "quota_remaining_bytes": {
+            "type": "integer",
+            "required": true
+          },
+          "quota_used_bytes": {
+            "type": "integer",
+            "required": true
+          },
           "supported": {
             "type": "boolean"
           }

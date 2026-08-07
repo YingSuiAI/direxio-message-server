@@ -22,6 +22,11 @@ import (
 // projection.
 var ErrInvalidActionResult = errors.New("native agent action result is invalid")
 
+const (
+	knowledgeQuotaLimitBytes int64 = 64 << 20
+	knowledgeMaxSourceBytes  int64 = 16 << 20
+)
+
 func adaptActionResult(action string, output map[string]any) (map[string]any, error) {
 	if err := validateActionResult(strings.TrimSpace(action), output); err != nil {
 		return nil, err
@@ -160,9 +165,51 @@ func validateActionResult(action string, output map[string]any) error {
 		return validateModelCatalogResult(output)
 	case "agent.chat.turns.list":
 		return validateTurnsListResult(output)
+	case "agent.knowledge.status":
+		return validateKnowledgeStatusResult(output)
 	default:
 		return nil
 	}
+}
+
+func validateKnowledgeStatusResult(output map[string]any) error {
+	if output == nil {
+		return fmt.Errorf("%w: knowledge status response is missing", ErrInvalidActionResult)
+	}
+	values := make(map[string]int64, 4)
+	for _, field := range []struct {
+		canonical string
+		core      string
+	}{
+		{canonical: "quota_used_bytes", core: "QuotaUsedBytes"},
+		{canonical: "quota_limit_bytes", core: "QuotaLimitBytes"},
+		{canonical: "quota_remaining_bytes", core: "QuotaRemainingBytes"},
+		{canonical: "max_source_bytes", core: "MaxSourceBytes"},
+	} {
+		value := valueByKey(output, field.canonical, field.core)
+		if value == nil {
+			return fmt.Errorf("%w: knowledge status %s is required", ErrInvalidActionResult, field.canonical)
+		}
+		integer, ok := turnInt64(value)
+		if !ok || integer < 0 {
+			return fmt.Errorf("%w: knowledge status %s must be a non-negative integer", ErrInvalidActionResult, field.canonical)
+		}
+		values[field.canonical] = integer
+	}
+	used := values["quota_used_bytes"]
+	limit := values["quota_limit_bytes"]
+	remaining := values["quota_remaining_bytes"]
+	maxSource := values["max_source_bytes"]
+	if limit != knowledgeQuotaLimitBytes || maxSource != knowledgeMaxSourceBytes {
+		return fmt.Errorf("%w: knowledge status quota limits violate the product contract", ErrInvalidActionResult)
+	}
+	if used > limit || remaining != limit-used {
+		return fmt.Errorf("%w: knowledge status quota counters are inconsistent", ErrInvalidActionResult)
+	}
+	if maxSource > limit {
+		return fmt.Errorf("%w: knowledge status max_source_bytes exceeds quota_limit_bytes", ErrInvalidActionResult)
+	}
+	return nil
 }
 
 func validateModelCatalogResult(output map[string]any) error {
@@ -849,6 +896,10 @@ func knowledgeStatusResult(value map[string]any) map[string]any {
 		"embedding_profile_id":       {"embedding_profile_id", "EmbeddingProfileID"},
 		"embedding_profile_revision": {"embedding_profile_revision", "EmbeddingProfileRevision"},
 		"embedding_model":            {"embedding_model", "EmbeddingModel"},
+		"quota_used_bytes":           {"quota_used_bytes", "QuotaUsedBytes"},
+		"quota_limit_bytes":          {"quota_limit_bytes", "QuotaLimitBytes"},
+		"quota_remaining_bytes":      {"quota_remaining_bytes", "QuotaRemainingBytes"},
+		"max_source_bytes":           {"max_source_bytes", "MaxSourceBytes"},
 	}
 	for key, names := range aliases {
 		if item := valueByKey(value, names...); item != nil {

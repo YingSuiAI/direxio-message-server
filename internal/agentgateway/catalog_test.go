@@ -15,12 +15,31 @@ func TestKnowledgeCatalogPinsCurrentAgentSchemaResults(t *testing.T) {
 		"agent.knowledge.config.update": "87c332e9185a0436d6488041bbfc11cd66c9f40e345af02d9f97a76676cd65ae",
 		"agent.knowledge.search":        "3bff0a96cb6f09421ee1a5ea243b8801a0b61fa4b1f8e01cdf98653acfd99761",
 		"agent.knowledge.memory.search": "3bff0a96cb6f09421ee1a5ea243b8801a0b61fa4b1f8e01cdf98653acfd99761",
+		"agent.knowledge.status":        "01c2cda93a058ad6e133692089afb4b81b9e5800d18003f6cd2f3e62f8efa4a3",
 	}
 	for action, expected := range want {
 		requirement := NewCatalogRequirement(action)
 		if got := hex.EncodeToString(requirement.ResultSchemaDigest); got != expected {
 			t.Errorf("%s result schema digest = %s, want %s", action, got, expected)
 		}
+	}
+}
+
+func TestValidateCatalogPinsKnowledgeStatusQuotaSchema(t *testing.T) {
+	const input = `{"type":"object","additionalProperties":true}`
+	const result = `{"additionalProperties":false,"properties":{"checked_at":{"format":"date-time","type":"string"},"cleanup_pending_count":{"minimum":0,"type":"integer"},"count":{"minimum":0,"type":"integer"},"embedding_indexed":{"minimum":0,"type":"integer"},"embedding_model":{"type":"string"},"embedding_profile_id":{"format":"uuid","type":"string"},"embedding_profile_revision":{"minimum":1,"type":"integer"},"embedding_stale":{"minimum":0,"type":"integer"},"failed_count":{"minimum":0,"type":"integer"},"indexing_count":{"minimum":0,"type":"integer"},"max_source_bytes":{"const":16777216,"type":"integer"},"quota_limit_bytes":{"const":67108864,"type":"integer"},"quota_remaining_bytes":{"minimum":0,"type":"integer"},"quota_used_bytes":{"minimum":0,"type":"integer"},"ready_count":{"minimum":0,"type":"integer"},"supported":{"type":"boolean"},"uploading_count":{"minimum":0,"type":"integer"}},"required":["supported","count","embedding_indexed","embedding_stale","ready_count","uploading_count","indexing_count","failed_count","cleanup_pending_count","checked_at","quota_used_bytes","quota_limit_bytes","quota_remaining_bytes","max_source_bytes"],"type":"object"}`
+	descriptor := catalogTestDescriptor("agent.knowledge.v1", "status", input, result)
+	catalog := catalogTestWithDigest(t, descriptor)
+	requirement := NewCatalogRequirement("agent.knowledge.status")
+	if err := ValidateCatalog(catalog, []CatalogRequirement{requirement}); err != nil {
+		t.Fatalf("current Agent knowledge status schema rejected: %v", err)
+	}
+	descriptor.Operations[0].ResultSchemaJson = `{"type":"object"}`
+	drifted := sha256.Sum256([]byte(descriptor.Operations[0].ResultSchemaJson))
+	descriptor.Operations[0].ResultSchemaDigest = drifted[:]
+	catalog.CatalogDigest = computeCatalogDigest(catalog.Capabilities)
+	if err := ValidateCatalog(catalog, []CatalogRequirement{requirement}); err == nil {
+		t.Fatal("catalog accepted drifted knowledge status quota schema")
 	}
 }
 

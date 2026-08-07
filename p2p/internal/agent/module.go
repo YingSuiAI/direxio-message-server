@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	capv1 "github.com/YingSuiAI/dirextalk-capability-api/gen/go/dirextalk/capability/v1"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/agentgateway"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/agentstream"
 	actionbase "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/action"
@@ -219,6 +220,9 @@ func externalAgentActionError(err error) *actionbase.Error {
 	}
 	var capabilityErr *agentgateway.CapabilityError
 	if errors.As(err, &capabilityErr) {
+		if capabilityErr.Code == capv1.ErrorCode_ERROR_CODE_RESOURCE_EXHAUSTED && capabilityErr.ClientCode == agentgateway.KnowledgeQuotaExceededCode {
+			return actionbase.CodedError(http.StatusRequestEntityTooLarge, agentgateway.KnowledgeQuotaExceededCode, capabilityErr.Error())
+		}
 		return actionbase.StatusError(agentgateway.CapabilityHTTPStatus(capabilityErr.Code), capabilityErr.Error())
 	}
 	message := strings.ToLower(strings.TrimSpace(err.Error()))

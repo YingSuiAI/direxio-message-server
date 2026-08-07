@@ -241,3 +241,15 @@ func TestCapabilityHTTPStatusUsesStructuredErrorCode(t *testing.T) {
 		t.Fatalf("structured capability error leaked %q: %q", secret, got)
 	}
 }
+
+func TestCapabilityErrorFromProtoPreservesOnlyKnowledgeQuotaClientCode(t *testing.T) {
+	err := capabilityErrorFromProto(&capv1.CapabilityError{Code: capv1.ErrorCode_ERROR_CODE_RESOURCE_EXHAUSTED, Details: map[string]string{"code": KnowledgeQuotaExceededCode, "secret": "drop"}})
+	var capabilityErr *CapabilityError
+	if !errors.As(err, &capabilityErr) || capabilityErr.ClientCode != KnowledgeQuotaExceededCode || capabilityErr.Error() != "knowledge quota exceeded" {
+		t.Fatalf("knowledge quota capability error = %#v", err)
+	}
+	other := capabilityErrorFromProto(&capv1.CapabilityError{Code: capv1.ErrorCode_ERROR_CODE_RESOURCE_EXHAUSTED, Details: map[string]string{"code": "untrusted_code"}})
+	if !errors.As(other, &capabilityErr) || capabilityErr.ClientCode != "" {
+		t.Fatalf("untrusted client code escaped Agent boundary: %#v", other)
+	}
+}

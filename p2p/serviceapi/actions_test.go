@@ -23,7 +23,7 @@ func TestAgentConversationAndKnowledgeSchemasMatchHandlerResponses(t *testing.T)
 		{"agent.chat.conversations.delete", map[string]string{"conversation": "object", "replayed": "boolean"}},
 		{"agent.knowledge.memory.create", map[string]string{"memory_id": "string", "title": "string", "content": "string", "tags": "array", "created_at": "string", "replayed": "boolean", "embedding_indexed": "boolean", "embedding_profile_id": "string", "embedding_profile_revision": "integer", "embedding_model": "string"}},
 		{"agent.knowledge.search", map[string]string{"items": "array", "next_cursor": "string", "search_mode": "string", "embedding_profile_id": "string", "embedding_profile_revision": "integer", "embedding_model": "string", "embedding_generation": "string", "collection_config_digest": "string"}},
-		{"agent.knowledge.status", map[string]string{"supported": "boolean", "count": "integer", "embedding_indexed": "integer", "embedding_stale": "integer", "embedding_profile_id": "string", "embedding_profile_revision": "integer", "embedding_model": "string"}},
+		{"agent.knowledge.status", map[string]string{"supported": "boolean", "count": "integer", "embedding_indexed": "integer", "embedding_stale": "integer", "embedding_profile_id": "string", "embedding_profile_revision": "integer", "embedding_model": "string", "quota_used_bytes": "integer", "quota_limit_bytes": "integer", "quota_remaining_bytes": "integer", "max_source_bytes": "integer"}},
 	} {
 		schema := byName[test.action].Schema
 		if schema == nil || len(schema.Response) != len(test.fields) {
@@ -33,6 +33,18 @@ func TestAgentConversationAndKnowledgeSchemasMatchHandlerResponses(t *testing.T)
 			if got := schema.Response[name].Type; got != want {
 				t.Fatalf("%s response.%s = %q, want %q", test.action, name, got, want)
 			}
+		}
+	}
+}
+
+func TestKnowledgeStatusSchemaRequiresCanonicalQuotaFields(t *testing.T) {
+	spec, ok := ActionSpecFor("agent.knowledge.status")
+	if !ok || spec.Schema == nil {
+		t.Fatal("agent.knowledge.status must publish a schema")
+	}
+	for _, field := range []string{"quota_used_bytes", "quota_limit_bytes", "quota_remaining_bytes", "max_source_bytes"} {
+		if !spec.Schema.Response[field].Required {
+			t.Errorf("knowledge status response.%s must be required", field)
 		}
 	}
 }

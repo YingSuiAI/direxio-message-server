@@ -60,6 +60,13 @@ func TestExternalAgentActionErrorUsesStructuredCapabilityCode(t *testing.T) {
 	}
 }
 
+func TestExternalAgentActionErrorMapsKnowledgeQuotaExceeded(t *testing.T) {
+	err := externalAgentActionError(&agentgateway.CapabilityError{Code: capv1.ErrorCode_ERROR_CODE_RESOURCE_EXHAUSTED, ClientCode: agentgateway.KnowledgeQuotaExceededCode})
+	if err == nil || err.Status != http.StatusRequestEntityTooLarge || err.Code != agentgateway.KnowledgeQuotaExceededCode || err.Error != "knowledge quota exceeded" {
+		t.Fatalf("knowledge quota ProductCore error = %#v", err)
+	}
+}
+
 func TestExternalAgentActionErrorMapsInvalidRequestSentinel(t *testing.T) {
 	err := externalAgentActionError(fmt.Errorf("wrapped: %w", agentgateway.ErrInvalidActionRequest))
 	if err == nil || err.Status != http.StatusBadRequest {

@@ -103,11 +103,11 @@ func TestPublicResultAdaptersPreserveLegacyEnvelopes(t *testing.T) {
 				t.Fatalf("upload start keys=%v value=%#v", keys, got)
 			}
 		}},
-		{"knowledge status exact projection", "agent.knowledge.status", map[string]any{"Supported": true, "Count": float64(3), "ReadyCount": float64(2), "FailedCount": float64(1), "EmbeddingIndexed": float64(1), "EmbeddingStale": float64(2), "EmbeddingProfileID": "embed", "EmbeddingProfileRevision": float64(4), "EmbeddingModel": "text-embedding-3-small", "extra": "drop"}, func(t *testing.T, got map[string]any) {
-			if keys := sortedMapKeys(got); !reflect.DeepEqual(keys, []string{"count", "embedding_indexed", "embedding_model", "embedding_profile_id", "embedding_profile_revision", "embedding_stale", "supported"}) {
+		{"knowledge status exact projection", "agent.knowledge.status", map[string]any{"Supported": true, "Count": float64(3), "ReadyCount": float64(2), "FailedCount": float64(1), "EmbeddingIndexed": float64(1), "EmbeddingStale": float64(2), "EmbeddingProfileID": "embed", "EmbeddingProfileRevision": float64(4), "EmbeddingModel": "text-embedding-3-small", "QuotaUsedBytes": float64(1024), "QuotaLimitBytes": float64(67108864), "QuotaRemainingBytes": float64(67107840), "MaxSourceBytes": float64(16777216), "extra": "drop"}, func(t *testing.T, got map[string]any) {
+			if keys := sortedMapKeys(got); !reflect.DeepEqual(keys, []string{"count", "embedding_indexed", "embedding_model", "embedding_profile_id", "embedding_profile_revision", "embedding_stale", "max_source_bytes", "quota_limit_bytes", "quota_remaining_bytes", "quota_used_bytes", "supported"}) {
 				t.Fatalf("knowledge status keys=%v value=%#v", keys, got)
 			}
-			if got["embedding_indexed"] != float64(1) || got["embedding_stale"] != float64(2) {
+			if got["embedding_indexed"] != float64(1) || got["embedding_stale"] != float64(2) || got["quota_used_bytes"] != float64(1024) || got["quota_limit_bytes"] != float64(67108864) || got["quota_remaining_bytes"] != float64(67107840) || got["max_source_bytes"] != float64(16777216) {
 				t.Fatalf("knowledge status counters were inferred/changed: %#v", got)
 			}
 		}},
@@ -324,6 +324,37 @@ func TestWebSearchResultAdapterRejectsMissingOrWrongTypedFields(t *testing.T) {
 	delete(validTest, "tested_at")
 	if _, err := adaptActionResult("agent.web_search.test", validTest); !errors.Is(err, ErrInvalidActionResult) {
 		t.Fatalf("web-search test missing tested_at error = %v, want ErrInvalidActionResult", err)
+	}
+}
+
+func TestKnowledgeStatusResultAdapterRequiresCanonicalQuotaCounters(t *testing.T) {
+	valid := map[string]any{
+		"QuotaUsedBytes": float64(1024), "QuotaLimitBytes": float64(67108864),
+		"QuotaRemainingBytes": float64(67107840), "MaxSourceBytes": float64(16777216),
+	}
+	if _, err := adaptActionResult("agent.knowledge.status", valid); err != nil {
+		t.Fatalf("valid knowledge status rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(map[string]any){
+		"missing used":   func(value map[string]any) { delete(value, "QuotaUsedBytes") },
+		"fraction limit": func(value map[string]any) { value["QuotaLimitBytes"] = 1.5 },
+		"negative max":   func(value map[string]any) { value["MaxSourceBytes"] = -1 },
+		"wrong fixed limits": func(value map[string]any) {
+			value["QuotaLimitBytes"] = float64(33554432)
+			value["QuotaRemainingBytes"] = float64(33553408)
+			value["MaxSourceBytes"] = float64(8388608)
+		},
+		"used exceeds limit":     func(value map[string]any) { value["QuotaUsedBytes"] = float64(67108865) },
+		"remaining inconsistent": func(value map[string]any) { value["QuotaRemainingBytes"] = float64(1) },
+		"source exceeds limit":   func(value map[string]any) { value["MaxSourceBytes"] = float64(67108865) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			value := cloneParams(valid)
+			mutate(value)
+			if _, err := adaptActionResult("agent.knowledge.status", value); !errors.Is(err, ErrInvalidActionResult) {
+				t.Fatalf("invalid knowledge status error = %v, want ErrInvalidActionResult", err)
+			}
+		})
 	}
 }
 

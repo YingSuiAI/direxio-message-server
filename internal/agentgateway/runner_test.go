@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"errors"
 	"testing"
 	"time"
 
@@ -154,6 +155,26 @@ func TestNativeEventFromProtoProjectsSequence(t *testing.T) {
 	})
 	if event == nil || event.Seq != 0 || event.Data["sequence"] != int64(0) {
 		t.Fatalf("non-positive proto sequence was projected: %#v", event)
+	}
+}
+
+func TestNativeEventFromProtoProjectsKnowledgeQuotaCode(t *testing.T) {
+	event, terminal, err := nativeEventFromProto(&capv1.WatchOperationEvent{
+		OperationId: "operation-1",
+		Sequence:    24,
+		Event: &capv1.WatchOperationEvent_Error{Error: &capv1.ErrorEvent{Error: &capv1.CapabilityError{
+			Code: capv1.ErrorCode_ERROR_CODE_RESOURCE_EXHAUSTED,
+			Details: map[string]string{
+				"code": KnowledgeQuotaExceededCode,
+			},
+		}}},
+	})
+	var capabilityErr *CapabilityError
+	if !terminal || !errors.As(err, &capabilityErr) || capabilityErr.ClientCode != KnowledgeQuotaExceededCode {
+		t.Fatalf("knowledge quota event terminal=%v err=%#v", terminal, err)
+	}
+	if event == nil || event.Data["code"] != KnowledgeQuotaExceededCode || event.Data["error_code"] != KnowledgeQuotaExceededCode || event.Data["error"] != "knowledge quota exceeded" {
+		t.Fatalf("knowledge quota event = %#v", event)
 	}
 }
 

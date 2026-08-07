@@ -47,7 +47,7 @@ func knowledgeSchema(action string) *ActionSchema {
 	case "search":
 		s.Response = map[string]ActionFieldSchema{"items": {Type: "array", Required: true}, "next_cursor": {Type: "string", Required: true}, "search_mode": {Type: "string", Required: true}, "embedding_profile_id": {Type: "string"}, "embedding_profile_revision": {Type: "integer"}, "embedding_model": {Type: "string"}, "embedding_generation": {Type: "string"}, "collection_config_digest": {Type: "string"}}
 	case "status":
-		s.Response = map[string]ActionFieldSchema{"supported": {Type: "boolean"}, "count": {Type: "integer"}, "embedding_indexed": {Type: "integer"}, "embedding_stale": {Type: "integer"}, "embedding_profile_id": {Type: "string"}, "embedding_profile_revision": {Type: "integer"}, "embedding_model": {Type: "string"}}
+		s.Response = map[string]ActionFieldSchema{"supported": {Type: "boolean"}, "count": {Type: "integer"}, "embedding_indexed": {Type: "integer"}, "embedding_stale": {Type: "integer"}, "embedding_profile_id": {Type: "string"}, "embedding_profile_revision": {Type: "integer"}, "embedding_model": {Type: "string"}, "quota_used_bytes": {Type: "integer", Required: true}, "quota_limit_bytes": {Type: "integer", Required: true}, "quota_remaining_bytes": {Type: "integer", Required: true}, "max_source_bytes": {Type: "integer", Required: true}}
 	case "memories_list":
 		s.Response = map[string]ActionFieldSchema{"items": {Type: "array"}, "next_page_token": {Type: "string"}}
 	default:

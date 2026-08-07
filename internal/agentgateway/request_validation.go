@@ -563,12 +563,18 @@ func positiveIntegerAtMost(value any, maximum int64) bool {
 // a capability operation. The upstream message is deliberately discarded;
 // Agent providers may include credential-bearing details in that field.
 type CapabilityError struct {
-	Code capv1.ErrorCode
+	Code       capv1.ErrorCode
+	ClientCode string
 }
+
+const KnowledgeQuotaExceededCode = "knowledge_quota_exceeded"
 
 func (e *CapabilityError) Error() string {
 	if e == nil {
 		return "external native agent operation failed"
+	}
+	if e.Code == capv1.ErrorCode_ERROR_CODE_RESOURCE_EXHAUSTED && e.ClientCode == KnowledgeQuotaExceededCode {
+		return "knowledge quota exceeded"
 	}
 	switch e.Code {
 	case capv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT:
@@ -595,6 +601,17 @@ func (e *CapabilityError) Error() string {
 }
 
 func capabilityError(code capv1.ErrorCode) error { return &CapabilityError{Code: code} }
+
+func capabilityErrorFromProto(value *capv1.CapabilityError) error {
+	if value == nil {
+		return capabilityError(capv1.ErrorCode_ERROR_CODE_UPSTREAM_FAILED)
+	}
+	clientCode := ""
+	if value.GetCode() == capv1.ErrorCode_ERROR_CODE_RESOURCE_EXHAUSTED && value.GetDetails()["code"] == KnowledgeQuotaExceededCode {
+		clientCode = KnowledgeQuotaExceededCode
+	}
+	return &CapabilityError{Code: value.GetCode(), ClientCode: clientCode}
+}
 
 // CapabilityHTTPStatus translates the structured Agent error taxonomy to the
 // stable ProductCore HTTP semantics. Unknown codes fail closed as 502.
