@@ -35,11 +35,13 @@ DIREXTALK_SPLIT_COMPOSE_MODE=production \
 DIREXTALK_MESSAGE_TLS_MODE=edge-terminated \
 DIREXTALK_MESSAGE_SERVER_NAME=message.example.com \
 DIREXTALK_MESSAGE_CLIENT_BASE_URL=https://message.example.com \
+DIREXTALK_RELEASE_CATALOG_ORIGIN=https://imadmin.dirextalk.ai \
   docker compose --env-file "$env_file" -f compose.yaml -f compose.production.yaml config --quiet
 DIREXTALK_SPLIT_COMPOSE_MODE=production \
 DIREXTALK_MESSAGE_TLS_MODE=edge-terminated \
 DIREXTALK_MESSAGE_SERVER_NAME=message.example.com \
 DIREXTALK_MESSAGE_CLIENT_BASE_URL=https://message.example.com \
+DIREXTALK_RELEASE_CATALOG_ORIGIN=https://imadmin.dirextalk.ai \
   docker compose --env-file "$env_file" -f compose.yaml -f compose.production.yaml config --format json >"$production_rendered"
 
 agent_instance=$(sed -n 's/^DIREXTALK_AGENT_INSTANCE_ID=//p' "$env_file")
@@ -51,6 +53,7 @@ https_bind=$(sed -n 's/^DIREXTALK_MESSAGE_HTTPS_BIND=//p' "$env_file")
 client_base_url=$(sed -n 's/^DIREXTALK_MESSAGE_CLIENT_BASE_URL=//p' "$env_file")
 tls_mode=$(sed -n 's/^DIREXTALK_MESSAGE_TLS_MODE=//p' "$env_file")
 server_name=$(sed -n 's/^DIREXTALK_MESSAGE_SERVER_NAME=//p' "$env_file")
+release_catalog_origin=$(sed -n 's/^DIREXTALK_RELEASE_CATALOG_ORIGIN=//p' "$env_file")
 tls_cert_file=$(sed -n 's/^DIREXTALK_MESSAGE_TLS_CERT_FILE=//p' "$env_file")
 tls_key_file=$(sed -n 's/^DIREXTALK_MESSAGE_TLS_KEY_FILE=//p' "$env_file")
 master_key_env=$(sed -n 's/^DIREXTALK_CORE_SECRET_MASTER_KEY_FILE=//p' "$env_file")
@@ -62,6 +65,7 @@ printf '%s\n' "$https_bind" | grep -Eq '^[0-9]+$'
 [ "$tls_mode" = local ]
 [ "$server_name" = localhost ]
 [ "$client_base_url" = "http://localhost:$http_bind" ]
+[ "$release_catalog_origin" = https://imadmin.dirextalk.ai ]
 [ "$tls_cert_file" = "$run_dir/provision/message-tls-external-cert.pem" ]
 [ "$tls_key_file" = "$run_dir/provision/message-tls-external-key.pem" ]
 [ "$master_key_env" = "$run_dir/provision/core-secret-master-key" ]
@@ -102,6 +106,12 @@ grep -Fqx 'core_secret_master_key_version: 1' "$run_dir/provision/agent-config.y
 printf '%s\n' "$account_generation" | grep -Eq '^[1-9][0-9]*$'
 jq -e --arg generation "$account_generation" '.services["message-server"].environment.P2P_ACCOUNT_GENERATION == $generation' "$production_rendered" >/dev/null
 jq -e '
+  .services["message-server"].environment.DIREXTALK_RELEASE_CATALOG_ORIGIN == "https://imadmin.dirextalk.ai" and
+  (.services.agent.environment.DIREXTALK_RELEASE_CATALOG_ORIGIN == null) and
+  (.services["extension-runner"].environment.DIREXTALK_RELEASE_CATALOG_ORIGIN == null) and
+  (.services["core-runner"].environment.DIREXTALK_RELEASE_CATALOG_ORIGIN == null)
+' "$production_rendered" >/dev/null
+jq -e '
   def required_bind($target; $source):
     [.services["message-server"].volumes[] |
       select(.type == "bind" and .target == $target and .source == $source and .read_only == true and .bind.create_host_path == false)] |
@@ -135,6 +145,7 @@ shellcheck \
   "$script_dir/manage-runner-apparmor.test.sh" \
   "$script_dir/update-agent-local.sh" \
   "$script_dir/update-agent-local.test.sh" \
+  "$script_dir/update-agent-local.docker.test.sh" \
   "$script_dir/provision-local.test.sh" \
   "$script_dir/verify-production-images.sh" \
   "$script_dir/verify-production-images.test.sh" \
@@ -328,6 +339,12 @@ jq -e --arg http "$http_bind" --arg https "$https_bind" '
 
 jq -e '
   (.services.agent.volumes | map(.source // "") | any(test("agent_extension_socket|core_runner_socket"))) and
+  ([.services.agent.volumes[] | select((.source | test("agent_extension_socket")) and .target == "/run/dirextalk-agent" and .volume.nocopy == true)] | length) == 1 and
+  ([.services.agent.volumes[] | select((.source | test("core_runner_socket")) and .target == "/run/dirextalk-core-runner" and .volume.nocopy == true)] | length) == 1 and
+  ([.services["extension-runner"].volumes[] | select((.source | test("agent_extension_socket")) and .target == "/run/dirextalk-agent" and .volume.nocopy == true)] | length) == 1 and
+  ([.services["extension-socket-init"].volumes[] | select((.source | test("agent_extension_socket")) and .target == "/socket" and .volume.nocopy == true)] | length) == 1 and
+  ([.services["core-runner"].volumes[] | select((.source | test("core_runner_socket")) and .target == "/run/dirextalk-core-runner" and .volume.nocopy == true)] | length) == 1 and
+  ([.services["core-runner-socket-init"].volumes[] | select((.source | test("core_runner_socket")) and .target == "/socket" and .volume.nocopy == true)] | length) == 1 and
   (.services.agent.volumes | map(.source // "") | any(test("agent_extension_staging"))) and
   ([.services.agent.volumes[] | select(.target == "/var/lib/dirextalk-agent/extension-workspaces" and .source == "agent_runner_workspaces")] | length) == 1 and
   ([.services["extension-runner"].volumes[] | select(.target == "/var/lib/dirextalk-agent/extension-workspaces" and .source == "agent_runner_workspaces")] | length) == 1 and

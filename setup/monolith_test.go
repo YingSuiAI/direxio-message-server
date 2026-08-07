@@ -73,3 +73,23 @@ func TestP2PEventRetentionInvalidEnvDisablesPruning(t *testing.T) {
 		t.Fatalf("expected invalid prune flag to disable pruning")
 	}
 }
+
+func TestReleaseCatalogSourcesFromEnvRequireValidHTTPSOrigin(t *testing.T) {
+	for _, origin := range []string{"", "http://imadmin.dirextalk.ai", "https://imadmin.dirextalk.ai/path", "https://user@imadmin.dirextalk.ai"} {
+		t.Run(strings.ReplaceAll(origin, "/", "_"), func(t *testing.T) {
+			t.Setenv("DIREXTALK_RELEASE_CATALOG_ORIGIN", origin)
+			server, agent, err := releaseCatalogSourcesFromEnv()
+			if err == nil || server != nil || agent != nil {
+				t.Fatalf("invalid origin did not fail closed: server=%T agent=%T err=%v", server, agent, err)
+			}
+		})
+	}
+}
+
+func TestReleaseCatalogSourcesFromEnvBuildBothChannelsFromOneOrigin(t *testing.T) {
+	t.Setenv("DIREXTALK_RELEASE_CATALOG_ORIGIN", "https://imadmin.dirextalk.ai/")
+	server, agent, err := releaseCatalogSourcesFromEnv()
+	if err != nil || server == nil || agent == nil {
+		t.Fatalf("valid release catalog origin rejected: server=%T agent=%T err=%v", server, agent, err)
+	}
+}

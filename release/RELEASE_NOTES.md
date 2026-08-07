@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v1.1.6
+
+1. Inject one deployment-owned release catalog origin and derive the fixed Server and Agent channels from it.
+2. Make Server and Agent release changes forward-only, with infrastructure failures entering maintenance and unreferenced old images removed after the new receipt commits.
+3. Preserve isolated runner socket permissions and delegated cgroup controllers across first start and release changes.
+
 ## v1.1.5
 
 1. Propagate durable Agent operation sequence cursors to Native Agent WebSocket frames so clients can resume streams with a real `after_seq` cursor.
@@ -97,11 +103,13 @@ metadata.
   upgrade target; repository release metadata does not constrain the source
   server version.
 
-### Backup and rollback
+### Forward-only updates
 
-An upgrade requires a backup. Rollback restores the single retained backup
-created before the current deployment attempt; it does not reuse an arbitrary
-older backup.
+Server and Agent release changes never reactivate an older release. A failure
+after activation starts enters maintenance and requires explicit intervention.
+After health and receipt commit, the protected wrapper removes the previous
+image only when no other container still references it; it never globally
+prunes or force-removes shared images.
 
 ### Publishing
 

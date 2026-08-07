@@ -17,6 +17,8 @@ old_message_id=$(printf 'c%.0s' {1..64})
 new_message_id=$(printf 'd%.0s' {1..64})
 agent_id=$(printf 'e%.0s' {1..64})
 postgres_id=$(printf 'f%.0s' {1..64})
+shared_old_id=$(printf '9%.0s' {1..64})
+old_oneshot_id=$(printf '8%.0s' {1..64})
 old_ref=docker.io/dirextalk/message-server@sha256:$old_digest
 old_repo_digest=dirextalk/message-server@sha256:$old_digest
 target_ref=docker.io/dirextalk/message-server@sha256:$target_digest
@@ -24,6 +26,12 @@ old_revision=$(printf '4%.0s' {1..40})
 target_revision=$(printf '5%.0s' {1..40})
 machine_id=$(tr -d '[:space:]' </etc/machine-id)
 
+cat >"$tmp/bin/sync" <<'EOF'
+#!/usr/bin/env bash
+printf 'sync %s\n' "$*" >>"$FAKE_DOCKER_LOG"
+if [ -n "${FAKE_SYNC_FAIL_MATCH:-}" ] && [[ "$*" == *"$FAKE_SYNC_FAIL_MATCH"* ]]; then exit 1; fi
+exec /usr/bin/sync "$@"
+EOF
 cat >"$tmp/bin/docker" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -39,7 +47,24 @@ case "$1" in
     [ "${FAKE_PULL_FAIL:-false}" != true ]
     ;;
   image)
+    if [ "$2" = rm ]; then [ "${FAKE_IMAGE_RM_FAIL:-false}" != true ]; exit; fi
     [ "$2" = inspect ]
+    if [ "${5:-}" = '{{.Id}}' ]; then
+      case "$3" in
+        "$FAKE_OLD_REF") printf '%s\n' "$FAKE_OLD_IMAGE_ID" ;;
+        docker.io/dirextalk/message-server:v1.0.0)
+          if [ "${FAKE_RETARGET_FIXED_REF:-false}" = true ]; then printf '%s\n' "$FAKE_TARGET_IMAGE_ID"; else printf '%s\n' "$FAKE_OLD_IMAGE_ID"; fi
+          ;;
+        "$FAKE_TARGET_REF") printf '%s\n' "$FAKE_TARGET_IMAGE_ID" ;;
+        *) exit 1 ;;
+      esac
+      exit 0
+    fi
+    if [ "${5:-}" = '{{range .RepoTags}}{{println .}}{{end}}{{range .RepoDigests}}{{println .}}{{end}}' ]; then
+      printf '%s\n' 'docker.io/dirextalk/message-server:v1.0.0' "$FAKE_OLD_REF"
+      [ "${FAKE_SHARED_ALIAS:-false}" != true ] || printf '%s\n' 'other.example/shared/message-server:keep'
+      exit 0
+    fi
     if [ "${5:-}" = '{{index .Config.Labels "org.opencontainers.image.revision"}}' ]; then
       case "$3" in
         "$FAKE_OLD_REF") printf '%s\n' "$FAKE_OLD_REVISION" ;;
@@ -75,6 +100,14 @@ case "$1" in
       else
         image=$FAKE_OLD_IMAGE_ID; ref=$FAKE_OLD_REF
       fi
+    elif [ "$id" = "$FAKE_SHARED_OLD_ID" ]; then
+      printf '[{"Id":"%s","Image":"%s","Name":"/shared","Config":{"Image":"%s","Labels":{"com.docker.compose.project":"other-stack","com.docker.compose.service":"message-server"}},"State":{"Status":"running","Health":{"Status":"healthy"}}}]\n' \
+        "$id" "$FAKE_OLD_IMAGE_ID" "$FAKE_OLD_REF"
+      exit 0
+    elif [ "$id" = "$FAKE_OLD_ONESHOT_ID" ]; then
+      printf '[{"Id":"%s","Image":"%s","Name":"/initializer","Config":{"Image":"%s","Labels":{"com.docker.compose.project":"d-abcdefghijklmnopqrstuvwxyz","com.docker.compose.service":"message-server-init"}},"State":{"Status":"exited"}}]\n' \
+        "$id" "$FAKE_OLD_IMAGE_ID" "$FAKE_OLD_REF"
+      exit 0
     else
       exit 1
     fi
@@ -84,7 +117,15 @@ case "$1" in
       "$id" "$image" "$ref" "$FAKE_STACK" "$health"
     ;;
   ps)
-    printf '%s\n' "$FAKE_NEW_MESSAGE_ID"
+    if [ "${2:-}" = -aq ]; then
+      [ "${FAKE_OLD_ONESHOT:-false}" != true ] || printf '%s\n' "$FAKE_OLD_ONESHOT_ID"
+      [ "${FAKE_SHARED_OLD_IMAGE:-false}" != true ] || printf '%s\n' "$FAKE_SHARED_OLD_ID"
+    else
+      printf '%s\n' "$FAKE_NEW_MESSAGE_ID"
+    fi
+    ;;
+  container)
+    [ "$2" = rm ]
     ;;
   compose)
     shift
@@ -124,7 +165,7 @@ case "$1" in
   *) exit 1 ;;
 esac
 EOF
-chmod 755 "$tmp/bin/docker"
+chmod 755 "$tmp/bin/docker" "$tmp/bin/sync"
 
 make_stack() {
   local name=$1 include_alias=${2:-true} root env_identity env_sha manifest_identity manifest_sha attestation_identity attestation_sha
@@ -135,6 +176,7 @@ make_stack() {
     [ "$include_alias" != true ] || printf 'MESSAGE_SERVER_IMAGE=%s\n' "$old_ref"
     printf 'DIREXTALK_MESSAGE_SERVER_IMAGE_IMMUTABLE=%s\n' "$old_ref"
     printf 'DIREXTALK_AGENT_IMAGE_IMMUTABLE=docker.io/dirextalk/agent@sha256:%s\n' "$(printf '3%.0s' {1..64})"
+    printf 'DIREXTALK_RELEASE_CATALOG_ORIGIN=https://imadmin.dirextalk.ai\n'
     printf 'DIREXTALK_IMAGE_ATTESTATION_FILE=%s/image-attestation\n' "$root"
   } >"$root/.env"
   cat >"$root/image-attestation" <<EOF
@@ -178,7 +220,7 @@ host.machine_id=$machine_id
 docker.engine_id=engine-message-update-test
 docker.context_endpoint=unix:///run/docker.sock
 docker.context_socket=/run/docker.sock
-container.count=3
+container.count=4
 container.0.id=$old_message_id
 container.0.name=message
 container.0.service=message-server
@@ -191,15 +233,31 @@ container.2.id=$postgres_id
 container.2.name=postgres
 container.2.service=message-postgres
 container.2.project=d-abcdefghijklmnopqrstuvwxyz
+container.3.id=$old_oneshot_id
+container.3.name=message-init
+container.3.service=message-server-init
+container.3.project=d-abcdefghijklmnopqrstuvwxyz
 EOF
   chmod 400 "$root/.cleanup-receipt"
   printf '%s\n' "$root"
+}
+
+rebind_env_receipt() {
+  local stack_root=$1 env_hash
+  env_hash=$(sha256sum "$stack_root/.env" | awk '{print $1}')
+  sed -i \
+    -e "s|^control.env_identity=.*|control.env_identity=$(stat -c '%d:%i:%u' "$stack_root/.env")|" \
+    -e "s|^control.env_sha256=.*|control.env_sha256=$env_hash|" \
+    "$stack_root/.cleanup-receipt"
+  chmod 400 "$stack_root/.env" "$stack_root/.cleanup-receipt"
 }
 
 run_update() {
   PATH="$tmp/bin:$PATH" \
   FAKE_DOCKER_LOG=$log FAKE_DOCKER_STATE=$state FAKE_ENGINE_ID=engine-message-update-test \
   FAKE_STACK=d-abcdefghijklmnopqrstuvwxyz FAKE_OLD_MESSAGE_ID=$old_message_id FAKE_NEW_MESSAGE_ID=$new_message_id \
+  FAKE_SHARED_OLD_ID=$shared_old_id \
+  FAKE_OLD_ONESHOT_ID=$old_oneshot_id \
   FAKE_OLD_REF=$old_ref FAKE_OLD_REPO_DIGEST=${FAKE_OLD_REPO_DIGEST_OVERRIDE:-$old_repo_digest} FAKE_OLD_IMAGE_ID=$old_image_id FAKE_OLD_VERSION=v1.0.0 \
   FAKE_OLD_REVISION=$old_revision FAKE_TARGET_REVISION=$target_revision \
   FAKE_TARGET_REF=$target_ref FAKE_TARGET_IMAGE_ID=$target_image_id FAKE_TARGET_VERSION=v1.0.1 \
@@ -244,9 +302,40 @@ for invalid_repo_digest in \
   fi
 done
 
+for origin_case in wrong missing; do
+  root=$(make_stack "catalog-origin-$origin_case")
+  if [ "$origin_case" = wrong ]; then
+    sed -i 's#^DIREXTALK_RELEASE_CATALOG_ORIGIN=.*#DIREXTALK_RELEASE_CATALOG_ORIGIN=https://wrong.invalid#' "$root/.env"
+  else
+    sed -i '/^DIREXTALK_RELEASE_CATALOG_ORIGIN=/d' "$root/.env"
+  fi
+  rebind_env_receipt "$root"
+  : >"$log"
+  if run_update "$root" v1.0.1 >/dev/null 2>&1; then
+    echo "$origin_case release catalog origin unexpectedly passed" >&2; exit 1
+  else
+    status=$?
+  fi
+  [ "$status" -eq 1 ]
+  if grep -Eq '(^|\|)(pull|compose)( |\|)' "$log"; then
+    echo "$origin_case release catalog origin crossed the Docker mutation boundary" >&2; exit 1
+  fi
+done
+
+root=$(make_stack journal-durability-failure)
+: >"$log"; : >"$state"
+if FAKE_SYNC_FAIL_MATCH=.message-server-update.transaction. run_update "$root" v1.0.1 >/dev/null 2>&1; then
+  echo 'message-server journal fsync failure unexpectedly passed' >&2; exit 1
+else
+  status=$?
+fi
+[ "$status" -eq 1 ]
+if grep -Eq '(^|\|)compose .* up ' "$log"; then echo 'message-server journal fsync failure crossed the Docker mutation boundary' >&2; exit 1; fi
+[ ! -e "$root/.message-server-update.transaction" ]
+
 root=$(make_stack success false)
 : >"$log"; : >"$state"
-run_update "$root" v1.0.1 >/dev/null
+FAKE_OLD_ONESHOT=true run_update "$root" v1.0.1 >/dev/null
 grep -Fqx "MESSAGE_SERVER_IMAGE=$target_ref" "$root/.env"
 grep -Fqx "DIREXTALK_MESSAGE_SERVER_IMAGE_IMMUTABLE=$target_ref" "$root/.env"
 grep -Fqx "message_source_revision=$target_revision" "$root/image-attestation"
@@ -262,11 +351,55 @@ grep -Fqx "control.manifest_sha256=$(sha256sum "$root/.manifest" | awk '{print $
 grep -Fq "container.0.id=$new_message_id" "$root/.cleanup-receipt"
 grep -Fq "container.1.id=$agent_id" "$root/.cleanup-receipt"
 grep -Fq "container.2.id=$postgres_id" "$root/.cleanup-receipt"
+grep -Fqx 'state=complete' "$root/.cleanup-receipt"
 [ "$(cat "$state")" = target ]
 [ "$(stat -c '%u:%g:%a' "$root/.message-server-update.lock")" = "$(id -u):$(id -g):600" ]
+grep -Fq "image rm $old_ref" "$log"
+grep -Fq 'image rm docker.io/dirextalk/message-server:v1.0.0' "$log"
+grep -Fq "container rm $old_oneshot_id" "$log"
 if grep -Eq 'up .* (agent|message-postgres)( |$)' "$log"; then
   echo 'message-server update mutated Agent or PostgreSQL' >&2; exit 1
 fi
+
+root=$(make_stack shared-old-alias)
+: >"$log"; : >"$state"
+FAKE_SHARED_ALIAS=true run_update "$root" v1.0.1 >/dev/null 2>&1
+grep -Fq 'image rm docker.io/dirextalk/message-server:v1.0.0' "$log"
+if grep -Fq 'image rm other.example/shared/message-server:keep' "$log"; then echo 'foreign message-server alias was removed' >&2; exit 1; fi
+if grep -Fq "image rm $old_image_id" "$log"; then echo 'foreign-aliased message-server image ID was removed' >&2; exit 1; fi
+
+root=$(make_stack shared-old-image)
+: >"$log"; : >"$state"
+FAKE_SHARED_OLD_IMAGE=true run_update "$root" v1.0.1 >/dev/null 2>&1
+grep -Fq "container.0.id=$new_message_id" "$root/.cleanup-receipt"
+grep -Fq "image rm $old_ref" "$log"
+if grep -Fq "image rm $old_image_id" "$log"; then echo 'shared old message-server image ID was removed' >&2; exit 1; fi
+
+root=$(make_stack retargeted-fixed-ref)
+: >"$log"; : >"$state"
+if FAKE_RETARGET_FIXED_REF=true run_update "$root" v1.0.1 >/dev/null 2>&1; then
+  echo 'retargeted message-server repository ref unexpectedly passed cleanup' >&2; exit 1
+else
+  status=$?
+fi
+[ "$status" -eq 1 ]
+grep -Fqx 'state=cleanup-pending' "$root/.cleanup-receipt"
+[ -f "$root/.message-server-update.transaction" ]
+if grep -Fq 'image rm docker.io/dirextalk/message-server:v1.0.0' "$log"; then echo 'retargeted message-server repository ref was removed' >&2; exit 1; fi
+
+root=$(make_stack old-image-cleanup-failure)
+: >"$log"; : >"$state"
+if FAKE_IMAGE_RM_FAIL=true run_update "$root" v1.0.1 >/dev/null 2>&1; then
+  echo 'old message-server image cleanup failure unexpectedly passed' >&2; exit 1
+else
+  status=$?
+fi
+[ "$status" -eq 1 ]
+grep -Fqx "DIREXTALK_MESSAGE_SERVER_IMAGE_IMMUTABLE=$target_ref" "$root/.env"
+grep -Fqx 'state=cleanup-pending' "$root/.cleanup-receipt"
+grep -Fq "container.0.id=$new_message_id" "$root/.cleanup-receipt"
+[ -f "$root/.message-server-update.transaction" ]
+grep -Fqx 'state=cleanup-pending' "$root/.message-server-update.transaction"
 
 root=$(make_stack pull-failure)
 : >"$log"; : >"$state"
@@ -282,7 +415,7 @@ if grep -Eq 'compose .* up ' "$log"; then
   echo 'pull failure crossed the Compose mutation boundary' >&2; exit 1
 fi
 
-root=$(make_stack hard-kill-resume)
+root=$(make_stack hard-kill-fail-closed)
 : >"$log"; : >"$state"
 if DIREXTALK_MESSAGE_SERVER_UPDATE_HARD_KILL_AFTER_RECREATE=true \
    run_update "$root" v1.0.1 >/dev/null 2>&1; then
@@ -293,90 +426,44 @@ fi
 [ "$status" -eq 137 ] || { echo "hard-kill injection returned $status, want 137" >&2; exit 1; }
 [ -f "$root/.message-server-update.transaction" ]
 grep -Fqx 'state=prepared' "$root/.message-server-update.transaction"
-run_update "$root" v1.0.1 >/dev/null
-[ ! -e "$root/.message-server-update.transaction" ]
-grep -Fqx "DIREXTALK_MESSAGE_SERVER_IMAGE_IMMUTABLE=$target_ref" "$root/.env"
-grep -Fqx "message_source_revision=$target_revision" "$root/image-attestation"
-grep -Fq "container.0.id=$new_message_id" "$root/.cleanup-receipt"
-
-root=$(make_stack hard-kill-target-mismatch)
-: >"$log"; : >"$state"
-if DIREXTALK_MESSAGE_SERVER_UPDATE_HARD_KILL_AFTER_RECREATE=true \
-   run_update "$root" v1.0.1 >/dev/null 2>&1; then
-  echo 'target-mismatch hard-kill injection unexpectedly returned success' >&2; exit 1
-else
-  status=$?
-fi
-[ "$status" -eq 137 ]
 journal_before=$(sha256sum "$root/.message-server-update.transaction" | awk '{print $1}')
-if run_update "$root" v1.0.2 >/dev/null 2>&1; then
-  echo 'different resume target unexpectedly passed' >&2; exit 1
+if run_update "$root" v1.0.1 >/dev/null 2>&1; then
+  echo 'unfinished one-way update unexpectedly resumed' >&2; exit 1
 else
   status=$?
 fi
 [ "$status" -eq 1 ]
 [ "$journal_before" = "$(sha256sum "$root/.message-server-update.transaction" | awk '{print $1}')" ]
 [ "$(cat "$state")" = target ]
-run_update "$root" v1.0.1 >/dev/null
-[ ! -e "$root/.message-server-update.transaction" ]
-
-root=$(make_stack hard-kill-partial-control-resume)
-: >"$log"; : >"$state"
-if DIREXTALK_MESSAGE_SERVER_UPDATE_HARD_KILL_AFTER_CONTROL_COMMIT=manifest \
-   run_update "$root" v1.0.1 >/dev/null 2>&1; then
-  echo 'partial-control hard-kill injection unexpectedly returned success' >&2; exit 1
-else
-  status=$?
+if grep -Fq "image=$old_ref" "$log"; then
+  echo 'unfinished one-way update attempted old-image recovery' >&2; exit 1
 fi
-[ "$status" -eq 137 ]
-grep -Fqx 'state=target-ready' "$root/.message-server-update.transaction"
-run_update "$root" v1.0.1 >/dev/null
-[ ! -e "$root/.message-server-update.transaction" ]
-grep -Fqx "DIREXTALK_MESSAGE_SERVER_IMAGE_IMMUTABLE=$target_ref" "$root/.env"
-grep -Fqx "message_source_revision=$target_revision" "$root/image-attestation"
-grep -Fq "container.0.id=$new_message_id" "$root/.cleanup-receipt"
+grep -Fq "container.0.id=$old_message_id" "$root/.cleanup-receipt"
 
-root=$(make_stack hard-kill-rollback)
+root=$(make_stack health-fail-closed)
 : >"$log"; : >"$state"
-if DIREXTALK_MESSAGE_SERVER_UPDATE_HARD_KILL_AFTER_RECREATE=true \
-   run_update "$root" v1.0.1 >/dev/null 2>&1; then
-  echo 'hard-kill rollback injection unexpectedly returned success' >&2; exit 1
-else
-  status=$?
-fi
-[ "$status" -eq 137 ]
-if FAKE_TARGET_UNHEALTHY=true run_update "$root" v1.0.1 >/dev/null 2>&1; then
-  echo 'unhealthy interrupted target unexpectedly completed' >&2; exit 1
-else
-  status=$?
-fi
-[ "$status" -eq 1 ]
-[ "$(cat "$state")" = old ]
-[ ! -e "$root/.message-server-update.transaction" ]
-grep -Fqx "DIREXTALK_MESSAGE_SERVER_IMAGE_IMMUTABLE=$old_ref" "$root/.env"
-grep -Fqx "message_source_revision=$old_revision" "$root/image-attestation"
-grep -Fq "container.0.id=$new_message_id" "$root/.cleanup-receipt"
-
-root=$(make_stack health-rollback)
-: >"$log"; : >"$state"
-before_env=$(sha256sum "$root/.env" | awk '{print $1}')
+before=$(sha256sum "$root/image-attestation" "$root/.manifest" "$root/.env" "$root/.cleanup-receipt")
 if FAKE_TARGET_UNHEALTHY=true run_update "$root" v1.0.1 >/dev/null 2>&1; then
   echo 'unhealthy target unexpectedly passed' >&2; exit 1
 else
   status=$?
 fi
 [ "$status" -eq 1 ]
-[ "$(cat "$state")" = old ]
-[ "$before_env" = "$(sha256sum "$root/.env" | awk '{print $1}')" ]
-grep -Fq "container.0.id=$new_message_id" "$root/.cleanup-receipt"
-grep -Fq "container.1.id=$agent_id" "$root/.cleanup-receipt"
-grep -Fq "container.2.id=$postgres_id" "$root/.cleanup-receipt"
-grep -Fq "image=$old_ref" "$log"
+[ "$(cat "$state")" = target ]
+[ "$before" = "$(sha256sum "$root/image-attestation" "$root/.manifest" "$root/.env" "$root/.cleanup-receipt")" ]
+[ -f "$root/.message-server-update.transaction" ]
+grep -Fqx 'state=prepared' "$root/.message-server-update.transaction"
+grep -Fq "container.0.id=$old_message_id" "$root/.cleanup-receipt"
+if grep -Fq "image=$old_ref" "$log"; then
+  echo 'unhealthy one-way target attempted old-image recovery' >&2; exit 1
+fi
+if grep -Fq "image rm $old_ref" "$log"; then
+  echo 'unhealthy one-way target cleaned the old image' >&2; exit 1
+fi
 
 for failed_control in attestation manifest env receipt; do
-  root=$(make_stack "$failed_control-commit-rollback")
+  root=$(make_stack "$failed_control-commit-fail-closed")
   : >"$log"; : >"$state"
-  before_controls=$(sha256sum "$root/image-attestation" "$root/.manifest" "$root/.env" | awk '{print $1}')
   if DIREXTALK_MESSAGE_SERVER_UPDATE_FAIL_CONTROL_COMMIT=$failed_control \
      run_update "$root" v1.0.1 >/dev/null 2>&1; then
     echo "$failed_control commit failure unexpectedly passed" >&2; exit 1
@@ -384,13 +471,13 @@ for failed_control in attestation manifest env receipt; do
     status=$?
   fi
   [ "$status" -eq 1 ]
-  [ "$(cat "$state")" = old ]
-  [ "$before_controls" = "$(sha256sum "$root/image-attestation" "$root/.manifest" "$root/.env" | awk '{print $1}')" ]
-  grep -Fq "container.0.id=$new_message_id" "$root/.cleanup-receipt"
-  grep -Fq "container.1.id=$agent_id" "$root/.cleanup-receipt"
-  grep -Fq "container.2.id=$postgres_id" "$root/.cleanup-receipt"
-  grep -Fqx "control.env_identity=$(stat -c '%d:%i:%u' "$root/.env")" "$root/.cleanup-receipt"
-  grep -Fqx "control.manifest_identity=$(stat -c '%d:%i:%u' "$root/.manifest")" "$root/.cleanup-receipt"
+  [ "$(cat "$state")" = target ]
+  [ -f "$root/.message-server-update.transaction" ]
+  grep -Fqx 'state=prepared' "$root/.message-server-update.transaction"
+  grep -Fq "container.0.id=$old_message_id" "$root/.cleanup-receipt"
+  if grep -Fq "image=$old_ref" "$log"; then
+    echo "$failed_control commit failure attempted old-image recovery" >&2; exit 1
+  fi
 done
 
 root=$(make_stack receipt-mismatch)
@@ -407,4 +494,4 @@ if grep -Eq '(^|\|)(pull|compose)( |\|)' "$log"; then
   echo 'receipt mismatch crossed the Docker mutation boundary' >&2; exit 1
 fi
 
-printf 'Message-server receipt-bound update, isolation, three-state result, and rollback verified\n'
+printf 'Message-server one-way receipt-bound update, isolation, audit journal, and three-state result verified\n'

@@ -9,15 +9,72 @@ import (
 	"testing"
 )
 
+const testReleaseCatalogOrigin = "https://imadmin.dirextalk.ai"
+
 type centralRoundTripper func(*http.Request) (*http.Response, error)
 
 func (fn centralRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
 	return fn(request)
 }
 
+func TestReleaseCatalogOriginDerivesFixedChannels(t *testing.T) {
+	for _, testCase := range []struct {
+		channel string
+		want    string
+	}{
+		{channel: "server", want: "https://imadmin.dirextalk.ai:443/api/appVersion/current?appId=1&channelId=server"},
+		{channel: "agents", want: "https://imadmin.dirextalk.ai:443/api/appVersion/current?appId=1&channelId=agents"},
+	} {
+		got, err := ReleaseCatalogEndpoint("https://imadmin.dirextalk.ai:443/", testCase.channel)
+		if err != nil || got != testCase.want {
+			t.Fatalf("ReleaseCatalogEndpoint(%q)=%q err=%v, want %q", testCase.channel, got, err, testCase.want)
+		}
+	}
+	if _, err := ReleaseCatalogEndpoint(testReleaseCatalogOrigin, "client-selected"); err == nil {
+		t.Fatal("arbitrary release channel was accepted")
+	}
+}
+
+func TestReleaseCatalogOriginRejectsNonOrigins(t *testing.T) {
+	for _, origin := range []string{
+		"", " https://imadmin.dirextalk.ai", "https://imadmin.dirextalk.ai ",
+		"http://imadmin.dirextalk.ai", "//imadmin.dirextalk.ai", "https://imadmin.dirextalk.ai:bad",
+		"https://user@imadmin.dirextalk.ai", "https://imadmin.dirextalk.ai/path", "https://imadmin.dirextalk.ai//",
+		"https://imadmin.dirextalk.ai/%2f", "https://imadmin.dirextalk.ai?x=1", "https://imadmin.dirextalk.ai?",
+		"https://imadmin.dirextalk.ai#fragment", "https://imadmin.dirextalk.ai#",
+	} {
+		t.Run(strings.NewReplacer(":", "_", "/", "_").Replace(origin), func(t *testing.T) {
+			if _, err := NormalizeReleaseCatalogOrigin(origin); err == nil {
+				t.Fatalf("invalid release catalog origin accepted: %q", origin)
+			}
+		})
+	}
+}
+
+func TestCentralSourcesFailClosedWithoutValidOrigin(t *testing.T) {
+	called := false
+	client := &http.Client{Transport: centralRoundTripper(func(*http.Request) (*http.Response, error) {
+		called = true
+		return nil, errors.New("unexpected request")
+	})}
+	for _, source := range []CentralVersionSource{
+		NewCentralVersionSource(CentralVersionSourceConfig{HTTPClient: client}),
+		NewCentralVersionSource(CentralVersionSourceConfig{HTTPClient: client, Origin: "http://imadmin.dirextalk.ai"}),
+	} {
+		_, err := source.CurrentServerVersion(context.Background())
+		centralErr, ok := AsCentralVersionError(err)
+		if !ok || centralErr.Code != CentralVersionUnavailableCode {
+			t.Fatalf("invalid origin did not fail closed: %#v", err)
+		}
+	}
+	if called {
+		t.Fatal("invalid origin reached the HTTP client")
+	}
+}
+
 func TestCentralVersionSourceValidatesFixedServerRecord(t *testing.T) {
 	client := &http.Client{Transport: centralRoundTripper(func(request *http.Request) (*http.Response, error) {
-		if request.Method != http.MethodGet || request.URL.String() != CentralServerVersionURL {
+		if request.Method != http.MethodGet || request.URL.String() != testReleaseCatalogOrigin+"/api/appVersion/current?appId=1&channelId=server" {
 			t.Fatalf("unexpected central request: %s %s", request.Method, request.URL)
 		}
 		return centralHTTPResponse(http.StatusOK, `{
@@ -26,7 +83,7 @@ func TestCentralVersionSourceValidatesFixedServerRecord(t *testing.T) {
 			"msg":"success"
 		}`), nil
 	})}
-	source := NewCentralVersionSource(CentralVersionSourceConfig{HTTPClient: client})
+	source := NewCentralVersionSource(CentralVersionSourceConfig{HTTPClient: client, Origin: testReleaseCatalogOrigin})
 	version, err := source.CurrentServerVersion(context.Background())
 	if err != nil {
 		t.Fatalf("CurrentServerVersion: %v", err)
@@ -43,7 +100,7 @@ func TestCentralVersionSourceAcceptsDevelopmentServerVersion(t *testing.T) {
 			"data":{"appId":"1","channelId":"server","version":"dev1.1.7","preVersion":"v1.1.6","updateContent":"development"}
 		}`), nil
 	})}
-	version, err := NewCentralVersionSource(CentralVersionSourceConfig{HTTPClient: client}).CurrentServerVersion(context.Background())
+	version, err := NewCentralVersionSource(CentralVersionSourceConfig{HTTPClient: client, Origin: testReleaseCatalogOrigin}).CurrentServerVersion(context.Background())
 	if err != nil {
 		t.Fatalf("CurrentServerVersion: %v", err)
 	}
@@ -54,7 +111,7 @@ func TestCentralVersionSourceAcceptsDevelopmentServerVersion(t *testing.T) {
 
 func TestCentralAgentVersionSourceValidatesFixedAgentRecord(t *testing.T) {
 	client := &http.Client{Transport: centralRoundTripper(func(request *http.Request) (*http.Response, error) {
-		if request.Method != http.MethodGet || request.URL.String() != CentralAgentVersionURL {
+		if request.Method != http.MethodGet || request.URL.String() != testReleaseCatalogOrigin+"/api/appVersion/current?appId=1&channelId=agents" {
 			t.Fatalf("unexpected central Agent request: %s %s", request.Method, request.URL)
 		}
 		return centralHTTPResponse(http.StatusOK, `{
@@ -63,7 +120,7 @@ func TestCentralAgentVersionSourceValidatesFixedAgentRecord(t *testing.T) {
 			"msg":"success"
 		}`), nil
 	})}
-	version, err := NewCentralAgentVersionSource(CentralVersionSourceConfig{HTTPClient: client}).CurrentAgentVersion(context.Background())
+	version, err := NewCentralAgentVersionSource(CentralVersionSourceConfig{HTTPClient: client, Origin: testReleaseCatalogOrigin}).CurrentAgentVersion(context.Background())
 	if err != nil {
 		t.Fatalf("CurrentAgentVersion: %v", err)
 	}
@@ -84,7 +141,7 @@ func TestCentralAgentVersionSourceRejectsMalformedAndUntrustedRecords(t *testing
 	} {
 		t.Run(name, func(t *testing.T) {
 			client := &http.Client{Transport: centralRoundTripper(func(*http.Request) (*http.Response, error) { return response, nil })}
-			_, err := NewCentralAgentVersionSource(CentralVersionSourceConfig{HTTPClient: client}).CurrentAgentVersion(context.Background())
+			_, err := NewCentralAgentVersionSource(CentralVersionSourceConfig{HTTPClient: client, Origin: testReleaseCatalogOrigin}).CurrentAgentVersion(context.Background())
 			centralErr, ok := AsCentralVersionError(err)
 			if !ok || centralErr.Code != CentralVersionInvalidCode {
 				t.Fatalf("unexpected error: %#v", err)
@@ -103,7 +160,7 @@ func TestCentralAgentVersionSourceDoesNotFollowRedirects(t *testing.T) {
 		}),
 		CheckRedirect: func(*http.Request, []*http.Request) error { followed = true; return nil },
 	}
-	_, err := NewCentralAgentVersionSource(CentralVersionSourceConfig{HTTPClient: client}).CurrentAgentVersion(context.Background())
+	_, err := NewCentralAgentVersionSource(CentralVersionSourceConfig{HTTPClient: client, Origin: testReleaseCatalogOrigin}).CurrentAgentVersion(context.Background())
 	centralErr, ok := AsCentralVersionError(err)
 	if !ok || centralErr.Code != CentralVersionUnavailableCode || followed {
 		t.Fatalf("redirect must fail closed without following: followed=%v err=%#v", followed, err)
@@ -114,7 +171,7 @@ func TestCentralAgentVersionSourceRejectsOversizedResponse(t *testing.T) {
 	client := &http.Client{Transport: centralRoundTripper(func(*http.Request) (*http.Response, error) {
 		return centralHTTPResponse(http.StatusOK, strings.Repeat("x", maxCentralVersionResponseBytes+1)), nil
 	})}
-	_, err := NewCentralAgentVersionSource(CentralVersionSourceConfig{HTTPClient: client}).CurrentAgentVersion(context.Background())
+	_, err := NewCentralAgentVersionSource(CentralVersionSourceConfig{HTTPClient: client, Origin: testReleaseCatalogOrigin}).CurrentAgentVersion(context.Background())
 	centralErr, ok := AsCentralVersionError(err)
 	if !ok || centralErr.Code != CentralVersionInvalidCode {
 		t.Fatalf("unexpected oversized-response error: %#v", err)
@@ -134,7 +191,7 @@ func TestCentralVersionSourceRejectsMalformedAndUntrustedRecords(t *testing.T) {
 			client := &http.Client{Transport: centralRoundTripper(func(*http.Request) (*http.Response, error) {
 				return response, nil
 			})}
-			_, err := NewCentralVersionSource(CentralVersionSourceConfig{HTTPClient: client}).CurrentServerVersion(context.Background())
+			_, err := NewCentralVersionSource(CentralVersionSourceConfig{HTTPClient: client, Origin: testReleaseCatalogOrigin}).CurrentServerVersion(context.Background())
 			centralErr, ok := AsCentralVersionError(err)
 			if !ok {
 				t.Fatalf("expected central version error, got %v", err)
@@ -156,7 +213,7 @@ func TestCentralVersionSourceMapsTransportFailureWithoutLeakingDetails(t *testin
 	client := &http.Client{Transport: centralRoundTripper(func(*http.Request) (*http.Response, error) {
 		return nil, errors.New("private socket secret")
 	})}
-	_, err := NewCentralVersionSource(CentralVersionSourceConfig{HTTPClient: client}).CurrentServerVersion(context.Background())
+	_, err := NewCentralVersionSource(CentralVersionSourceConfig{HTTPClient: client, Origin: testReleaseCatalogOrigin}).CurrentServerVersion(context.Background())
 	centralErr, ok := AsCentralVersionError(err)
 	if !ok || centralErr.Code != CentralVersionUnavailableCode {
 		t.Fatalf("unexpected error: %#v", err)

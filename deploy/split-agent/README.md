@@ -168,16 +168,29 @@ the OCI version label of the exact receipt-bound running message-server
 container; it never compares a Flutter or other client version. An unmet
 minimum, a non-newer Agent target, or a non-production stack is an expected
 negative result (exit `3`) before pull or mutation. Exit `1` is an identity,
-Docker, migration, health, or rollback infrastructure failure. A successful
+Docker, migration, health, or control-commit infrastructure failure. A successful
 update pulls the fixed
 `docker.io/dirextalk/agent:<version>` repository, resolves it to an immutable
 digest, migrates Agent storage, recreates both runners and then Agent from that
 one digest, then atomically updates the Agent digest and source revision in the
 protected image attestation together with its manifest, environment, cleanup
 receipt, and three container IDs. The same transaction runs the production
-image smoke and isolated three-container topology gates. A post-mutation failure
-recreates and health-checks the previous immutable image and restores the exact
-four protected control files.
+image smoke and isolated three-container topology gates before publishing the
+new protected controls. A fixed owner-bound lock serializes the complete
+transaction, and file-plus-directory fsync makes journal and control state
+durable across process or host failure. Updates are one-way: a post-mutation failure does not
+start the previous image or restore old controls. It preserves the last
+receipt, publishes no replacement success receipt, exits non-zero, and writes
+a mode-0400 `.agent-update-failure.*` record with the failed phase and immutable
+target identity for operator audit and explicit recovery. After committing the
+new controls and a `cleanup-pending` receipt, the wrapper revalidates the three
+healthy target container identities, removes all fixed-repository references
+to the previous image without `--force`, and only then publishes the complete
+receipt.
+If any non-owned, unbound, or running container or foreign repository alias
+still uses the old image ID, the wrapper retains that image ID after removing
+only its fixed `dirextalk/agent` repository references; it never removes the
+foreign alias or performs a global prune.
 
 This wrapper is the host execution adapter only. The current message-server
 `release.v2` actions delegate exclusively to the
@@ -196,12 +209,20 @@ The target is canonical stable `vX.Y.Z`; repository, image, Compose files,
 project, and service are code-owned and are never argv inputs. Status `0`
 means only message-server was recreated healthy, `3` is an expected
 non-production or non-newer result, and `1` is an identity, Docker, health, or
-recovery failure. The adapter atomically binds the resolved image digest and
+control/journal infrastructure failure. The adapter atomically binds the resolved image digest and
 OCI revision through the protected image attestation, manifest, environment,
-cleanup receipt, and new container ID. A fixed root-owned journal and lock
-resume an interrupted transaction by completing an exact healthy target or
-restoring the exact old image and receipt; Agent and database containers are
-never recreated.
+cleanup receipt, and new container ID. Updates are one-way. A fixed root-owned
+journal and lock preserve an interrupted or failed mutation for explicit
+operator recovery; a later invocation refuses to resume it automatically and
+never starts the previous image. Journal and control renames and the final
+journal unlink are file-plus-directory fsynced. After committing the new controls and a
+`cleanup-pending` receipt, the wrapper revalidates the healthy target container,
+removes all fixed-repository references to the previous image without
+`--force`, and only then publishes the complete receipt. Images used by an
+unbound or other container, or carrying a foreign alias, retain their image ID
+and foreign references after fixed `dirextalk/message-server` references are
+removed. Agent and database
+containers are never recreated, and no wrapper performs a global prune.
 
 Formal Agent images are built from the sibling `dirextalk-agent` repository.
 The first channel version is `v1.0.0`:

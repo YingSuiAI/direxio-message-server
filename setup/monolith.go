@@ -96,6 +96,10 @@ func (m *Monolith) AddAllPublicRoutes(
 	if generationErr != nil {
 		logrus.WithError(generationErr).Fatal("invalid account generation")
 	}
+	centralVersionSource, centralAgentVersionSource, releaseCatalogErr := releaseCatalogSourcesFromEnv()
+	if releaseCatalogErr != nil {
+		logrus.WithError(releaseCatalogErr).Fatal("invalid release catalog configuration")
+	}
 	p2pConfig := p2p.Config{
 		ServerName:                             string(cfg.Global.ServerName),
 		Homeserver:                             cfg.Global.WellKnownClientName,
@@ -106,6 +110,8 @@ func (m *Monolith) AddAllPublicRoutes(
 		P2PEventRetentionPruneOnWrite:          p2pEventRetentionPruneOnWriteFromEnv(),
 		PushRules:                              m.UserAPI,
 		ReleaseController:                      releasecontrol.NewUnixController(releasecontrol.UnixControllerConfig{}),
+		CentralVersionSource:                   centralVersionSource,
+		CentralAgentVersionSource:              centralAgentVersionSource,
 		AllowAccountDeleteWithoutUpdater:       boolEnv("P2P_ALLOW_ACCOUNT_DELETE_WITHOUT_UPDATER"),
 		NativeAgentVoiceCallbackURL:            firstNonEmptyEnv("P2P_AGENT_VOICE_CALLBACK_URL", "DIREXTALK_AGENT_VOICE_CALLBACK_URL"),
 		NativeAgentVoiceCallbackAuthToken:      readOptionalSecretEnv("P2P_AGENT_VOICE_CALLBACK_AUTH_TOKEN_FILE", "DIREXTALK_AGENT_VOICE_CALLBACK_AUTH_TOKEN_FILE"),
@@ -193,6 +199,19 @@ func (m *Monolith) AddAllPublicRoutes(
 	if m.RelayAPI != nil {
 		relayapi.AddPublicRoutes(routers, cfg, m.KeyRing, m.RelayAPI)
 	}
+}
+
+func releaseCatalogSourcesFromEnv() (releasecontrol.CentralVersionSource, releasecontrol.CentralAgentVersionSource, error) {
+	origin, ok := os.LookupEnv("DIREXTALK_RELEASE_CATALOG_ORIGIN")
+	if !ok || origin == "" {
+		return nil, nil, errors.New("DIREXTALK_RELEASE_CATALOG_ORIGIN is required")
+	}
+	normalized, err := releasecontrol.NormalizeReleaseCatalogOrigin(origin)
+	if err != nil {
+		return nil, nil, fmt.Errorf("DIREXTALK_RELEASE_CATALOG_ORIGIN: %w", err)
+	}
+	config := releasecontrol.CentralVersionSourceConfig{Origin: normalized}
+	return releasecontrol.NewCentralVersionSource(config), releasecontrol.NewCentralAgentVersionSource(config), nil
 }
 
 func startProductCapabilityServer(processCtx *process.ProcessContext, service *p2p.Service, grantPrivateKey []byte) error {

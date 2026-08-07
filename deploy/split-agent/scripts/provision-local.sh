@@ -279,6 +279,7 @@ if [ "$compose_mode" = production ]; then
   [ "$core_extension_enabled" = true ] || die "production requires DIREXTALK_CORE_EXTENSION_ENABLED=true"
   [ "$core_workload_enabled" = true ] || die "production requires DIREXTALK_CORE_WORKLOAD_ENABLED=true"
 fi
+release_catalog_origin=https://imadmin.dirextalk.ai
 if [ "$runner_fixture_mode" = true ] && [ "${DIREXTALK_SPLIT_TEST_MODE:-false}" != true ]; then
   die "DIREXTALK_SPLIT_FIXTURE_MODE requires explicit DIREXTALK_SPLIT_TEST_MODE=true"
 fi
@@ -1107,6 +1108,7 @@ DIREXTALK_IMAGE_ATTESTATION_FILE=$image_attestation_file
 DIREXTALK_MESSAGE_SERVER_INSTANCE_ID=$message_instance_id
 DIREXTALK_AGENT_INSTANCE_ID=$agent_instance_id
 DIREXTALK_ACCOUNT_GENERATION=$account_generation
+DIREXTALK_RELEASE_CATALOG_ORIGIN=$release_catalog_origin
 DIREXTALK_AGENT_TLS_SERVER_NAME=dirextalk-agent
 DIREXTALK_MESSAGE_SERVER_NAME=$message_server_name
 DIREXTALK_MESSAGE_CLIENT_BASE_URL=$message_client_base_url

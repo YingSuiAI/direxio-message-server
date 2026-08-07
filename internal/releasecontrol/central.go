@@ -8,13 +8,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
 
 const (
-	CentralServerVersionURL = "https://imadmin.dirextalk.ai/api/appVersion/current?appId=1&channelId=server"
-	CentralAgentVersionURL  = "https://imadmin.dirextalk.ai/api/appVersion/current?appId=1&channelId=agents"
+	centralVersionPath = "/api/appVersion/current?appId=1&channelId="
 )
 
 const maxCentralVersionResponseBytes = 64 * 1024
@@ -59,26 +59,66 @@ type CentralAgentVersionSource interface {
 
 type CentralVersionSourceConfig struct {
 	HTTPClient *http.Client
+	Origin     string
 }
 
 type centralVersionSource struct {
-	client *http.Client
+	client    *http.Client
+	endpoint  string
+	configErr error
 }
 
 type centralAgentVersionSource struct {
-	client *http.Client
+	client    *http.Client
+	endpoint  string
+	configErr error
 }
 
 // NewCentralVersionSource always targets the configured Dirextalk admin
 // endpoint. Callers cannot change this URL through ProductCore parameters.
 func NewCentralVersionSource(config CentralVersionSourceConfig) CentralVersionSource {
-	return &centralVersionSource{client: boundedCentralHTTPClient(config.HTTPClient)}
+	endpoint, err := ReleaseCatalogEndpoint(config.Origin, "server")
+	return &centralVersionSource{client: boundedCentralHTTPClient(config.HTTPClient), endpoint: endpoint, configErr: err}
 }
 
 // NewCentralAgentVersionSource always targets the fixed Dirextalk Agent
 // channel. Neither callers nor ProductCore parameters can change its URL.
 func NewCentralAgentVersionSource(config CentralVersionSourceConfig) CentralAgentVersionSource {
-	return &centralAgentVersionSource{client: boundedCentralHTTPClient(config.HTTPClient)}
+	endpoint, err := ReleaseCatalogEndpoint(config.Origin, "agents")
+	return &centralAgentVersionSource{client: boundedCentralHTTPClient(config.HTTPClient), endpoint: endpoint, configErr: err}
+}
+
+// NormalizeReleaseCatalogOrigin validates one deployment-owned HTTPS origin.
+// ProductCore receives only sources derived from this origin and cannot
+// supply or override request destinations.
+func NormalizeReleaseCatalogOrigin(origin string) (string, error) {
+	if origin == "" || origin != strings.TrimSpace(origin) {
+		return "", errors.New("release catalog origin is required without surrounding whitespace")
+	}
+	parsed, err := url.Parse(origin)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.Hostname() == "" || parsed.User != nil || parsed.Opaque != "" {
+		return "", errors.New("release catalog origin must be an HTTPS origin")
+	}
+	if parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || parsed.RawFragment != "" || strings.Contains(origin, "#") {
+		return "", errors.New("release catalog origin must not contain query or fragment data")
+	}
+	if parsed.Path != "" && parsed.Path != "/" || parsed.RawPath != "" {
+		return "", errors.New("release catalog origin must not contain a path")
+	}
+	return "https://" + parsed.Host, nil
+}
+
+// ReleaseCatalogEndpoint derives one fixed appId=1 release channel from the
+// validated deployment origin. Only code-owned channel names are accepted.
+func ReleaseCatalogEndpoint(origin, channel string) (string, error) {
+	normalized, err := NormalizeReleaseCatalogOrigin(origin)
+	if err != nil {
+		return "", err
+	}
+	if channel != "server" && channel != "agents" {
+		return "", errors.New("release catalog channel is invalid")
+	}
+	return normalized + centralVersionPath + channel, nil
 }
 
 func boundedCentralHTTPClient(input *http.Client) *http.Client {
@@ -96,10 +136,10 @@ func boundedCentralHTTPClient(input *http.Client) *http.Client {
 }
 
 func (s *centralVersionSource) CurrentServerVersion(ctx context.Context) (CentralServerVersion, error) {
-	if s == nil {
+	if s == nil || s.configErr != nil {
 		return CentralServerVersion{}, centralVersionError(CentralVersionUnavailableCode, "central version service is unavailable", nil)
 	}
-	data, err := fetchCentralVersion(ctx, s.client, CentralServerVersionURL)
+	data, err := fetchCentralVersion(ctx, s.client, s.endpoint)
 	if err != nil {
 		return CentralServerVersion{}, err
 	}
@@ -107,10 +147,10 @@ func (s *centralVersionSource) CurrentServerVersion(ctx context.Context) (Centra
 }
 
 func (s *centralAgentVersionSource) CurrentAgentVersion(ctx context.Context) (CentralAgentVersion, error) {
-	if s == nil {
+	if s == nil || s.configErr != nil {
 		return CentralAgentVersion{}, centralVersionError(CentralVersionUnavailableCode, "central version service is unavailable", nil)
 	}
-	data, err := fetchCentralVersion(ctx, s.client, CentralAgentVersionURL)
+	data, err := fetchCentralVersion(ctx, s.client, s.endpoint)
 	if err != nil {
 		return CentralAgentVersion{}, err
 	}

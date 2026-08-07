@@ -87,6 +87,7 @@ done <"$generated_dir/turnserver.conf"
 grep -Fqx 'DIREXTALK_TURN_EXTERNAL_IP=127.0.0.1' "$generated_dir/.env"
 grep -Fqx "DIREXTALK_TURN_SHARED_SECRET_FILE=$generated_dir/turn-shared-secret" "$generated_dir/.env"
 grep -Fqx "DIREXTALK_COTURN_CONFIG_FILE=$generated_dir/turnserver.conf" "$generated_dir/.env"
+grep -Fqx 'DIREXTALK_RELEASE_CATALOG_ORIGIN=https://imadmin.dirextalk.ai' "$generated_dir/.env"
 for public_file in "$generated_log" "$generated_dir/.env"; do
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
@@ -161,7 +162,6 @@ if DIREXTALK_SPLIT_COMPOSE_MODE=production \
   echo "production without both isolated runners unexpectedly passed" >&2
   exit 1
 fi
-
 production_dir=$tmp_dir/production
 DIREXTALK_SPLIT_FIXTURE_MODE=true \
 DIREXTALK_SPLIT_TEST_MODE=true \
@@ -178,6 +178,7 @@ DIREXTALK_MESSAGE_TLS_CERT_SOURCE_FILE=$tls_cert_source \
 DIREXTALK_MESSAGE_TLS_KEY_SOURCE_FILE=$tls_key_source \
   "$script" "$production_dir" >/dev/null
 grep -Fqx 'DIREXTALK_SPLIT_COMPOSE_MODE=production' "$production_dir/.env"
+grep -Fqx 'DIREXTALK_RELEASE_CATALOG_ORIGIN=https://imadmin.dirextalk.ai' "$production_dir/.env"
 grep -Fqx 'compose_mode=production' "$production_dir/.manifest"
 grep -Fqx "DIREXTALK_IMAGE_ATTESTATION_FILE=$production_dir/image-attestation" "$production_dir/.env"
 cmp -- "$attestation_source" "$production_dir/image-attestation"

@@ -245,10 +245,18 @@ services:
     volumes:
       - agent_config_material:/etc/dirextalk-agent:ro
       - agent_secret_material:/run/secrets:ro
-      - agent_extension_socket:${DIREXTALK_CORE_EXTENSION_RUNNER_DIR:?set the extension runner socket directory}
+      - type: volume
+        source: agent_extension_socket
+        target: ${DIREXTALK_CORE_EXTENSION_RUNNER_DIR:?set the extension runner socket directory}
+        volume:
+          nocopy: true
       - agent_extension_staging:/var/lib/dirextalk-agent/extension-staging
       - agent_runner_workspaces:/var/lib/dirextalk-agent/extension-workspaces
-      - core_runner_socket:${DIREXTALK_CORE_WORKLOAD_RUNNER_DIR:?set the Core Runner socket directory}
+      - type: volume
+        source: core_runner_socket
+        target: ${DIREXTALK_CORE_WORKLOAD_RUNNER_DIR:?set the Core Runner socket directory}
+        volume:
+          nocopy: true
       - agent_knowledge_content:/var/lib/dirextalk-agent/knowledge-content
       - agent_knowledge_mount:/var/lib/dirextalk-agent/knowledge-mount:ro
       - agent_core_data:/var/lib/dirextalk-agent/core-data
@@ -295,7 +303,11 @@ services:
       - --state-root
       - /var/lib/dirextalk-agent/extension-state
     volumes:
-      - agent_extension_socket:${DIREXTALK_CORE_EXTENSION_RUNNER_DIR:?set the extension runner socket directory}
+      - type: volume
+        source: agent_extension_socket
+        target: ${DIREXTALK_CORE_EXTENSION_RUNNER_DIR:?set the extension runner socket directory}
+        volume:
+          nocopy: true
       - agent_extension_install:/var/lib/dirextalk-agent/extension-install
       - agent_runner_workspaces:/var/lib/dirextalk-agent/extension-workspaces
       - agent_extension_state:/var/lib/dirextalk-agent/extension-state
@@ -324,9 +336,14 @@ services:
       - >-
         install -d -m 2750 /socket;
         chown 65531:65532 /socket;
-        chmod 2750 /socket
+        chmod 2750 /socket;
+        test "$$(stat -c '%u:%g:%a' /socket)" = 65531:65532:2750
     volumes:
-      - agent_extension_socket:/socket
+      - type: volume
+        source: agent_extension_socket
+        target: /socket
+        volume:
+          nocopy: true
 
   # Named-volume roots are initialized explicitly. This avoids Docker's image
   # copy-up ownership and makes the first fresh-state start deterministic.
@@ -338,7 +355,10 @@ services:
         chown 65531:65531 /install /state;
         chmod 0700 /install /state;
         chown 65531:65532 /workspace;
-        chmod 0770 /workspace
+        chmod 0770 /workspace;
+        test "$$(stat -c '%u:%g:%a' /install)" = 65531:65531:700;
+        test "$$(stat -c '%u:%g:%a' /state)" = 65531:65531:700;
+        test "$$(stat -c '%u:%g:%a' /workspace)" = 65531:65532:770
     volumes:
       - agent_extension_install:/install
       - agent_runner_workspaces:/workspace
@@ -372,7 +392,11 @@ services:
       - --state-root
       - /var/lib/dirextalk-core-runner/state
     volumes:
-      - core_runner_socket:${DIREXTALK_CORE_WORKLOAD_RUNNER_DIR:?set the Core Runner socket directory}
+      - type: volume
+        source: core_runner_socket
+        target: ${DIREXTALK_CORE_WORKLOAD_RUNNER_DIR:?set the Core Runner socket directory}
+        volume:
+          nocopy: true
       - core_runner_installs:/var/lib/dirextalk-core-runner/installs
       - core_runner_workspaces:/var/lib/dirextalk-core-runner/workspaces
       - core_runner_state:/var/lib/dirextalk-core-runner/state
@@ -401,9 +425,14 @@ services:
       - >-
         install -d -m 2750 /socket;
         chown 65530:65532 /socket;
-        chmod 2750 /socket
+        chmod 2750 /socket;
+        test "$$(stat -c '%u:%g:%a' /socket)" = 65530:65532:2750
     volumes:
-      - core_runner_socket:/socket
+      - type: volume
+        source: core_runner_socket
+        target: /socket
+        volume:
+          nocopy: true
 
   core-runner-storage-init:
     <<: *runner-storage-init
@@ -411,7 +440,10 @@ services:
       - -ec
       - >-
         chown 65530:65530 /install /workspace /state;
-        chmod 0700 /install /workspace /state
+        chmod 0700 /install /workspace /state;
+        test "$$(stat -c '%u:%g:%a' /install)" = 65530:65530:700;
+        test "$$(stat -c '%u:%g:%a' /workspace)" = 65530:65530:700;
+        test "$$(stat -c '%u:%g:%a' /state)" = 65530:65530:700
     volumes:
       - core_runner_installs:/install
       - core_runner_workspaces:/workspace
@@ -476,6 +508,7 @@ services:
       P2P_MESSAGE_SERVER_INSTANCE_ID: ${DIREXTALK_MESSAGE_SERVER_INSTANCE_ID:?set the message-server instance ID}
       P2P_AGENT_INSTANCE_ID: ${DIREXTALK_AGENT_INSTANCE_ID:?set the Agent instance ID}
       P2P_ACCOUNT_GENERATION: ${DIREXTALK_ACCOUNT_GENERATION:?set the fresh account generation}
+      DIREXTALK_RELEASE_CATALOG_ORIGIN: ${DIREXTALK_RELEASE_CATALOG_ORIGIN:?set the HTTPS release catalog origin}
     entrypoint: ["/usr/local/bin/message-server-entrypoint"]
     command:
       - --http-bind-address
