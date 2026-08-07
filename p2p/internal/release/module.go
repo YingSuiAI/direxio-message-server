@@ -5,6 +5,7 @@ package release
 import (
 	"context"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -16,19 +17,20 @@ import (
 	"github.com/google/uuid"
 )
 
+var releaseJobIDPattern = regexp.MustCompile(`^job_[A-Za-z0-9_-]{1,124}$`)
+
 const (
 	ClientSessionStaleCode = "client_session_stale"
 	UpdaterUnavailableCode = "updater_unavailable"
 
 	actionClientVersionReport = "client.version.report"
-	actionReleaseStatus       = "release.v1.status"
-	actionReleaseApply        = "release.v1.apply"
-	actionReleaseV2Status     = "release.v2.status"
-	actionReleaseV2Apply      = "release.v2.apply"
-	applyInvalidParamsCode    = "release_apply_invalid_params"
+	actionReleaseStatus       = "release.v2.status"
+	actionReleaseApply        = "release.v2.apply"
 	v2StatusInvalidParamsCode = "release_v2_status_invalid_params"
 	v2ApplyInvalidParamsCode  = "release_v2_apply_invalid_params"
 	clientVersionIncompatible = "client_version_incompatible"
+	serverVersionIncompatible = "server_version_incompatible"
+	agentVersionUnavailable   = "agent_current_version_unavailable"
 	releaseTargetMismatch     = "release_target_mismatch"
 	releaseTargetNotNewer     = "release_target_not_newer"
 )
@@ -85,8 +87,6 @@ func (m *Module) Handlers() map[string]actionbase.Handler {
 		actionClientVersionReport: m.reportClientVersion,
 		actionReleaseStatus:       m.status,
 		actionReleaseApply:        m.apply,
-		actionReleaseV2Status:     m.statusV2,
-		actionReleaseV2Apply:      m.applyV2,
 	}
 }
 
@@ -135,124 +135,71 @@ func (m *Module) reportClientVersion(ctx context.Context, params map[string]any)
 	}, nil
 }
 
-func (m *Module) status(ctx context.Context, _ map[string]any) (any, *actionbase.Error) {
-	buildInfo := internal.CurrentBuildInfo()
-	snapshot := m.state.Snapshot()
-	request := releasecontrol.StatusRequest{
-		CurrentVersion:             buildInfo.Version,
-		CurrentSchemaVersion:       buildInfo.SchemaVersion,
-		CurrentSchemaCompatVersion: buildInfo.SchemaCompatVersion,
-		ClientVersion:              snapshot.Client.Version,
-	}
-	centralAgent, err := m.centralAgentSource.CurrentAgentVersion(ctx)
-	if err != nil || validateCentralAgentVersion(centralAgent) != nil {
-		reason := releasecontrol.CentralVersionInvalidCode
-		if centralErr, ok := releasecontrol.AsCentralVersionError(err); ok {
-			reason = centralErr.Code
-		}
-		return statusMap(unavailableStatus(request, reason), buildInfo.SchemaVersion, buildInfo.SchemaCompatVersion, snapshot.Client, snapshot.DeviceID), nil
-	}
-	request.AgentVersion = centralAgent.Version
-	request.AgentMinimumServerVersion = centralAgent.PreVersion
-	status := unavailableStatus(request, UpdaterUnavailableCode)
-	if snapshot.Controller != nil {
-		if current, err := snapshot.Controller.Status(ctx, request); err == nil {
-			status = current
-		}
-	}
-	status.CurrentVersion = request.CurrentVersion
-	status.ClientVersion = request.ClientVersion
-	status.Agent.LatestVersion = request.AgentVersion
-	status.Agent.MinimumServerVersion = request.AgentMinimumServerVersion
-	return statusMap(status, buildInfo.SchemaVersion, buildInfo.SchemaCompatVersion, snapshot.Client, snapshot.DeviceID), nil
-}
-
-func (m *Module) apply(ctx context.Context, params map[string]any) (any, *actionbase.Error) {
-	allowed := map[string]struct{}{"plan_token": {}, "idempotency_key": {}, "confirm": {}}
-	for key := range params {
-		if _, ok := allowed[key]; !ok {
-			return nil, actionbase.CodedError(http.StatusBadRequest, applyInvalidParamsCode, "release apply accepts only plan_token, idempotency_key, and confirm")
-		}
-	}
-	values := actionbase.Params(params)
-	request := releasecontrol.ApplyRequest{
-		PlanToken:      values.String("plan_token"),
-		IdempotencyKey: values.String("idempotency_key"),
-		Confirm:        values.String("confirm"),
-	}
-	if request.PlanToken == "" || len(request.PlanToken) > 4096 || strings.ContainsAny(request.PlanToken, "\r\n\t") || request.Confirm != releasecontrol.ApplyConfirmation {
-		return nil, actionbase.CodedError(http.StatusBadRequest, applyInvalidParamsCode, "release apply parameters are invalid")
-	}
-	if _, err := uuid.Parse(request.IdempotencyKey); err != nil {
-		return nil, actionbase.CodedError(http.StatusBadRequest, applyInvalidParamsCode, "idempotency_key must be a UUID")
-	}
-	controller := m.state.Snapshot().Controller
-	if controller == nil {
-		return nil, unavailableError()
-	}
-	ticket, err := controller.Apply(ctx, request)
-	if err != nil {
-		return nil, controllerError(err)
-	}
-	return map[string]any{"job_id": ticket.JobID, "job_token": ticket.JobToken, "status_url": ticket.StatusURL}, nil
-}
-
-// statusV2 deliberately asks only the direct updater control surface. It does
-// not discover GitHub releases or generate an executable plan; the central
-// record is consulted only when an owner requests an apply.
-func (m *Module) statusV2(ctx context.Context, params map[string]any) (any, *actionbase.Error) {
+func (m *Module) status(ctx context.Context, params map[string]any) (any, *actionbase.Error) {
 	if len(params) != 0 {
 		return nil, actionbase.CodedError(http.StatusBadRequest, v2StatusInvalidParamsCode, "release v2 status does not accept parameters")
 	}
 	buildInfo := internal.CurrentBuildInfo()
 	snapshot := m.state.Snapshot()
-	status := releasecontrol.DirectStatus{}
-	if controller, ok := snapshot.Controller.(releasecontrol.DirectController); ok {
-		if current, err := controller.StatusDirect(ctx); err == nil {
-			status = current
-		}
+	type updaterResult struct {
+		status releasecontrol.Status
+		err    error
 	}
-	return directStatusMap(status, buildInfo.Version, snapshot.Client.Version), nil
+	type centralResult struct {
+		version releasecontrol.CentralAgentVersion
+		err     error
+	}
+	updaterCh := make(chan updaterResult, 1)
+	centralCh := make(chan centralResult, 1)
+	go func() {
+		if snapshot.Controller == nil {
+			updaterCh <- updaterResult{err: context.Canceled}
+			return
+		}
+		status, err := snapshot.Controller.Status(ctx)
+		updaterCh <- updaterResult{status: status, err: err}
+	}()
+	go func() {
+		version, err := m.centralAgentSource.CurrentAgentVersion(ctx)
+		centralCh <- centralResult{version: version, err: err}
+	}()
+	updater := <-updaterCh
+	central := <-centralCh
+	centralReason := ""
+	if central.err != nil || validateCentralAgentVersion(central.version) != nil {
+		centralReason = centralVersionReason(central.err)
+	}
+	return releaseStatusMap(updater.status, updater.err, central.version, centralReason, buildInfo.Version, snapshot.Client.Version), nil
 }
 
-func (m *Module) applyV2(ctx context.Context, params map[string]any) (any, *actionbase.Error) {
+func (m *Module) apply(ctx context.Context, params map[string]any) (any, *actionbase.Error) {
 	request, apiErr := validateV2ApplyRequest(params)
 	if apiErr != nil {
 		return nil, apiErr
 	}
 	snapshot := m.state.Snapshot()
-	controller, ok := snapshot.Controller.(releasecontrol.DirectController)
-	if !ok {
+	controller := snapshot.Controller
+	if controller == nil {
 		return nil, unavailableError()
 	}
 	buildInfo := internal.CurrentBuildInfo()
-	updaterStatus, err := controller.StatusDirect(ctx)
-	if err != nil || !validDirectUpdaterStatus(updaterStatus, buildInfo.Version) || !updaterStatus.UpdaterReady {
+	updaterStatus, err := controller.Status(ctx)
+	if err != nil || !validUpdaterStatus(updaterStatus, buildInfo.Version) || !updaterStatus.UpdaterReady {
 		return nil, unavailableError()
 	}
-	central, err := m.centralSource.CurrentServerVersion(ctx)
-	if err != nil {
-		return nil, centralVersionError(err)
+	switch request.Component {
+	case releasecontrol.ReleaseComponentServer:
+		if apiErr := m.gateServerUpdate(ctx, snapshot, buildInfo.Version, &request); apiErr != nil {
+			return nil, apiErr
+		}
+	case releasecontrol.ReleaseComponentAgent:
+		if apiErr := m.gateAgentUpdate(ctx, updaterStatus, buildInfo.Version, &request); apiErr != nil {
+			return nil, apiErr
+		}
+	default:
+		return nil, v2InvalidParamsError()
 	}
-	if err := validateCentralServerVersion(central); err != nil {
-		return nil, centralVersionError(err)
-	}
-	if request.TargetVersion != central.Version {
-		return nil, actionbase.CodedError(http.StatusConflict, releaseTargetMismatch, "target_version no longer matches the central server version")
-	}
-	clientVersion, err := releasecontrol.CanonicalStableVersion("client_version", snapshot.Client.Version)
-	if err != nil {
-		return nil, actionbase.CodedError(http.StatusConflict, clientVersionIncompatible, "current client version is not compatible with the server update")
-	}
-	comparison, err := releasecontrol.CompareCanonicalStableVersions(clientVersion, central.PreVersion)
-	if err != nil || comparison < 0 {
-		return nil, actionbase.CodedError(http.StatusConflict, clientVersionIncompatible, "current client version is not compatible with the server update")
-	}
-	comparison, err = releasecontrol.CompareCanonicalServerVersions(request.TargetVersion, buildInfo.Version)
-	if err != nil || comparison <= 0 {
-		return nil, actionbase.CodedError(http.StatusConflict, releaseTargetNotNewer, "target_version must be newer than the running server")
-	}
-	ticket, err := controller.ApplyDirect(ctx, request)
+	ticket, err := controller.Apply(ctx, request)
 	if err != nil {
 		return nil, controllerError(err)
 	}
@@ -260,6 +207,57 @@ func (m *Module) applyV2(ctx context.Context, params map[string]any) (any, *acti
 		"job_id": ticket.JobID, "job_token": ticket.JobToken,
 		"status_url": ticket.StatusURL, "status": ticket.Status,
 	}, nil
+}
+
+func (m *Module) gateServerUpdate(ctx context.Context, snapshot Snapshot, runningVersion string, request *releasecontrol.ApplyRequest) *actionbase.Error {
+	central, err := m.centralSource.CurrentServerVersion(ctx)
+	if err != nil || validateCentralServerVersion(central) != nil {
+		return centralVersionError(err)
+	}
+	if request.TargetVersion != central.Version {
+		return actionbase.CodedError(http.StatusConflict, releaseTargetMismatch, "target_version no longer matches the central server version")
+	}
+	clientVersion, err := releasecontrol.CanonicalStableVersion("client_version", snapshot.Client.Version)
+	if err != nil {
+		return actionbase.CodedError(http.StatusConflict, clientVersionIncompatible, "current client version is not compatible with the server update")
+	}
+	comparison, err := releasecontrol.CompareCanonicalStableVersions(clientVersion, central.PreVersion)
+	if err != nil || comparison < 0 {
+		return actionbase.CodedError(http.StatusConflict, clientVersionIncompatible, "current client version is not compatible with the server update")
+	}
+	comparison, err = releasecontrol.CompareCanonicalServerVersions(request.TargetVersion, runningVersion)
+	if err != nil || comparison <= 0 {
+		return actionbase.CodedError(http.StatusConflict, releaseTargetNotNewer, "target_version must be newer than the running server")
+	}
+	request.MinimumServerVersion = ""
+	return nil
+}
+
+func (m *Module) gateAgentUpdate(ctx context.Context, status releasecontrol.Status, runningVersion string, request *releasecontrol.ApplyRequest) *actionbase.Error {
+	central, err := m.centralAgentSource.CurrentAgentVersion(ctx)
+	if err != nil || validateCentralAgentVersion(central) != nil {
+		return centralVersionError(err)
+	}
+	if request.TargetVersion != central.Version {
+		return actionbase.CodedError(http.StatusConflict, releaseTargetMismatch, "target_version no longer matches the central Agent version")
+	}
+	serverComparison, err := releasecontrol.CompareCanonicalStableVersions(runningVersion, central.PreVersion)
+	if err != nil || serverComparison < 0 {
+		return actionbase.CodedError(http.StatusConflict, serverVersionIncompatible, "running server version is not compatible with the Agent update")
+	}
+	if !status.Agent.Available {
+		return actionbase.CodedError(http.StatusConflict, agentVersionUnavailable, "current Agent version is unavailable")
+	}
+	current, err := releasecontrol.CanonicalStableVersion("agent.current_version", status.Agent.CurrentVersion)
+	if err != nil {
+		return actionbase.CodedError(http.StatusConflict, agentVersionUnavailable, "current Agent version is unavailable")
+	}
+	comparison, err := releasecontrol.CompareCanonicalStableVersions(request.TargetVersion, current)
+	if err != nil || comparison <= 0 {
+		return actionbase.CodedError(http.StatusConflict, releaseTargetNotNewer, "target_version must be newer than the running Agent")
+	}
+	request.MinimumServerVersion = central.PreVersion
+	return nil
 }
 
 func (m *Module) SetDesiredState(ctx context.Context, state releasecontrol.DesiredState) *actionbase.Error {
@@ -288,15 +286,6 @@ func unavailableError() *actionbase.Error {
 	return actionbase.CodedError(http.StatusServiceUnavailable, UpdaterUnavailableCode, "updater is unavailable")
 }
 
-func unavailableStatus(request releasecontrol.StatusRequest, reason string) releasecontrol.UpdaterStatus {
-	return releasecontrol.UpdaterStatus{
-		Available: false, ReleaseAvailable: false, UpdateAvailable: false,
-		DiscoveryStatus: "unavailable", CurrentVersion: request.CurrentVersion,
-		ClientVersion: request.ClientVersion, Compatibility: "unknown",
-		Reasons: []string{reason}, Operations: []releasecontrol.Operation{},
-	}
-}
-
 func validateCentralAgentVersion(version releasecontrol.CentralAgentVersion) error {
 	if version.AppID != "1" || version.ChannelID != "agents" {
 		return &releasecontrol.CentralVersionError{Code: releasecontrol.CentralVersionInvalidCode, Message: "central version response is invalid"}
@@ -310,35 +299,48 @@ func validateCentralAgentVersion(version releasecontrol.CentralAgentVersion) err
 	return nil
 }
 
-func validateV2ApplyRequest(params map[string]any) (releasecontrol.DirectApplyRequest, *actionbase.Error) {
-	allowed := map[string]struct{}{"target_version": {}, "idempotency_key": {}, "confirm": {}}
+func validateV2ApplyRequest(params map[string]any) (releasecontrol.ApplyRequest, *actionbase.Error) {
+	allowed := map[string]struct{}{"component": {}, "target_version": {}, "idempotency_key": {}, "confirm": {}}
 	for key := range params {
 		if _, ok := allowed[key]; !ok {
-			return releasecontrol.DirectApplyRequest{}, v2InvalidParamsError()
+			return releasecontrol.ApplyRequest{}, v2InvalidParamsError()
 		}
+	}
+	componentText, ok := exactString(params["component"])
+	if !ok {
+		return releasecontrol.ApplyRequest{}, v2InvalidParamsError()
+	}
+	component := releasecontrol.ReleaseComponent(componentText)
+	if component != releasecontrol.ReleaseComponentServer && component != releasecontrol.ReleaseComponentAgent {
+		return releasecontrol.ApplyRequest{}, v2InvalidParamsError()
 	}
 	targetVersion, ok := exactString(params["target_version"])
 	if !ok {
-		return releasecontrol.DirectApplyRequest{}, v2InvalidParamsError()
+		return releasecontrol.ApplyRequest{}, v2InvalidParamsError()
 	}
-	targetVersion, err := releasecontrol.CanonicalServerVersion("target_version", targetVersion)
+	var err error
+	if component == releasecontrol.ReleaseComponentAgent {
+		targetVersion, err = releasecontrol.CanonicalStableVersion("target_version", targetVersion)
+	} else {
+		targetVersion, err = releasecontrol.CanonicalServerVersion("target_version", targetVersion)
+	}
 	if err != nil {
-		return releasecontrol.DirectApplyRequest{}, v2InvalidParamsError()
+		return releasecontrol.ApplyRequest{}, v2InvalidParamsError()
 	}
 	idempotencyKey, ok := exactString(params["idempotency_key"])
 	if !ok {
-		return releasecontrol.DirectApplyRequest{}, v2InvalidParamsError()
+		return releasecontrol.ApplyRequest{}, v2InvalidParamsError()
 	}
 	parsedUUID, err := uuid.Parse(idempotencyKey)
 	if err != nil || parsedUUID.String() != idempotencyKey {
-		return releasecontrol.DirectApplyRequest{}, v2InvalidParamsError()
+		return releasecontrol.ApplyRequest{}, v2InvalidParamsError()
 	}
 	confirm, ok := exactString(params["confirm"])
 	if !ok || confirm != releasecontrol.ApplyConfirmation {
-		return releasecontrol.DirectApplyRequest{}, v2InvalidParamsError()
+		return releasecontrol.ApplyRequest{}, v2InvalidParamsError()
 	}
-	return releasecontrol.DirectApplyRequest{
-		TargetVersion: targetVersion, IdempotencyKey: idempotencyKey, Confirm: confirm,
+	return releasecontrol.ApplyRequest{
+		Component: component, TargetVersion: targetVersion, IdempotencyKey: idempotencyKey, Confirm: confirm,
 	}, nil
 }
 
@@ -351,7 +353,7 @@ func exactString(value any) (string, bool) {
 }
 
 func v2InvalidParamsError() *actionbase.Error {
-	return actionbase.CodedError(http.StatusBadRequest, v2ApplyInvalidParamsCode, "release v2 apply accepts only target_version, idempotency_key, and confirm")
+	return actionbase.CodedError(http.StatusBadRequest, v2ApplyInvalidParamsCode, "release v2 apply accepts only component, target_version, idempotency_key, and confirm")
 }
 
 func validateCentralServerVersion(version releasecontrol.CentralServerVersion) error {
@@ -379,23 +381,39 @@ func centralVersionError(err error) *actionbase.Error {
 	return actionbase.CodedError(http.StatusBadGateway, releasecontrol.CentralVersionInvalidCode, "central version response is invalid")
 }
 
-func directStatusMap(status releasecontrol.DirectStatus, currentVersion, clientVersion string) map[string]any {
-	valid := validDirectUpdaterStatus(status, currentVersion)
+func centralVersionReason(err error) string {
+	if centralErr, ok := releasecontrol.AsCentralVersionError(err); ok {
+		return centralErr.Code
+	}
+	return releasecontrol.CentralVersionInvalidCode
+}
+
+func releaseStatusMap(status releasecontrol.Status, statusErr error, central releasecontrol.CentralAgentVersion, centralReason, currentVersion, clientVersion string) map[string]any {
+	valid := statusErr == nil && validUpdaterStatus(status, currentVersion)
 	updaterAvailable := valid && status.Available
 	updaterReady := updaterAvailable && status.UpdaterReady
+	desiredState := "unknown"
+	var activeJob any
+	watchdog := watchdogMap(releasecontrol.WatchdogStatus{})
+	if valid {
+		desiredState = normalizedDesiredState(status.DesiredState)
+		activeJob = activeJobMap(status.ActiveJob)
+		watchdog = watchdogMap(status.Watchdog)
+	}
 	return map[string]any{
 		"available":         updaterReady,
 		"current_version":   currentVersion,
 		"client_version":    clientVersion,
 		"updater_available": updaterAvailable,
 		"updater_ready":     updaterReady,
-		"desired_state":     normalizedDesiredState(status.DesiredState),
-		"active_job":        directActiveJobMap(status.ActiveJob),
-		"watchdog":          watchdogMap(status.Watchdog),
+		"desired_state":     desiredState,
+		"active_job":        activeJob,
+		"watchdog":          watchdog,
+		"agent":             agentStatusMap(status.Agent, central, centralReason, currentVersion, valid),
 	}
 }
 
-func validDirectUpdaterStatus(status releasecontrol.DirectStatus, currentVersion string) bool {
+func validUpdaterStatus(status releasecontrol.Status, currentVersion string) bool {
 	if !status.Available {
 		return false
 	}
@@ -403,7 +421,18 @@ func validDirectUpdaterStatus(status releasecontrol.DirectStatus, currentVersion
 	if err != nil || updaterVersion != currentVersion {
 		return false
 	}
-	return normalizedDesiredState(status.DesiredState) != "unknown"
+	desiredState := normalizedDesiredState(status.DesiredState)
+	jobValid := validActiveJob(status.ActiveJob)
+	switch desiredState {
+	case "running":
+		return status.ActiveJob == nil && status.UpdaterReady
+	case "upgrading":
+		return status.ActiveJob != nil && jobValid && !status.UpdaterReady
+	case "maintenance", "deprovisioned":
+		return status.ActiveJob == nil && !status.UpdaterReady
+	default:
+		return false
+	}
 }
 
 func normalizedDesiredState(value string) string {
@@ -415,112 +444,95 @@ func normalizedDesiredState(value string) string {
 	}
 }
 
-func directActiveJobMap(job *releasecontrol.ActiveJob) any {
-	if job == nil || !strings.HasPrefix(job.JobID, "job_") || len(job.JobID) > 128 || !knownJobStatus(job.Status) {
+func activeJobMap(job *releasecontrol.ActiveJob) any {
+	if !validActiveJob(job) {
 		return nil
 	}
+	component := releasecontrol.ReleaseComponent(job.Component)
 	result := map[string]any{
 		"job_id":            job.JobID,
+		"component":         string(component),
 		"status":            job.Status,
 		"service_available": job.ServiceAvailable,
 	}
-	if version, err := releasecontrol.CanonicalServerVersion("current_version", job.CurrentVersion); err == nil && version != "" {
-		result["current_version"] = version
-	}
-	if version, err := releasecontrol.CanonicalServerVersion("target_version", job.TargetVersion); err == nil && version != "" {
-		result["target_version"] = version
-	}
+	result["current_version"] = job.CurrentVersion
+	result["target_version"] = job.TargetVersion
 	return result
 }
 
-func knownJobStatus(value string) bool {
-	switch value {
-	case "queued", "validating", "backing_up", "pulling", "stopping", "migrating", "starting", "health_check", "rolling_back", "restarting", "succeeded", "failed", "rolled_back":
-		return true
+func validActiveJob(job *releasecontrol.ActiveJob) bool {
+	if job == nil {
+		return false
+	}
+	if !releaseJobIDPattern.MatchString(job.JobID) || (job.Status != "queued" && job.Status != "pulling") {
+		return false
+	}
+	switch releasecontrol.ReleaseComponent(job.Component) {
+	case releasecontrol.ReleaseComponentServer:
+		comparison, err := releasecontrol.CompareCanonicalServerVersions(job.TargetVersion, job.CurrentVersion)
+		return err == nil && comparison > 0
+	case releasecontrol.ReleaseComponentAgent:
+		comparison, err := releasecontrol.CompareCanonicalStableVersions(job.TargetVersion, job.CurrentVersion)
+		return err == nil && comparison > 0
 	default:
 		return false
 	}
 }
 
-func statusMap(status releasecontrol.UpdaterStatus, schemaVersion, schemaCompatVersion int, client dirextalkdomain.ClientBuild, deviceID string) map[string]any {
-	agentStatus := agentReleaseStatusMap(status.Agent, status.CurrentVersion)
-	operations := releaseOperations(status.Operations, agentStatus)
-	reasons := status.Reasons
-	if reasons == nil {
-		reasons = []string{}
-	}
-	return map[string]any{
-		"available": status.Available, "release_available": status.ReleaseAvailable,
-		"update_available": status.UpdateAvailable, "discovery_status": status.DiscoveryStatus,
-		"checked_at": status.CheckedAt, "current_version": status.CurrentVersion,
-		"current_schema_version": schemaVersion, "current_schema_compat_version": schemaCompatVersion,
-		"latest_version": status.LatestVersion, "client_version": status.ClientVersion,
-		"client_build_number": client.BuildNumber, "client_platform": client.Platform,
-		"client_device_id": deviceID, "client_reported_at": client.ReportedAt,
-		"compatibility": status.Compatibility, "reasons": reasons,
-		"release_notes_url": status.ReleaseNotesURL, "operations": operations,
-		"watchdog": watchdogMap(status.Watchdog),
-		"agent":    agentStatus,
-	}
-}
-
-func releaseOperations(operations []releasecontrol.Operation, agentStatus map[string]any) []releasecontrol.Operation {
-	result := make([]releasecontrol.Operation, 0, len(operations))
-	agentUpdateAvailable, _ := agentStatus["update_available"].(bool)
-	agentTarget, _ := agentStatus["latest_version"].(string)
-	for _, operation := range operations {
-		if operation.Kind == "agent_upgrade" && (!agentUpdateAvailable || operation.TargetVersion != agentTarget) {
-			continue
-		}
-		result = append(result, operation)
-	}
-	return result
-}
-
-func agentReleaseStatusMap(status releasecontrol.AgentReleaseStatus, currentServerVersion string) map[string]any {
-	reasons := []string{"agent_release_unavailable"}
+func agentStatusMap(status releasecontrol.AgentStatus, central releasecontrol.CentralAgentVersion, centralReason, currentServerVersion string, updaterValid bool) map[string]any {
+	reasons := []string{}
 	result := map[string]any{
 		"available": false, "current_version": "", "latest_version": "",
 		"minimum_server_version": "", "update_available": false,
 		"compatibility": "unknown", "reasons": reasons,
 	}
+	if centralReason == "" {
+		result["latest_version"] = central.Version
+		result["minimum_server_version"] = central.PreVersion
+	}
+	if !updaterValid {
+		result["reasons"] = []string{UpdaterUnavailableCode}
+		return result
+	}
+	reasons = normalizedAgentReleaseReasons(status.Reasons)
 	if !status.Available {
+		result["reasons"] = appendReason(reasons, "agent_release_unavailable")
 		return result
 	}
 	current, err := releasecontrol.CanonicalStableVersion("agent.current_version", status.CurrentVersion)
 	if err != nil {
+		result["reasons"] = appendReason(reasons, "agent_release_invalid")
 		return result
 	}
-	latest, err := releasecontrol.CanonicalStableVersion("agent.latest_version", status.LatestVersion)
-	if err != nil {
+	result["available"] = true
+	result["current_version"] = current
+	if centralReason != "" {
+		result["reasons"] = appendReason(reasons, centralReason)
 		return result
 	}
-	minimumServer, err := releasecontrol.CanonicalStableVersion("agent.minimum_server_version", status.MinimumServerVersion)
+	latest := central.Version
+	minimumServer := central.PreVersion
+	serverComparison, err := releasecontrol.CompareCanonicalStableVersions(currentServerVersion, minimumServer)
 	if err != nil {
-		return result
-	}
-	runningServer, err := releasecontrol.CanonicalStableVersion("current_version", currentServerVersion)
-	if err != nil {
-		return result
-	}
-	serverComparison, err := releasecontrol.CompareCanonicalStableVersions(runningServer, minimumServer)
-	if err != nil {
-		return result
+		serverComparison = -1
 	}
 	agentComparison, err := releasecontrol.CompareCanonicalStableVersions(latest, current)
 	if err != nil {
 		return result
 	}
 	compatibility := "compatible"
-	reasons = normalizedAgentReleaseReasons(status.Reasons)
 	if serverComparison < 0 {
 		compatibility = "incompatible"
 		reasons = appendReason(reasons, "agent_requires_newer_server")
+	} else if agentComparison > 0 {
+		reasons = appendReason(reasons, "agent_update_available")
+	} else {
+		reasons = appendReason(reasons, "agent_up_to_date")
 	}
 	return map[string]any{
 		"available": true, "current_version": current, "latest_version": latest,
 		"minimum_server_version": minimumServer,
-		"update_available":       status.UpdateAvailable && agentComparison > 0 && serverComparison >= 0,
+		"update_available":       agentComparison > 0 && serverComparison >= 0,
 		"compatibility":          compatibility, "reasons": reasons,
 	}
 }
@@ -529,7 +541,7 @@ func normalizedAgentReleaseReasons(values []string) []string {
 	result := make([]string, 0, len(values))
 	for _, value := range values {
 		switch value {
-		case "agent_update_available", "agent_up_to_date", "agent_requires_newer_server":
+		case "agent_release_unavailable", "agent_receipt_unavailable", "agent_receipt_invalid":
 			result = appendReason(result, value)
 		}
 	}

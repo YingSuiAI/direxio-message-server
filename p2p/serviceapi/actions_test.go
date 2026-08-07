@@ -102,20 +102,23 @@ func TestActionSpecsReturnsStableOrderedCopy(t *testing.T) {
 	}
 }
 
-func TestReleaseV1SchemasPublishAgentStatusAndOpaqueApply(t *testing.T) {
-	status, ok := ActionSpecFor("release.v1.status")
+func TestReleaseV2SchemasPublishUnifiedComponentContract(t *testing.T) {
+	status, ok := ActionSpecFor("release.v2.status")
 	if !ok || status.Schema == nil || !status.Schema.Response["agent"].Required {
-		t.Fatalf("release.v1.status schema = %#v", status.Schema)
+		t.Fatalf("release.v2.status schema = %#v", status.Schema)
 	}
 	agent := status.Schema.Response["agent"]
 	for _, field := range []string{"available", "current_version", "latest_version", "minimum_server_version", "update_available", "compatibility", "reasons"} {
 		if !agent.Properties[field].Required {
-			t.Errorf("release.v1.status agent.%s must be required", field)
+			t.Errorf("release.v2.status agent.%s must be required", field)
 		}
 	}
-	apply, ok := ActionSpecFor("release.v1.apply")
-	if !ok || apply.Schema == nil || !apply.Schema.Request["plan_token"].WriteOnly || !apply.Schema.Response["job_token"].WriteOnly {
-		t.Fatalf("release.v1.apply schema = %#v", apply.Schema)
+	if !status.Schema.Response["active_job"].Properties["component"].Required {
+		t.Fatal("release.v2.status active_job.component must be required")
+	}
+	apply, ok := ActionSpecFor("release.v2.apply")
+	if !ok || apply.Schema == nil || !apply.Schema.Request["component"].Required || !apply.Schema.Request["target_version"].Required || !apply.Schema.Response["job_token"].WriteOnly {
+		t.Fatalf("release.v2.apply schema = %#v", apply.Schema)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	rootinternal "github.com/YingSuiAI/dirextalk-message-server/internal"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/dirextalkmcp"
 )
 
@@ -55,7 +56,7 @@ func TestMCPHTTPInitializeAndToolsListRequireAgentToken(t *testing.T) {
 		t.Fatalf("expected initialize protocolVersion, got %#v", initializeResult)
 	}
 	serverInfo, ok := initializeResult["serverInfo"].(map[string]any)
-	if !ok || serverInfo["version"] != "v1.1.1" {
+	if !ok || serverInfo["version"] != rootinternal.VersionString() {
 		t.Fatalf("expected canonical MCP server version, got %#v", initializeResult["serverInfo"])
 	}
 	if _, ok := initializeResult["capabilities"].(map[string]any)["tools"]; !ok {

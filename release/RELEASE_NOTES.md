@@ -2,7 +2,11 @@
 
 ## Unreleased
 
-1. Authorize Agent release discovery from the fixed central `agents` channel and pass only its canonical target and minimum message-server version to the root-owned updater and receipt-bound update wrapper, without local channel metadata fallback.
+## v1.1.3
+
+1. Unify Message Server and Agent updates behind the single `release.v2` status, apply, ticket, and recovery contract.
+2. Authorize Agent targets from the fixed central `agents` channel and enforce its minimum stable Message Server version at both the server and root-owned updater boundaries.
+3. Commit Agent image provenance, runtime receipts, and the three-container topology in one rollback-safe update transaction.
 
 ## v1.1.1
 

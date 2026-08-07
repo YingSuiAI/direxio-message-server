@@ -3,14 +3,17 @@
 本文只描述当前代码、架构与接口。当前实现、生成 contract 和 focused tests
 优先于叙述性说明。
 
-## 2026-08-06 Release V2 服务端版本格式
+## 2026-08-07 Release V2 组件版本格式
 
-`release.v2.apply.target_version` 接受 canonical 稳定版 `vX.Y.Z` 和测试版
-`devX.Y.Z`。中台 server `version`、updater status/current version 以及
-active-job 服务端版本使用相同格式。升级通道严格隔离：`v` 运行版本只能
+`release.v2.apply.component=server` 的 `target_version` 接受 canonical 稳定版
+`vX.Y.Z` 和测试版 `devX.Y.Z`；`component=agent` 只接受稳定版 `vX.Y.Z`。
+中台 server `version`、updater status/current version 以及 server active-job
+版本使用相同 server 格式，Agent receipt/active-job 版本只使用稳定格式。
+服务端升级通道严格隔离：`v` 运行版本只能
 升级到更高的 `v` 版本，`dev` 运行版本只能升级到更高的 `dev` 版本，禁止
 跨通道升级。客户端版本与中台 server `preVersion` 仍只接受稳定版
-`vX.Y.Z`。
+`vX.Y.Z`；中台 agents `preVersion` 是 Agent 目标要求的最低 Message Server
+版本。
 
 ## 1. 项目定位
 
@@ -56,7 +59,7 @@ Dirextalk 产品 API 以 body-action surface 为主；标准 MCP 客户端使用
 }
 ```
 
-Protected action 通过 HTTP route 调用时需要 `Authorization: Bearer <access_token>`。登录后的客户端 product action 在 WS 已收到 `server.ready` 时优先走 `GET /_p2p/ws` 上的 `client.request`/`server.response`；点击时 WS 未 ready 或已断线时，当前 action 立即用 `POST /_p2p/query` 或 `POST /_p2p/command` 作为 owner HTTP fallback，同时 realtime WS 在后台继续重连。已发出 WS request 后响应丢失时，只对可安全重复的 action 做 HTTP fallback。`client.version.report`、`release.v1.status` 支持 owner HTTP/WS；`release.v1.apply`、`release.v2.status`、`release.v2.apply` 与 `portal.account.delete` 是 owner `access_token` 保护的 HTTP-only 命令。`release.v2.status` 只返回本机真实 server version、当前 device 报告的 client version 和 updater readiness/watchdog/token-free active-job 状态，不执行 GitHub discovery 或暴露 plan；`release.v2.apply` 只接受 canonical `target_version`、小写 UUID `idempotency_key` 与 `confirm=apply_release_change`。它在每次点击时读取固定中台 `appId=1&channelId=server` 记录，严格复核 `code=0`、app/channel、目标版本和 server `preVersion` 对当前已报告 client version 的兼容性，之后只把这三个安全字段送到 updater Unix control。它拒绝 image/digest/url/plan token/shell/Compose/service 和未知基础设施字段。`release.v1.apply` 只接受 updater 生成的 `plan_token`、UUID `idempotency_key` 与 `confirm=apply_release_change`，不接受 image/digest/version/shell/Compose/service 参数。`realtime.ws_ticket.create` 只接受 owner `access_token` 创建 owner WS ticket。`agent_token` 只允许通过 product body-action 访问 `agent.matrix_session.create`，并可访问标准 `POST /mcp` MCP endpoint，不能通过 HTTP fallback 调用 owner product action。固定 `mcp.*` HTTP body action 已从 `/_p2p/query` 和 `/_p2p/command` 删除；外部 MCP客户端必须使用 `POST /mcp` JSON-RPC。标准 MCP endpoint 与 `agent.matrix_session.create` 不迁移到 WS `client.request`。`GET /_p2p/ws` 只接受短期单次 owner WS ticket，不直接接受 bearer token。当前 public action 是：
+Protected action 通过 HTTP route 调用时需要 `Authorization: Bearer <access_token>`。登录后的客户端 product action 在 WS 已收到 `server.ready` 时优先走 `GET /_p2p/ws` 上的 `client.request`/`server.response`；点击时 WS 未 ready 或已断线时，当前 action 立即用 `POST /_p2p/query` 或 `POST /_p2p/command` 作为 owner HTTP fallback，同时 realtime WS 在后台继续重连。已发出 WS request 后响应丢失时，只对可安全重复的 action 做 HTTP fallback。`client.version.report` 支持 owner HTTP/WS；`release.v2.status`、`release.v2.apply` 与 `portal.account.delete` 是 owner `access_token` 保护的 HTTP-only 命令。`release.v2.status` 不接受参数，并行读取 receipt-bound updater 状态与固定中台 `appId=1&channelId=agents` 记录；中台故障不会阻止返回 updater/server/job/watchdog 事实，Agent 目标不可用时以结构化 reason 表示。状态不执行 GitHub discovery、不暴露执行计划或基础设施字段。`release.v2.apply` 只接受 `component=server|agent`、canonical `target_version`、小写 UUID `idempotency_key` 与 `confirm=apply_release_change`。server 更新每次重取固定 server 记录，并用其 `preVersion` 复核当前 device 报告的 client；Agent 更新每次重取固定 agents 记录，用其 `preVersion` 复核实际运行的 Message Server，并要求目标严格新于 updater receipt 绑定的 Agent 当前版本。通过 Gate 后仅向 updater 发送 `component`、`target_version`、`minimum_server_version`、`idempotency_key`、`confirm` 五个字段；server 的 `minimum_server_version` 必须为空字符串，Agent 使用 agents `preVersion`。它拒绝 image/digest/url/shell/Compose/service 和未知基础设施字段。`realtime.ws_ticket.create` 只接受 owner `access_token` 创建 owner WS ticket。`agent_token` 只允许通过 product body-action 访问 `agent.matrix_session.create`，并可访问标准 `POST /mcp` MCP endpoint，不能通过 HTTP fallback 调用 owner product action。固定 `mcp.*` HTTP body action 已从 `/_p2p/query` 和 `/_p2p/command` 删除；外部 MCP客户端必须使用 `POST /mcp` JSON-RPC。标准 MCP endpoint 与 `agent.matrix_session.create` 不迁移到 WS `client.request`。`GET /_p2p/ws` 只接受短期单次 owner WS ticket，不直接接受 bearer token。当前 public action 是：
 
 - `portal.bootstrap`
 - `portal.auth`
@@ -73,7 +76,7 @@ Protected action 通过 HTTP route 调用时需要 `Authorization: Bearer <acces
 
 Action auth and transport metadata is generated from `p2p/serviceapi.ActionSpecs` into `docs/product-action-contract.json`; contract-critical docs and clients should treat that generated file as the checkable action list.
 
-`portal.bootstrap`、`portal.auth`、`portal.password` 响应只暴露一个初始化状态：`initialized`。它只表示用户是否已通过 `portal.password` 修改过初始密码；profile 是否填写不影响该状态。`client.version.report` 绑定发起 HTTP 请求或创建 WS ticket 时认证的 portal device/session；设备或会话切换后的旧请求、旧 WS 会以 `client_session_stale` 拒绝。报告通过只更新 client build 字段的 device-CAS 写入，其他 portal 字段不会被旧快照覆盖；新 portal device 会原子清掉旧设备报告。同 device 的 `portal.password` token/generation 轮换和 portal 持久化与 report 复核/CAS 共用 session mutex，完成后释放锁再刷新 Matrix session，旧 report 不会越过轮换落库。`release.v1.status` 每次读取固定中台 `appId=1&channelId=agents` 记录，把其中 canonical `version` 和作为 Agent 最低 message-server 版本的 `preVersion` 以 `agent_version`、`agent_minimum_server_version` 两个安全字段传给 root-owned Unix updater；不把 URL、image、digest 或任意中台字段传给 updater。中台不可达或记录无效时不调用 updater，并返回带 `central_version_unavailable` 或 `central_version_invalid` reason 的可解析 unavailable 状态，不使用缓存或旧路径 fallback。运行中 Agent 版本、兼容性、原因与 operation 来自 host updater，但 Agent `latest_version`、`minimum_server_version`、server `current_version` 和 device `client_version` 分别以本次中台、本机和 current-device 事实为准，不信任 updater echo；updater 不可达时仍返回可解析的 unavailable 状态。`portal.account.delete` 要求 `params.confirm="delete_account"`，先持久化 updater desired state `deprovisioned`，失败时不执行后续破坏操作；成功后向 accepted direct contacts 发布带 `account_deleted` 的 `io.dirextalk.room.profile` 解散状态，让对端隐藏已注销联系人，随后退出直聊、解散 owner 创建的群聊和频道、退出 owner 只是成员的群聊/频道、停用本地 owner/agent Matrix 账号并写入非密钥 deprovision 标记。设置 `deprovisioned` 后任一阶段失败都会 best-effort 恢复 `running`；恢复失败返回安全结构化错误 `account_delete_watchdog_restore_failed`。该动作只清理本机数据库并关闭 message-server 进程，不销毁 AWS/云服务器实例。
+`portal.bootstrap`、`portal.auth`、`portal.password` 响应只暴露一个初始化状态：`initialized`。它只表示用户是否已通过 `portal.password` 修改过初始密码；profile 是否填写不影响该状态。`client.version.report` 绑定发起 HTTP 请求或创建 WS ticket 时认证的 portal device/session；设备或会话切换后的旧请求、旧 WS 会以 `client_session_stale` 拒绝。报告通过只更新 client build 字段的 device-CAS 写入，其他 portal 字段不会被旧快照覆盖；新 portal device 会原子清掉旧设备报告。同 device 的 `portal.password` token/generation 轮换和 portal 持久化与 report 复核/CAS 共用 session mutex，完成后释放锁再刷新 Matrix session，旧 report 不会越过轮换落库。`release.v2.status` 的 Agent 当前版本来自 host updater 的 receipt-bound runtime，latest/minimum 来自本次固定中台 agents 记录；兼容性只比较实际 Message Server 版本与 agents `preVersion`。中台或 updater 任一侧失败都保留另一侧可验证事实，不使用缓存或旧 action fallback。`portal.account.delete` 要求 `params.confirm="delete_account"`，先持久化 updater desired state `deprovisioned`，失败时不执行后续破坏操作；成功后向 accepted direct contacts 发布带 `account_deleted` 的 `io.dirextalk.room.profile` 解散状态，让对端隐藏已注销联系人，随后退出直聊、解散 owner 创建的群聊和频道、退出 owner 只是成员的群聊/频道、停用本地 owner/agent Matrix 账号并写入非密钥 deprovision 标记。设置 `deprovisioned` 后任一阶段失败都会 best-effort 恢复 `running`；恢复失败返回安全结构化错误 `account_delete_watchdog_restore_failed`。该动作只清理本机数据库并关闭 message-server 进程，不销毁 AWS/云服务器实例。
 
 `rooms.reactivate` 与 `channels.public.join_result` 是 HTTP-only 节点间回调，不是 WS `client.request` 或客户端常规入口。`rooms.reactivate` 只用于在群/私有频道成员节点重建后恢复对方节点上的邀请/待加入提示，不能让对方静默加入；最终加入仍由对方客户端调用 `groups.join` 或 `channels.join`。
 

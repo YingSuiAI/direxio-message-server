@@ -38,11 +38,38 @@
       "transport": "http_and_ws_request"
     },
     {
-      "name": "release.v1.status",
+      "name": "release.v2.status",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "response": {
+          "active_job": {
+            "type": "object",
+            "properties": {
+              "component": {
+                "type": "string",
+                "required": true
+              },
+              "current_version": {
+                "type": "string"
+              },
+              "job_id": {
+                "type": "string",
+                "required": true
+              },
+              "service_available": {
+                "type": "boolean",
+                "required": true
+              },
+              "status": {
+                "type": "string",
+                "required": true
+              },
+              "target_version": {
+                "type": "string"
+              }
+            }
+          },
           "agent": {
             "type": "object",
             "required": true,
@@ -80,22 +107,65 @@
               }
             }
           },
+          "available": {
+            "type": "boolean",
+            "required": true
+          },
           "client_version": {
             "type": "string"
           },
           "current_version": {
             "type": "string",
             "required": true
+          },
+          "desired_state": {
+            "type": "string",
+            "required": true
+          },
+          "updater_available": {
+            "type": "boolean",
+            "required": true
+          },
+          "updater_ready": {
+            "type": "boolean",
+            "required": true
+          },
+          "watchdog": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "cooldown_until": {
+                "type": "string"
+              },
+              "degraded": {
+                "type": "boolean",
+                "required": true
+              },
+              "error_code": {
+                "type": "string"
+              },
+              "last_observed_at": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "required": true
+              }
+            }
           }
         }
       }
     },
     {
-      "name": "release.v1.apply",
+      "name": "release.v2.apply",
       "auth": "owner",
       "transport": "http_only",
       "schema": {
         "request": {
+          "component": {
+            "type": "string",
+            "required": true
+          },
           "confirm": {
             "type": "string",
             "required": true
@@ -104,10 +174,9 @@
             "type": "string",
             "required": true
           },
-          "plan_token": {
+          "target_version": {
             "type": "string",
-            "required": true,
-            "write_only": true
+            "required": true
           }
         },
         "response": {
@@ -120,22 +189,15 @@
             "required": true,
             "write_only": true
           },
+          "status": {
+            "type": "string"
+          },
           "status_url": {
             "type": "string",
             "required": true
           }
         }
       }
-    },
-    {
-      "name": "release.v2.status",
-      "auth": "owner",
-      "transport": "http_only"
-    },
-    {
-      "name": "release.v2.apply",
-      "auth": "owner",
-      "transport": "http_only"
     },
     {
       "name": "profile.get",

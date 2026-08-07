@@ -42,51 +42,19 @@ const (
 	DesiredStateDeprovisioned DesiredState = "deprovisioned"
 )
 
-type StatusRequest struct {
-	CurrentVersion             string `json:"current_version"`
-	CurrentSchemaVersion       int    `json:"current_schema_version"`
-	CurrentSchemaCompatVersion int    `json:"current_schema_compat_version"`
-	ClientVersion              string `json:"client_version"`
-	AgentVersion               string `json:"agent_version"`
-	AgentMinimumServerVersion  string `json:"agent_minimum_server_version"`
-}
+type ReleaseComponent string
 
-type Operation struct {
-	Kind          string `json:"kind"`
-	PlanToken     string `json:"plan_token"`
-	TargetVersion string `json:"target_version,omitempty"`
-	ExpiresAt     string `json:"expires_at,omitempty"`
-	Confirm       string `json:"confirm,omitempty"`
-}
+const (
+	ReleaseComponentServer ReleaseComponent = "server"
+	ReleaseComponentAgent  ReleaseComponent = "agent"
+)
 
-type UpdaterStatus struct {
-	Available        bool               `json:"available"`
-	ReleaseAvailable bool               `json:"release_available"`
-	UpdateAvailable  bool               `json:"update_available"`
-	DiscoveryStatus  string             `json:"discovery_status"`
-	CheckedAt        string             `json:"checked_at,omitempty"`
-	CurrentVersion   string             `json:"current_version"`
-	LatestVersion    string             `json:"latest_version,omitempty"`
-	ClientVersion    string             `json:"client_version,omitempty"`
-	Compatibility    string             `json:"compatibility"`
-	Reasons          []string           `json:"reasons"`
-	ReleaseNotesURL  string             `json:"release_notes_url,omitempty"`
-	Operations       []Operation        `json:"operations"`
-	Watchdog         WatchdogStatus     `json:"watchdog"`
-	Agent            AgentReleaseStatus `json:"agent"`
-}
-
-// AgentReleaseStatus is the updater-owned, non-secret Agent release
-// projection. The updater observes the receipt-bound runtime and central
-// Agent channel; message-server validates these values again before exposing
-// them to Flutter.
-type AgentReleaseStatus struct {
-	Available            bool     `json:"available"`
-	CurrentVersion       string   `json:"current_version,omitempty"`
-	LatestVersion        string   `json:"latest_version,omitempty"`
-	MinimumServerVersion string   `json:"minimum_server_version,omitempty"`
-	UpdateAvailable      bool     `json:"update_available"`
-	Reasons              []string `json:"reasons"`
+// AgentStatus is the receipt-bound Agent runtime fact reported by the host
+// updater. Central release discovery remains owned by message-server.
+type AgentStatus struct {
+	Available      bool     `json:"available"`
+	CurrentVersion string   `json:"current_version,omitempty"`
+	Reasons        []string `json:"reasons,omitempty"`
 }
 
 type WatchdogStatus struct {
@@ -102,36 +70,32 @@ type WatchdogStatus struct {
 // command, path, recovery point, or job bearer fields.
 type ActiveJob struct {
 	JobID            string `json:"job_id"`
+	Component        string `json:"component"`
 	Status           string `json:"status"`
 	CurrentVersion   string `json:"current_version,omitempty"`
 	TargetVersion    string `json:"target_version,omitempty"`
 	ServiceAvailable bool   `json:"service_available"`
 }
 
-// DirectStatus is the small v2 updater control response. It intentionally
+// Status is the small release.v2 updater control response. It intentionally
 // excludes release discovery, plans, and operations; central version lookup is
 // performed by the message server at apply time instead.
-type DirectStatus struct {
+type Status struct {
 	Available      bool           `json:"available"`
 	UpdaterReady   bool           `json:"updater_ready"`
 	CurrentVersion string         `json:"current_version"`
 	DesiredState   string         `json:"desired_state"`
 	ActiveJob      *ActiveJob     `json:"active_job,omitempty"`
 	Watchdog       WatchdogStatus `json:"watchdog"`
+	Agent          AgentStatus    `json:"agent"`
 }
 
 type ApplyRequest struct {
-	PlanToken      string `json:"plan_token"`
-	IdempotencyKey string `json:"idempotency_key"`
-	Confirm        string `json:"confirm"`
-}
-
-// DirectApplyRequest is the v2 central-version upgrade command. The target is
-// a release identifier only; callers cannot select infrastructure details.
-type DirectApplyRequest struct {
-	TargetVersion  string `json:"target_version"`
-	IdempotencyKey string `json:"idempotency_key"`
-	Confirm        string `json:"confirm"`
+	Component            ReleaseComponent `json:"component"`
+	TargetVersion        string           `json:"target_version"`
+	MinimumServerVersion string           `json:"minimum_server_version"`
+	IdempotencyKey       string           `json:"idempotency_key"`
+	Confirm              string           `json:"confirm"`
 }
 
 type JobTicket struct {
@@ -142,17 +106,9 @@ type JobTicket struct {
 }
 
 type Controller interface {
-	Status(context.Context, StatusRequest) (UpdaterStatus, error)
+	Status(context.Context) (Status, error)
 	Apply(context.Context, ApplyRequest) (JobTicket, error)
 	SetDesiredState(context.Context, DesiredState) error
-}
-
-// DirectController is implemented by current updaters. It is separate from
-// Controller so legacy v1 plan-token behavior remains source compatible while
-// v2 can fail closed when installed updater binaries have not been migrated.
-type DirectController interface {
-	StatusDirect(context.Context) (DirectStatus, error)
-	ApplyDirect(context.Context, DirectApplyRequest) (JobTicket, error)
 }
 
 type ControllerError struct {
@@ -207,41 +163,16 @@ func NewUnixController(config UnixControllerConfig) Controller {
 	}
 }
 
-func (c *unixController) Status(ctx context.Context, request StatusRequest) (UpdaterStatus, error) {
-	var status UpdaterStatus
-	if _, err := CanonicalStableVersion("agent_version", request.AgentVersion); err != nil {
-		return UpdaterStatus{}, &ControllerError{Status: http.StatusBadRequest, Code: "updater_request_invalid", Message: "updater request is invalid"}
-	}
-	if _, err := CanonicalStableVersion("agent_minimum_server_version", request.AgentMinimumServerVersion); err != nil {
-		return UpdaterStatus{}, &ControllerError{Status: http.StatusBadRequest, Code: "updater_request_invalid", Message: "updater request is invalid"}
-	}
-	if err := c.post(ctx, ControlStatusPath, request, &status); err != nil {
-		return UpdaterStatus{}, err
+func (c *unixController) Status(ctx context.Context) (Status, error) {
+	var status Status
+	if err := c.post(ctx, ControlStatusPath, struct{}{}, &status); err != nil {
+		return Status{}, err
 	}
 	return status, nil
 }
 
 func (c *unixController) Apply(ctx context.Context, request ApplyRequest) (JobTicket, error) {
-	var ticket JobTicket
-	if err := c.post(ctx, ControlJobsPath, request, &ticket); err != nil {
-		return JobTicket{}, err
-	}
-	if err := validateJobTicket(ticket); err != nil {
-		return JobTicket{}, err
-	}
-	return ticket, nil
-}
-
-func (c *unixController) StatusDirect(ctx context.Context) (DirectStatus, error) {
-	var status DirectStatus
-	if err := c.post(ctx, ControlStatusPath, struct{}{}, &status); err != nil {
-		return DirectStatus{}, err
-	}
-	return status, nil
-}
-
-func (c *unixController) ApplyDirect(ctx context.Context, request DirectApplyRequest) (JobTicket, error) {
-	if _, err := CanonicalServerVersion("target_version", request.TargetVersion); err != nil {
+	if !validApplyVersions(request) {
 		return JobTicket{}, &ControllerError{Status: http.StatusBadRequest, Code: "updater_request_invalid", Message: "updater request is invalid"}
 	}
 	parsedID, err := uuid.Parse(request.IdempotencyKey)
@@ -256,6 +187,25 @@ func (c *unixController) ApplyDirect(ctx context.Context, request DirectApplyReq
 		return JobTicket{}, err
 	}
 	return ticket, nil
+}
+
+func validApplyVersions(request ApplyRequest) bool {
+	switch request.Component {
+	case ReleaseComponentServer:
+		if request.MinimumServerVersion != "" {
+			return false
+		}
+		_, err := CanonicalServerVersion("target_version", request.TargetVersion)
+		return err == nil
+	case ReleaseComponentAgent:
+		if _, err := CanonicalStableVersion("target_version", request.TargetVersion); err != nil {
+			return false
+		}
+		_, err := CanonicalStableVersion("minimum_server_version", request.MinimumServerVersion)
+		return err == nil
+	default:
+		return false
+	}
 }
 
 func (c *unixController) SetDesiredState(ctx context.Context, state DesiredState) error {
