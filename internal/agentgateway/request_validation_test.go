@@ -1,6 +1,10 @@
 package agentgateway
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"math"
@@ -13,6 +17,8 @@ import (
 
 func TestValidateChatRequestRequiresImmutableProfilePins(t *testing.T) {
 	base := map[string]any{
+		"idempotency_key":        "11111111-1111-4111-8111-111111111111",
+		"conversation_id":        "22222222-2222-4222-8222-222222222222",
 		"message":                "hello",
 		"model_profile_id":       "profile-id",
 		"model_profile_revision": int64(2),
@@ -27,7 +33,7 @@ func TestValidateChatRequestRequiresImmutableProfilePins(t *testing.T) {
 	if err := ValidateActionRequest("agent.chat", jsonNumbers); err != nil {
 		t.Fatalf("JSON-number chat profile pins rejected: %v", err)
 	}
-	for _, field := range []string{"model_profile_id", "model_profile_revision", "credential_version"} {
+	for _, field := range []string{"idempotency_key", "conversation_id", "message", "model_profile_id", "model_profile_revision", "credential_version"} {
 		params := cloneParams(base)
 		delete(params, field)
 		if err := ValidateActionRequest("agent.chat.stream", params); !errors.Is(err, ErrInvalidActionRequest) {
@@ -54,8 +60,210 @@ func TestValidateChatRequestRequiresImmutableProfilePins(t *testing.T) {
 	}
 }
 
+func TestValidateChatAttachmentsUseCommittedIDsOnlyOnDurableStream(t *testing.T) {
+	base := map[string]any{
+		"idempotency_key":        "11111111-1111-4111-8111-111111111111",
+		"conversation_id":        "22222222-2222-4222-8222-222222222222",
+		"message":                "inspect the images",
+		"model_profile_id":       "profile-id",
+		"model_profile_revision": int64(2),
+		"credential_version":     int64(3),
+	}
+	ids := []any{
+		"11111111-1111-4111-8111-111111111111",
+		"22222222-2222-4222-8222-222222222222",
+	}
+	stream := cloneParams(base)
+	stream["accepted_attachment_ids"] = ids
+	if err := ValidateActionRequest("agent.chat.stream", stream); err != nil {
+		t.Fatalf("committed attachment IDs rejected: %v", err)
+	}
+	if err := ValidateActionRequest("agent.chat", stream); !errors.Is(err, ErrInvalidActionRequest) {
+		t.Fatalf("unary chat accepted attachment IDs: %v", err)
+	}
+
+	for name, value := range map[string]any{
+		"duplicate": []any{ids[0], ids[0]},
+		"too many": []any{
+			"11111111-1111-4111-8111-111111111111",
+			"22222222-2222-4222-8222-222222222222",
+			"33333333-3333-4333-8333-333333333333",
+			"44444444-4444-4444-8444-444444444444",
+			"55555555-5555-4555-8555-555555555555",
+		},
+		"invalid UUID": []any{"attachment-1"},
+		"mixed type":   []any{ids[0], 2},
+	} {
+		t.Run(name, func(t *testing.T) {
+			params := cloneParams(base)
+			params["accepted_attachment_ids"] = value
+			if err := ValidateActionRequest("agent.chat.stream", params); !errors.Is(err, ErrInvalidActionRequest) {
+				t.Fatalf("invalid attachment IDs accepted: %v", err)
+			}
+		})
+	}
+
+	for _, field := range []string{"attachment", "attachments", "data_base64"} {
+		params := cloneParams(base)
+		params[field] = map[string]any{"data_base64": "private-image-canary"}
+		err := ValidateActionRequest("agent.chat.stream", params)
+		if !errors.Is(err, ErrInvalidActionRequest) {
+			t.Errorf("raw %s payload accepted: %v", field, err)
+		}
+		if strings.Contains(err.Error(), "private-image-canary") {
+			t.Errorf("raw %s error leaked payload bytes: %v", field, err)
+		}
+	}
+}
+
+func TestValidateChatAttachmentUploadRequests(t *testing.T) {
+	const (
+		idempotencyID = "11111111-1111-4111-8111-111111111111"
+		turnRequestID = "22222222-2222-4222-8222-222222222222"
+		uploadID      = "33333333-3333-4333-8333-333333333333"
+	)
+	chunk := []byte("hello")
+	chunkDigest := sha256.Sum256(chunk)
+	digest := hex.EncodeToString(chunkDigest[:])
+	encoded := base64.StdEncoding.EncodeToString(chunk)
+
+	begin := map[string]any{
+		"idempotency_key": idempotencyID, "turn_request_id": turnRequestID,
+		"kind": "image", "name": "image.png", "mime_type": "image/png", "declared_size": len(chunk), "content_sha256": digest,
+	}
+	appendRequest := map[string]any{
+		"idempotency_key": idempotencyID, "upload_id": uploadID, "expected_revision": 1,
+		"ordinal": 0, "offset_bytes": 0, "data_base64": encoded, "chunk_sha256": digest,
+	}
+	commit := map[string]any{
+		"idempotency_key": idempotencyID, "upload_id": uploadID,
+		"expected_revision": 2, "content_sha256": digest,
+	}
+	for action, params := range map[string]map[string]any{
+		"agent.chat.attachment.begin":  begin,
+		"agent.chat.attachment.append": appendRequest,
+		"agent.chat.attachment.commit": commit,
+	} {
+		if err := ValidateActionRequest(action, params); err != nil {
+			t.Errorf("%s canonical request rejected: %v", action, err)
+		}
+	}
+
+	for name, input := range map[string]map[string]any{
+		"ordinary file": {
+			"kind": "file", "name": "task.json", "mime_type": "application/json",
+		},
+		"structured suffix file": {
+			"kind": "file", "name": "events.data", "mime_type": "application/vnd.example+json",
+		},
+		"workspace archive": {
+			"kind": "workspace_archive", "name": "workspace.tar.gz",
+			"mime_type": "application/vnd.dirextalk.workspace+tar+gzip",
+		},
+	} {
+		t.Run("begin "+name, func(t *testing.T) {
+			params := cloneParams(begin)
+			for field, value := range input {
+				params[field] = value
+			}
+			params["declared_size"] = maxChatAttachmentBytes
+			if err := ValidateActionRequest("agent.chat.attachment.begin", params); err != nil {
+				t.Fatalf("valid %s rejected: %v", name, err)
+			}
+		})
+	}
+
+	for name, value := range map[string]string{
+		"empty":    "",
+		"raw":      base64.RawStdEncoding.EncodeToString([]byte("h")),
+		"URL safe": base64.URLEncoding.EncodeToString([]byte{0xfb, 0xff}),
+		"oversize": base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{'x'}, int(maxChatAttachmentChunkBytes)+1)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			params := cloneParams(appendRequest)
+			params["data_base64"] = value
+			err := ValidateActionRequest("agent.chat.attachment.append", params)
+			if !errors.Is(err, ErrInvalidActionRequest) {
+				t.Fatalf("non-canonical base64 accepted: %v", err)
+			}
+			if value != "" && strings.Contains(err.Error(), value) {
+				t.Fatal("base64 payload was reflected in the validation error")
+			}
+		})
+	}
+
+	wrongDigest := cloneParams(appendRequest)
+	wrongDigest["chunk_sha256"] = strings.Repeat("0", sha256.Size*2)
+	if err := ValidateActionRequest("agent.chat.attachment.append", wrongDigest); !errors.Is(err, ErrInvalidActionRequest) {
+		t.Fatalf("mismatched chunk digest accepted: %v", err)
+	}
+	for _, mutation := range []map[string]any{
+		{"name": "../image.png"},
+		{"kind": ""},
+		{"mime_type": "application/octet-stream"},
+		{"kind": "file", "mime_type": "image/png"},
+		{"kind": "workspace_archive", "mime_type": "application/gzip"},
+		{"declared_size": maxChatAttachmentBytes + 1},
+		{"content_sha256": strings.ToUpper(digest)},
+		{"extra": true},
+	} {
+		params := cloneParams(begin)
+		for field, value := range mutation {
+			params[field] = value
+		}
+		if err := ValidateActionRequest("agent.chat.attachment.begin", params); !errors.Is(err, ErrInvalidActionRequest) {
+			t.Errorf("invalid begin mutation %#v accepted: %v", mutation, err)
+		}
+	}
+}
+
+func TestValidateCloudWorkerArtifactDownloadRequest(t *testing.T) {
+	const artifactID = "9e728519-ea72-52cc-bb5a-8eb2860722b8"
+	valid := map[string]any{
+		"record_kind":     "cloud_worker",
+		"artifact_id":     artifactID,
+		"offset_bytes":    json.Number("0"),
+		"max_chunk_bytes": json.Number("524288"),
+	}
+	if err := ValidateActionRequest("agent.execution.v2.artifacts.download", valid); err != nil {
+		t.Fatalf("canonical artifact download request rejected: %v", err)
+	}
+
+	for name, mutation := range map[string]map[string]any{
+		"missing record kind": {"record_kind": nil},
+		"generic route":       {"record_kind": "generic"},
+		"bad artifact id":     {"artifact_id": "artifact-1"},
+		"negative offset":     {"offset_bytes": -1},
+		"oversize offset":     {"offset_bytes": maxCloudWorkerArtifactBytes},
+		"fractional offset":   {"offset_bytes": 1.5},
+		"zero chunk":          {"max_chunk_bytes": 0},
+		"oversize chunk":      {"max_chunk_bytes": maxCloudWorkerArtifactChunkBytes + 1},
+		"unknown field":       {"s3_url": "s3://private/internal"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			request := cloneParams(valid)
+			for field, value := range mutation {
+				if value == nil {
+					delete(request, field)
+				} else {
+					request[field] = value
+				}
+			}
+			err := ValidateActionRequest("agent.execution.v2.artifacts.download", request)
+			if !errors.Is(err, ErrInvalidActionRequest) {
+				t.Fatalf("invalid artifact download request accepted: %v", err)
+			}
+			if strings.Contains(err.Error(), "s3://private/internal") {
+				t.Fatal("request validation reflected a private storage address")
+			}
+		})
+	}
+}
+
 func TestValidateChatRequestRejectsNestedSensitiveKeysButNotPromptValues(t *testing.T) {
 	base := map[string]any{
+		"idempotency_key":        "11111111-1111-4111-8111-111111111111",
+		"conversation_id":        "22222222-2222-4222-8222-222222222222",
 		"message":                "A prompt may mention api_key, authorization, and password.",
 		"model_profile_id":       "profile-id",
 		"model_profile_revision": int64(2),
@@ -122,15 +330,44 @@ func TestValidateChatRequestRejectsNestedSensitiveKeysButNotPromptValues(t *test
 		})
 	}
 
-	for _, value := range []any{
+	for _, value := range []string{
 		"api_key",
-		[]string{"authorization", "password"},
-		map[string]any{"message": "api_key"},
+		"authorization and password",
+		"message may discuss a private_key without containing one",
 	} {
 		params := cloneParams(base)
-		params["metadata"] = value
+		params["message"] = value
 		if err := ValidateActionRequest("agent.chat", params); err != nil {
 			t.Errorf("ordinary value %#v was rejected: %v", value, err)
+		}
+	}
+}
+
+func TestValidateChatRequestUsesOneClosedStartShape(t *testing.T) {
+	valid := map[string]any{
+		"idempotency_key":        "11111111-1111-4111-8111-111111111111",
+		"conversation_id":        "22222222-2222-4222-8222-222222222222",
+		"message":                "hello",
+		"model_profile_id":       "profile-id",
+		"model_profile_revision": int64(2),
+		"credential_version":     int64(3),
+		"after_seq":              json.Number("0"),
+	}
+	if err := ValidateActionRequest("agent.chat.stream", valid); err != nil {
+		t.Fatalf("canonical stream request rejected: %v", err)
+	}
+	for _, field := range []string{"prompt", "turn_id", "client_message_id", "request_id", "operation_id"} {
+		params := cloneParams(valid)
+		params[field] = "33333333-3333-4333-8333-333333333333"
+		if err := ValidateActionRequest("agent.chat.stream", params); !errors.Is(err, ErrInvalidActionRequest) {
+			t.Errorf("unsupported start field %q accepted: %v", field, err)
+		}
+	}
+	for _, sequence := range []any{-1, 1.5, "1"} {
+		params := cloneParams(valid)
+		params["after_seq"] = sequence
+		if err := ValidateActionRequest("agent.chat.stream", params); !errors.Is(err, ErrInvalidActionRequest) {
+			t.Errorf("invalid after_seq %#v accepted: %v", sequence, err)
 		}
 	}
 }
@@ -166,9 +403,14 @@ func TestPositiveIntegerUsesExactInt64UpperBound(t *testing.T) {
 }
 
 func TestTurnControlRequestsRequireCanonicalClosedShapes(t *testing.T) {
+	mutationID := "33333333-3333-4333-8333-333333333333"
 	turnID := "11111111-1111-4111-8111-111111111111"
 	conversationID := "22222222-2222-4222-8222-222222222222"
-	if err := ValidateActionRequest("agent.chat.turn.stop", map[string]any{"turn_id": turnID}); err != nil {
+	if err := ValidateActionRequest("agent.chat.turn.stop", map[string]any{
+		"idempotency_key":   mutationID,
+		"turn_id":           turnID,
+		"expected_revision": json.Number("2"),
+	}); err != nil {
 		t.Fatalf("canonical stop rejected: %v", err)
 	}
 	if err := ValidateActionRequest("agent.chat.turns.list", map[string]any{"conversation_id": conversationID, "page_token": "", "limit": json.Number("20")}); err != nil {
@@ -181,9 +423,11 @@ func TestTurnControlRequestsRequireCanonicalClosedShapes(t *testing.T) {
 		action string
 		params map[string]any
 	}{
-		{"agent.chat.turn.stop", map[string]any{"turn_id": "turn-1"}},
-		{"agent.chat.turn.stop", map[string]any{"turn_id": "00000000-0000-0000-0000-000000000000"}},
-		{"agent.chat.turn.stop", map[string]any{"turn_id": turnID, "conversation_id": conversationID}},
+		{"agent.chat.turn.stop", map[string]any{"turn_id": turnID, "expected_revision": 2}},
+		{"agent.chat.turn.stop", map[string]any{"idempotency_key": mutationID, "turn_id": "turn-1", "expected_revision": 2}},
+		{"agent.chat.turn.stop", map[string]any{"idempotency_key": mutationID, "turn_id": "00000000-0000-0000-0000-000000000000", "expected_revision": 2}},
+		{"agent.chat.turn.stop", map[string]any{"idempotency_key": mutationID, "turn_id": turnID, "expected_revision": 0}},
+		{"agent.chat.turn.stop", map[string]any{"idempotency_key": mutationID, "turn_id": turnID, "expected_revision": 2, "conversation_id": conversationID}},
 		{"agent.chat.turns.list", map[string]any{"conversation_id": "conversation-1"}},
 		{"agent.chat.turns.list", map[string]any{"conversation_id": conversationID, "next_cursor": "legacy"}},
 		{"agent.chat.turns.list", map[string]any{"conversation_id": conversationID, "limit": 0}},

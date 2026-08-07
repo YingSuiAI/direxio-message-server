@@ -15,6 +15,7 @@ import (
 	"github.com/YingSuiAI/dirextalk-message-server/internal/agentgateway"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/agentstream"
 	actionbase "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/action"
+	"github.com/google/uuid"
 )
 
 // Runner is the only Native Agent runtime boundary exposed by p2p.Config.
@@ -78,21 +79,41 @@ func (m *Module) DurableStream(ctx context.Context, ownerID, action string, para
 	if err := agentgateway.ValidateActionRequest(action, params); err != nil {
 		return err
 	}
-	turnID := strings.TrimSpace(actionbase.String(params["turn_id"]))
+	startID := strings.TrimSpace(actionbase.String(params["idempotency_key"]))
 	conversationID := agentstream.ConversationID(params)
-	if !agentstream.ValidID(turnID) {
-		return fmt.Errorf("turn_id is invalid")
+	if !canonicalStreamUUID(startID) {
+		return fmt.Errorf("idempotency_key is invalid")
 	}
-	if !agentstream.ValidID(conversationID) {
+	if !canonicalStreamUUID(conversationID) {
 		return fmt.Errorf("conversation_id is invalid")
 	}
 	if emit == nil {
 		return fmt.Errorf("native agent stream callback is required")
 	}
 	params = cloneMap(params)
-	params["turn_id"] = turnID
+	params["idempotency_key"] = startID
 	params["conversation_id"] = conversationID
+	authoredTurnID := ""
+	var authoredRevision int64
 	return m.runner.Stream(ctx, action, params, func(event agentstream.Event) error {
+		eventStartID := strings.TrimSpace(actionbase.String(event.Data["idempotency_key"]))
+		eventConversationID := strings.TrimSpace(actionbase.String(event.Data["conversation_id"]))
+		eventTurnID := strings.TrimSpace(actionbase.String(event.Data["turn_id"]))
+		revision, ok := streamPositiveInt64(event.Data["revision"])
+		if eventStartID != startID || eventConversationID != conversationID || !canonicalStreamUUID(eventTurnID) || !ok {
+			return fmt.Errorf("%w: native agent stream identity is invalid", agentgateway.ErrInvalidActionResult)
+		}
+		if authoredTurnID == "" {
+			authoredTurnID, authoredRevision = eventTurnID, revision
+		} else if eventTurnID != authoredTurnID || revision < authoredRevision {
+			return fmt.Errorf("%w: native agent stream identity drifted", agentgateway.ErrInvalidActionResult)
+		} else {
+			authoredRevision = revision
+		}
+		sequence := event.Seq
+		if sequence < 0 {
+			return fmt.Errorf("%w: native agent stream sequence is invalid", agentgateway.ErrInvalidActionResult)
+		}
 		state := agentstream.StateRunning
 		kind := agentstream.EventRuntime
 		switch strings.TrimSpace(event.Event) {
@@ -108,56 +129,44 @@ func (m *Module) DurableStream(ctx context.Context, ownerID, action string, para
 			state = agentstream.StateStopped
 			kind = agentstream.EventError
 		}
-		turn := agentstream.Turn{OwnerID: strings.TrimSpace(ownerID), TurnID: turnID, ConversationID: conversationID, Action: action, State: state, UpdatedAt: time.Now().UTC()}
-		return emit(agentstream.StreamEvent{Kind: kind, Turn: turn, TurnID: turnID, ConversationID: conversationID, Seq: event.Seq, Event: event.Event, Data: event.Data})
+		turn := agentstream.Turn{
+			OwnerID: strings.TrimSpace(ownerID), TurnID: eventTurnID,
+			IdempotencyKey: startID, ConversationID: conversationID,
+			Action: action, State: state, Revision: revision, UpdatedAt: time.Now().UTC(),
+		}
+		return emit(agentstream.StreamEvent{
+			Kind: kind, Turn: turn, TurnID: eventTurnID, IdempotencyKey: startID,
+			ConversationID: conversationID, Revision: revision, Seq: sequence,
+			Event: event.Event, Data: event.Data,
+		})
 	})
 }
 
-type externalDurableRunner interface {
-	Stream(context.Context, string, map[string]any, func(agentstream.Event) error) error
-	Cancel(context.Context, string, map[string]any) (map[string]any, error)
-	Get(context.Context, string, map[string]any) (map[string]any, error)
+func canonicalStreamUUID(value string) bool {
+	if value == "" || value != strings.TrimSpace(value) {
+		return false
+	}
+	parsed, err := uuid.Parse(value)
+	return err == nil && parsed != uuid.Nil && parsed.String() == value
 }
 
-func (m *Module) Cancel(ctx context.Context, action string, params map[string]any) (map[string]any, error) {
-	runner, ok := m.runner.(externalDurableRunner)
-	if !ok {
-		return nil, fmt.Errorf("external native agent turn control is unavailable")
-	}
-	return runner.Cancel(ctx, action, cloneMap(params))
+func streamPositiveInt64(value any) (int64, bool) {
+	parsed, ok := streamNonnegativeInt64(value)
+	return parsed, ok && parsed > 0
 }
 
-func (m *Module) CancelExternal(ctx context.Context, action string, params map[string]any) (map[string]any, error) {
-	return m.Cancel(ctx, action, params)
-}
-
-func (m *Module) stopTurn(ctx context.Context, params map[string]any) (any, *actionbase.Error) {
-	if err := agentgateway.ValidateActionRequest("agent.chat.turn.stop", params); err != nil {
-		return nil, externalAgentActionError(err)
+func streamNonnegativeInt64(value any) (int64, bool) {
+	switch item := value.(type) {
+	case int:
+		return int64(item), item >= 0
+	case int64:
+		return item, item >= 0
+	case float64:
+		parsed := int64(item)
+		return parsed, item >= 0 && float64(parsed) == item
+	default:
+		return 0, false
 	}
-	turnID := strings.TrimSpace(actionbase.String(params["turn_id"]))
-	if !agentstream.ValidID(turnID) {
-		return nil, actionbase.BadRequest("turn_id is invalid")
-	}
-	_, err := m.Cancel(ctx, "agent.chat.turn.stop", map[string]any{"turn_id": turnID})
-	if err != nil {
-		return nil, externalAgentActionError(err)
-	}
-	// Operation-control state and operation_id are transport internals. A
-	// successful stop publishes only the canonical turn identity; callers
-	// reattach/list for authoritative state.
-	return map[string]any{"turn_id": turnID}, nil
-}
-
-func (m *Module) listTurns(ctx context.Context, params map[string]any) (any, *actionbase.Error) {
-	if m == nil || m.runner == nil {
-		return nil, actionbase.StatusError(http.StatusBadGateway, "external native agent runtime is not configured")
-	}
-	result, err := m.runner.Invoke(ctx, "agent.chat.turns.list", cloneMap(params))
-	if err != nil {
-		return nil, externalAgentActionError(err)
-	}
-	return result, nil
 }
 
 func (m *Module) Handlers() map[string]actionbase.Handler {
@@ -170,16 +179,11 @@ func (m *Module) Handlers() map[string]actionbase.Handler {
 		actionConfigGet:           m.getConfig,
 		actionConfigUpdate:        m.updateConfig,
 		"agent.chat.stream":       streamOnly,
-		"agent.chat.turn.stop":    m.stopTurn,
-		"agent.chat.turns.list":   m.listTurns,
 	}
 	for _, action := range runtimeActions {
 		handlers[action] = m.invoke(action)
 	}
 	for _, action := range externalNativeActions {
-		if action == "agent.chat.turn.stop" || action == "agent.chat.turns.list" {
-			continue
-		}
 		if strings.HasSuffix(action, ".stream") {
 			handlers[action] = streamOnly
 		} else {
@@ -272,5 +276,5 @@ var runtimeActions = []string{
 }
 
 var externalNativeActions = []string{
-	"agent.account.deprovision", "agent.backends.get", "agent.core.status.get", "agent.core.model_profiles.sync", "agent.core.model_profiles.list", "agent.core.model_profiles.get", "agent.core.model_profiles.delete", "agent.model_profiles.sync", "agent.model_profiles.list", "agent.model_profiles.get", "agent.model_profiles.test", "agent.model_profiles.delete", "agent.schedules.create", "agent.schedules.update", "agent.schedules.get", "agent.schedules.list", "agent.schedules.delete", "agent.schedules.enable", "agent.schedules.disable", "agent.schedules.run_now", "agent.schedule_runs.list", "agent.schedule_runs.get", "agent.core.tasks.get", "agent.core.tasks.list", "agent.core.tasks.cancel", "agent.core.tasks.retry", "agent.core.tasks.events", "agent.core.schedules.create", "agent.core.schedules.get", "agent.core.schedules.list", "agent.core.schedules.update", "agent.core.schedules.pause", "agent.core.schedules.resume", "agent.core.schedules.trigger", "agent.core.schedules.delete", "agent.core.confirmations.get", "agent.core.confirmations.list", "agent.core.confirmations.confirm", "agent.core.confirmations.reject", "agent.core.confirmations.acknowledge_extension_execution_uncertain", "agent.core.mcp.discover", "agent.core.mcp.get", "agent.core.mcp.list", "agent.core.mcp.inspect", "agent.core.mcp.install", "agent.core.mcp.update", "agent.core.mcp.remove", "agent.core.mcp.list_tools", "agent.core.mcp.execute", "agent.core.skills.discover", "agent.core.skills.get", "agent.core.skills.list", "agent.core.skills.inspect", "agent.core.skills.install", "agent.core.skills.update", "agent.core.skills.remove", "agent.core.skills.execute", "agent.core.aws.credentials.create", "agent.core.aws.credentials.update", "agent.core.aws.credentials.delete", "agent.core.aws.credentials.list", "agent.core.aws.credentials.test", "agent.chat.turn.stop", "agent.chat.turns.list", "agent.voice.session.create", "agent.voice.session.start", "agent.voice.session.transcript", "agent.voice.session.interrupt", "agent.voice.session.end", "agent.voice.session.stream", "agent.execution.v2.projects.analyze", "agent.execution.v2.analyses.get", "agent.execution.v2.targets.list", "agent.execution.v2.targets.get", "agent.execution.v2.targets.import", "agent.execution.v2.targets.reserve", "agent.execution.v2.targets.observe", "agent.execution.v2.plans.create", "agent.execution.v2.plans.revise", "agent.execution.v2.plans.get", "agent.execution.v2.plans.list", "agent.execution.v2.deployments.list", "agent.execution.v2.deployments.get", "agent.execution.v2.deployments.events", "agent.execution.v2.runs.create", "agent.execution.v2.runs.get", "agent.execution.v2.runs.list", "agent.execution.v2.runs.cancel", "agent.execution.v2.runs.retry", "agent.execution.v2.runs.reconcile", "agent.execution.v2.runs.events", "agent.execution.v2.confirmations.get", "agent.execution.v2.confirmations.list", "agent.execution.v2.confirmations.confirm", "agent.execution.v2.confirmations.reject", "agent.execution.v2.artifacts.get", "agent.execution.v2.service_bindings.list", "agent.execution.v2.service_bindings.get", "agent.execution.v2.service_bindings.invoke", "agent.execution.v2.secrets.create", "agent.execution.v2.secrets.get", "agent.execution.v2.secrets.list", "agent.execution.v2.secrets.revoke",
+	"agent.account.deprovision", "agent.backends.get", "agent.core.status.get", "agent.core.model_profiles.sync", "agent.core.model_profiles.list", "agent.core.model_profiles.get", "agent.core.model_profiles.delete", "agent.model_profiles.sync", "agent.model_profiles.list", "agent.model_profiles.get", "agent.model_profiles.test", "agent.model_profiles.delete", "agent.schedules.create", "agent.schedules.update", "agent.schedules.get", "agent.schedules.list", "agent.schedules.delete", "agent.schedules.enable", "agent.schedules.disable", "agent.schedules.run_now", "agent.schedule_runs.list", "agent.schedule_runs.get", "agent.core.tasks.get", "agent.core.tasks.list", "agent.core.tasks.cancel", "agent.core.tasks.retry", "agent.core.tasks.events", "agent.core.schedules.create", "agent.core.schedules.get", "agent.core.schedules.list", "agent.core.schedules.update", "agent.core.schedules.pause", "agent.core.schedules.resume", "agent.core.schedules.trigger", "agent.core.schedules.delete", "agent.core.confirmations.get", "agent.core.confirmations.list", "agent.core.confirmations.confirm", "agent.core.confirmations.reject", "agent.core.confirmations.acknowledge_extension_execution_uncertain", "agent.core.mcp.discover", "agent.core.mcp.get", "agent.core.mcp.list", "agent.core.mcp.inspect", "agent.core.mcp.install", "agent.core.mcp.update", "agent.core.mcp.remove", "agent.core.mcp.list_tools", "agent.core.mcp.execute", "agent.core.skills.discover", "agent.core.skills.get", "agent.core.skills.list", "agent.core.skills.inspect", "agent.core.skills.install", "agent.core.skills.update", "agent.core.skills.remove", "agent.core.skills.execute", "agent.core.aws.credentials.create", "agent.core.aws.credentials.update", "agent.core.aws.credentials.delete", "agent.core.aws.credentials.list", "agent.core.aws.credentials.test", "agent.chat.attachment.begin", "agent.chat.attachment.append", "agent.chat.attachment.commit", "agent.chat.turn.stop", "agent.chat.turns.list", "agent.voice.session.create", "agent.voice.session.start", "agent.voice.session.transcript", "agent.voice.session.interrupt", "agent.voice.session.end", "agent.voice.session.stream", "agent.execution.v2.projects.analyze", "agent.execution.v2.analyses.get", "agent.execution.v2.targets.list", "agent.execution.v2.targets.get", "agent.execution.v2.targets.import", "agent.execution.v2.targets.reserve", "agent.execution.v2.targets.observe", "agent.execution.v2.plans.create", "agent.execution.v2.plans.revise", "agent.execution.v2.plans.get", "agent.execution.v2.plans.list", "agent.execution.v2.deployments.list", "agent.execution.v2.deployments.get", "agent.execution.v2.deployments.events", "agent.execution.v2.runs.create", "agent.execution.v2.runs.get", "agent.execution.v2.runs.list", "agent.execution.v2.runs.cancel", "agent.execution.v2.runs.retry", "agent.execution.v2.runs.events", "agent.execution.v2.artifacts.get", "agent.execution.v2.artifacts.download", "agent.execution.v2.service_bindings.list", "agent.execution.v2.service_bindings.get", "agent.execution.v2.service_bindings.invoke", "agent.execution.v2.secrets.create", "agent.execution.v2.secrets.get", "agent.execution.v2.secrets.list", "agent.execution.v2.secrets.revoke",
 }

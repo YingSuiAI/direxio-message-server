@@ -54,13 +54,33 @@ func validateOperationInput(operation *capv1.OperationDescriptor, raw []byte) er
 	for name, value := range input {
 		property, ok := properties[name].(map[string]any)
 		if !ok {
+			if additional, present := schema["additionalProperties"].(bool); present && !additional {
+				return fmt.Errorf("field %q is not allowed", name)
+			}
 			continue
 		}
 		if expected, _ := property["type"].(string); expected != "" && !jsonSchemaTypeMatches(expected, value) {
 			return fmt.Errorf("field %q has invalid type", name)
 		}
+		if allowed, present := property["enum"].([]any); present && !jsonSchemaEnumMatches(allowed, value) {
+			return fmt.Errorf("field %q has an unsupported value", name)
+		}
 	}
 	return nil
+}
+
+func jsonSchemaEnumMatches(allowed []any, value any) bool {
+	actual, err := json.Marshal(value)
+	if err != nil {
+		return false
+	}
+	for _, candidate := range allowed {
+		expected, err := json.Marshal(candidate)
+		if err == nil && bytes.Equal(actual, expected) {
+			return true
+		}
+	}
+	return false
 }
 
 func rejectForgedIdentity(params map[string]any) error {

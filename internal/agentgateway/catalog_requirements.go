@@ -26,6 +26,7 @@ import (
 type catalogSchemaDigest struct {
 	inputHex  string
 	resultHex string
+	eventHex  string
 }
 
 var expectedCatalogSchemaDigests = map[string]catalogSchemaDigest{
@@ -58,8 +59,21 @@ var expectedCatalogSchemaDigests = map[string]catalogSchemaDigest{
 		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
 	},
 	"agent.chat.stream": {
-		inputHex:  "5a7ef7ea09ccf4dcdb6a8f120c74b18d7ef9b2e7912d203947c2238e2476afe1",
-		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+		inputHex:  "1e6dbb373e6a75ba7316516f8c96d9718012d02faf1ae551725df532d54254ad",
+		resultHex: "e517caf92e89459a4b9e6318b519765499bfa0e30c077c0bf004cfd852ea5545",
+		eventHex:  "dad787ab7255e30302327d0cc1467503d43ed5f1ec9ff869d968edb810e98966",
+	},
+	"agent.chat.attachment.begin": {
+		inputHex:  "8ca4c5efd311f5793aaabbab7813c8e8588f844b8cc1a0b9d0ec3a396be06e47",
+		resultHex: "72fe45efd99e1170083007800597665df3a8a8db8e78795ac585a42ff2fb95e8",
+	},
+	"agent.chat.attachment.append": {
+		inputHex:  "f3c65322ece7aca25c93e12046b4919aa6b942e5e252b3802ba86184898e013e",
+		resultHex: "72fe45efd99e1170083007800597665df3a8a8db8e78795ac585a42ff2fb95e8",
+	},
+	"agent.chat.attachment.commit": {
+		inputHex:  "1f5a339393a28aaa60a08d4ba3d8e43d4320eef387d59f3524a4fb598320c875",
+		resultHex: "394f7f4be76a9433531de881cf34aa4359342f9420ab7cd3308e50bc6470d01d",
 	},
 	"agent.chat.conversations.create": {
 		inputHex:  "f4882cae6623ba2a5f487ae5004eff65d55f9fefb41d69b8e03e9e4e2275754f",
@@ -83,7 +97,11 @@ var expectedCatalogSchemaDigests = map[string]catalogSchemaDigest{
 	},
 	"agent.chat.turns.list": {
 		inputHex:  "30681a058e34eaaf4cbbfe914762501b9dc2c8c8891a297e0ea458369fe6cf75",
-		resultHex: "929619cdc1fafde6c72777f7b8d14d55a421366cfe2df410c978c48ff619ba93",
+		resultHex: "c6bd313ead8cf85cf1855e16018701eb5bf2508f1abfd495ec77ea50a45f9903",
+	},
+	"agent.chat.turn.stop": {
+		inputHex:  "d7bc619c13ed4ab5b743b7157d80e1a303386d1259696f19b5d82cfb939e1058",
+		resultHex: "5031fafc12966ca78f1c41730d87f967f622647042719a67dca2619cfb737763",
 	},
 	"agent.context.compress": {
 		inputHex:  "e482c09e35d5c78ff7205b9ca1cb91509ed9432ec707de9ed25143f635869523",
@@ -597,33 +615,17 @@ var expectedCatalogSchemaDigests = map[string]catalogSchemaDigest{
 		inputHex:  "7e180c570ec547e4984ba496e33c79014ebf52395a0ed4bd5ce415a8e807b030",
 		resultHex: "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
 	},
-	"agent.execution.v2.runs.reconcile": {
-		inputHex:  "2e45eab436c11491635261765996de3ad5011ff425d1c1f12b909ff90fb73aa0",
-		resultHex: "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
-	},
 	"agent.execution.v2.runs.events": {
 		inputHex:  "bc7e7a4725673026a5975e3797ee090706d46ddf87aa4361b24f10a7e9bcf3c0",
-		resultHex: "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
-	},
-	"agent.execution.v2.confirmations.get": {
-		inputHex:  "5821e9486e4948db9d41357cbeeca4a45172f5be6eaacde7eb2d668e4860aa07",
-		resultHex: "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
-	},
-	"agent.execution.v2.confirmations.list": {
-		inputHex:  "f399e7b8c1570f30c6a8692402b0c51b14b9adfd9f5924149a05fc7e05b0af64",
-		resultHex: "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
-	},
-	"agent.execution.v2.confirmations.confirm": {
-		inputHex:  "30cead5925df5f240b0994bee93a6b4760c9158d8e5ebdf62f959c877622e719",
-		resultHex: "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
-	},
-	"agent.execution.v2.confirmations.reject": {
-		inputHex:  "30cead5925df5f240b0994bee93a6b4760c9158d8e5ebdf62f959c877622e719",
 		resultHex: "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
 	},
 	"agent.execution.v2.artifacts.get": {
 		inputHex:  "b02d218487a7506ca82213915a7670ada2b470e9aaa6012d825030a3ec7fc6bc",
 		resultHex: "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
+	},
+	"agent.execution.v2.artifacts.download": {
+		inputHex:  "1f89699ab07b14d135619ee5f6b2ffd0d8d0821fb8f1ba236662814c0586706c",
+		resultHex: "6ea5feead715aa50feeff464e6da618564f9b6e422025c94743faf173478689d",
 	},
 	"agent.execution.v2.service_bindings.list": {
 		inputHex:  "240ddd168d1005ce6be5d887188a13cbecce17389c29a6436f576122effbd5b3",
@@ -710,6 +712,10 @@ func NewCatalogRequirement(action string) CatalogRequirement {
 	requirement.RequireSchemaPin = true
 	requirement.InputSchemaDigest = decodeCatalogSchemaDigest(digest.inputHex)
 	requirement.ResultSchemaDigest = decodeCatalogSchemaDigest(digest.resultHex)
+	if digest.eventHex != "" {
+		requirement.RequireEventSchemaPin = true
+		requirement.EventSchemaDigest = decodeCatalogSchemaDigest(digest.eventHex)
+	}
 	return requirement
 }
 
@@ -719,7 +725,8 @@ func NewCatalogRequirement(action string) CatalogRequirement {
 func catalogRequirementForLookup(action string) (CatalogRequirement, error) {
 	requirement := NewCatalogRequirement(action)
 	if _, bound := actionBindings[strings.TrimSpace(action)]; bound &&
-		(len(requirement.InputSchemaDigest) != sha256.Size || len(requirement.ResultSchemaDigest) != sha256.Size) {
+		(len(requirement.InputSchemaDigest) != sha256.Size || len(requirement.ResultSchemaDigest) != sha256.Size ||
+			requirement.RequireEventSchemaPin && len(requirement.EventSchemaDigest) != sha256.Size) {
 		return requirement, fmt.Errorf("%w: action %q has no pinned schema identity", ErrCatalogInvalid, strings.TrimSpace(action))
 	}
 	return requirement, nil

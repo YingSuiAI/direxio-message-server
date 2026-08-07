@@ -4,8 +4,23 @@ import (
 	"errors"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 )
+
+func canonicalChatResponseForTest(content string, references, taskIDs, planIDs []any) map[string]any {
+	message := map[string]any{"content": content}
+	response := map[string]any{"message": message, "done": true}
+	for field, value := range map[string][]any{
+		"references": references, "related_task_ids": taskIDs, "related_plan_ids": planIDs,
+	} {
+		if value != nil {
+			response[field] = value
+			message[field] = value
+		}
+	}
+	return response
+}
 
 func TestPublicResultAdaptersPreserveLegacyEnvelopes(t *testing.T) {
 	tests := []struct {
@@ -137,7 +152,7 @@ func TestPublicResultAdaptersPreserveLegacyEnvelopes(t *testing.T) {
 				t.Fatalf("extension list = %#v", got)
 			}
 		}},
-		{"chat", "agent.chat", map[string]any{"message": map[string]any{"Content": "hello"}}, func(t *testing.T, got map[string]any) {
+		{"chat", "agent.chat", canonicalChatResponseForTest("hello", nil, nil, nil), func(t *testing.T, got map[string]any) {
 			if got["text"] != "hello" {
 				t.Fatalf("chat = %#v", got)
 			}
@@ -170,6 +185,181 @@ func TestPublicResultAdaptersPreserveLegacyEnvelopes(t *testing.T) {
 			test.check(t, got)
 		})
 	}
+}
+
+func TestChatResultPromotesServerAuthoredExecutionLinkage(t *testing.T) {
+	taskID := "11111111-1111-4111-8111-111111111111"
+	planID := "22222222-2222-4222-8222-222222222222"
+	reference := validExecutionReferenceForTest()
+	metadata := map[string]any{
+		"references":       []any{reference},
+		"related_task_ids": []any{taskID},
+		"related_plan_ids": []any{planID},
+	}
+	input := canonicalChatResponseForTest("done", metadata["references"].([]any), metadata["related_task_ids"].([]any), metadata["related_plan_ids"].([]any))
+	got, err := adaptActionResultForRequestWithAuthority(
+		"agent.chat", nil, input,
+		actionResultAuthority{ownerID: "@owner:example.test", accountGeneration: 7},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["text"] != "done" || !reflect.DeepEqual(got["references"], metadata["references"]) || !reflect.DeepEqual(got["related_task_ids"], metadata["related_task_ids"]) || !reflect.DeepEqual(got["related_plan_ids"], metadata["related_plan_ids"]) {
+		t.Fatalf("chat projection = %#v", got)
+	}
+
+	got, err = adaptActionResult("agent.chat", canonicalChatResponseForTest("queued", nil, []any{taskID}, []any{planID}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, synthesized := got["references"]; synthesized {
+		t.Fatalf("related ids synthesized an authority-bearing reference: %#v", got)
+	}
+}
+
+func TestChatResultRejectsAlternateDuplicateAndConflictingLocations(t *testing.T) {
+	taskID := "11111111-1111-4111-8111-111111111111"
+	canonical := canonicalChatResponseForTest("done", nil, []any{taskID}, nil)
+	conflict := canonicalChatResponseForTest("done", nil, []any{taskID}, nil)
+	conflict["message"].(map[string]any)["related_task_ids"] = []any{"22222222-2222-4222-8222-222222222222"}
+	for name, input := range map[string]map[string]any{
+		"top-level text":       {"text": "done", "message": map[string]any{"content": "done"}},
+		"Pascal message":       {"Message": map[string]any{"content": "done"}},
+		"response wrapper":     {"response": canonical},
+		"message-only linkage": {"message": map[string]any{"content": "done", "related_task_ids": []any{taskID}}},
+		"conflicting copies":   conflict,
+		"unknown root field":   {"message": map[string]any{"content": "done"}, "done": true, "metadata": map[string]any{}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := adaptActionResult("agent.chat", input); !errors.Is(err, ErrInvalidActionResult) {
+				t.Fatalf("non-canonical chat shape accepted: %v", err)
+			}
+		})
+	}
+	streamDuplicate := map[string]any{
+		"kind": "done", "text": "done", "response": canonicalChatResponseForTest("done", nil, nil, nil),
+	}
+	if err := promoteChatResultFields(streamDuplicate, actionResultAuthority{}); !errors.Is(err, ErrInvalidActionResult) {
+		t.Fatalf("duplicate stream/result text accepted: %v", err)
+	}
+	for name, event := range map[string]map[string]any{
+		"done without response": {"kind": "done"},
+		"delta with response":   {"kind": "delta", "response": canonicalChatResponseForTest("done", nil, nil, nil)},
+		"unknown kind":          {"kind": "complete"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := validateChatStreamEvent(event, actionResultAuthority{}); !errors.Is(err, ErrInvalidActionResult) {
+				t.Fatalf("non-canonical stream event accepted: %v", err)
+			}
+		})
+	}
+}
+
+func TestChatResultKeepsGenericExecutionAndServiceBindingReferencesInformational(t *testing.T) {
+	digest := strings.Repeat("a", 64)
+	references := []any{
+		map[string]any{"kind": "execution_plan", "plan_id": "11111111-1111-4111-8111-111111111111", "plan_revision": float64(4), "plan_digest": digest},
+		map[string]any{
+			"kind": "execution_run", "run_id": "22222222-2222-4222-8222-222222222222", "run_revision": float64(2), "run_digest": digest,
+			"plan_id": "11111111-1111-4111-8111-111111111111", "plan_revision": float64(4), "plan_digest": digest,
+			"deployment_id": "77777777-7777-4777-8777-777777777777", "status": "waiting_user",
+		},
+		map[string]any{
+			"kind": "execution_confirmation", "confirmation_id": "55555555-5555-4555-8555-555555555555",
+			"plan_id": "11111111-1111-4111-8111-111111111111", "plan_revision": float64(4), "plan_digest": digest,
+			"run_id": "22222222-2222-4222-8222-222222222222", "run_revision": float64(2), "run_digest": digest,
+			"stage_id": "33333333-3333-4333-8333-333333333333", "stage_revision": float64(1), "stage_digest": digest,
+			"target_id": "44444444-4444-4444-8444-444444444444", "target_revision": float64(3), "target_digest": digest,
+		},
+		map[string]any{
+			"kind": "service_binding", "binding_id": "66666666-6666-4666-8666-666666666666", "binding_revision": float64(2), "binding_digest": digest,
+			"deployment_id": "77777777-7777-4777-8777-777777777777", "project_id": "88888888-8888-4888-8888-888888888888",
+			"run_id": "22222222-2222-4222-8222-222222222222", "target_id": "44444444-4444-4444-8444-444444444444",
+			"target_revision": float64(3), "target_digest": digest,
+		},
+	}
+	got, err := adaptActionResult("agent.chat", canonicalChatResponseForTest("done", references, nil, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got["references"], references) {
+		t.Fatalf("generic references changed: %#v", got)
+	}
+}
+
+func TestChatResultRejectsCloudWorkerReferenceFromForeignGeneration(t *testing.T) {
+	reference := validExecutionReferenceForTest()
+	reference["account_generation"] = float64(8)
+	_, err := adaptActionResultForRequestWithAuthority(
+		"agent.chat", nil, canonicalChatResponseForTest("done", []any{reference}, nil, nil),
+		actionResultAuthority{ownerID: "@owner:example.test", accountGeneration: 7},
+	)
+	if !errors.Is(err, ErrInvalidActionResult) {
+		t.Fatalf("foreign generation err=%v", err)
+	}
+}
+
+func TestChatResultRejectsMalformedReferencesAndRelatedIDs(t *testing.T) {
+	valid := validExecutionReferenceForTest()
+	tests := []struct {
+		name  string
+		input map[string]any
+	}{
+		{name: "related task is not canonical", input: map[string]any{"related_task_ids": []any{"TASK-1"}}},
+		{name: "unknown reference kind", input: map[string]any{"references": []any{map[string]any{"kind": "service_binding"}}}},
+		{name: "room lacks identity", input: map[string]any{"references": []any{map[string]any{"kind": "room"}}}},
+		{name: "channel post lacks post", input: map[string]any{"references": []any{map[string]any{"kind": "channel_post", "room_id": "!r:example", "channel_id": "!r:example"}}}},
+		{name: "execution is incomplete", input: map[string]any{"references": []any{map[string]any{"kind": "execution_plan", "task_id": "11111111-1111-4111-8111-111111111111"}}}},
+		{name: "execution has unknown field", input: map[string]any{"references": []any{withReferenceField(valid, "action", "confirm")}}},
+		{name: "execution digest is not lowercase sha256", input: map[string]any{"references": []any{withReferenceField(valid, "quote_digest", strings.Repeat("A", 64))}}},
+		{name: "duplicate reference", input: map[string]any{"references": []any{valid, valid}}},
+		{name: "semantic duplicate with explicit empty field", input: map[string]any{"references": []any{map[string]any{"kind": "room", "room_id": "!room:example"}, map[string]any{"kind": "room", "room_id": "!room:example", "title": ""}}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			input := canonicalChatResponseForTest("done", nil, nil, nil)
+			for field, value := range test.input {
+				input[field] = value
+				if field == "references" || field == "related_task_ids" || field == "related_plan_ids" {
+					input["message"].(map[string]any)[field] = value
+				}
+			}
+			_, err := adaptActionResult("agent.chat", input)
+			if !errors.Is(err, ErrInvalidActionResult) {
+				t.Fatalf("error = %v, want ErrInvalidActionResult", err)
+			}
+		})
+	}
+}
+
+func validExecutionReferenceForTest() map[string]any {
+	return map[string]any{
+		"kind":                  "execution_plan",
+		"account_generation":    float64(7),
+		"task_id":               "11111111-1111-4111-8111-111111111111",
+		"plan_id":               "22222222-2222-4222-8222-222222222222",
+		"plan_revision":         float64(3),
+		"plan_digest":           strings.Repeat("a", 64),
+		"run_id":                "33333333-3333-4333-8333-333333333333",
+		"run_revision":          float64(4),
+		"run_digest":            strings.Repeat("b", 64),
+		"execution_id":          "33333333-3333-4333-8333-333333333333",
+		"confirmation_id":       "44444444-4444-4444-8444-444444444444",
+		"confirmation_revision": float64(5),
+		"binding_digest":        strings.Repeat("c", 64),
+		"quote_digest":          strings.Repeat("d", 64),
+		"execution_digest":      strings.Repeat("e", 64),
+		"status":                "waiting_user",
+	}
+}
+
+func withReferenceField(source map[string]any, key string, value any) map[string]any {
+	clone := make(map[string]any, len(source)+1)
+	for name, item := range source {
+		clone[name] = item
+	}
+	clone[key] = value
+	return clone
 }
 
 func TestModelCatalogResultAdapterDropsUnknownModelFieldsAtGatewayBoundary(t *testing.T) {
@@ -207,6 +397,7 @@ func TestTurnsListResultPublishesOnlyCanonicalMetadata(t *testing.T) {
 	input := map[string]any{
 		"turns": []any{map[string]any{
 			"turn_id":          "11111111-1111-4111-8111-111111111111",
+			"idempotency_key":  "33333333-3333-4333-8333-333333333333",
 			"conversation_id":  "22222222-2222-4222-8222-222222222222",
 			"state":            "completed",
 			"revision":         float64(3),
@@ -226,7 +417,7 @@ func TestTurnsListResultPublishesOnlyCanonicalMetadata(t *testing.T) {
 		t.Fatalf("turn list keys=%v value=%#v", keys, got)
 	}
 	turn := got["turns"].([]any)[0].(map[string]any)
-	if keys := sortedMapKeys(turn); !reflect.DeepEqual(keys, []string{"conversation_id", "created_at", "last_sequence", "revision", "state", "terminal_code", "terminal_summary", "turn_id", "updated_at"}) {
+	if keys := sortedMapKeys(turn); !reflect.DeepEqual(keys, []string{"conversation_id", "created_at", "idempotency_key", "last_sequence", "revision", "state", "terminal_code", "terminal_summary", "turn_id", "updated_at"}) {
 		t.Fatalf("turn keys=%v value=%#v", keys, turn)
 	}
 }
@@ -234,6 +425,7 @@ func TestTurnsListResultPublishesOnlyCanonicalMetadata(t *testing.T) {
 func TestTurnsListResultRejectsAliasesLeaksAndMalformedMetadata(t *testing.T) {
 	valid := map[string]any{
 		"turn_id":          "11111111-1111-4111-8111-111111111111",
+		"idempotency_key":  "33333333-3333-4333-8333-333333333333",
 		"conversation_id":  "22222222-2222-4222-8222-222222222222",
 		"state":            "running",
 		"revision":         float64(2),
@@ -248,16 +440,58 @@ func TestTurnsListResultRejectsAliasesLeaksAndMalformedMetadata(t *testing.T) {
 		"prompt leak":   func(turn map[string]any) { turn["prompt"] = "must not cross" },
 		"status alias":  func(turn map[string]any) { delete(turn, "state"); turn["status"] = "running" },
 		"bad UUID":      func(turn map[string]any) { turn["turn_id"] = "turn-1" },
+		"bad start key": func(turn map[string]any) { turn["idempotency_key"] = "request-1" },
 		"bad state":     func(turn map[string]any) { turn["state"] = "unknown" },
 		"zero revision": func(turn map[string]any) { turn["revision"] = float64(0) },
 		"negative seq":  func(turn map[string]any) { turn["last_sequence"] = float64(-1) },
 		"bad timestamp": func(turn map[string]any) { turn["updated_at"] = "today" },
+		"time reversal": func(turn map[string]any) { turn["updated_at"] = "2026-08-05T01:02:03Z" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			turn := cloneParams(valid)
 			mutate(turn)
 			_, err := adaptActionResult("agent.chat.turns.list", map[string]any{"turns": []any{turn}, "next_page_token": ""})
 			if !errors.Is(err, ErrInvalidActionResult) {
+				t.Fatalf("error=%v, want ErrInvalidActionResult", err)
+			}
+		})
+	}
+}
+
+func TestTurnStopResultPublishesExactAuthoritativeMetadata(t *testing.T) {
+	const turnID = "11111111-1111-4111-8111-111111111111"
+	result := map[string]any{
+		"turn_id":          turnID,
+		"idempotency_key":  "22222222-2222-4222-8222-222222222222",
+		"conversation_id":  "33333333-3333-4333-8333-333333333333",
+		"state":            "canceled",
+		"revision":         float64(3),
+		"last_sequence":    float64(5),
+		"terminal_code":    "canceled",
+		"terminal_summary": "canceled by owner",
+		"created_at":       "2026-08-06T01:02:03Z",
+		"updated_at":       "2026-08-06T01:02:04Z",
+	}
+	got, err := adaptActionResultForRequest("agent.chat.turn.stop", map[string]any{
+		"idempotency_key":   "44444444-4444-4444-8444-444444444444",
+		"turn_id":           turnID,
+		"expected_revision": float64(2),
+	}, result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, result) {
+		t.Fatalf("stop result = %#v, want exact metadata %#v", got, result)
+	}
+
+	for name, mutate := range map[string]func(map[string]any){
+		"wrong turn": func(value map[string]any) { value["turn_id"] = "55555555-5555-4555-8555-555555555555" },
+		"leak":       func(value map[string]any) { value["prompt"] = "must not cross" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := cloneParams(result)
+			mutate(candidate)
+			if _, err := adaptActionResultForRequest("agent.chat.turn.stop", map[string]any{"turn_id": turnID}, candidate); !errors.Is(err, ErrInvalidActionResult) {
 				t.Fatalf("error=%v, want ErrInvalidActionResult", err)
 			}
 		})

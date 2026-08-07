@@ -20,6 +20,209 @@ func executionV2PageResponse(item string) map[string]ActionFieldSchema {
 	}
 }
 
+func executionV2CloudWorkerRoute(request map[string]ActionFieldSchema) map[string]ActionFieldSchema {
+	request["record_kind"] = ActionFieldSchema{Type: "string", Presence: &ActionPresenceSchema{Omitted: "generic_execution_v2_authority", Present: "exact:cloud_worker"}}
+	return request
+}
+
+func cloudWorkerConditional(kind, rule string) ActionFieldSchema {
+	return ActionFieldSchema{Type: kind, Presence: &ActionPresenceSchema{
+		Omitted: "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+		Present: "required_when_record_kind=cloud_worker;" + rule,
+	}}
+}
+
+func cloudWorkerNested(kind, rule string) ActionFieldSchema {
+	return ActionFieldSchema{Type: kind, Required: true, Presence: &ActionPresenceSchema{Present: rule}}
+}
+
+func cloudWorkerObject(rule string, properties map[string]ActionFieldSchema) ActionFieldSchema {
+	field := cloudWorkerConditional("object", rule)
+	field.Properties = properties
+	return field
+}
+
+func cloudWorkerArray(rule string, item ActionFieldSchema) ActionFieldSchema {
+	field := cloudWorkerConditional("array", rule)
+	field.Items = &item
+	return field
+}
+
+func cloudWorkerPlanProperties() map[string]ActionFieldSchema {
+	return map[string]ActionFieldSchema{
+		"owner_id":                  cloudWorkerConditional("string", "exact_prepared_permission_owner"),
+		"account_generation":        cloudWorkerConditional("integer", "positive_integer_equal_to_prepared_permission_generation"),
+		"plan_id":                   cloudWorkerConditional("string", "canonical_uuid"),
+		"revision":                  cloudWorkerConditional("integer", "positive_integer"),
+		"status":                    cloudWorkerConditional("string", "exact:waiting_user"),
+		"digest":                    cloudWorkerConditional("string", "lowercase_sha256"),
+		"execution_id":              cloudWorkerConditional("string", "canonical_uuid"),
+		"task_id":                   cloudWorkerConditional("string", "canonical_uuid"),
+		"confirmation_id":           cloudWorkerConditional("string", "canonical_uuid"),
+		"conversation_id":           cloudWorkerConditional("string", "canonical_uuid"),
+		"turn_id":                   cloudWorkerConditional("string", "canonical_uuid"),
+		"recipe_id":                 cloudWorkerConditional("string", "exact:ephemeral-pi-task"),
+		"adapter":                   cloudWorkerConditional("string", "exact:pi_json_task_v1"),
+		"objective_summary":         cloudWorkerConditional("string", "nonempty_redacted_summary"),
+		"proposal_reason":           cloudWorkerConditional("string", "one_of:explicit_user_cloud|local_budget_exceeded"),
+		"input_manifest_digest":     cloudWorkerConditional("string", "lowercase_sha256"),
+		"input_manifest_item_count": cloudWorkerConditional("integer", "nonnegative_integer"),
+		"workspace_mode":            cloudWorkerConditional("string", "one_of:none|read_only|write"),
+		"model_authorization": cloudWorkerObject("strict_model_authorization", map[string]ActionFieldSchema{
+			"model_profile_id":       cloudWorkerNested("string", "canonical_uuid"),
+			"model_profile_revision": cloudWorkerNested("integer", "positive_integer"),
+			"provider":               cloudWorkerNested("string", "nonempty"),
+			"model":                  cloudWorkerNested("string", "nonempty"),
+			"interface":              cloudWorkerNested("string", "nonempty"),
+			"credential_version":     cloudWorkerNested("integer", "positive_integer"),
+		}),
+		"aws": cloudWorkerObject("strict_aws_binding", map[string]ActionFieldSchema{
+			"account_id":          cloudWorkerNested("string", "aws_account_id"),
+			"region":              cloudWorkerNested("string", "aws_region"),
+			"credential_revision": cloudWorkerNested("integer", "positive_integer"),
+		}),
+		"compute": cloudWorkerObject("strict_single_worker_compute", map[string]ActionFieldSchema{
+			"instance_type":              cloudWorkerNested("string", "nonempty"),
+			"architecture":               cloudWorkerNested("string", "nonempty"),
+			"root_device_name":           cloudWorkerNested("string", "nonempty"),
+			"volume_gib":                 cloudWorkerNested("integer", "positive_integer"),
+			"volume_type":                cloudWorkerNested("string", "nonempty"),
+			"volume_iops":                cloudWorkerNested("integer", "positive_integer"),
+			"volume_throughput_mib":      cloudWorkerNested("integer", "positive_integer"),
+			"ami_id":                     cloudWorkerNested("string", "nonempty"),
+			"ami_digest":                 cloudWorkerNested("string", "lowercase_sha256"),
+			"worker_release_digest":      cloudWorkerNested("string", "lowercase_sha256"),
+			"pi_runtime_digest":          cloudWorkerNested("string", "lowercase_sha256"),
+			"host_network_policy_sha256": cloudWorkerNested("string", "lowercase_sha256"),
+		}),
+		"limits": cloudWorkerObject("strict_hard_limits", map[string]ActionFieldSchema{
+			"max_runtime_seconds": cloudWorkerNested("integer", "positive_integer"),
+			"max_tokens":          cloudWorkerNested("integer", "positive_integer"),
+			"max_output_bytes":    cloudWorkerNested("integer", "positive_integer"),
+		}),
+		"network_grants": cloudWorkerArray("strict_approved_network_grants", ActionFieldSchema{Type: "string", Required: true}),
+		"secret_grants": cloudWorkerArray("strict_purpose_only_secret_grants_without_references", ActionFieldSchema{Type: "object", Required: true, Properties: map[string]ActionFieldSchema{
+			"purpose": cloudWorkerNested("string", "nonempty_bounded_64"),
+		}}),
+		"artifact_retention_seconds": cloudWorkerConditional("integer", "positive_integer"),
+		"quote": cloudWorkerObject("strict_quote_and_owner_hard_limit", map[string]ActionFieldSchema{
+			"amount_micros":                  cloudWorkerNested("integer", "nonnegative_integer"),
+			"currency":                       cloudWorkerNested("string", "exact:USD"),
+			"source_time":                    cloudWorkerNested("string", "rfc3339_nano"),
+			"expires_at":                     cloudWorkerNested("string", "rfc3339_nano_after_source_time"),
+			"maximum_authorized_cost_micros": cloudWorkerNested("integer", "integer_greater_than_or_equal_to_amount"),
+			"digest":                         cloudWorkerNested("string", "lowercase_sha256"),
+		}),
+		"execution_digest": cloudWorkerConditional("string", "lowercase_sha256"),
+		"created_at":       cloudWorkerConditional("string", "rfc3339_nano"),
+		"updated_at":       cloudWorkerConditional("string", "rfc3339_nano_not_before_created_at"),
+	}
+}
+
+func cloudWorkerRunProperties() map[string]ActionFieldSchema {
+	return map[string]ActionFieldSchema{
+		"owner_id":               cloudWorkerConditional("string", "exact_prepared_permission_owner"),
+		"account_generation":     cloudWorkerConditional("integer", "positive_integer_equal_to_prepared_permission_generation"),
+		"run_id":                 cloudWorkerConditional("string", "canonical_uuid_equal_to_execution_id"),
+		"execution_id":           cloudWorkerConditional("string", "canonical_uuid_equal_to_run_id"),
+		"plan_id":                cloudWorkerConditional("string", "canonical_uuid"),
+		"plan_revision":          cloudWorkerConditional("integer", "positive_integer"),
+		"plan_digest":            cloudWorkerConditional("string", "lowercase_sha256"),
+		"task_id":                cloudWorkerConditional("string", "canonical_uuid"),
+		"confirmation_id":        cloudWorkerConditional("string", "canonical_uuid"),
+		"conversation_id":        cloudWorkerConditional("string", "canonical_uuid"),
+		"turn_id":                cloudWorkerConditional("string", "canonical_uuid"),
+		"status":                 cloudWorkerConditional("string", "cloud_worker_execution_state"),
+		"revision":               cloudWorkerConditional("integer", "positive_integer"),
+		"digest":                 cloudWorkerConditional("string", "lowercase_sha256"),
+		"workspace_mode":         cloudWorkerConditional("string", "one_of:none|read_only|write"),
+		"quote_digest":           cloudWorkerConditional("string", "lowercase_sha256"),
+		"execution_digest":       cloudWorkerConditional("string", "lowercase_sha256"),
+		"cancellation_requested": cloudWorkerConditional("boolean", "authoritative_cancel_intent_flag"),
+		"cleanup": cloudWorkerObject("strict_verified_cleanup_summary", map[string]ActionFieldSchema{
+			"verified_destroyed":           cloudWorkerNested("boolean", "true_only_after_all_resources_destroyed"),
+			"verified_at":                  {Type: "string", Presence: &ActionPresenceSchema{Omitted: "cleanup_not_verified", Present: "rfc3339_nano_when_verified"}},
+			"resources_total":              cloudWorkerNested("integer", "nonnegative_integer"),
+			"resources_verified_destroyed": cloudWorkerNested("integer", "between_zero_and_resources_total"),
+		}),
+		"artifact_ids":    cloudWorkerArray("canonical_uuid_array", ActionFieldSchema{Type: "string", Required: true, Presence: &ActionPresenceSchema{Present: "canonical_uuid"}}),
+		"failure_code":    cloudWorkerConditional("string", "redacted_failure_code_or_empty"),
+		"failure_summary": cloudWorkerConditional("string", "redacted_failure_summary_or_empty"),
+		"created_at":      cloudWorkerConditional("string", "rfc3339_nano"),
+		"updated_at":      cloudWorkerConditional("string", "rfc3339_nano_not_before_created_at"),
+	}
+}
+
+func cloudWorkerArtifactProperties() map[string]ActionFieldSchema {
+	return map[string]ActionFieldSchema{
+		"owner_id":           cloudWorkerConditional("string", "exact_prepared_permission_owner"),
+		"account_generation": cloudWorkerConditional("integer", "positive_integer_equal_to_prepared_permission_generation"),
+		"artifact_id":        cloudWorkerConditional("string", "canonical_uuid"),
+		"execution_id":       cloudWorkerConditional("string", "canonical_uuid"),
+		"kind":               cloudWorkerConditional("string", "approved_artifact_kind"),
+		"name":               cloudWorkerConditional("string", "safe_display_name"),
+		"media_type":         cloudWorkerConditional("string", "nonempty_media_type"),
+		"size_bytes":         cloudWorkerConditional("integer", "nonnegative_integer"),
+		"sha256":             cloudWorkerConditional("string", "lowercase_sha256"),
+		"status":             cloudWorkerConditional("string", "one_of:pending|verified|rejected"),
+		"created_at":         cloudWorkerConditional("string", "rfc3339_nano"),
+	}
+}
+
+func cloudWorkerArtifactDownloadProperties() map[string]ActionFieldSchema {
+	return map[string]ActionFieldSchema{
+		"owner_id":           cloudWorkerNested("string", "exact_prepared_permission_owner"),
+		"account_generation": cloudWorkerNested("integer", "positive_integer_equal_to_prepared_permission_generation"),
+		"artifact_id":        cloudWorkerNested("string", "canonical_uuid_equal_to_requested_artifact"),
+		"execution_id":       cloudWorkerNested("string", "canonical_uuid"),
+		"offset_bytes":       cloudWorkerNested("integer", "integer_0_to_8388607_equal_to_requested_offset"),
+		"data_base64":        cloudWorkerNested("string", "canonical_standard_base64_for_1_to_524288_bytes"),
+		"chunk_sha256":       cloudWorkerNested("string", "lowercase_sha256_of_decoded_chunk"),
+		"artifact_sha256":    cloudWorkerNested("string", "lowercase_sha256_of_complete_artifact"),
+		"size_bytes":         cloudWorkerNested("integer", "integer_1_to_8388608"),
+		"next_offset_bytes":  cloudWorkerNested("integer", "offset_plus_decoded_chunk_length_strictly_advancing_not_above_size"),
+		"eof":                cloudWorkerNested("boolean", "true_exactly_when_next_offset_equals_size"),
+	}
+}
+
+func cloudWorkerEventProperties() map[string]ActionFieldSchema {
+	return map[string]ActionFieldSchema{
+		"event_id":           cloudWorkerConditional("string", "canonical_uuid"),
+		"run_id":             cloudWorkerConditional("string", "canonical_uuid_equal_to_requested_run"),
+		"owner_id":           cloudWorkerConditional("string", "exact_prepared_permission_owner"),
+		"account_generation": cloudWorkerConditional("integer", "positive_integer_equal_to_prepared_permission_generation"),
+		"revision":           cloudWorkerConditional("integer", "positive_integer"),
+		"sequence":           cloudWorkerConditional("integer", "positive_strictly_increasing_integer"),
+		"type":               cloudWorkerConditional("string", "nonempty_event_type"),
+		"at":                 cloudWorkerConditional("string", "rfc3339_nano"),
+		"payload_digest":     cloudWorkerConditional("string", "lowercase_sha256"),
+		"status":             {Type: "string", Presence: &ActionPresenceSchema{Omitted: "event_has_no_state_transition", Present: "cloud_worker_execution_state"}},
+	}
+}
+
+func executionV2CloudWorkerObjectResponse(name string, properties map[string]ActionFieldSchema, genericOwnerRequired bool) map[string]ActionFieldSchema {
+	if genericOwnerRequired {
+		owner := properties["owner_id"]
+		owner.Required = true
+		properties["owner_id"] = owner
+	}
+	return map[string]ActionFieldSchema{name: {Type: "object", Required: true, Properties: properties}}
+}
+
+func executionV2CloudWorkerPageResponse(name string, properties map[string]ActionFieldSchema) map[string]ActionFieldSchema {
+	return map[string]ActionFieldSchema{
+		name:              {Type: "array", Required: true, Items: &ActionFieldSchema{Type: "object", Properties: properties}},
+		"next_page_token": {Type: "string", Required: true},
+	}
+}
+
+func executionV2CloudWorkerEventsResponse() map[string]ActionFieldSchema {
+	return map[string]ActionFieldSchema{
+		"events":        {Type: "array", Required: true, Items: &ActionFieldSchema{Type: "object", Properties: cloudWorkerEventProperties()}},
+		"next_sequence": {Type: "integer", Required: true},
+	}
+}
+
 func executionV2OwnedObject(name string) map[string]ActionFieldSchema {
 	return map[string]ActionFieldSchema{name: {
 		Type:       "object",
@@ -158,10 +361,11 @@ func executionV2Schema(name string) *ActionSchema {
 		request["plan_id"] = ActionFieldSchema{Type: "string", Required: true}
 		return &ActionSchema{Request: request, Response: executionV2OwnedObject("plan")}
 	case "plans.get":
-		request := map[string]ActionFieldSchema{"plan_id": {Type: "string", Required: true}, "revision": {Type: "integer"}}
-		return &ActionSchema{Request: request, Response: executionV2OwnedObject("plan")}
+		request := executionV2CloudWorkerRoute(map[string]ActionFieldSchema{"plan_id": {Type: "string", Required: true}, "revision": {Type: "integer"}})
+		return &ActionSchema{Request: request, Response: executionV2CloudWorkerObjectResponse("plan", cloudWorkerPlanProperties(), true)}
 	case "plans.list":
-		return &ActionSchema{Request: executionV2PageRequest(), Response: executionV2PageResponse("plans")}
+		request := executionV2CloudWorkerRoute(executionV2PageRequest())
+		return &ActionSchema{Request: request, Response: executionV2CloudWorkerPageResponse("plans", cloudWorkerPlanProperties())}
 	case "deployments.list":
 		request := executionV2PageRequest()
 		request["project_id"] = ActionFieldSchema{Type: "string"}
@@ -181,37 +385,35 @@ func executionV2Schema(name string) *ActionSchema {
 		response["stages"] = ActionFieldSchema{Type: "array", Required: true, Items: &ActionFieldSchema{Type: "object"}}
 		return &ActionSchema{Request: request, Response: response}
 	case "runs.get":
-		response := object("run")
-		response["stages"] = ActionFieldSchema{Type: "array", Required: true, Items: &ActionFieldSchema{Type: "object"}}
-		return &ActionSchema{Request: map[string]ActionFieldSchema{"run_id": {Type: "string", Required: true}}, Response: response}
+		response := executionV2CloudWorkerObjectResponse("run", cloudWorkerRunProperties(), false)
+		response["stages"] = ActionFieldSchema{Type: "array", Items: &ActionFieldSchema{Type: "object"}, Presence: &ActionPresenceSchema{Omitted: "record_kind=cloud_worker", Present: "generic_execution_v2_stage_projection"}}
+		return &ActionSchema{Request: executionV2CloudWorkerRoute(map[string]ActionFieldSchema{"run_id": {Type: "string", Required: true}}), Response: response}
 	case "runs.list":
-		request := executionV2PageRequest()
+		request := executionV2CloudWorkerRoute(executionV2PageRequest())
 		request["project_id"] = ActionFieldSchema{Type: "string"}
 		request["deployment_id"] = ActionFieldSchema{Type: "string"}
-		return &ActionSchema{Request: request, Response: executionV2PageResponse("runs")}
-	case "runs.cancel", "runs.retry":
+		return &ActionSchema{Request: request, Response: executionV2CloudWorkerPageResponse("runs", cloudWorkerRunProperties())}
+	case "runs.cancel":
+		request := executionV2CloudWorkerRoute(executionV2RevisionMutationBase())
+		request["run_id"] = ActionFieldSchema{Type: "string", Required: true}
+		return &ActionSchema{Request: request, Response: executionV2CloudWorkerObjectResponse("run", cloudWorkerRunProperties(), false)}
+	case "runs.retry":
 		request := executionV2RevisionMutationBase()
 		request["run_id"] = ActionFieldSchema{Type: "string", Required: true}
-		return &ActionSchema{Request: request, Response: object("run")}
-	case "runs.reconcile":
-		request := executionV2RevisionMutationBase()
-		request["run_id"] = ActionFieldSchema{Type: "string", Required: true}
-		request["stage_id"] = ActionFieldSchema{Type: "string", Required: true}
 		return &ActionSchema{Request: request, Response: object("run")}
 	case "runs.events":
-		return &ActionSchema{Request: executionV2EventsRequest("run_id"), Response: executionV2EventsResponse()}
-	case "confirmations.get":
-		return get("confirmation_id", "confirmation")
-	case "confirmations.list":
-		request := executionV2PageRequest()
-		request["states"] = ActionFieldSchema{Type: "array", Items: &ActionFieldSchema{Type: "string"}}
-		return &ActionSchema{Request: request, Response: executionV2PageResponse("confirmations")}
-	case "confirmations.confirm", "confirmations.reject":
-		request := executionV2RevisionMutationBase()
-		request["confirmation_id"] = ActionFieldSchema{Type: "string", Required: true}
-		return &ActionSchema{Request: request, Response: object("confirmation")}
+		return &ActionSchema{Request: executionV2CloudWorkerRoute(executionV2EventsRequest("run_id")), Response: executionV2CloudWorkerEventsResponse()}
 	case "artifacts.get":
-		return get("artifact_id", "artifact")
+		request := executionV2CloudWorkerRoute(map[string]ActionFieldSchema{"artifact_id": {Type: "string", Required: true, Presence: &ActionPresenceSchema{Present: "canonical_uuid"}}})
+		return &ActionSchema{Request: request, Response: executionV2CloudWorkerObjectResponse("artifact", cloudWorkerArtifactProperties(), false)}
+	case "artifacts.download":
+		request := map[string]ActionFieldSchema{
+			"record_kind":     {Type: "string", Required: true, Presence: &ActionPresenceSchema{Present: "exact:cloud_worker"}},
+			"artifact_id":     {Type: "string", Required: true, Presence: &ActionPresenceSchema{Present: "canonical_uuid"}},
+			"offset_bytes":    {Type: "integer", Required: true, Presence: &ActionPresenceSchema{Present: "integer_0_to_8388607"}},
+			"max_chunk_bytes": {Type: "integer", Required: true, Presence: &ActionPresenceSchema{Present: "integer_1_to_524288"}},
+		}
+		return &ActionSchema{Request: request, Response: cloudWorkerArtifactDownloadProperties()}
 	case "service_bindings.list":
 		request := executionV2PageRequest()
 		request["project_id"] = ActionFieldSchema{Type: "string"}

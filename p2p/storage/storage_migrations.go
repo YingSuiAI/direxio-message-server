@@ -253,6 +253,24 @@ func (s *DatabaseStore) migrate(ctx context.Context) error {
 				`CREATE INDEX IF NOT EXISTS p2p_events_room_idx ON p2p_events(room_id, seq)`,
 				`CREATE INDEX IF NOT EXISTS p2p_events_type_idx ON p2p_events(type, seq)`,
 				`CREATE UNIQUE INDEX IF NOT EXISTS p2p_events_dedupe_key_idx ON p2p_events(dedupe_key) WHERE dedupe_key <> ''`,
+				`CREATE TABLE IF NOT EXISTS p2p_agent_execution_completion_receipts (
+					event_id UUID PRIMARY KEY NOT NULL,
+					execution_id UUID NOT NULL,
+					run_id UUID NOT NULL CHECK (run_id = execution_id),
+					conversation_id UUID NOT NULL,
+					turn_id UUID NOT NULL,
+					result_message_id UUID NOT NULL,
+					terminal_state TEXT NOT NULL CHECK (terminal_state IN ('succeeded','failed','canceled')),
+					completed_at TEXT NOT NULL CHECK (completed_at <> ''),
+					payload_digest TEXT NOT NULL CHECK (payload_digest ~ '^[0-9a-f]{64}$'),
+					owner_id TEXT NOT NULL CHECK (owner_id <> ''),
+					account_generation BIGINT NOT NULL CHECK (account_generation > 0),
+					event_seq BIGINT NOT NULL UNIQUE,
+					created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+					UNIQUE (owner_id, account_generation, execution_id)
+				)`,
+				`CREATE INDEX IF NOT EXISTS p2p_agent_execution_completion_owner_idx
+					ON p2p_agent_execution_completion_receipts(owner_id, account_generation, created_at DESC)`,
 			})
 		},
 	})

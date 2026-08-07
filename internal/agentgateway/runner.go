@@ -50,7 +50,8 @@ func (r *Runner) Apply(ctx context.Context, action string) error {
 }
 
 func (r *Runner) Invoke(ctx context.Context, action string, params map[string]any) (map[string]any, error) {
-	result, replayed, err := r.invokeOperationWithReplay(ctx, action, params)
+	var authority actionResultAuthority
+	result, replayed, err := r.invokeOperationWithReplay(ctx, action, params, &authority)
 	if err != nil {
 		return nil, err
 	}
@@ -60,7 +61,7 @@ func (r *Runner) Invoke(ctx context.Context, action string, params map[string]an
 		if actionSupportsReplay(strings.TrimSpace(action)) {
 			output["replayed"] = replayed
 		}
-		return adaptActionResult(strings.TrimSpace(action), output)
+		return adaptActionResultForRequestWithAuthority(strings.TrimSpace(action), params, output, authority)
 	}
 	if err := json.Unmarshal(result, &output); err != nil {
 		return nil, fmt.Errorf("agent operation returned invalid JSON: %w", err)
@@ -71,7 +72,7 @@ func (r *Runner) Invoke(ctx context.Context, action string, params map[string]an
 		// public schema explicitly defines the field.
 		output["replayed"] = replayed
 	}
-	return adaptActionResult(strings.TrimSpace(action), output)
+	return adaptActionResultForRequestWithAuthority(strings.TrimSpace(action), params, output, authority)
 }
 
 func (r *Runner) Stream(ctx context.Context, action string, params map[string]any, emit func(agentstream.Event) error) error {
@@ -88,6 +89,7 @@ func (r *Runner) Stream(ctx context.Context, action string, params map[string]an
 	if err != nil {
 		return err
 	}
+	authority := actionResultAuthority{ownerID: permission.GetAuthenticatedOwnerId(), accountGeneration: permission.GetAccountGeneration()}
 	r.syncPeerGeneration(permission.AccountGeneration)
 	callCtx := r.client.createCallContext(operationID)
 	binding, ok := actionBindingFor(action)
@@ -115,10 +117,6 @@ func (r *Runner) Stream(ctx context.Context, action string, params map[string]an
 	if err := operationStateError(response.GetState()); err != nil {
 		return err
 	}
-	if err := emit(agentstream.Event{Event: "accepted", Data: map[string]any{"operation_id": operationID}}); err != nil {
-		return err
-	}
-
 	controlPermission, err := r.operationControlPermission(callCtx, operationID, "watch", permission)
 	if err != nil {
 		return err
@@ -146,14 +144,18 @@ func (r *Runner) Stream(ctx context.Context, action string, params map[string]an
 			continue
 		}
 		if result, ok := event.Event.(*capv1.WatchOperationEvent_Result); ok && result.Result != nil {
-			for _, nativeEvent := range nativeEventsFromResult(result.Result.ResultJson, event.Sequence) {
+			nativeEvents, projectionErr := nativeEventsFromResult(result.Result.ResultJson, event.Sequence, authority)
+			if projectionErr != nil {
+				return projectionErr
+			}
+			for _, nativeEvent := range nativeEvents {
 				if err := emit(nativeEvent); err != nil {
 					return err
 				}
 			}
 			return nil
 		}
-		nativeEvent, terminal, terminalErr := nativeEventFromProto(event)
+		nativeEvent, terminal, terminalErr := nativeEventFromProto(event, authority)
 		if nativeEvent != nil {
 			if err := emit(*nativeEvent); err != nil {
 				return err
@@ -169,11 +171,11 @@ func (r *Runner) Stream(ctx context.Context, action string, params map[string]an
 }
 
 func (r *Runner) invokeOperation(ctx context.Context, action string, params map[string]any) ([]byte, error) {
-	result, _, err := r.invokeOperationWithReplay(ctx, action, params)
+	result, _, err := r.invokeOperationWithReplay(ctx, action, params, nil)
 	return result, err
 }
 
-func (r *Runner) invokeOperationWithReplay(ctx context.Context, action string, params map[string]any) ([]byte, bool, error) {
+func (r *Runner) invokeOperationWithReplay(ctx context.Context, action string, params map[string]any, authorityOut *actionResultAuthority) ([]byte, bool, error) {
 	if r == nil || r.client == nil {
 		return nil, false, fmt.Errorf("agent gateway is not configured")
 	}
@@ -183,6 +185,12 @@ func (r *Runner) invokeOperationWithReplay(ctx context.Context, action string, p
 	operationID, requestJSON, permission, err := r.prepare(action, params)
 	if err != nil {
 		return nil, false, err
+	}
+	if authorityOut != nil {
+		*authorityOut = actionResultAuthority{
+			ownerID:           permission.GetAuthenticatedOwnerId(),
+			accountGeneration: permission.GetAccountGeneration(),
+		}
 	}
 	r.syncPeerGeneration(permission.AccountGeneration)
 	callCtx := r.client.createCallContext(operationID)
@@ -256,60 +264,6 @@ func (r *Runner) invokeOperationWithReplay(ctx context.Context, action string, p
 	}
 }
 
-// Cancel cancels one external Agent operation. It is used by the legacy
-// agent.chat.turn.stop action so stop never touches a message-server turn
-// store. The operation binding is fixed to the typed chat stream operation.
-func (r *Runner) Cancel(ctx context.Context, action string, params map[string]any) (map[string]any, error) {
-	if r == nil || r.client == nil {
-		return nil, fmt.Errorf("agent gateway is not configured")
-	}
-	operationID, _, permission, err := r.prepare("agent.chat.stream", params)
-	if err != nil {
-		return nil, err
-	}
-	r.syncPeerGeneration(permission.AccountGeneration)
-	callCtx := r.client.createCallContext(operationID)
-	if _, ok := actionBindingFor("agent.chat.stream"); !ok {
-		return nil, fmt.Errorf("%w: %q", ErrUnsupportedAction, action)
-	}
-	controlPermission, err := r.operationControlPermission(callCtx, operationID, "cancel", permission)
-	if err != nil {
-		return nil, err
-	}
-	response, err := r.client.CancelOperation(ctx, operationID, controlPermission, callCtx)
-	if err != nil {
-		return nil, err
-	}
-	return map[string]any{"operation_id": operationID, "state": response.GetState().String()}, nil
-}
-
-// Get returns one external Agent operation status for a durable turn. The
-// operation id is derived from turn_id by prepare, so reconnects use the same
-// ledger row without any local persistence.
-func (r *Runner) Get(ctx context.Context, action string, params map[string]any) (map[string]any, error) {
-	if r == nil || r.client == nil {
-		return nil, fmt.Errorf("agent gateway is not configured")
-	}
-	operationID, _, permission, err := r.prepare("agent.chat.stream", params)
-	if err != nil {
-		return nil, err
-	}
-	r.syncPeerGeneration(permission.AccountGeneration)
-	callCtx := r.client.createCallContext(operationID)
-	if _, ok := actionBindingFor("agent.chat.stream"); !ok {
-		return nil, fmt.Errorf("%w: %q", ErrUnsupportedAction, action)
-	}
-	controlPermission, err := r.operationControlPermission(callCtx, operationID, "get", permission)
-	if err != nil {
-		return nil, err
-	}
-	response, err := r.client.GetOperation(ctx, operationID, controlPermission, callCtx)
-	if err != nil {
-		return nil, err
-	}
-	return map[string]any{"operation_id": operationID, "state": response.GetState().String(), "result": json.RawMessage(response.GetResultJson())}, nil
-}
-
 func (r *Runner) prepare(action string, params map[string]any) (string, []byte, *capv1.PermissionContext, error) {
 	operationID := r.operationIDFor(params)
 	if params == nil {
@@ -349,22 +303,11 @@ func (r *Runner) operationIDFor(params map[string]any) string {
 				return parsed.String()
 			}
 		}
-	}
-	turnID := ""
-	if params != nil {
-		if value, ok := params["turn_id"].(string); ok {
-			turnID = strings.TrimSpace(value)
+		if value, ok := params["idempotency_key"].(string); ok {
+			if parsed, err := uuid.Parse(strings.TrimSpace(value)); err == nil {
+				return parsed.String()
+			}
 		}
-	}
-	if turnID != "" {
-		if parsed, err := uuid.Parse(turnID); err == nil {
-			return parsed.String()
-		}
-		owner := ""
-		if r != nil && r.config.OwnerID != nil {
-			owner = strings.TrimSpace(r.config.OwnerID())
-		}
-		return uuid.NewSHA1(uuid.NameSpaceOID, []byte("native-agent-turn:\x00"+owner+"\x00"+turnID)).String()
 	}
 	return uuid.New().String()
 }
@@ -611,119 +554,41 @@ func afterSequence(params map[string]any) int64 {
 	return 0
 }
 
-// nativeEventsFromResult flattens the Core chat adapter's collected stream
-// result. The wire contract exposes top-level accepted/delta/tool/done/error
-// events; the internal `{events:[...]}` envelope must never leak to Flutter.
-func nativeEventsFromResult(resultJSON []byte, resultSequence int64) []agentstream.Event {
-	var envelope map[string]json.RawMessage
-	if len(resultJSON) == 0 || json.Unmarshal(resultJSON, &envelope) != nil {
-		return []agentstream.Event{{Event: "done", Seq: positiveSequence(resultSequence), Data: map[string]any{}}}
+// nativeEventsFromResult projects the durable operation's canonical Agent
+// ChatResponse into one public done event. Legacy collected-stream envelopes
+// are intentionally rejected; progress arrives through WatchOperation events.
+func nativeEventsFromResult(resultJSON []byte, resultSequence int64, authority actionResultAuthority) ([]agentstream.Event, error) {
+	var response map[string]any
+	if len(resultJSON) == 0 || json.Unmarshal(resultJSON, &response) != nil || response == nil {
+		return nil, fmt.Errorf("%w: canonical chat operation result is missing", ErrInvalidActionResult)
+	}
+	if err := validateDurableChatResult(response, authority); err != nil {
+		return nil, err
 	}
 	sequence := positiveSequence(resultSequence)
-	if sequence == 0 {
-		sequence = positiveJSONSequence(envelope["sequence"])
-	}
-	var rawEvents []json.RawMessage
-	_ = json.Unmarshal(envelope["events"], &rawEvents)
-	if len(rawEvents) == 0 {
-		var payload map[string]any
-		_ = json.Unmarshal(resultJSON, &payload)
-		if payload == nil {
-			payload = map[string]any{}
-		}
-		return []agentstream.Event{{Event: "done", Seq: sequence, Data: payload}}
-	}
-	out := make([]agentstream.Event, 0, len(rawEvents)+1)
-	lastSequence := sequence
-	for _, raw := range rawEvents {
-		var payload map[string]any
-		if json.Unmarshal(raw, &payload) != nil || payload == nil {
-			continue
-		}
-		eventSequence := sequence
-		if eventSequence == 0 {
-			eventSequence = positiveJSONSequence(rawSequence(raw))
-		}
-		if eventSequence > 0 {
-			lastSequence = eventSequence
-		}
-		kind := strings.ToLower(strings.TrimSpace(fmt.Sprint(payload["kind"])))
-		switch kind {
-		case "started":
-			out = append(out, agentstream.Event{Event: "accepted", Seq: eventSequence, Data: payload})
-		case "delta":
-			out = append(out, agentstream.Event{Event: "delta", Seq: eventSequence, Data: payload})
-		case "tool_call", "tool_result", "tool":
-			out = append(out, agentstream.Event{Event: "tool", Seq: eventSequence, Data: payload})
-		case "error":
-			out = append(out, agentstream.Event{Event: "error", Seq: eventSequence, Data: payload})
-		case "done":
-			out = append(out, agentstream.Event{Event: "done", Seq: eventSequence, Data: payload})
-		default:
-			out = append(out, agentstream.Event{Event: "delta", Seq: eventSequence, Data: payload})
-		}
-	}
-	if len(out) == 0 || out[len(out)-1].Event != "done" {
-		var response any
-		_ = json.Unmarshal(envelope["response"], &response)
-		data := map[string]any{}
-		if response != nil {
-			data["response"] = response
-		}
-		out = append(out, agentstream.Event{Event: "done", Seq: lastSequence, Data: data})
-	}
-	return out
+	data := chatResult(response)
+	data["sequence"] = sequence
+	return []agentstream.Event{{Event: "done", Seq: sequence, Data: data}}, nil
 }
 
-func rawSequence(raw json.RawMessage) json.RawMessage {
-	var payload map[string]json.RawMessage
-	if json.Unmarshal(raw, &payload) != nil {
-		return nil
-	}
-	return payload["sequence"]
-}
-
-func positiveJSONSequence(raw json.RawMessage) int64 {
-	if len(raw) == 0 {
-		return 0
-	}
-	var value any
-	decoder := json.NewDecoder(strings.NewReader(string(raw)))
-	decoder.UseNumber()
-	if err := decoder.Decode(&value); err != nil {
-		return 0
-	}
-	number, ok := value.(json.Number)
-	if !ok {
-		return 0
-	}
-	parsed, err := number.Int64()
-	if err != nil {
-		return 0
-	}
-	return positiveSequence(parsed)
-}
-
-func positiveSequence(sequence int64) int64 {
-	if sequence > 0 {
-		return sequence
-	}
-	return 0
-}
-
-func nativeEventFromProto(event *capv1.WatchOperationEvent) (*agentstream.Event, bool, error) {
+func nativeEventFromProto(event *capv1.WatchOperationEvent, authority actionResultAuthority) (*agentstream.Event, bool, error) {
 	if event == nil {
 		return nil, false, nil
 	}
 	sequence := positiveSequence(event.Sequence)
-	base := map[string]any{"operation_id": event.OperationId, "sequence": sequence}
+	base := map[string]any{"sequence": sequence}
 	switch value := event.Event.(type) {
 	case *capv1.WatchOperationEvent_Accepted:
-		return &agentstream.Event{Event: "accepted", Seq: sequence, Data: base}, false, nil
+		// The capability protocol acceptance is transport state and contains no
+		// Agent-authored turn identity. Only the durable business accepted
+		// progress event may become a ProductCore accepted frame.
+		return nil, false, nil
 	case *capv1.WatchOperationEvent_Progress:
 		var payload map[string]any
 		if len(value.Progress.EventJson) > 0 {
-			_ = json.Unmarshal(value.Progress.EventJson, &payload)
+			if err := json.Unmarshal(value.Progress.EventJson, &payload); err != nil {
+				return nil, true, fmt.Errorf("%w: chat stream progress is not canonical JSON", ErrInvalidActionResult)
+			}
 		}
 		if payload == nil {
 			payload = map[string]any{}
@@ -731,18 +596,23 @@ func nativeEventFromProto(event *capv1.WatchOperationEvent) (*agentstream.Event,
 		for key, item := range base {
 			payload[key] = item
 		}
-		eventName := strings.ToLower(strings.TrimSpace(fmt.Sprint(payload["event"])))
-		if eventName == "" {
-			eventName = strings.ToLower(strings.TrimSpace(fmt.Sprint(payload["kind"])))
+		if err := validateChatStreamEvent(payload, authority); err != nil {
+			return nil, true, err
 		}
+		eventName := strings.ToLower(strings.TrimSpace(fmt.Sprint(payload["kind"])))
 		switch eventName {
-		case "accepted", "started":
+		case "accepted":
 			return &agentstream.Event{Event: "accepted", Seq: sequence, Data: payload}, false, nil
+		case "started":
+			return &agentstream.Event{Event: "started", Seq: sequence, Data: payload}, false, nil
 		case "tool", "tool_call", "tool_result":
 			return &agentstream.Event{Event: "tool", Seq: sequence, Data: payload}, false, nil
 		case "error":
 			return &agentstream.Event{Event: "error", Seq: sequence, Data: payload}, true, fmt.Errorf("agent operation failed")
 		case "done":
+			if err := promoteChatResultFields(payload, authority); err != nil {
+				return nil, true, err
+			}
 			return &agentstream.Event{Event: "done", Seq: sequence, Data: payload}, true, nil
 		default:
 			return &agentstream.Event{Event: "delta", Seq: sequence, Data: payload}, false, nil
@@ -755,8 +625,12 @@ func nativeEventFromProto(event *capv1.WatchOperationEvent) (*agentstream.Event,
 			}
 		}
 		if payload == nil {
-			payload = map[string]any{}
+			return nil, true, fmt.Errorf("%w: canonical chat operation result is missing", ErrInvalidActionResult)
 		}
+		if err := validateDurableChatResult(payload, authority); err != nil {
+			return nil, true, err
+		}
+		payload = chatResult(payload)
 		for key, item := range base {
 			payload[key] = item
 		}
@@ -774,8 +648,7 @@ func nativeEventFromProto(event *capv1.WatchOperationEvent) (*agentstream.Event,
 		base["error"] = capabilityErr.Error()
 		return &agentstream.Event{Event: "error", Seq: sequence, Data: base}, true, capabilityErr
 	case *capv1.WatchOperationEvent_Cancelled:
-		base["reason"] = "external native agent operation was cancelled"
-		return &agentstream.Event{Event: "cancelled", Seq: sequence, Data: base}, true, capabilityError(capv1.ErrorCode_ERROR_CODE_CONFLICT)
+		return nil, true, capabilityError(capv1.ErrorCode_ERROR_CODE_CONFLICT)
 	case *capv1.WatchOperationEvent_Gap:
 		base["earliest_sequence"] = value.Gap.EarliestAvailableSequence
 		base["latest_sequence"] = value.Gap.LatestAvailableSequence
@@ -783,6 +656,13 @@ func nativeEventFromProto(event *capv1.WatchOperationEvent) (*agentstream.Event,
 	default:
 		return nil, false, nil
 	}
+}
+
+func positiveSequence(sequence int64) int64 {
+	if sequence > 0 {
+		return sequence
+	}
+	return 0
 }
 
 type actionBinding struct{ capabilityID, operation string }
@@ -801,11 +681,15 @@ var actionBindings = map[string]actionBinding{
 	"agent.core.status.get":           {"agent.info.v1", "get_status"},
 	"agent.chat":                      {"agent.chat.v1", "chat"},
 	"agent.chat.stream":               {"agent.chat.v1", "stream_chat"},
+	"agent.chat.attachment.begin":     {"agent.chat.v1", "upload_attachment_begin"},
+	"agent.chat.attachment.append":    {"agent.chat.v1", "upload_attachment_append"},
+	"agent.chat.attachment.commit":    {"agent.chat.v1", "upload_attachment_commit"},
 	"agent.chat.conversations.create": {"agent.chat.v1", "create_conversation"},
 	"agent.chat.conversations.list":   {"agent.chat.v1", "list_conversations"},
 	"agent.chat.conversations.get":    {"agent.chat.v1", "get_conversation"},
 	"agent.chat.conversations.rename": {"agent.chat.v1", "rename_conversation"},
 	"agent.chat.conversations.delete": {"agent.chat.v1", "delete_conversation"},
+	"agent.chat.turn.stop":            {"agent.chat.v1", "stop_turn"},
 	"agent.chat.turns.list":           {"agent.chat.v1", "list_turns"},
 	"agent.context.compress":          {"agent.chat.v1", "compress_context"},
 	"agent.summarize":                 {"agent.chat.v1", "summarize"},
@@ -952,13 +836,9 @@ var actionBindings = map[string]actionBinding{
 	"agent.execution.v2.runs.list":               {"agent.execution.v2", "runs_list"},
 	"agent.execution.v2.runs.cancel":             {"agent.execution.v2", "runs_cancel"},
 	"agent.execution.v2.runs.retry":              {"agent.execution.v2", "runs_retry"},
-	"agent.execution.v2.runs.reconcile":          {"agent.execution.v2", "runs_reconcile"},
 	"agent.execution.v2.runs.events":             {"agent.execution.v2", "runs_events"},
-	"agent.execution.v2.confirmations.get":       {"agent.execution.v2", "confirmations_get"},
-	"agent.execution.v2.confirmations.list":      {"agent.execution.v2", "confirmations_list"},
-	"agent.execution.v2.confirmations.confirm":   {"agent.execution.v2", "confirmations_confirm"},
-	"agent.execution.v2.confirmations.reject":    {"agent.execution.v2", "confirmations_reject"},
 	"agent.execution.v2.artifacts.get":           {"agent.execution.v2", "artifacts_get"},
+	"agent.execution.v2.artifacts.download":      {"agent.execution.v2", "artifacts_download"},
 	"agent.execution.v2.service_bindings.list":   {"agent.execution.v2", "service_bindings_list"},
 	"agent.execution.v2.service_bindings.get":    {"agent.execution.v2", "service_bindings_get"},
 	"agent.execution.v2.service_bindings.invoke": {"agent.execution.v2", "service_bindings_invoke"},
@@ -1009,25 +889,20 @@ func transformCapabilityRequest(action, operationID string, params map[string]an
 	// sequence observed by the client.
 	delete(input, "after_seq")
 	if action == "agent.chat" || action == "agent.chat.stream" {
-		if _, ok := input["message"]; !ok {
-			if prompt, exists := input["prompt"]; exists {
-				input["message"] = prompt
+		// ProductCore and the Agent capability share one closed request shape.
+		// Reconnect cursors and websocket correlation metadata are consumed by
+		// the gateway and must never cross the capability boundary.
+		canonical := make(map[string]any, 7)
+		for _, key := range []string{
+			"idempotency_key", "conversation_id", "message",
+			"model_profile_id", "model_profile_revision", "credential_version",
+			"accepted_attachment_ids",
+		} {
+			if value, present := input[key]; present {
+				canonical[key] = value
 			}
 		}
-		if _, ok := input["request_id"]; !ok {
-			if clientID, exists := input["client_message_id"]; exists {
-				input["request_id"] = clientID
-			} else if turnID, exists := input["turn_id"]; exists {
-				input["request_id"] = turnID
-			}
-		}
-		if _, ok := input["idempotency_key"]; !ok {
-			if requestID, exists := input["request_id"]; exists {
-				input["idempotency_key"] = requestID
-			} else {
-				input["idempotency_key"] = operationID
-			}
-		}
+		input = canonical
 	}
 	if action == "agent.models.list" {
 		modelKind, exists := input["model_kind"]

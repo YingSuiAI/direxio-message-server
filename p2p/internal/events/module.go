@@ -133,6 +133,25 @@ func (m *Module) ResetSequence() {
 	m.mu.Unlock()
 }
 
+// NotifyPersisted advances the local sequence fence and wakes realtime
+// consumers after another domain transaction atomically inserted a p2p_event.
+// It must be called only after that transaction commits successfully.
+func (m *Module) NotifyPersisted(sequence int64) {
+	if m == nil || sequence <= 0 {
+		return
+	}
+	m.mu.Lock()
+	if sequence > m.nextSeq {
+		m.nextSeq = sequence
+	}
+	if m.eventWake == nil {
+		m.eventWake = make(chan struct{})
+	}
+	close(m.eventWake)
+	m.eventWake = make(chan struct{})
+	m.mu.Unlock()
+}
+
 func (m *Module) notify() {
 	m.mu.Lock()
 	defer m.mu.Unlock()

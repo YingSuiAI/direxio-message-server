@@ -24,18 +24,22 @@ var ErrCatalogInvalid = errors.New("native agent capability catalog is invalid")
 // report external Native Agent readiness.
 type CatalogRequirement struct {
 	Action string
-	// InputSchemaDigest and ResultSchemaDigest pin the exact Agent descriptor
+	// InputSchemaDigest, ResultSchemaDigest, and EventSchemaDigest pin the exact Agent descriptor
 	// schema identities expected for this action. Empty values retain the
 	// generic self-consistency proof for optional/extension actions; required
 	// baseline actions with a known Agent contract are populated by
 	// NewCatalogRequirement.
 	InputSchemaDigest  []byte
 	ResultSchemaDigest []byte
+	EventSchemaDigest  []byte
 	// RequireSchemaPin makes an empty expected digest a configuration error.
 	// Readiness baseline actions set this flag so a missing generated pin fails
 	// closed instead of silently degrading to self-consistency only. Optional
 	// extension actions may leave it false.
 	RequireSchemaPin bool
+	// RequireEventSchemaPin applies the same fail-closed rule to a durable
+	// stream's progress-event contract.
+	RequireEventSchemaPin bool
 }
 
 // ProbeCatalog performs one bounded, authenticated catalog probe. The
@@ -110,6 +114,9 @@ func ValidateCatalog(catalog *capv1.DescribeCapabilitiesResponse, requirements [
 		if requirement.RequireSchemaPin && (len(requirement.InputSchemaDigest) != sha256.Size || len(requirement.ResultSchemaDigest) != sha256.Size) {
 			return fmt.Errorf("%w: action %q has no pinned schema identity", ErrCatalogInvalid, action)
 		}
+		if requirement.RequireEventSchemaPin && len(requirement.EventSchemaDigest) != sha256.Size {
+			return fmt.Errorf("%w: action %q has no pinned event schema identity", ErrCatalogInvalid, action)
+		}
 		if err := validateOperationSchemas(operation, requirement); err != nil {
 			return fmt.Errorf("%w: action %q: %v", ErrCatalogInvalid, action, err)
 		}
@@ -146,6 +153,22 @@ func validateOperationSchemas(operation *capv1.OperationDescriptor, requirement 
 	if len(requirement.ResultSchemaDigest) > 0 {
 		if len(requirement.ResultSchemaDigest) != sha256.Size || !bytes.Equal(requirement.ResultSchemaDigest, resultDigest[:]) {
 			return errors.New("result schema does not match the expected contract")
+		}
+	}
+
+	eventSchema := operation.GetEventSchemaJson()
+	eventDigestBytes := operation.GetEventSchemaDigest()
+	if strings.TrimSpace(eventSchema) != "" || len(eventDigestBytes) > 0 || len(requirement.EventSchemaDigest) > 0 {
+		if strings.TrimSpace(eventSchema) == "" || !json.Valid([]byte(eventSchema)) {
+			return errors.New("event schema is missing or invalid")
+		}
+		eventDigest := sha256.Sum256([]byte(eventSchema))
+		if len(eventDigestBytes) != sha256.Size || !bytes.Equal(eventDigestBytes, eventDigest[:]) {
+			return errors.New("event schema digest is missing or mismatched")
+		}
+		if len(requirement.EventSchemaDigest) > 0 &&
+			(len(requirement.EventSchemaDigest) != sha256.Size || !bytes.Equal(requirement.EventSchemaDigest, eventDigest[:])) {
+			return errors.New("event schema does not match the expected contract")
 		}
 	}
 	return nil

@@ -1,15 +1,20 @@
 package agentgateway
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"math/big"
+	"mime"
 	"reflect"
 	"regexp"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	capv1 "github.com/YingSuiAI/dirextalk-capability-api/gen/go/dirextalk/capability/v1"
 	"github.com/google/uuid"
@@ -27,6 +32,16 @@ var ErrInvalidActionRequest = errors.New("native agent action request is invalid
 var catalogSensitiveKeyRE = regexp.MustCompile(`(?i)(^|[^a-z0-9])(access[_-]?token|refresh[_-]?token|client[_-]?secret|authorization|headers?|cookies?|bearer|basic|secret|token|pass(?:word|wd|phrase)|credential|api[_-]?key|private[_-]?key)([^a-z0-9]|$)`)
 
 var maxInt64Rat = new(big.Rat).SetInt64(math.MaxInt64)
+
+const (
+	maxChatMessageBytes              = 1 << 20
+	maxChatAttachmentBytes           = int64(8 << 20)
+	maxChatAttachmentChunkBytes      = int64(1 << 20)
+	maxChatAttachmentNameBytes       = 255
+	maxChatAttachments               = 4
+	maxCloudWorkerArtifactBytes      = int64(8 << 20)
+	maxCloudWorkerArtifactChunkBytes = int64(512 << 10)
+)
 
 // InvalidActionRequestError carries only a field name and a stable reason. It
 // never includes the value of a write-only field (for example api_key).
@@ -69,23 +84,58 @@ func ValidateActionRequest(action string, params map[string]any) error {
 	switch action {
 	case "agent.chat", "agent.chat.stream":
 		return validateChatRequest(action, params)
+	case "agent.chat.attachment.begin":
+		return validateChatAttachmentBeginRequest(action, params)
+	case "agent.chat.attachment.append":
+		return validateChatAttachmentAppendRequest(action, params)
+	case "agent.chat.attachment.commit":
+		return validateChatAttachmentCommitRequest(action, params)
 	case "agent.models.list":
 		return validateModelCatalogRequest(action, params)
 	case "agent.chat.turn.stop":
 		return validateTurnStopRequest(action, params)
 	case "agent.chat.turns.list":
 		return validateTurnsListRequest(action, params)
+	case "agent.execution.v2.artifacts.download":
+		return validateCloudWorkerArtifactDownloadRequest(action, params)
 	default:
 		return nil
 	}
 }
 
-func validateTurnStopRequest(action string, params map[string]any) error {
-	if err := rejectUnknownActionFields(action, params, "turn_id"); err != nil {
+func validateCloudWorkerArtifactDownloadRequest(action string, params map[string]any) error {
+	if err := rejectUnknownActionFields(action, params, "record_kind", "artifact_id", "offset_bytes", "max_chunk_bytes"); err != nil {
 		return err
 	}
-	if params == nil || !canonicalActionUUID(params["turn_id"]) {
-		return invalidActionRequest(action, "turn_id", "must be a canonical UUID")
+	if params == nil || params["record_kind"] != "cloud_worker" {
+		return invalidActionRequest(action, "record_kind", "must be exactly cloud_worker")
+	}
+	if !canonicalActionUUID(params["artifact_id"]) {
+		return invalidActionRequest(action, "artifact_id", "must be a canonical UUID")
+	}
+	if !actionIntegerInRange(params["offset_bytes"], 0, maxCloudWorkerArtifactBytes-1) {
+		return invalidActionRequest(action, "offset_bytes", "must be an integer from 0 to 8388607")
+	}
+	if !actionIntegerInRange(params["max_chunk_bytes"], 1, maxCloudWorkerArtifactChunkBytes) {
+		return invalidActionRequest(action, "max_chunk_bytes", "must be an integer from 1 to 524288")
+	}
+	return nil
+}
+
+func validateTurnStopRequest(action string, params map[string]any) error {
+	if err := rejectUnknownActionFields(action, params, "idempotency_key", "turn_id", "expected_revision"); err != nil {
+		return err
+	}
+	if params == nil {
+		return invalidActionRequest(action, "idempotency_key", "is required")
+	}
+	for _, field := range []string{"idempotency_key", "turn_id"} {
+		if !canonicalActionUUID(params[field]) {
+			return invalidActionRequest(action, field, "must be a canonical UUID")
+		}
+	}
+	if !positiveInteger(params["expected_revision"]) {
+		return invalidActionRequest(action, "expected_revision", "must be a positive integer")
 	}
 	return nil
 }
@@ -138,30 +188,40 @@ func canonicalActionUUID(value any) bool {
 
 func validateChatRequest(action string, params map[string]any) error {
 	if params == nil {
-		return invalidActionRequest(action, "model_profile_id", "is required")
+		return invalidActionRequest(action, "idempotency_key", "is required")
 	}
-	// These fields were accepted by older embedded-Agent clients. Keeping them
-	// out of the request is important: the selected profile and its secret
-	// revision must be resolved server-side and pinned by the caller.
-	for _, field := range []string{
-		"client_model_profile_id",
-		"model_profile",
-		"default_profile",
-		"default_profile_id",
-		"default_model_profile_id",
-		"use_default_profile",
-		"tool_credentials",
-		"messages",
-		"history",
-		"chat_history",
-		"conversation_history",
-	} {
-		if _, present := params[field]; present {
-			return invalidActionRequest(action, field, "is not supported")
-		}
+	allowed := []string{
+		"idempotency_key", "conversation_id", "message", "model_profile_id",
+		"model_profile_revision", "credential_version",
+	}
+	if action == "agent.chat.stream" {
+		allowed = append(allowed, "after_seq", "accepted_attachment_ids")
+	}
+	if err := rejectUnknownActionFields(action, params, allowed...); err != nil {
+		return err
 	}
 	if field := firstForbiddenChatRequestKey(params); field != "" {
 		return invalidActionRequest(action, field, "is not supported")
+	}
+	if !canonicalActionUUID(params["idempotency_key"]) {
+		return invalidActionRequest(action, "idempotency_key", "must be a canonical UUID")
+	}
+	message, ok := params["message"].(string)
+	if !ok || strings.TrimSpace(message) == "" || len(message) > maxChatMessageBytes || !utf8.ValidString(message) {
+		return invalidActionRequest(action, "message", "must be non-empty UTF-8 of at most 1048576 bytes")
+	}
+	if conversationID, present := params["conversation_id"]; present {
+		if !canonicalActionUUID(conversationID) {
+			return invalidActionRequest(action, "conversation_id", "must be a canonical UUID")
+		}
+	} else if action == "agent.chat.stream" {
+		return invalidActionRequest(action, "conversation_id", "is required")
+	}
+	if value, present := params["after_seq"]; present {
+		sequence, valid := actionInteger(value)
+		if action != "agent.chat.stream" || !valid || sequence < 0 {
+			return invalidActionRequest(action, "after_seq", "must be a non-negative integer")
+		}
 	}
 
 	profileID, present := params["model_profile_id"]
@@ -181,7 +241,234 @@ func validateChatRequest(action string, params map[string]any) error {
 			return invalidActionRequest(action, field, "must be a positive integer")
 		}
 	}
+	if value, present := params["accepted_attachment_ids"]; present {
+		if action != "agent.chat.stream" {
+			return invalidActionRequest(action, "accepted_attachment_ids", "is supported only by agent.chat.stream")
+		}
+		ids, ok := actionStringSlice(value)
+		if !ok || len(ids) > maxChatAttachments {
+			return invalidActionRequest(action, "accepted_attachment_ids", "must contain at most 4 canonical UUIDs")
+		}
+		seen := make(map[string]struct{}, len(ids))
+		for _, id := range ids {
+			if !canonicalActionUUID(id) {
+				return invalidActionRequest(action, "accepted_attachment_ids", "must contain at most 4 canonical UUIDs")
+			}
+			if _, duplicate := seen[id]; duplicate {
+				return invalidActionRequest(action, "accepted_attachment_ids", "must not contain duplicates")
+			}
+			seen[id] = struct{}{}
+		}
+	}
 	return nil
+}
+
+func validateChatAttachmentBeginRequest(action string, params map[string]any) error {
+	if err := rejectUnknownActionFields(action, params,
+		"idempotency_key", "turn_request_id", "kind", "name", "mime_type", "declared_size", "content_sha256"); err != nil {
+		return err
+	}
+	if !canonicalActionUUID(params["idempotency_key"]) {
+		return invalidActionRequest(action, "idempotency_key", "must be a canonical UUID")
+	}
+	if !canonicalActionUUID(params["turn_request_id"]) {
+		return invalidActionRequest(action, "turn_request_id", "must be a canonical UUID")
+	}
+	if !validChatAttachmentName(params["name"]) {
+		return invalidActionRequest(action, "name", "must be a 1 to 255 byte basename")
+	}
+	if !validChatAttachmentMIME(params["kind"], params["mime_type"]) {
+		return invalidActionRequest(action, "kind", "must bind an approved image, file, or workspace_archive media type")
+	}
+	if !actionIntegerInRange(params["declared_size"], 1, maxChatAttachmentBytes) {
+		return invalidActionRequest(action, "declared_size", "must be an integer from 1 to 8388608")
+	}
+	if !canonicalActionSHA256(params["content_sha256"]) {
+		return invalidActionRequest(action, "content_sha256", "must be a lowercase SHA-256 digest")
+	}
+	return nil
+}
+
+func validateChatAttachmentAppendRequest(action string, params map[string]any) error {
+	if err := rejectUnknownActionFields(action, params,
+		"idempotency_key", "upload_id", "expected_revision", "ordinal", "offset_bytes", "data_base64", "chunk_sha256"); err != nil {
+		return err
+	}
+	for _, field := range []string{"idempotency_key", "upload_id"} {
+		if !canonicalActionUUID(params[field]) {
+			return invalidActionRequest(action, field, "must be a canonical UUID")
+		}
+	}
+	if !positiveInteger(params["expected_revision"]) {
+		return invalidActionRequest(action, "expected_revision", "must be a positive integer")
+	}
+	if !actionIntegerInRange(params["ordinal"], 0, math.MaxUint32) {
+		return invalidActionRequest(action, "ordinal", "must be a non-negative integer")
+	}
+	if !actionIntegerInRange(params["offset_bytes"], 0, math.MaxInt64) {
+		return invalidActionRequest(action, "offset_bytes", "must be a non-negative integer")
+	}
+	encoded, ok := params["data_base64"].(string)
+	if !ok || encoded == "" {
+		return invalidActionRequest(action, "data_base64", "must be canonical standard base64 for 1 to 1048576 bytes")
+	}
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil || int64(len(decoded)) < 1 || int64(len(decoded)) > maxChatAttachmentChunkBytes || base64.StdEncoding.EncodeToString(decoded) != encoded {
+		return invalidActionRequest(action, "data_base64", "must be canonical standard base64 for 1 to 1048576 bytes")
+	}
+	defer clear(decoded)
+	if !canonicalActionSHA256(params["chunk_sha256"]) {
+		return invalidActionRequest(action, "chunk_sha256", "must be a lowercase SHA-256 digest")
+	}
+	digest := sha256.Sum256(decoded)
+	if params["chunk_sha256"] != hex.EncodeToString(digest[:]) {
+		return invalidActionRequest(action, "chunk_sha256", "must match the decoded chunk")
+	}
+	return nil
+}
+
+func validateChatAttachmentCommitRequest(action string, params map[string]any) error {
+	if err := rejectUnknownActionFields(action, params,
+		"idempotency_key", "upload_id", "expected_revision", "content_sha256"); err != nil {
+		return err
+	}
+	for _, field := range []string{"idempotency_key", "upload_id"} {
+		if !canonicalActionUUID(params[field]) {
+			return invalidActionRequest(action, field, "must be a canonical UUID")
+		}
+	}
+	if !positiveInteger(params["expected_revision"]) {
+		return invalidActionRequest(action, "expected_revision", "must be a positive integer")
+	}
+	if !canonicalActionSHA256(params["content_sha256"]) {
+		return invalidActionRequest(action, "content_sha256", "must be a lowercase SHA-256 digest")
+	}
+	return nil
+}
+
+func actionStringSlice(value any) ([]string, bool) {
+	switch values := value.(type) {
+	case []string:
+		return append([]string(nil), values...), true
+	case []any:
+		out := make([]string, 0, len(values))
+		for _, value := range values {
+			text, ok := value.(string)
+			if !ok {
+				return nil, false
+			}
+			out = append(out, text)
+		}
+		return out, true
+	default:
+		return nil, false
+	}
+}
+
+func validChatAttachmentName(value any) bool {
+	name, ok := value.(string)
+	if !ok || name == "" || name != strings.TrimSpace(name) || len(name) > maxChatAttachmentNameBytes || !utf8.ValidString(name) || name == "." || name == ".." {
+		return false
+	}
+	return !strings.ContainsAny(name, "\\/\r\n\x00")
+}
+
+func validChatAttachmentMIME(kindValue, value any) bool {
+	kind, kindOK := kindValue.(string)
+	mimeType, ok := value.(string)
+	if !kindOK || !ok || mimeType != strings.ToLower(strings.TrimSpace(mimeType)) {
+		return false
+	}
+	parsed, parameters, err := mime.ParseMediaType(mimeType)
+	if err != nil || parsed != mimeType || len(parameters) != 0 {
+		return false
+	}
+	switch kind {
+	case "image":
+		return mimeType == "image/jpeg" || mimeType == "image/png" || mimeType == "image/webp"
+	case "workspace_archive":
+		return mimeType == "application/vnd.dirextalk.workspace+tar+gzip"
+	case "file":
+		if strings.HasPrefix(mimeType, "text/") || strings.HasSuffix(mimeType, "+json") || strings.HasSuffix(mimeType, "+xml") {
+			return true
+		}
+		switch mimeType {
+		case "application/json", "application/ld+json", "application/xml", "application/yaml",
+			"application/pdf", "application/rtf", "application/octet-stream", "application/wasm",
+			"application/zip", "application/msword", "application/vnd.ms-excel", "application/vnd.ms-powerpoint",
+			"application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+			"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+			"application/vnd.openxmlformats-officedocument.presentationml.presentation":
+			return true
+		}
+		return false
+	default:
+		return false
+	}
+}
+
+func canonicalActionSHA256(value any) bool {
+	digest, ok := value.(string)
+	if !ok || len(digest) != sha256.Size*2 || digest != strings.ToLower(strings.TrimSpace(digest)) {
+		return false
+	}
+	_, err := hex.DecodeString(digest)
+	return err == nil
+}
+
+func actionIntegerInRange(value any, minimum, maximum int64) bool {
+	integer, ok := actionInteger(value)
+	return ok && integer >= minimum && integer <= maximum
+}
+
+func actionInteger(value any) (int64, bool) {
+	switch typed := value.(type) {
+	case json.Number:
+		rational, ok := new(big.Rat).SetString(strings.TrimSpace(typed.String()))
+		if !ok || !rational.IsInt() || !rational.Num().IsInt64() {
+			return 0, false
+		}
+		return rational.Num().Int64(), true
+	case int:
+		return int64(typed), true
+	case int8:
+		return int64(typed), true
+	case int16:
+		return int64(typed), true
+	case int32:
+		return int64(typed), true
+	case int64:
+		return typed, true
+	case uint:
+		if uint64(typed) > math.MaxInt64 {
+			return 0, false
+		}
+		return int64(typed), true
+	case uint8:
+		return int64(typed), true
+	case uint16:
+		return int64(typed), true
+	case uint32:
+		return int64(typed), true
+	case uint64:
+		if typed > math.MaxInt64 {
+			return 0, false
+		}
+		return int64(typed), true
+	case float32:
+		integer := float64(typed)
+		if math.IsNaN(integer) || math.IsInf(integer, 0) || math.Trunc(integer) != integer || integer < math.MinInt64 || integer >= -float64(math.MinInt64) {
+			return 0, false
+		}
+		return int64(integer), true
+	case float64:
+		if math.IsNaN(typed) || math.IsInf(typed, 0) || math.Trunc(typed) != typed || typed < math.MinInt64 || typed >= -float64(math.MinInt64) {
+			return 0, false
+		}
+		return int64(typed), true
+	default:
+		return 0, false
+	}
 }
 
 // firstForbiddenChatRequestKey walks only map keys and nested map/list
@@ -287,7 +574,7 @@ func isUnsupportedChatKey(key string) bool {
 	for _, unsupported := range []string{
 		"tool_credentials", "model_profile", "client_model_profile_id",
 		"default_profile", "default_profile_id", "default_model_profile_id", "use_default_profile",
-		"messages", "history", "chat_history", "conversation_history",
+		"messages", "history", "chat_history", "conversation_history", "attachments", "data_base64",
 	} {
 		if key == unsupported {
 			return true
@@ -298,7 +585,7 @@ func isUnsupportedChatKey(key string) bool {
 	case "tool_credentials", "model_profile", "client_model_profile_id",
 		"default_profile", "default_profile_id", "default_model_profile_id", "use_default_profile",
 		"model_profile_id", "model_profile_revision",
-		"messages", "history", "chat_history", "conversation_history":
+		"messages", "history", "chat_history", "conversation_history", "attachments", "data_base64":
 		// Profile pin variants (for example clientModelProfileId) are not
 		// server-derived pins and must not become a nested escape hatch.
 		return true

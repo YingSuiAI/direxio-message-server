@@ -22,6 +22,7 @@ type reactionRecord = dirextalkdomain.ReactionRecord
 type memberRecord = dirextalkdomain.MemberRecord
 type p2pEvent = dirextalkdomain.Event
 type eventBounds = dirextalkdomain.EventBounds
+type agentExecutionCompletionReceipt = dirextalkdomain.AgentExecutionCompletionReceipt
 type blockRecord = dirextalkdomain.BlockRecord
 type reportRecord = dirextalkdomain.ReportRecord
 type pluginInstance = dirextalkplugin.Instance

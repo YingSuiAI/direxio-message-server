@@ -43,6 +43,19 @@ func TestValidateCatalogPinsKnowledgeStatusQuotaSchema(t *testing.T) {
 	}
 }
 
+func TestArtifactDownloadCatalogPinsExactAgentSchemas(t *testing.T) {
+	requirement := NewCatalogRequirement("agent.execution.v2.artifacts.download")
+	if got, want := hex.EncodeToString(requirement.InputSchemaDigest), "1f89699ab07b14d135619ee5f6b2ffd0d8d0821fb8f1ba236662814c0586706c"; got != want {
+		t.Fatalf("artifact download input schema digest = %s, want %s", got, want)
+	}
+	if got, want := hex.EncodeToString(requirement.ResultSchemaDigest), "6ea5feead715aa50feeff464e6da618564f9b6e422025c94743faf173478689d"; got != want {
+		t.Fatalf("artifact download result schema digest = %s, want %s", got, want)
+	}
+	if !requirement.RequireSchemaPin {
+		t.Fatal("artifact download catalog requirement is not fail-closed")
+	}
+}
+
 func TestValidateCatalogAcceptsCurrentAgentInfoSchemas(t *testing.T) {
 	const input = `{"additionalProperties":false,"properties":{},"type":"object"}`
 	const backend = `{"additionalProperties":false,"properties":{"api_version":{"type":"string"},"available":{"type":"boolean"},"capabilities":{"items":{"type":"string"},"type":"array"},"configured":{"type":"boolean"},"instance_id":{"type":"string"},"release_version":{"type":"string"},"status":{"type":"string"},"supported_model_providers":{"items":{"type":"string"},"type":"array"}},"required":["available","configured","status","capabilities","supported_model_providers"],"type":"object"}`
@@ -204,9 +217,20 @@ func TestValidateCatalogRejectsSchemaDigestDriftAfterCatalogRehash(t *testing.T)
 func TestValidateCatalogRequiresChatSchemaPins(t *testing.T) {
 	requirements := []CatalogRequirement{NewCatalogRequirement("agent.chat"), NewCatalogRequirement("agent.chat.stream")}
 	input := `{"type":"object","properties":{"idempotency_key":{"type":"string"},"conversation_id":{"type":"string"},"message":{"type":"string"},"model_profile_id":{"type":"string"},"model_profile_revision":{"type":"integer"},"credential_version":{"type":"integer"}},"required":["idempotency_key","message","model_profile_id","model_profile_revision","credential_version"]}`
+	streamInput := `{"additionalProperties":false,"type":"object","properties":{"accepted_attachment_ids":{"items":{"format":"uuid","type":"string"},"maxItems":4,"uniqueItems":true,"type":"array"},"idempotency_key":{"format":"uuid","type":"string"},"conversation_id":{"format":"uuid","type":"string"},"message":{"minLength":1,"type":"string"},"model_profile_id":{"format":"uuid","type":"string"},"model_profile_revision":{"minimum":1,"type":"integer"},"credential_version":{"minimum":1,"type":"integer"}},"required":["idempotency_key","message","model_profile_id","model_profile_revision","credential_version"]}`
+	for _, forbidden := range [][]byte{[]byte(`"prompt"`), []byte(`"turn_id"`), []byte(`"client_message_id"`), []byte(`"request_id"`)} {
+		if bytes.Contains([]byte(streamInput), forbidden) {
+			t.Fatalf("pinned Agent chat schema contains unsupported start field %s", forbidden)
+		}
+	}
 	result := `{"type":"object"}`
+	streamResult := `{"additionalProperties":false,"properties":{"conversation_id":{"format":"uuid","type":"string"},"done":{"const":true,"type":"boolean"},"idempotency_key":{"format":"uuid","type":"string"},"message":{"type":"object"},"model_profile_id":{"format":"uuid","type":"string"},"references":{"items":{"type":"object"},"type":"array"},"related_plan_ids":{"items":{"format":"uuid","type":"string"},"type":"array"},"related_task_ids":{"items":{"format":"uuid","type":"string"},"type":"array"},"revision":{"minimum":1,"type":"integer"},"tool_results":{"items":{"type":"object"},"type":"array"},"tool_summaries":{"items":{"type":"string"},"type":"array"}},"required":["idempotency_key","conversation_id","revision","message","done","model_profile_id"],"type":"object"}`
+	streamEvent := `{"additionalProperties":false,"properties":{"conversation_id":{"format":"uuid","type":"string"},"error_code":{"type":"string"},"error_summary":{"type":"string"},"idempotency_key":{"format":"uuid","type":"string"},"kind":{"enum":["accepted","started","delta","tool_call","tool_result","done","error"],"type":"string"},"response":` + streamResult + `,"revision":{"minimum":1,"type":"integer"},"text":{"type":"string"},"tool_call":{"type":"object"},"tool_result":{"type":"object"},"turn_id":{"format":"uuid","type":"string"}},"required":["kind","idempotency_key","conversation_id","turn_id","revision"],"type":"object"}`
 	inputDigest := sha256.Sum256([]byte(input))
+	streamInputDigest := sha256.Sum256([]byte(streamInput))
 	resultDigest := sha256.Sum256([]byte(result))
+	streamResultDigest := sha256.Sum256([]byte(streamResult))
+	streamEventDigest := sha256.Sum256([]byte(streamEvent))
 	descriptor := &capv1.CapabilityDescriptor{
 		CapabilityId:    "agent.chat.v1",
 		SemanticVersion: "1.0.0",
@@ -214,7 +238,7 @@ func TestValidateCatalogRequiresChatSchemaPins(t *testing.T) {
 		Readiness:       true,
 		Operations: []*capv1.OperationDescriptor{
 			{OperationId: "chat", InputSchemaJson: input, InputSchemaDigest: inputDigest[:], ResultSchemaJson: result, ResultSchemaDigest: resultDigest[:]},
-			{OperationId: "stream_chat", InputSchemaJson: input, InputSchemaDigest: inputDigest[:], ResultSchemaJson: result, ResultSchemaDigest: resultDigest[:]},
+			{OperationId: "stream_chat", InputSchemaJson: streamInput, InputSchemaDigest: streamInputDigest[:], ResultSchemaJson: streamResult, ResultSchemaDigest: streamResultDigest[:], EventSchemaJson: streamEvent, EventSchemaDigest: streamEventDigest[:]},
 		},
 	}
 	catalog := catalogTestWithDigest(t, descriptor)
@@ -228,6 +252,15 @@ func TestValidateCatalogRequiresChatSchemaPins(t *testing.T) {
 	if err := ValidateCatalog(catalog, requirements); err == nil {
 		t.Fatal("chat catalog accepted drifted input schema")
 	}
+	descriptor.Operations[0].InputSchemaJson = input
+	descriptor.Operations[0].InputSchemaDigest = inputDigest[:]
+	descriptor.Operations[1].EventSchemaJson = `{"type":"object"}`
+	driftedEvent := sha256.Sum256([]byte(descriptor.Operations[1].EventSchemaJson))
+	descriptor.Operations[1].EventSchemaDigest = driftedEvent[:]
+	catalog.CatalogDigest = computeCatalogDigest(catalog.Capabilities)
+	if err := ValidateCatalog(catalog, requirements); err == nil {
+		t.Fatal("chat catalog accepted drifted durable event schema")
+	}
 }
 
 func TestValidateCatalogAcceptsCurrentMutationSchemas(t *testing.T) {
@@ -236,7 +269,11 @@ func TestValidateCatalogAcceptsCurrentMutationSchemas(t *testing.T) {
 	tests := []struct {
 		action, capability, operation, input, result string
 	}{
+		{"agent.chat.attachment.begin", "agent.chat.v1", "upload_attachment_begin", `{"additionalProperties":false,"properties":{"content_sha256":{"pattern":"^[a-f0-9]{64}$","type":"string"},"declared_size":{"maximum":8388608,"minimum":1,"type":"integer"},"idempotency_key":{"format":"uuid","type":"string"},"kind":{"enum":["image","file","workspace_archive"],"type":"string"},"mime_type":{"maxLength":255,"minLength":1,"type":"string"},"name":{"maxLength":255,"minLength":1,"type":"string"},"turn_request_id":{"format":"uuid","type":"string"}},"required":["idempotency_key","turn_request_id","kind","name","mime_type","declared_size","content_sha256"],"type":"object"}`, `{"additionalProperties":false,"properties":{"expires_at":{"format":"date-time","type":"string"},"max_chunk_bytes":{"minimum":1,"type":"integer"},"received_size":{"minimum":0,"type":"integer"},"revision":{"minimum":1,"type":"integer"},"source_id":{"format":"uuid","type":"string"},"status":{"enum":["receiving","committed","consumed"],"type":"string"},"turn_request_id":{"format":"uuid","type":"string"},"upload_id":{"format":"uuid","type":"string"}},"required":["upload_id","source_id","turn_request_id","status","received_size","max_chunk_bytes","revision","expires_at"],"type":"object"}`},
+		{"agent.chat.attachment.append", "agent.chat.v1", "upload_attachment_append", `{"additionalProperties":false,"properties":{"chunk_sha256":{"pattern":"^[a-f0-9]{64}$","type":"string"},"data_base64":{"maxLength":1398104,"minLength":4,"type":"string"},"expected_revision":{"minimum":1,"type":"integer"},"idempotency_key":{"format":"uuid","type":"string"},"offset_bytes":{"minimum":0,"type":"integer"},"ordinal":{"minimum":0,"type":"integer"},"upload_id":{"format":"uuid","type":"string"}},"required":["idempotency_key","upload_id","expected_revision","ordinal","offset_bytes","data_base64","chunk_sha256"],"type":"object"}`, `{"additionalProperties":false,"properties":{"expires_at":{"format":"date-time","type":"string"},"max_chunk_bytes":{"minimum":1,"type":"integer"},"received_size":{"minimum":0,"type":"integer"},"revision":{"minimum":1,"type":"integer"},"source_id":{"format":"uuid","type":"string"},"status":{"enum":["receiving","committed","consumed"],"type":"string"},"turn_request_id":{"format":"uuid","type":"string"},"upload_id":{"format":"uuid","type":"string"}},"required":["upload_id","source_id","turn_request_id","status","received_size","max_chunk_bytes","revision","expires_at"],"type":"object"}`},
+		{"agent.chat.attachment.commit", "agent.chat.v1", "upload_attachment_commit", `{"additionalProperties":false,"properties":{"content_sha256":{"pattern":"^[a-f0-9]{64}$","type":"string"},"expected_revision":{"minimum":1,"type":"integer"},"idempotency_key":{"format":"uuid","type":"string"},"upload_id":{"format":"uuid","type":"string"}},"required":["idempotency_key","upload_id","expected_revision","content_sha256"],"type":"object"}`, `{"additionalProperties":false,"properties":{"expires_at":{"format":"date-time","type":"string"},"kind":{"enum":["image","file","workspace_archive"],"type":"string"},"mime_type":{"maxLength":255,"minLength":1,"type":"string"},"name":{"maxLength":255,"minLength":1,"type":"string"},"revision":{"minimum":1,"type":"integer"},"sha256":{"pattern":"^[a-f0-9]{64}$","type":"string"},"size_bytes":{"maximum":8388608,"minimum":1,"type":"integer"},"source_id":{"format":"uuid","type":"string"},"status":{"const":"committed","type":"string"},"turn_request_id":{"format":"uuid","type":"string"}},"required":["source_id","revision","turn_request_id","kind","name","mime_type","size_bytes","sha256","status","expires_at"],"type":"object"}`},
 		{"agent.chat.conversations.create", "agent.chat.v1", "create_conversation", `{"type":"object","properties":{"title":{"type":"string"},"conversation_id":{"type":"string","format":"uuid"},"idempotency_key":{"type":"string","format":"uuid"}},"required":["conversation_id","idempotency_key"]}`, objectResult},
+		{"agent.chat.turn.stop", "agent.chat.v1", "stop_turn", `{"additionalProperties":false,"properties":{"expected_revision":{"minimum":1,"type":"integer"},"idempotency_key":{"format":"uuid","type":"string"},"turn_id":{"format":"uuid","type":"string"}},"required":["idempotency_key","turn_id","expected_revision"],"type":"object"}`, `{"additionalProperties":false,"properties":{"conversation_id":{"format":"uuid","type":"string"},"created_at":{"format":"date-time","type":"string"},"idempotency_key":{"format":"uuid","type":"string"},"last_sequence":{"minimum":0,"type":"integer"},"revision":{"minimum":1,"type":"integer"},"state":{"enum":["accepted","running","waiting_confirmation","completed","canceled","failed"],"type":"string"},"terminal_code":{"type":"string"},"terminal_summary":{"type":"string"},"turn_id":{"format":"uuid","type":"string"},"updated_at":{"format":"date-time","type":"string"}},"required":["turn_id","idempotency_key","conversation_id","state","revision","last_sequence","terminal_code","terminal_summary","created_at","updated_at"],"type":"object"}`},
 		{"agent.knowledge.config.update", "agent.knowledge.v1", "update_config", `{"type":"object","properties":{"idempotency_key":{"format":"uuid","type":"string"},"expected_revision":{"type":"integer"},"embedding_profile_id":{"type":"string"},"profile_id":{"type":"string"},"dimension":{"type":"integer"},"collection":{"type":"string"},"collection_config_digest":{"type":"string"}},"required":["idempotency_key","expected_revision"]}`, knowledgeConfigResult},
 		{"agent.knowledge.sources.delete", "agent.knowledge.v1", "delete_source", `{"type":"object","properties":{"source_id":{"type":"string"},"expected_revision":{"type":"integer"},"idempotency_key":{"format":"uuid","type":"string"}},"required":["source_id","expected_revision","idempotency_key"]}`, objectResult},
 		{"agent.knowledge.upload.start", "agent.knowledge.v1", "start_upload", `{"type":"object","properties":{"upload_id":{"type":"string"},"source_id":{"type":"string"},"title":{"type":"string"},"relative_path":{"type":"string"},"media_type":{"type":"string"},"declared_size":{"type":"integer"},"content_sha256":{"type":"string"},"idempotency_key":{"format":"uuid","type":"string"}},"required":["declared_size","content_sha256","idempotency_key"]}`, objectResult},

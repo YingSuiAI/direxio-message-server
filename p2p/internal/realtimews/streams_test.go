@@ -63,12 +63,46 @@ func (a sequencedDurableAgent) DurableStream(_ context.Context, _ string, _ stri
 	if a.params != nil {
 		a.params <- cloneMap(params)
 	}
-	turn := agentstream.Turn{State: agentstream.StateAccepted}
-	if err := emit(agentstream.StreamEvent{Kind: agentstream.EventAccepted, Turn: turn, TurnID: "turn-1", ConversationID: "conversation-1", Seq: 41, Event: "accepted"}); err != nil {
+	startID := actionbase.String(params["idempotency_key"])
+	conversationID := actionbase.String(params["conversation_id"])
+	turnID := "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	turn := agentstream.Turn{State: agentstream.StateAccepted, IdempotencyKey: startID, TurnID: turnID, ConversationID: conversationID, Revision: 1}
+	if err := emit(agentstream.StreamEvent{Kind: agentstream.EventAccepted, Turn: turn, IdempotencyKey: startID, TurnID: turnID, ConversationID: conversationID, Revision: 1, Seq: 41, Event: "accepted"}); err != nil {
 		return err
 	}
 	turn.State = agentstream.StateSucceeded
-	return emit(agentstream.StreamEvent{Kind: agentstream.EventRuntime, Turn: turn, TurnID: "turn-1", ConversationID: "conversation-1", Seq: 42, Event: "done", Data: map[string]any{"done": true}})
+	return emit(agentstream.StreamEvent{Kind: agentstream.EventRuntime, Turn: turn, IdempotencyKey: startID, TurnID: turnID, ConversationID: conversationID, Revision: 1, Seq: 42, Event: "done", Data: map[string]any{"done": true}})
+}
+
+func (agentStreamPortStub) DurableStream(
+	_ context.Context,
+	ownerID string,
+	_ string,
+	params map[string]any,
+	emit func(agentstream.StreamEvent) error,
+) error {
+	startID := actionbase.String(params["idempotency_key"])
+	conversationID := actionbase.String(params["conversation_id"])
+	turnID := "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	revision := int64(1)
+	identity := map[string]any{
+		"idempotency_key": startID, "conversation_id": conversationID,
+		"turn_id": turnID, "revision": float64(revision),
+	}
+	turn := agentstream.Turn{OwnerID: ownerID, TurnID: turnID, IdempotencyKey: startID, ConversationID: conversationID, Revision: revision}
+	accepted := cloneMap(identity)
+	accepted["kind"] = "accepted"
+	if err := emit(agentstream.StreamEvent{Kind: agentstream.EventAccepted, Turn: turn, TurnID: turnID, IdempotencyKey: startID, ConversationID: conversationID, Revision: revision, Seq: 1, Event: "accepted", Data: accepted}); err != nil {
+		return err
+	}
+	delta := cloneMap(identity)
+	delta["kind"], delta["text"] = "delta", "agent"
+	if err := emit(agentstream.StreamEvent{Kind: agentstream.EventRuntime, Turn: turn, TurnID: turnID, IdempotencyKey: startID, ConversationID: conversationID, Revision: revision, Seq: 2, Event: "delta", Data: delta}); err != nil {
+		return err
+	}
+	done := cloneMap(identity)
+	done["kind"] = "done"
+	return emit(agentstream.StreamEvent{Kind: agentstream.EventRuntime, Turn: turn, TurnID: turnID, IdempotencyKey: startID, ConversationID: conversationID, Revision: revision, Seq: 3, Event: "done", Data: done})
 }
 
 type validatingNativeAgentRunner struct {
@@ -133,14 +167,28 @@ func TestPluginAndAgentStreamsPreserveFramesAndSharedIDNamespace(t *testing.T) {
 
 	module.startNativeAgentStream(ctx, connection, map[string]any{
 		"id": "agent-happy", "action": "agent.chat", "params": map[string]any{
-			"prompt": "hello", "model_profile_id": "profile-id",
+			"idempotency_key": "11111111-1111-4111-8111-111111111111",
+			"conversation_id": "22222222-2222-4222-8222-222222222222",
+			"message":         "hello", "model_profile_id": "profile-id",
 			"model_profile_revision": int64(1), "credential_version": int64(1),
 		},
 	})
+	agentAccepted := nextOutbound(t, connection)
 	agentDelta := nextOutbound(t, connection)
 	agentDone := nextOutbound(t, connection)
+	if agentAccepted["type"] != "server.native_agent_stream.accepted" ||
+		agentAccepted["idempotency_key"] != "11111111-1111-4111-8111-111111111111" ||
+		agentAccepted["turn_id"] != "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" ||
+		agentAccepted["revision"] != int64(1) {
+		t.Fatalf("agent accepted frame did not preserve distinct identities: %#v", agentAccepted)
+	}
 	if agentDelta["type"] != "server.native_agent_stream.event" || agentDelta["event"] != "delta" || agentDelta["action"] != "agent.chat" || agentDone["event"] != "done" || agentDone["action"] != "agent.chat" {
 		t.Fatalf("agent frames = %#v / %#v", agentDelta, agentDone)
+	}
+	for _, frame := range []map[string]any{agentDelta, agentDone} {
+		if frame["idempotency_key"] != "11111111-1111-4111-8111-111111111111" || frame["turn_id"] != "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" || frame["revision"] != int64(1) {
+			t.Fatalf("agent event frame identity drifted: %#v", frame)
+		}
 	}
 
 	module.startNativeAgentStream(ctx, connection, map[string]any{
@@ -162,7 +210,9 @@ func TestPluginAndAgentStreamsPreserveFramesAndSharedIDNamespace(t *testing.T) {
 	}
 	module.startNativeAgentStream(ctx, connection, map[string]any{
 		"id": "shared", "action": "agent.chat", "params": map[string]any{
-			"prompt": "hello", "model_profile_id": "profile-id",
+			"idempotency_key": "33333333-3333-4333-8333-333333333333",
+			"conversation_id": "22222222-2222-4222-8222-222222222222",
+			"message":         "hello", "model_profile_id": "profile-id",
 			"model_profile_revision": int64(1), "credential_version": int64(1),
 		},
 	})
@@ -178,38 +228,32 @@ func TestPluginAndAgentStreamsPreserveFramesAndSharedIDNamespace(t *testing.T) {
 }
 
 func TestNativeAgentStreamRejectsSensitiveKeysBeforeForwardAndReplay(t *testing.T) {
-	for _, durable := range []bool{false, true} {
-		t.Run(map[bool]string{false: "stream", true: "durable-replay"}[durable], func(t *testing.T) {
-			runner := &validatingNativeAgentRunner{}
-			agent := agentmodule.New(agentmodule.Config{Runner: runner})
-			module := New(Dependencies{Agent: agent}, Config{})
-			connection := newConnection("session", Ticket{Role: "owner", UserID: "@owner:example.test"})
-			params := map[string]any{
-				"message":                "hello",
-				"model_profile_id":       "profile-id",
-				"model_profile_revision": int64(2),
-				"credential_version":     int64(3),
-				"metadata":               []any{map[string]any{"dbPass": "stream-secret-canary"}},
-			}
-			if durable {
-				params["turn_id"] = "turn-1"
-				params["conversation_id"] = "conversation-1"
-			}
-			module.startNativeAgentStream(context.Background(), connection, map[string]any{
-				"id": "sensitive", "action": "agent.chat", "params": params,
-			})
+	runner := &validatingNativeAgentRunner{}
+	agent := agentmodule.New(agentmodule.Config{Runner: runner})
+	module := New(Dependencies{Agent: agent}, Config{})
+	connection := newConnection("session", Ticket{Role: "owner", UserID: "@owner:example.test"})
+	params := map[string]any{
+		"idempotency_key":        "11111111-1111-4111-8111-111111111111",
+		"conversation_id":        "22222222-2222-4222-8222-222222222222",
+		"message":                "hello",
+		"model_profile_id":       "profile-id",
+		"model_profile_revision": int64(2),
+		"credential_version":     int64(3),
+		"metadata":               []any{map[string]any{"dbPass": "stream-secret-canary"}},
+	}
+	module.startNativeAgentStream(context.Background(), connection, map[string]any{
+		"id": "sensitive", "action": "agent.chat", "params": params,
+	})
 
-			frame := nextOutbound(t, connection)
-			if frame["type"] != "server.native_agent_stream.error" || frame["status"] != http.StatusBadRequest {
-				t.Fatalf("sensitive %s frame = %#v, want HTTP 400 error", map[bool]string{false: "stream", true: "durable-replay"}[durable], frame)
-			}
-			if strings.Contains(fmt.Sprint(frame), "stream-secret-canary") {
-				t.Fatalf("sensitive %s frame leaked value: %#v", map[bool]string{false: "stream", true: "durable-replay"}[durable], frame)
-			}
-			if runner.streamCalls != 0 {
-				t.Fatalf("sensitive %s request reached runner %d time(s)", map[bool]string{false: "stream", true: "durable-replay"}[durable], runner.streamCalls)
-			}
-		})
+	frame := nextOutbound(t, connection)
+	if frame["type"] != "server.native_agent_stream.error" || frame["status"] != http.StatusBadRequest {
+		t.Fatalf("sensitive stream frame = %#v, want HTTP 400 error", frame)
+	}
+	if strings.Contains(fmt.Sprint(frame), "stream-secret-canary") {
+		t.Fatalf("sensitive stream frame leaked value: %#v", frame)
+	}
+	if runner.streamCalls != 0 {
+		t.Fatalf("sensitive request reached runner %d time(s)", runner.streamCalls)
 	}
 }
 
@@ -218,12 +262,12 @@ func TestNativeAgentStreamValidatesImmediatelyAndDetachesDurableTurn(t *testing.
 	module := New(Dependencies{Agent: agent}, Config{})
 	connection := newConnection("session", Ticket{Role: "owner", UserID: "@owner:example.test"})
 	invalid := map[string]any{
+		"idempotency_key":        "11111111-1111-4111-8111-111111111111",
+		"conversation_id":        "22222222-2222-4222-8222-222222222222",
 		"message":                "hello",
 		"model_profile_id":       "profile-id",
 		"model_profile_revision": int64(2),
 		"credential_version":     int64(3),
-		"turn_id":                "invalid-turn",
-		"conversation_id":        "conversation-1",
 		"metadata":               map[string]any{"httpBasicAuth": "immediate-secret"},
 	}
 	module.startNativeAgentStream(context.Background(), connection, map[string]any{
@@ -245,13 +289,12 @@ func TestNativeAgentStreamValidatesImmediatelyAndDetachesDurableTurn(t *testing.
 	}
 
 	valid := map[string]any{
+		"idempotency_key":        "33333333-3333-4333-8333-333333333333",
+		"conversation_id":        "22222222-2222-4222-8222-222222222222",
 		"message":                "hello",
 		"model_profile_id":       "profile-id",
 		"model_profile_revision": int64(2),
 		"credential_version":     int64(3),
-		"turn_id":                "valid-turn",
-		"conversation_id":        "conversation-1",
-		"metadata":               map[string]any{"ordinary": "value"},
 	}
 	module.startNativeAgentStream(context.Background(), connection, map[string]any{
 		"id": "valid", "action": "agent.chat", "params": valid,
@@ -277,9 +320,10 @@ func TestNativeAgentDurableFramesExposeSequenceCursor(t *testing.T) {
 	connection := newConnection("session", Ticket{Role: "owner", UserID: "@owner:example.test"})
 	module.startNativeAgentStream(context.Background(), connection, map[string]any{
 		"id": "sequenced", "action": "agent.chat", "params": map[string]any{
-			"message": "hello", "model_profile_id": "profile-id",
+			"idempotency_key": "11111111-1111-4111-8111-111111111111",
+			"message":         "hello", "model_profile_id": "profile-id",
 			"model_profile_revision": int64(1), "credential_version": int64(1),
-			"turn_id": "turn-1", "conversation_id": "conversation-1", "after_seq": int64(40),
+			"conversation_id": "22222222-2222-4222-8222-222222222222", "after_seq": int64(40),
 		},
 	})
 	params := <-receivedParams
@@ -288,7 +332,7 @@ func TestNativeAgentDurableFramesExposeSequenceCursor(t *testing.T) {
 	}
 
 	accepted := nextOutbound(t, connection)
-	if accepted["type"] != "server.native_agent_stream.accepted" || accepted["seq"] != int64(41) {
+	if accepted["type"] != "server.native_agent_stream.accepted" || accepted["seq"] != int64(41) || accepted["idempotency_key"] != "11111111-1111-4111-8111-111111111111" || accepted["revision"] != int64(1) {
 		t.Fatalf("accepted frame = %#v, want seq 41", accepted)
 	}
 	done := nextOutbound(t, connection)

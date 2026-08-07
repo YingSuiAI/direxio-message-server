@@ -69,6 +69,7 @@ func TestExternalNativeAgentModeDoesNotConstructEmbeddedRuntime(t *testing.T) {
 		t.Fatal("external mode must preserve the agent.chat action surface")
 	}
 	if _, actionErr := handler(context.Background(), map[string]any{
+		"idempotency_key":        "11111111-1111-4111-8111-111111111111",
 		"message":                "hello",
 		"model_profile_id":       "00000000-0000-4000-8000-000000000001",
 		"model_profile_revision": int64(1),
@@ -93,7 +94,7 @@ func TestExternalNativeAgentModeDoesNotConstructEmbeddedRuntime(t *testing.T) {
 	if turnsHandler == nil {
 		t.Fatal("external mode must preserve the durable turn listing action")
 	}
-	if _, actionErr := turnsHandler(context.Background(), map[string]any{"conversation_id": "conversation-1"}); actionErr != nil {
+	if _, actionErr := turnsHandler(context.Background(), map[string]any{"conversation_id": "22222222-2222-4222-8222-222222222222"}); actionErr != nil {
 		t.Fatalf("external turn listing failed: %v", actionErr)
 	}
 	if probe.invoked != "agent.chat.turns.list" {
@@ -109,6 +110,7 @@ func TestNativeAgentSensitiveChatKeyRejectedAtHTTPProductAction(t *testing.T) {
 	req := jsonRequest(t, PathPrefix+"query", map[string]any{
 		"action": "agent.chat",
 		"params": map[string]any{
+			"idempotency_key":        "33333333-3333-4333-8333-333333333333",
 			"message":                "hello",
 			"model_profile_id":       "profile-id",
 			"model_profile_revision": int64(2),
@@ -137,6 +139,7 @@ func TestNativeAgentJSONProfilePinsAcceptedAtHTTPProductAction(t *testing.T) {
 	req := jsonRequest(t, PathPrefix+"query", map[string]any{
 		"action": "agent.chat",
 		"params": map[string]any{
+			"idempotency_key":        "44444444-4444-4444-8444-444444444444",
 			"message":                "hello",
 			"model_profile_id":       "profile-id",
 			"model_profile_revision": int64(2),

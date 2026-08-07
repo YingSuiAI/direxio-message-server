@@ -18,6 +18,7 @@ func (s *MemoryStore) ResetAccountState() {
 	s.channels = make(map[string]channel)
 	s.inviteGrants = make(map[string]channelInviteGrant)
 	s.posts = nil
+	s.postSettings = make(map[string]channelPostSettingsRecord)
 	s.comments = nil
 	s.contacts = make(map[string]contactRecord)
 	s.blocks = make(map[string]blockRecord)
@@ -30,6 +31,9 @@ func (s *MemoryStore) ResetAccountState() {
 	s.events = nil
 	s.eventSeq = make(map[int64]struct{})
 	s.eventDedupe = make(map[string]int64)
+	s.completionReceipts = make(map[string]agentExecutionCompletionReceipt)
+	s.completionExecutions = make(map[string]string)
+	s.completionEventSeq = make(map[string]int64)
 	s.reports = make(map[string]reportRecord)
 	s.operations = make(map[string]operations.Record)
 }

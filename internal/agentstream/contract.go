@@ -58,6 +58,7 @@ var (
 type Turn struct {
 	OwnerID              string
 	TurnID               string
+	IdempotencyKey       string
 	ConversationID       string
 	Action               string
 	ModelProfileID       string
@@ -65,6 +66,7 @@ type Turn struct {
 	CredentialVersion    int64
 	Digest               [32]byte
 	State                State
+	Revision             int64
 	Error                string
 	CreatedAt            time.Time
 	UpdatedAt            time.Time
@@ -89,7 +91,9 @@ type StreamEvent struct {
 	Kind           string
 	Turn           Turn
 	TurnID         string
+	IdempotencyKey string
 	ConversationID string
+	Revision       int64
 	Seq            int64
 	Event          string
 	Data           map[string]any

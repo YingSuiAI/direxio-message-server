@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	capv1 "github.com/YingSuiAI/dirextalk-capability-api/gen/go/dirextalk/capability/v1"
+	"github.com/YingSuiAI/dirextalk-message-server/internal/dirextalkdomain"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/dirextalktransport"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -49,6 +50,11 @@ type Config struct {
 	// ExpectedAccountGeneration fences a deleted/recreated owner account. A
 	// non-positive value disables the fixed generation check.
 	ExpectedAccountGeneration int64
+	// ServiceOwnerID and RecordAgentExecutionCompletion form the private,
+	// service-originated terminal callback boundary. The owner and generation
+	// are local deployment facts and are never accepted from request JSON.
+	ServiceOwnerID                 string
+	RecordAgentExecutionCompletion func(context.Context, dirextalkdomain.AgentExecutionCompletionReceipt) (replayed bool, err error)
 
 	// GrantPublicKey verifies the opaque Ed25519 grant-v1 supplied by Agent
 	// calls. Product is the message-server-owned capability boundary, so it

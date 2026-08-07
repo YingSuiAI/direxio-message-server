@@ -2147,12 +2147,33 @@
                 "type": "object",
                 "required": true,
                 "properties": {
+                  "account_generation": {
+                    "type": "integer",
+                    "presence": {
+                      "omitted": "non_cloud_worker_confirmation",
+                      "present": "positive_integer_required_for_cloud_worker.execute"
+                    }
+                  },
                   "content_digest": {
                     "type": "string",
                     "required": true
                   },
+                  "digest": {
+                    "type": "string",
+                    "presence": {
+                      "omitted": "non_cloud_worker_confirmation",
+                      "present": "lowercase_sha256_required_for_cloud_worker.execute"
+                    }
+                  },
                   "execution_digest": {
                     "type": "string"
+                  },
+                  "execution_id": {
+                    "type": "string",
+                    "presence": {
+                      "omitted": "non_cloud_worker_confirmation",
+                      "present": "canonical_uuid_required_for_cloud_worker.execute"
+                    }
                   },
                   "manifest_digest": {
                     "type": "string"
@@ -2172,7 +2193,11 @@
                     "required": true
                   },
                   "owner_id": {
-                    "type": "string"
+                    "type": "string",
+                    "required": true,
+                    "presence": {
+                      "present": "authenticated_owner_id"
+                    }
                   },
                   "parameter_digest": {
                     "type": "string",
@@ -2180,6 +2205,55 @@
                   },
                   "permission_digest": {
                     "type": "string"
+                  },
+                  "plan_digest": {
+                    "type": "string",
+                    "presence": {
+                      "omitted": "non_cloud_worker_confirmation",
+                      "present": "lowercase_sha256_required_for_cloud_worker.execute"
+                    }
+                  },
+                  "plan_id": {
+                    "type": "string",
+                    "presence": {
+                      "omitted": "non_cloud_worker_confirmation",
+                      "present": "canonical_uuid_required_for_cloud_worker.execute"
+                    }
+                  },
+                  "plan_revision": {
+                    "type": "integer",
+                    "presence": {
+                      "omitted": "non_cloud_worker_confirmation",
+                      "present": "positive_integer_required_for_cloud_worker.execute"
+                    }
+                  },
+                  "quote_digest": {
+                    "type": "string",
+                    "presence": {
+                      "omitted": "non_cloud_worker_confirmation",
+                      "present": "lowercase_sha256_required_for_cloud_worker.execute"
+                    }
+                  },
+                  "run_digest": {
+                    "type": "string",
+                    "presence": {
+                      "omitted": "non_cloud_worker_confirmation",
+                      "present": "lowercase_sha256_required_for_cloud_worker.execute"
+                    }
+                  },
+                  "run_id": {
+                    "type": "string",
+                    "presence": {
+                      "omitted": "non_cloud_worker_confirmation",
+                      "present": "canonical_uuid_required_for_cloud_worker.execute"
+                    }
+                  },
+                  "run_revision": {
+                    "type": "integer",
+                    "presence": {
+                      "omitted": "non_cloud_worker_confirmation",
+                      "present": "positive_integer_required_for_cloud_worker.execute"
+                    }
                   },
                   "secret_grant_digest": {
                     "type": "string",
@@ -2193,7 +2267,10 @@
                       "properties": {
                         "binding_digest": {
                           "type": "string",
-                          "required": true
+                          "presence": {
+                            "omitted": "cloud_worker.execute exposes purpose only",
+                            "present": "required_for_non_cloud_worker_confirmation"
+                          }
                         },
                         "purpose": {
                           "type": "string",
@@ -2201,13 +2278,9 @@
                         },
                         "reference_id": {
                           "type": "string",
-                          "required": true
-                        },
-                        "secret_revision": {
-                          "type": "integer",
                           "presence": {
-                            "present": "positive_integer",
-                            "empty": "omitted"
+                            "omitted": "cloud_worker.execute exposes purpose only",
+                            "present": "required_for_non_cloud_worker_confirmation"
                           }
                         }
                       }
@@ -2258,6 +2331,13 @@
               "expires_at": {
                 "type": "string",
                 "required": true
+              },
+              "owner_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "authenticated_owner_id"
+                }
               },
               "revision": {
                 "type": "integer",
@@ -2340,12 +2420,33 @@
                   "type": "object",
                   "required": true,
                   "properties": {
+                    "account_generation": {
+                      "type": "integer",
+                      "presence": {
+                        "omitted": "non_cloud_worker_confirmation",
+                        "present": "positive_integer_required_for_cloud_worker.execute"
+                      }
+                    },
                     "content_digest": {
                       "type": "string",
                       "required": true
                     },
+                    "digest": {
+                      "type": "string",
+                      "presence": {
+                        "omitted": "non_cloud_worker_confirmation",
+                        "present": "lowercase_sha256_required_for_cloud_worker.execute"
+                      }
+                    },
                     "execution_digest": {
                       "type": "string"
+                    },
+                    "execution_id": {
+                      "type": "string",
+                      "presence": {
+                        "omitted": "non_cloud_worker_confirmation",
+                        "present": "canonical_uuid_required_for_cloud_worker.execute"
+                      }
                     },
                     "manifest_digest": {
                       "type": "string"
@@ -2365,7 +2466,11 @@
                       "required": true
                     },
                     "owner_id": {
-                      "type": "string"
+                      "type": "string",
+                      "required": true,
+                      "presence": {
+                        "present": "authenticated_owner_id"
+                      }
                     },
                     "parameter_digest": {
                       "type": "string",
@@ -2373,6 +2478,55 @@
                     },
                     "permission_digest": {
                       "type": "string"
+                    },
+                    "plan_digest": {
+                      "type": "string",
+                      "presence": {
+                        "omitted": "non_cloud_worker_confirmation",
+                        "present": "lowercase_sha256_required_for_cloud_worker.execute"
+                      }
+                    },
+                    "plan_id": {
+                      "type": "string",
+                      "presence": {
+                        "omitted": "non_cloud_worker_confirmation",
+                        "present": "canonical_uuid_required_for_cloud_worker.execute"
+                      }
+                    },
+                    "plan_revision": {
+                      "type": "integer",
+                      "presence": {
+                        "omitted": "non_cloud_worker_confirmation",
+                        "present": "positive_integer_required_for_cloud_worker.execute"
+                      }
+                    },
+                    "quote_digest": {
+                      "type": "string",
+                      "presence": {
+                        "omitted": "non_cloud_worker_confirmation",
+                        "present": "lowercase_sha256_required_for_cloud_worker.execute"
+                      }
+                    },
+                    "run_digest": {
+                      "type": "string",
+                      "presence": {
+                        "omitted": "non_cloud_worker_confirmation",
+                        "present": "lowercase_sha256_required_for_cloud_worker.execute"
+                      }
+                    },
+                    "run_id": {
+                      "type": "string",
+                      "presence": {
+                        "omitted": "non_cloud_worker_confirmation",
+                        "present": "canonical_uuid_required_for_cloud_worker.execute"
+                      }
+                    },
+                    "run_revision": {
+                      "type": "integer",
+                      "presence": {
+                        "omitted": "non_cloud_worker_confirmation",
+                        "present": "positive_integer_required_for_cloud_worker.execute"
+                      }
                     },
                     "secret_grant_digest": {
                       "type": "string",
@@ -2386,7 +2540,10 @@
                         "properties": {
                           "binding_digest": {
                             "type": "string",
-                            "required": true
+                            "presence": {
+                              "omitted": "cloud_worker.execute exposes purpose only",
+                              "present": "required_for_non_cloud_worker_confirmation"
+                            }
                           },
                           "purpose": {
                             "type": "string",
@@ -2394,13 +2551,9 @@
                           },
                           "reference_id": {
                             "type": "string",
-                            "required": true
-                          },
-                          "secret_revision": {
-                            "type": "integer",
                             "presence": {
-                              "present": "positive_integer",
-                              "empty": "omitted"
+                              "omitted": "cloud_worker.execute exposes purpose only",
+                              "present": "required_for_non_cloud_worker_confirmation"
                             }
                           }
                         }
@@ -2451,6 +2604,13 @@
                 "expires_at": {
                   "type": "string",
                   "required": true
+                },
+                "owner_id": {
+                  "type": "string",
+                  "required": true,
+                  "presence": {
+                    "present": "authenticated_owner_id"
+                  }
                 },
                 "revision": {
                   "type": "integer",
@@ -2524,12 +2684,33 @@
                 "type": "object",
                 "required": true,
                 "properties": {
+                  "account_generation": {
+                    "type": "integer",
+                    "presence": {
+                      "omitted": "non_cloud_worker_confirmation",
+                      "present": "positive_integer_required_for_cloud_worker.execute"
+                    }
+                  },
                   "content_digest": {
                     "type": "string",
                     "required": true
                   },
+                  "digest": {
+                    "type": "string",
+                    "presence": {
+                      "omitted": "non_cloud_worker_confirmation",
+                      "present": "lowercase_sha256_required_for_cloud_worker.execute"
+                    }
+                  },
                   "execution_digest": {
                     "type": "string"
+                  },
+                  "execution_id": {
+                    "type": "string",
+                    "presence": {
+                      "omitted": "non_cloud_worker_confirmation",
+                      "present": "canonical_uuid_required_for_cloud_worker.execute"
+                    }
                   },
                   "manifest_digest": {
                     "type": "string"
@@ -2549,7 +2730,11 @@
                     "required": true
                   },
                   "owner_id": {
-                    "type": "string"
+                    "type": "string",
+                    "required": true,
+                    "presence": {
+                      "present": "authenticated_owner_id"
+                    }
                   },
                   "parameter_digest": {
                     "type": "string",
@@ -2557,6 +2742,55 @@
                   },
                   "permission_digest": {
                     "type": "string"
+                  },
+                  "plan_digest": {
+                    "type": "string",
+                    "presence": {
+                      "omitted": "non_cloud_worker_confirmation",
+                      "present": "lowercase_sha256_required_for_cloud_worker.execute"
+                    }
+                  },
+                  "plan_id": {
+                    "type": "string",
+                    "presence": {
+                      "omitted": "non_cloud_worker_confirmation",
+                      "present": "canonical_uuid_required_for_cloud_worker.execute"
+                    }
+                  },
+                  "plan_revision": {
+                    "type": "integer",
+                    "presence": {
+                      "omitted": "non_cloud_worker_confirmation",
+                      "present": "positive_integer_required_for_cloud_worker.execute"
+                    }
+                  },
+                  "quote_digest": {
+                    "type": "string",
+                    "presence": {
+                      "omitted": "non_cloud_worker_confirmation",
+                      "present": "lowercase_sha256_required_for_cloud_worker.execute"
+                    }
+                  },
+                  "run_digest": {
+                    "type": "string",
+                    "presence": {
+                      "omitted": "non_cloud_worker_confirmation",
+                      "present": "lowercase_sha256_required_for_cloud_worker.execute"
+                    }
+                  },
+                  "run_id": {
+                    "type": "string",
+                    "presence": {
+                      "omitted": "non_cloud_worker_confirmation",
+                      "present": "canonical_uuid_required_for_cloud_worker.execute"
+                    }
+                  },
+                  "run_revision": {
+                    "type": "integer",
+                    "presence": {
+                      "omitted": "non_cloud_worker_confirmation",
+                      "present": "positive_integer_required_for_cloud_worker.execute"
+                    }
                   },
                   "secret_grant_digest": {
                     "type": "string",
@@ -2570,7 +2804,10 @@
                       "properties": {
                         "binding_digest": {
                           "type": "string",
-                          "required": true
+                          "presence": {
+                            "omitted": "cloud_worker.execute exposes purpose only",
+                            "present": "required_for_non_cloud_worker_confirmation"
+                          }
                         },
                         "purpose": {
                           "type": "string",
@@ -2578,13 +2815,9 @@
                         },
                         "reference_id": {
                           "type": "string",
-                          "required": true
-                        },
-                        "secret_revision": {
-                          "type": "integer",
                           "presence": {
-                            "present": "positive_integer",
-                            "empty": "omitted"
+                            "omitted": "cloud_worker.execute exposes purpose only",
+                            "present": "required_for_non_cloud_worker_confirmation"
                           }
                         }
                       }
@@ -2635,6 +2868,13 @@
               "expires_at": {
                 "type": "string",
                 "required": true
+              },
+              "owner_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "authenticated_owner_id"
+                }
               },
               "revision": {
                 "type": "integer",
@@ -2704,12 +2944,33 @@
                 "type": "object",
                 "required": true,
                 "properties": {
+                  "account_generation": {
+                    "type": "integer",
+                    "presence": {
+                      "omitted": "non_cloud_worker_confirmation",
+                      "present": "positive_integer_required_for_cloud_worker.execute"
+                    }
+                  },
                   "content_digest": {
                     "type": "string",
                     "required": true
                   },
+                  "digest": {
+                    "type": "string",
+                    "presence": {
+                      "omitted": "non_cloud_worker_confirmation",
+                      "present": "lowercase_sha256_required_for_cloud_worker.execute"
+                    }
+                  },
                   "execution_digest": {
                     "type": "string"
+                  },
+                  "execution_id": {
+                    "type": "string",
+                    "presence": {
+                      "omitted": "non_cloud_worker_confirmation",
+                      "present": "canonical_uuid_required_for_cloud_worker.execute"
+                    }
                   },
                   "manifest_digest": {
                     "type": "string"
@@ -2729,7 +2990,11 @@
                     "required": true
                   },
                   "owner_id": {
-                    "type": "string"
+                    "type": "string",
+                    "required": true,
+                    "presence": {
+                      "present": "authenticated_owner_id"
+                    }
                   },
                   "parameter_digest": {
                     "type": "string",
@@ -2737,6 +3002,55 @@
                   },
                   "permission_digest": {
                     "type": "string"
+                  },
+                  "plan_digest": {
+                    "type": "string",
+                    "presence": {
+                      "omitted": "non_cloud_worker_confirmation",
+                      "present": "lowercase_sha256_required_for_cloud_worker.execute"
+                    }
+                  },
+                  "plan_id": {
+                    "type": "string",
+                    "presence": {
+                      "omitted": "non_cloud_worker_confirmation",
+                      "present": "canonical_uuid_required_for_cloud_worker.execute"
+                    }
+                  },
+                  "plan_revision": {
+                    "type": "integer",
+                    "presence": {
+                      "omitted": "non_cloud_worker_confirmation",
+                      "present": "positive_integer_required_for_cloud_worker.execute"
+                    }
+                  },
+                  "quote_digest": {
+                    "type": "string",
+                    "presence": {
+                      "omitted": "non_cloud_worker_confirmation",
+                      "present": "lowercase_sha256_required_for_cloud_worker.execute"
+                    }
+                  },
+                  "run_digest": {
+                    "type": "string",
+                    "presence": {
+                      "omitted": "non_cloud_worker_confirmation",
+                      "present": "lowercase_sha256_required_for_cloud_worker.execute"
+                    }
+                  },
+                  "run_id": {
+                    "type": "string",
+                    "presence": {
+                      "omitted": "non_cloud_worker_confirmation",
+                      "present": "canonical_uuid_required_for_cloud_worker.execute"
+                    }
+                  },
+                  "run_revision": {
+                    "type": "integer",
+                    "presence": {
+                      "omitted": "non_cloud_worker_confirmation",
+                      "present": "positive_integer_required_for_cloud_worker.execute"
+                    }
                   },
                   "secret_grant_digest": {
                     "type": "string",
@@ -2750,7 +3064,10 @@
                       "properties": {
                         "binding_digest": {
                           "type": "string",
-                          "required": true
+                          "presence": {
+                            "omitted": "cloud_worker.execute exposes purpose only",
+                            "present": "required_for_non_cloud_worker_confirmation"
+                          }
                         },
                         "purpose": {
                           "type": "string",
@@ -2758,13 +3075,9 @@
                         },
                         "reference_id": {
                           "type": "string",
-                          "required": true
-                        },
-                        "secret_revision": {
-                          "type": "integer",
                           "presence": {
-                            "present": "positive_integer",
-                            "empty": "omitted"
+                            "omitted": "cloud_worker.execute exposes purpose only",
+                            "present": "required_for_non_cloud_worker_confirmation"
                           }
                         }
                       }
@@ -2815,6 +3128,13 @@
               "expires_at": {
                 "type": "string",
                 "required": true
+              },
+              "owner_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "authenticated_owner_id"
+                }
               },
               "revision": {
                 "type": "integer",
@@ -5239,34 +5559,11 @@
       "transport": "http_and_ws_request",
       "schema": {
         "request": {
-          "after_seq": {
-            "type": "integer"
-          },
-          "attachments": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "data_base64": {
-                  "type": "string",
-                  "required": true,
-                  "write_only": true
-                },
-                "mime_type": {
-                  "type": "string",
-                  "required": true
-                },
-                "name": {
-                  "type": "string"
-                },
-                "type": {
-                  "type": "string"
-                }
-              }
-            }
-          },
           "conversation_id": {
-            "type": "string"
+            "type": "string",
+            "presence": {
+              "present": "canonical_uuid"
+            }
           },
           "credential_version": {
             "type": "integer",
@@ -5275,8 +5572,19 @@
               "present": "positive_integer"
             }
           },
+          "idempotency_key": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid"
+            }
+          },
           "message": {
-            "type": "string"
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "nonempty_utf8"
+            }
           },
           "model_profile_id": {
             "type": "string",
@@ -5291,12 +5599,6 @@
             "presence": {
               "present": "positive_integer"
             }
-          },
-          "prompt": {
-            "type": "string"
-          },
-          "turn_id": {
-            "type": "string"
           }
         },
         "response": {
@@ -5305,25 +5607,215 @@
             "items": {
               "type": "object",
               "properties": {
+                "account_generation": {
+                  "type": "integer",
+                  "presence": {
+                    "omitted": "generic_execution_v2_reference",
+                    "present": "positive_integer_equal_to_prepared_permission_generation;required_with_task_id"
+                  }
+                },
+                "binding_digest": {
+                  "type": "string",
+                  "presence": {
+                    "present": "lowercase_sha256;cloud_worker_confirmation_binding_or_generic_binding"
+                  }
+                },
+                "binding_id": {
+                  "type": "string",
+                  "presence": {
+                    "present": "canonical_uuid;service_binding_only"
+                  }
+                },
+                "binding_revision": {
+                  "type": "integer",
+                  "presence": {
+                    "present": "positive_integer;service_binding_only"
+                  }
+                },
                 "channel_id": {
-                  "type": "string"
+                  "type": "string",
+                  "presence": {
+                    "present": "required_for_channel_post"
+                  }
+                },
+                "confirmation_id": {
+                  "type": "string",
+                  "presence": {
+                    "present": "canonical_uuid;required_by_confirmation_linkage"
+                  }
+                },
+                "confirmation_revision": {
+                  "type": "integer",
+                  "presence": {
+                    "present": "positive_integer;required_for_cloud_worker_or_full_generic_confirmation"
+                  }
+                },
+                "deployment_id": {
+                  "type": "string",
+                  "presence": {
+                    "present": "canonical_uuid;generic_execution_run_or_service_binding_only"
+                  }
+                },
+                "execution_digest": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "generic_execution_v2_reference",
+                    "present": "lowercase_sha256;required_with_task_id"
+                  }
+                },
+                "execution_id": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "generic_execution_v2_reference",
+                    "present": "canonical_uuid_equal_to_run_id;required_with_task_id"
+                  }
+                },
+                "gate_type": {
+                  "type": "string",
+                  "presence": {
+                    "present": "bounded_128;full_generic_execution_confirmation_only"
+                  }
                 },
                 "kind": {
                   "type": "string",
-                  "required": true
+                  "required": true,
+                  "presence": {
+                    "present": "one_of:room|channel_post|execution_plan|execution_run|execution_confirmation|service_binding"
+                  }
+                },
+                "plan_digest": {
+                  "type": "string",
+                  "presence": {
+                    "present": "lowercase_sha256;required_by_plan_linkage"
+                  }
+                },
+                "plan_id": {
+                  "type": "string",
+                  "presence": {
+                    "present": "canonical_uuid;required_by_plan_linkage"
+                  }
+                },
+                "plan_revision": {
+                  "type": "integer",
+                  "presence": {
+                    "present": "positive_integer;required_by_plan_linkage"
+                  }
                 },
                 "post_id": {
-                  "type": "string"
+                  "type": "string",
+                  "presence": {
+                    "present": "required_for_channel_post"
+                  }
                 },
                 "preview": {
                   "type": "string"
                 },
+                "preview_digest": {
+                  "type": "string",
+                  "presence": {
+                    "present": "lowercase_sha256;full_generic_execution_confirmation_only"
+                  }
+                },
+                "project_id": {
+                  "type": "string",
+                  "presence": {
+                    "present": "canonical_uuid;service_binding_only"
+                  }
+                },
+                "quote_digest": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "generic_execution_v2_reference",
+                    "present": "lowercase_sha256;required_with_task_id"
+                  }
+                },
+                "risk_level": {
+                  "type": "string",
+                  "presence": {
+                    "present": "bounded_16;full_generic_execution_confirmation_only"
+                  }
+                },
                 "room_id": {
                   "type": "string",
-                  "required": true
+                  "presence": {
+                    "present": "required_for_room_or_channel_post"
+                  }
                 },
                 "room_type": {
                   "type": "string"
+                },
+                "run_digest": {
+                  "type": "string",
+                  "presence": {
+                    "present": "lowercase_sha256;required_by_run_linkage_except_full_generic_confirmation"
+                  }
+                },
+                "run_id": {
+                  "type": "string",
+                  "presence": {
+                    "present": "canonical_uuid;required_by_run_linkage"
+                  }
+                },
+                "run_revision": {
+                  "type": "integer",
+                  "presence": {
+                    "present": "positive_integer;required_by_run_linkage"
+                  }
+                },
+                "stage_digest": {
+                  "type": "string",
+                  "presence": {
+                    "present": "lowercase_sha256;generic_execution_confirmation_only"
+                  }
+                },
+                "stage_id": {
+                  "type": "string",
+                  "presence": {
+                    "present": "canonical_uuid;generic_execution_confirmation_only"
+                  }
+                },
+                "stage_revision": {
+                  "type": "integer",
+                  "presence": {
+                    "present": "positive_integer;generic_execution_confirmation_only"
+                  }
+                },
+                "state": {
+                  "type": "string",
+                  "presence": {
+                    "present": "cloud_worker_confirmation_state_or_bounded_generic_confirmation_state"
+                  }
+                },
+                "status": {
+                  "type": "string",
+                  "presence": {
+                    "present": "cloud_worker_execution_state_or_bounded_generic_run_status"
+                  }
+                },
+                "target_digest": {
+                  "type": "string",
+                  "presence": {
+                    "present": "lowercase_sha256;generic_execution_confirmation_or_service_binding"
+                  }
+                },
+                "target_id": {
+                  "type": "string",
+                  "presence": {
+                    "present": "canonical_uuid;generic_execution_confirmation_or_service_binding"
+                  }
+                },
+                "target_revision": {
+                  "type": "integer",
+                  "presence": {
+                    "present": "positive_integer;generic_execution_confirmation_or_service_binding"
+                  }
+                },
+                "task_id": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "generic_execution_v2_reference",
+                    "present": "canonical_uuid;cloud_worker_reference"
+                  }
                 },
                 "title": {
                   "type": "string"
@@ -5331,8 +5823,34 @@
               }
             },
             "presence": {
-              "omitted": "No room or channel references were produced.",
-              "present": "References are immutable projections derived from successful built-in Dirextalk tool results."
+              "omitted": "No room, channel-post, or Execution V2 references were produced.",
+              "present": "At most 32 strict server-authored references; Execution V2 references carry complete UUID/revision/digest linkage and grant no authority."
+            }
+          },
+          "related_plan_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "presence": {
+                "present": "canonical_uuid"
+              }
+            },
+            "presence": {
+              "omitted": "No Execution V2 plan was related to the assistant result.",
+              "present": "At most 32 server-authored canonical UUIDs; never synthesized from references."
+            }
+          },
+          "related_task_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "presence": {
+                "present": "canonical_uuid"
+              }
+            },
+            "presence": {
+              "omitted": "No CoreTask was related to the assistant result.",
+              "present": "At most 32 server-authored canonical UUIDs; never synthesized from references."
             }
           },
           "text": {
@@ -5350,34 +5868,32 @@
       "transport": "ws_stream_only",
       "schema": {
         "request": {
-          "after_seq": {
-            "type": "integer"
-          },
-          "attachments": {
+          "accepted_attachment_ids": {
             "type": "array",
             "items": {
-              "type": "object",
-              "properties": {
-                "data_base64": {
-                  "type": "string",
-                  "required": true,
-                  "write_only": true
-                },
-                "mime_type": {
-                  "type": "string",
-                  "required": true
-                },
-                "name": {
-                  "type": "string"
-                },
-                "type": {
-                  "type": "string"
-                }
+              "type": "string",
+              "presence": {
+                "present": "canonical_uuid"
               }
+            },
+            "presence": {
+              "omitted": "no_committed_turn_inputs",
+              "present": "unique;at_most_4;all_owned_committed_unexpired_and_bound_to_turn_request_id;combined_size_at_most_8388608"
+            }
+          },
+          "after_seq": {
+            "type": "integer",
+            "presence": {
+              "omitted": "from_beginning",
+              "present": "nonnegative_integer"
             }
           },
           "conversation_id": {
-            "type": "string"
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid"
+            }
           },
           "credential_version": {
             "type": "integer",
@@ -5386,8 +5902,19 @@
               "present": "positive_integer"
             }
           },
+          "idempotency_key": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid"
+            }
+          },
           "message": {
-            "type": "string"
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "nonempty_utf8"
+            }
           },
           "model_profile_id": {
             "type": "string",
@@ -5402,12 +5929,6 @@
             "presence": {
               "present": "positive_integer"
             }
-          },
-          "prompt": {
-            "type": "string"
-          },
-          "turn_id": {
-            "type": "string"
           }
         },
         "response": {
@@ -5416,25 +5937,215 @@
             "items": {
               "type": "object",
               "properties": {
+                "account_generation": {
+                  "type": "integer",
+                  "presence": {
+                    "omitted": "generic_execution_v2_reference",
+                    "present": "positive_integer_equal_to_prepared_permission_generation;required_with_task_id"
+                  }
+                },
+                "binding_digest": {
+                  "type": "string",
+                  "presence": {
+                    "present": "lowercase_sha256;cloud_worker_confirmation_binding_or_generic_binding"
+                  }
+                },
+                "binding_id": {
+                  "type": "string",
+                  "presence": {
+                    "present": "canonical_uuid;service_binding_only"
+                  }
+                },
+                "binding_revision": {
+                  "type": "integer",
+                  "presence": {
+                    "present": "positive_integer;service_binding_only"
+                  }
+                },
                 "channel_id": {
-                  "type": "string"
+                  "type": "string",
+                  "presence": {
+                    "present": "required_for_channel_post"
+                  }
+                },
+                "confirmation_id": {
+                  "type": "string",
+                  "presence": {
+                    "present": "canonical_uuid;required_by_confirmation_linkage"
+                  }
+                },
+                "confirmation_revision": {
+                  "type": "integer",
+                  "presence": {
+                    "present": "positive_integer;required_for_cloud_worker_or_full_generic_confirmation"
+                  }
+                },
+                "deployment_id": {
+                  "type": "string",
+                  "presence": {
+                    "present": "canonical_uuid;generic_execution_run_or_service_binding_only"
+                  }
+                },
+                "execution_digest": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "generic_execution_v2_reference",
+                    "present": "lowercase_sha256;required_with_task_id"
+                  }
+                },
+                "execution_id": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "generic_execution_v2_reference",
+                    "present": "canonical_uuid_equal_to_run_id;required_with_task_id"
+                  }
+                },
+                "gate_type": {
+                  "type": "string",
+                  "presence": {
+                    "present": "bounded_128;full_generic_execution_confirmation_only"
+                  }
                 },
                 "kind": {
                   "type": "string",
-                  "required": true
+                  "required": true,
+                  "presence": {
+                    "present": "one_of:room|channel_post|execution_plan|execution_run|execution_confirmation|service_binding"
+                  }
+                },
+                "plan_digest": {
+                  "type": "string",
+                  "presence": {
+                    "present": "lowercase_sha256;required_by_plan_linkage"
+                  }
+                },
+                "plan_id": {
+                  "type": "string",
+                  "presence": {
+                    "present": "canonical_uuid;required_by_plan_linkage"
+                  }
+                },
+                "plan_revision": {
+                  "type": "integer",
+                  "presence": {
+                    "present": "positive_integer;required_by_plan_linkage"
+                  }
                 },
                 "post_id": {
-                  "type": "string"
+                  "type": "string",
+                  "presence": {
+                    "present": "required_for_channel_post"
+                  }
                 },
                 "preview": {
                   "type": "string"
                 },
+                "preview_digest": {
+                  "type": "string",
+                  "presence": {
+                    "present": "lowercase_sha256;full_generic_execution_confirmation_only"
+                  }
+                },
+                "project_id": {
+                  "type": "string",
+                  "presence": {
+                    "present": "canonical_uuid;service_binding_only"
+                  }
+                },
+                "quote_digest": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "generic_execution_v2_reference",
+                    "present": "lowercase_sha256;required_with_task_id"
+                  }
+                },
+                "risk_level": {
+                  "type": "string",
+                  "presence": {
+                    "present": "bounded_16;full_generic_execution_confirmation_only"
+                  }
+                },
                 "room_id": {
                   "type": "string",
-                  "required": true
+                  "presence": {
+                    "present": "required_for_room_or_channel_post"
+                  }
                 },
                 "room_type": {
                   "type": "string"
+                },
+                "run_digest": {
+                  "type": "string",
+                  "presence": {
+                    "present": "lowercase_sha256;required_by_run_linkage_except_full_generic_confirmation"
+                  }
+                },
+                "run_id": {
+                  "type": "string",
+                  "presence": {
+                    "present": "canonical_uuid;required_by_run_linkage"
+                  }
+                },
+                "run_revision": {
+                  "type": "integer",
+                  "presence": {
+                    "present": "positive_integer;required_by_run_linkage"
+                  }
+                },
+                "stage_digest": {
+                  "type": "string",
+                  "presence": {
+                    "present": "lowercase_sha256;generic_execution_confirmation_only"
+                  }
+                },
+                "stage_id": {
+                  "type": "string",
+                  "presence": {
+                    "present": "canonical_uuid;generic_execution_confirmation_only"
+                  }
+                },
+                "stage_revision": {
+                  "type": "integer",
+                  "presence": {
+                    "present": "positive_integer;generic_execution_confirmation_only"
+                  }
+                },
+                "state": {
+                  "type": "string",
+                  "presence": {
+                    "present": "cloud_worker_confirmation_state_or_bounded_generic_confirmation_state"
+                  }
+                },
+                "status": {
+                  "type": "string",
+                  "presence": {
+                    "present": "cloud_worker_execution_state_or_bounded_generic_run_status"
+                  }
+                },
+                "target_digest": {
+                  "type": "string",
+                  "presence": {
+                    "present": "lowercase_sha256;generic_execution_confirmation_or_service_binding"
+                  }
+                },
+                "target_id": {
+                  "type": "string",
+                  "presence": {
+                    "present": "canonical_uuid;generic_execution_confirmation_or_service_binding"
+                  }
+                },
+                "target_revision": {
+                  "type": "integer",
+                  "presence": {
+                    "present": "positive_integer;generic_execution_confirmation_or_service_binding"
+                  }
+                },
+                "task_id": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "generic_execution_v2_reference",
+                    "present": "canonical_uuid;cloud_worker_reference"
+                  }
                 },
                 "title": {
                   "type": "string"
@@ -5442,8 +6153,34 @@
               }
             },
             "presence": {
-              "omitted": "No room or channel references were produced.",
-              "present": "References are immutable projections derived from successful built-in Dirextalk tool results."
+              "omitted": "No room, channel-post, or Execution V2 references were produced.",
+              "present": "At most 32 strict server-authored references; Execution V2 references carry complete UUID/revision/digest linkage and grant no authority."
+            }
+          },
+          "related_plan_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "presence": {
+                "present": "canonical_uuid"
+              }
+            },
+            "presence": {
+              "omitted": "No Execution V2 plan was related to the assistant result.",
+              "present": "At most 32 server-authored canonical UUIDs; never synthesized from references."
+            }
+          },
+          "related_task_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "presence": {
+                "present": "canonical_uuid"
+              }
+            },
+            "presence": {
+              "omitted": "No CoreTask was related to the assistant result.",
+              "present": "At most 32 server-authored canonical UUIDs; never synthesized from references."
             }
           },
           "text": {
@@ -5451,6 +6188,354 @@
           },
           "tool_calls": {
             "type": "array"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.chat.attachment.begin",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "content_sha256": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "lowercase_sha256"
+            }
+          },
+          "declared_size": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "integer_1_to_8388608"
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid"
+            }
+          },
+          "kind": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "one_of:image|file|workspace_archive"
+            }
+          },
+          "mime_type": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "approved_media_type_matching_kind"
+            }
+          },
+          "name": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "basename;utf8_bytes_1_to_255"
+            }
+          },
+          "turn_request_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid"
+            }
+          }
+        },
+        "response": {
+          "expires_at": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "rfc3339"
+            }
+          },
+          "max_chunk_bytes": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "exactly_1048576"
+            }
+          },
+          "received_size": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "integer_0_to_8388608"
+            }
+          },
+          "revision": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "positive_integer"
+            }
+          },
+          "source_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid"
+            }
+          },
+          "status": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "exactly:receiving"
+            }
+          },
+          "turn_request_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid"
+            }
+          },
+          "upload_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.chat.attachment.append",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "chunk_sha256": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "lowercase_sha256_matching_decoded_data"
+            }
+          },
+          "data_base64": {
+            "type": "string",
+            "required": true,
+            "write_only": true,
+            "presence": {
+              "present": "canonical_standard_base64_decoding_to_1_to_1048576_bytes"
+            }
+          },
+          "expected_revision": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "positive_integer"
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid"
+            }
+          },
+          "offset_bytes": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "non_negative_integer"
+            }
+          },
+          "ordinal": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "non_negative_integer"
+            }
+          },
+          "upload_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid"
+            }
+          }
+        },
+        "response": {
+          "expires_at": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "rfc3339"
+            }
+          },
+          "max_chunk_bytes": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "exactly_1048576"
+            }
+          },
+          "received_size": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "integer_0_to_8388608"
+            }
+          },
+          "revision": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "positive_integer"
+            }
+          },
+          "source_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid"
+            }
+          },
+          "status": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "exactly:receiving"
+            }
+          },
+          "turn_request_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid"
+            }
+          },
+          "upload_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.chat.attachment.commit",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "content_sha256": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "lowercase_sha256_matching_declared_upload"
+            }
+          },
+          "expected_revision": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "positive_integer"
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid"
+            }
+          },
+          "upload_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid"
+            }
+          }
+        },
+        "response": {
+          "attachment": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "expires_at": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "rfc3339"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "one_of:image|file|workspace_archive"
+                }
+              },
+              "mime_type": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "approved_media_type_matching_kind"
+                }
+              },
+              "name": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "basename;utf8_bytes_1_to_255"
+                }
+              },
+              "revision": {
+                "type": "integer",
+                "required": true,
+                "presence": {
+                  "present": "exactly_1"
+                }
+              },
+              "sha256": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "lowercase_sha256_matching_committed_content"
+                }
+              },
+              "size_bytes": {
+                "type": "integer",
+                "required": true,
+                "presence": {
+                  "present": "integer_1_to_8388608"
+                }
+              },
+              "source_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "status": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "exactly:committed"
+                }
+              },
+              "turn_request_id": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              }
+            }
           }
         }
       }
@@ -5602,15 +6687,92 @@
       "transport": "http_and_ws_request",
       "schema": {
         "request": {
+          "expected_revision": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "positive_integer"
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid"
+            }
+          },
           "turn_id": {
             "type": "string",
-            "required": true
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid"
+            }
           }
         },
         "response": {
-          "turn_id": {
+          "conversation_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid"
+            }
+          },
+          "created_at": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "rfc3339_nano"
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid;original_start_idempotency_key"
+            }
+          },
+          "last_sequence": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "nonnegative_integer"
+            }
+          },
+          "revision": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "positive_integer"
+            }
+          },
+          "state": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "one_of:accepted|running|waiting_confirmation|completed|canceled|failed"
+            }
+          },
+          "terminal_code": {
             "type": "string",
             "required": true
+          },
+          "terminal_summary": {
+            "type": "string",
+            "required": true
+          },
+          "turn_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid;agent_authored_internal_turn_identity"
+            }
+          },
+          "updated_at": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "rfc3339_nano_not_before_created_at"
+            }
           }
         }
       }
@@ -5623,13 +6785,24 @@
         "request": {
           "conversation_id": {
             "type": "string",
-            "required": true
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid"
+            }
           },
           "limit": {
-            "type": "integer"
+            "type": "integer",
+            "presence": {
+              "omitted": "server_default_50",
+              "present": "integer_1_to_1000"
+            }
           },
           "page_token": {
-            "type": "string"
+            "type": "string",
+            "presence": {
+              "omitted": "first_page",
+              "present": "bounded_4096"
+            }
           }
         },
         "response": {
@@ -5645,23 +6818,45 @@
               "properties": {
                 "conversation_id": {
                   "type": "string",
-                  "required": true
+                  "required": true,
+                  "presence": {
+                    "present": "canonical_uuid"
+                  }
                 },
                 "created_at": {
                   "type": "string",
-                  "required": true
+                  "required": true,
+                  "presence": {
+                    "present": "rfc3339_nano"
+                  }
+                },
+                "idempotency_key": {
+                  "type": "string",
+                  "required": true,
+                  "presence": {
+                    "present": "canonical_uuid;original_start_idempotency_key"
+                  }
                 },
                 "last_sequence": {
                   "type": "integer",
-                  "required": true
+                  "required": true,
+                  "presence": {
+                    "present": "nonnegative_integer"
+                  }
                 },
                 "revision": {
                   "type": "integer",
-                  "required": true
+                  "required": true,
+                  "presence": {
+                    "present": "positive_integer"
+                  }
                 },
                 "state": {
                   "type": "string",
-                  "required": true
+                  "required": true,
+                  "presence": {
+                    "present": "one_of:accepted|running|waiting_confirmation|completed|canceled|failed"
+                  }
                 },
                 "terminal_code": {
                   "type": "string",
@@ -5673,11 +6868,17 @@
                 },
                 "turn_id": {
                   "type": "string",
-                  "required": true
+                  "required": true,
+                  "presence": {
+                    "present": "canonical_uuid;agent_authored_internal_turn_identity"
+                  }
                 },
                 "updated_at": {
                   "type": "string",
-                  "required": true
+                  "required": true,
+                  "presence": {
+                    "present": "rfc3339_nano_not_before_created_at"
+                  }
                 }
               }
             }
@@ -7346,6 +8547,13 @@
             "type": "string",
             "required": true
           },
+          "record_kind": {
+            "type": "string",
+            "presence": {
+              "omitted": "generic_execution_v2_authority",
+              "present": "exact:cloud_worker"
+            }
+          },
           "revision": {
             "type": "integer"
           }
@@ -7355,9 +8563,446 @@
             "type": "object",
             "required": true,
             "properties": {
+              "account_generation": {
+                "type": "integer",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;positive_integer_equal_to_prepared_permission_generation"
+                }
+              },
+              "adapter": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;exact:pi_json_task_v1"
+                }
+              },
+              "artifact_retention_seconds": {
+                "type": "integer",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;positive_integer"
+                }
+              },
+              "aws": {
+                "type": "object",
+                "properties": {
+                  "account_id": {
+                    "type": "string",
+                    "required": true,
+                    "presence": {
+                      "present": "aws_account_id"
+                    }
+                  },
+                  "credential_revision": {
+                    "type": "integer",
+                    "required": true,
+                    "presence": {
+                      "present": "positive_integer"
+                    }
+                  },
+                  "region": {
+                    "type": "string",
+                    "required": true,
+                    "presence": {
+                      "present": "aws_region"
+                    }
+                  }
+                },
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;strict_aws_binding"
+                }
+              },
+              "compute": {
+                "type": "object",
+                "properties": {
+                  "ami_digest": {
+                    "type": "string",
+                    "required": true,
+                    "presence": {
+                      "present": "lowercase_sha256"
+                    }
+                  },
+                  "ami_id": {
+                    "type": "string",
+                    "required": true,
+                    "presence": {
+                      "present": "nonempty"
+                    }
+                  },
+                  "architecture": {
+                    "type": "string",
+                    "required": true,
+                    "presence": {
+                      "present": "nonempty"
+                    }
+                  },
+                  "host_network_policy_sha256": {
+                    "type": "string",
+                    "required": true,
+                    "presence": {
+                      "present": "lowercase_sha256"
+                    }
+                  },
+                  "instance_type": {
+                    "type": "string",
+                    "required": true,
+                    "presence": {
+                      "present": "nonempty"
+                    }
+                  },
+                  "pi_runtime_digest": {
+                    "type": "string",
+                    "required": true,
+                    "presence": {
+                      "present": "lowercase_sha256"
+                    }
+                  },
+                  "root_device_name": {
+                    "type": "string",
+                    "required": true,
+                    "presence": {
+                      "present": "nonempty"
+                    }
+                  },
+                  "volume_gib": {
+                    "type": "integer",
+                    "required": true,
+                    "presence": {
+                      "present": "positive_integer"
+                    }
+                  },
+                  "volume_iops": {
+                    "type": "integer",
+                    "required": true,
+                    "presence": {
+                      "present": "positive_integer"
+                    }
+                  },
+                  "volume_throughput_mib": {
+                    "type": "integer",
+                    "required": true,
+                    "presence": {
+                      "present": "positive_integer"
+                    }
+                  },
+                  "volume_type": {
+                    "type": "string",
+                    "required": true,
+                    "presence": {
+                      "present": "nonempty"
+                    }
+                  },
+                  "worker_release_digest": {
+                    "type": "string",
+                    "required": true,
+                    "presence": {
+                      "present": "lowercase_sha256"
+                    }
+                  }
+                },
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;strict_single_worker_compute"
+                }
+              },
+              "confirmation_id": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                }
+              },
+              "conversation_id": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                }
+              },
+              "created_at": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;rfc3339_nano"
+                }
+              },
+              "digest": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;lowercase_sha256"
+                }
+              },
+              "execution_digest": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;lowercase_sha256"
+                }
+              },
+              "execution_id": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                }
+              },
+              "input_manifest_digest": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;lowercase_sha256"
+                }
+              },
+              "input_manifest_item_count": {
+                "type": "integer",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;nonnegative_integer"
+                }
+              },
+              "limits": {
+                "type": "object",
+                "properties": {
+                  "max_output_bytes": {
+                    "type": "integer",
+                    "required": true,
+                    "presence": {
+                      "present": "positive_integer"
+                    }
+                  },
+                  "max_runtime_seconds": {
+                    "type": "integer",
+                    "required": true,
+                    "presence": {
+                      "present": "positive_integer"
+                    }
+                  },
+                  "max_tokens": {
+                    "type": "integer",
+                    "required": true,
+                    "presence": {
+                      "present": "positive_integer"
+                    }
+                  }
+                },
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;strict_hard_limits"
+                }
+              },
+              "model_authorization": {
+                "type": "object",
+                "properties": {
+                  "credential_version": {
+                    "type": "integer",
+                    "required": true,
+                    "presence": {
+                      "present": "positive_integer"
+                    }
+                  },
+                  "interface": {
+                    "type": "string",
+                    "required": true,
+                    "presence": {
+                      "present": "nonempty"
+                    }
+                  },
+                  "model": {
+                    "type": "string",
+                    "required": true,
+                    "presence": {
+                      "present": "nonempty"
+                    }
+                  },
+                  "model_profile_id": {
+                    "type": "string",
+                    "required": true,
+                    "presence": {
+                      "present": "canonical_uuid"
+                    }
+                  },
+                  "model_profile_revision": {
+                    "type": "integer",
+                    "required": true,
+                    "presence": {
+                      "present": "positive_integer"
+                    }
+                  },
+                  "provider": {
+                    "type": "string",
+                    "required": true,
+                    "presence": {
+                      "present": "nonempty"
+                    }
+                  }
+                },
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;strict_model_authorization"
+                }
+              },
+              "network_grants": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "required": true
+                },
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;strict_approved_network_grants"
+                }
+              },
+              "objective_summary": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;nonempty_redacted_summary"
+                }
+              },
               "owner_id": {
                 "type": "string",
-                "required": true
+                "required": true,
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;exact_prepared_permission_owner"
+                }
+              },
+              "plan_id": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                }
+              },
+              "proposal_reason": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;one_of:explicit_user_cloud|local_budget_exceeded"
+                }
+              },
+              "quote": {
+                "type": "object",
+                "properties": {
+                  "amount_micros": {
+                    "type": "integer",
+                    "required": true,
+                    "presence": {
+                      "present": "nonnegative_integer"
+                    }
+                  },
+                  "currency": {
+                    "type": "string",
+                    "required": true,
+                    "presence": {
+                      "present": "exact:USD"
+                    }
+                  },
+                  "digest": {
+                    "type": "string",
+                    "required": true,
+                    "presence": {
+                      "present": "lowercase_sha256"
+                    }
+                  },
+                  "expires_at": {
+                    "type": "string",
+                    "required": true,
+                    "presence": {
+                      "present": "rfc3339_nano_after_source_time"
+                    }
+                  },
+                  "maximum_authorized_cost_micros": {
+                    "type": "integer",
+                    "required": true,
+                    "presence": {
+                      "present": "integer_greater_than_or_equal_to_amount"
+                    }
+                  },
+                  "source_time": {
+                    "type": "string",
+                    "required": true,
+                    "presence": {
+                      "present": "rfc3339_nano"
+                    }
+                  }
+                },
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;strict_quote_and_owner_hard_limit"
+                }
+              },
+              "recipe_id": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;exact:ephemeral-pi-task"
+                }
+              },
+              "revision": {
+                "type": "integer",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;positive_integer"
+                }
+              },
+              "secret_grants": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": true,
+                  "properties": {
+                    "purpose": {
+                      "type": "string",
+                      "required": true,
+                      "presence": {
+                        "present": "nonempty_bounded_64"
+                      }
+                    }
+                  }
+                },
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;strict_purpose_only_secret_grants_without_references"
+                }
+              },
+              "status": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;exact:waiting_user"
+                }
+              },
+              "task_id": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                }
+              },
+              "turn_id": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                }
+              },
+              "updated_at": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;rfc3339_nano_not_before_created_at"
+                }
+              },
+              "workspace_mode": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;one_of:none|read_only|write"
+                }
               }
             }
           }
@@ -7382,6 +9027,13 @@
             "presence": {
               "omitted": "first_page"
             }
+          },
+          "record_kind": {
+            "type": "string",
+            "presence": {
+              "omitted": "generic_execution_v2_authority",
+              "present": "exact:cloud_worker"
+            }
           }
         },
         "response": {
@@ -7393,7 +9045,449 @@
             "type": "array",
             "required": true,
             "items": {
-              "type": "object"
+              "type": "object",
+              "properties": {
+                "account_generation": {
+                  "type": "integer",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;positive_integer_equal_to_prepared_permission_generation"
+                  }
+                },
+                "adapter": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;exact:pi_json_task_v1"
+                  }
+                },
+                "artifact_retention_seconds": {
+                  "type": "integer",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;positive_integer"
+                  }
+                },
+                "aws": {
+                  "type": "object",
+                  "properties": {
+                    "account_id": {
+                      "type": "string",
+                      "required": true,
+                      "presence": {
+                        "present": "aws_account_id"
+                      }
+                    },
+                    "credential_revision": {
+                      "type": "integer",
+                      "required": true,
+                      "presence": {
+                        "present": "positive_integer"
+                      }
+                    },
+                    "region": {
+                      "type": "string",
+                      "required": true,
+                      "presence": {
+                        "present": "aws_region"
+                      }
+                    }
+                  },
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;strict_aws_binding"
+                  }
+                },
+                "compute": {
+                  "type": "object",
+                  "properties": {
+                    "ami_digest": {
+                      "type": "string",
+                      "required": true,
+                      "presence": {
+                        "present": "lowercase_sha256"
+                      }
+                    },
+                    "ami_id": {
+                      "type": "string",
+                      "required": true,
+                      "presence": {
+                        "present": "nonempty"
+                      }
+                    },
+                    "architecture": {
+                      "type": "string",
+                      "required": true,
+                      "presence": {
+                        "present": "nonempty"
+                      }
+                    },
+                    "host_network_policy_sha256": {
+                      "type": "string",
+                      "required": true,
+                      "presence": {
+                        "present": "lowercase_sha256"
+                      }
+                    },
+                    "instance_type": {
+                      "type": "string",
+                      "required": true,
+                      "presence": {
+                        "present": "nonempty"
+                      }
+                    },
+                    "pi_runtime_digest": {
+                      "type": "string",
+                      "required": true,
+                      "presence": {
+                        "present": "lowercase_sha256"
+                      }
+                    },
+                    "root_device_name": {
+                      "type": "string",
+                      "required": true,
+                      "presence": {
+                        "present": "nonempty"
+                      }
+                    },
+                    "volume_gib": {
+                      "type": "integer",
+                      "required": true,
+                      "presence": {
+                        "present": "positive_integer"
+                      }
+                    },
+                    "volume_iops": {
+                      "type": "integer",
+                      "required": true,
+                      "presence": {
+                        "present": "positive_integer"
+                      }
+                    },
+                    "volume_throughput_mib": {
+                      "type": "integer",
+                      "required": true,
+                      "presence": {
+                        "present": "positive_integer"
+                      }
+                    },
+                    "volume_type": {
+                      "type": "string",
+                      "required": true,
+                      "presence": {
+                        "present": "nonempty"
+                      }
+                    },
+                    "worker_release_digest": {
+                      "type": "string",
+                      "required": true,
+                      "presence": {
+                        "present": "lowercase_sha256"
+                      }
+                    }
+                  },
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;strict_single_worker_compute"
+                  }
+                },
+                "confirmation_id": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                  }
+                },
+                "conversation_id": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                  }
+                },
+                "created_at": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;rfc3339_nano"
+                  }
+                },
+                "digest": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;lowercase_sha256"
+                  }
+                },
+                "execution_digest": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;lowercase_sha256"
+                  }
+                },
+                "execution_id": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                  }
+                },
+                "input_manifest_digest": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;lowercase_sha256"
+                  }
+                },
+                "input_manifest_item_count": {
+                  "type": "integer",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;nonnegative_integer"
+                  }
+                },
+                "limits": {
+                  "type": "object",
+                  "properties": {
+                    "max_output_bytes": {
+                      "type": "integer",
+                      "required": true,
+                      "presence": {
+                        "present": "positive_integer"
+                      }
+                    },
+                    "max_runtime_seconds": {
+                      "type": "integer",
+                      "required": true,
+                      "presence": {
+                        "present": "positive_integer"
+                      }
+                    },
+                    "max_tokens": {
+                      "type": "integer",
+                      "required": true,
+                      "presence": {
+                        "present": "positive_integer"
+                      }
+                    }
+                  },
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;strict_hard_limits"
+                  }
+                },
+                "model_authorization": {
+                  "type": "object",
+                  "properties": {
+                    "credential_version": {
+                      "type": "integer",
+                      "required": true,
+                      "presence": {
+                        "present": "positive_integer"
+                      }
+                    },
+                    "interface": {
+                      "type": "string",
+                      "required": true,
+                      "presence": {
+                        "present": "nonempty"
+                      }
+                    },
+                    "model": {
+                      "type": "string",
+                      "required": true,
+                      "presence": {
+                        "present": "nonempty"
+                      }
+                    },
+                    "model_profile_id": {
+                      "type": "string",
+                      "required": true,
+                      "presence": {
+                        "present": "canonical_uuid"
+                      }
+                    },
+                    "model_profile_revision": {
+                      "type": "integer",
+                      "required": true,
+                      "presence": {
+                        "present": "positive_integer"
+                      }
+                    },
+                    "provider": {
+                      "type": "string",
+                      "required": true,
+                      "presence": {
+                        "present": "nonempty"
+                      }
+                    }
+                  },
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;strict_model_authorization"
+                  }
+                },
+                "network_grants": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;strict_approved_network_grants"
+                  }
+                },
+                "objective_summary": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;nonempty_redacted_summary"
+                  }
+                },
+                "owner_id": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;exact_prepared_permission_owner"
+                  }
+                },
+                "plan_id": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                  }
+                },
+                "proposal_reason": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;one_of:explicit_user_cloud|local_budget_exceeded"
+                  }
+                },
+                "quote": {
+                  "type": "object",
+                  "properties": {
+                    "amount_micros": {
+                      "type": "integer",
+                      "required": true,
+                      "presence": {
+                        "present": "nonnegative_integer"
+                      }
+                    },
+                    "currency": {
+                      "type": "string",
+                      "required": true,
+                      "presence": {
+                        "present": "exact:USD"
+                      }
+                    },
+                    "digest": {
+                      "type": "string",
+                      "required": true,
+                      "presence": {
+                        "present": "lowercase_sha256"
+                      }
+                    },
+                    "expires_at": {
+                      "type": "string",
+                      "required": true,
+                      "presence": {
+                        "present": "rfc3339_nano_after_source_time"
+                      }
+                    },
+                    "maximum_authorized_cost_micros": {
+                      "type": "integer",
+                      "required": true,
+                      "presence": {
+                        "present": "integer_greater_than_or_equal_to_amount"
+                      }
+                    },
+                    "source_time": {
+                      "type": "string",
+                      "required": true,
+                      "presence": {
+                        "present": "rfc3339_nano"
+                      }
+                    }
+                  },
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;strict_quote_and_owner_hard_limit"
+                  }
+                },
+                "recipe_id": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;exact:ephemeral-pi-task"
+                  }
+                },
+                "revision": {
+                  "type": "integer",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;positive_integer"
+                  }
+                },
+                "secret_grants": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": true,
+                    "properties": {
+                      "purpose": {
+                        "type": "string",
+                        "required": true,
+                        "presence": {
+                          "present": "nonempty_bounded_64"
+                        }
+                      }
+                    }
+                  },
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;strict_purpose_only_secret_grants_without_references"
+                  }
+                },
+                "status": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;exact:waiting_user"
+                  }
+                },
+                "task_id": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                  }
+                },
+                "turn_id": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                  }
+                },
+                "updated_at": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;rfc3339_nano_not_before_created_at"
+                  }
+                },
+                "workspace_mode": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;one_of:none|read_only|write"
+                  }
+                }
+              }
             }
           }
         }
@@ -7555,6 +9649,13 @@
       "transport": "http_and_ws_request",
       "schema": {
         "request": {
+          "record_kind": {
+            "type": "string",
+            "presence": {
+              "omitted": "generic_execution_v2_authority",
+              "present": "exact:cloud_worker"
+            }
+          },
           "run_id": {
             "type": "string",
             "required": true
@@ -7563,13 +9664,223 @@
         "response": {
           "run": {
             "type": "object",
-            "required": true
+            "required": true,
+            "properties": {
+              "account_generation": {
+                "type": "integer",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;positive_integer_equal_to_prepared_permission_generation"
+                }
+              },
+              "artifact_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "required": true,
+                  "presence": {
+                    "present": "canonical_uuid"
+                  }
+                },
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;canonical_uuid_array"
+                }
+              },
+              "cancellation_requested": {
+                "type": "boolean",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;authoritative_cancel_intent_flag"
+                }
+              },
+              "cleanup": {
+                "type": "object",
+                "properties": {
+                  "resources_total": {
+                    "type": "integer",
+                    "required": true,
+                    "presence": {
+                      "present": "nonnegative_integer"
+                    }
+                  },
+                  "resources_verified_destroyed": {
+                    "type": "integer",
+                    "required": true,
+                    "presence": {
+                      "present": "between_zero_and_resources_total"
+                    }
+                  },
+                  "verified_at": {
+                    "type": "string",
+                    "presence": {
+                      "omitted": "cleanup_not_verified",
+                      "present": "rfc3339_nano_when_verified"
+                    }
+                  },
+                  "verified_destroyed": {
+                    "type": "boolean",
+                    "required": true,
+                    "presence": {
+                      "present": "true_only_after_all_resources_destroyed"
+                    }
+                  }
+                },
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;strict_verified_cleanup_summary"
+                }
+              },
+              "confirmation_id": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                }
+              },
+              "conversation_id": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                }
+              },
+              "created_at": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;rfc3339_nano"
+                }
+              },
+              "digest": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;lowercase_sha256"
+                }
+              },
+              "execution_digest": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;lowercase_sha256"
+                }
+              },
+              "execution_id": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;canonical_uuid_equal_to_run_id"
+                }
+              },
+              "failure_code": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;redacted_failure_code_or_empty"
+                }
+              },
+              "failure_summary": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;redacted_failure_summary_or_empty"
+                }
+              },
+              "owner_id": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;exact_prepared_permission_owner"
+                }
+              },
+              "plan_digest": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;lowercase_sha256"
+                }
+              },
+              "plan_id": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                }
+              },
+              "plan_revision": {
+                "type": "integer",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;positive_integer"
+                }
+              },
+              "quote_digest": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;lowercase_sha256"
+                }
+              },
+              "revision": {
+                "type": "integer",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;positive_integer"
+                }
+              },
+              "run_id": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;canonical_uuid_equal_to_execution_id"
+                }
+              },
+              "status": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;cloud_worker_execution_state"
+                }
+              },
+              "task_id": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                }
+              },
+              "turn_id": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                }
+              },
+              "updated_at": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;rfc3339_nano_not_before_created_at"
+                }
+              },
+              "workspace_mode": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;one_of:none|read_only|write"
+                }
+              }
+            }
           },
           "stages": {
             "type": "array",
-            "required": true,
             "items": {
               "type": "object"
+            },
+            "presence": {
+              "omitted": "record_kind=cloud_worker",
+              "present": "generic_execution_v2_stage_projection"
             }
           }
         }
@@ -7599,6 +9910,13 @@
           },
           "project_id": {
             "type": "string"
+          },
+          "record_kind": {
+            "type": "string",
+            "presence": {
+              "omitted": "generic_execution_v2_authority",
+              "present": "exact:cloud_worker"
+            }
           }
         },
         "response": {
@@ -7610,7 +9928,214 @@
             "type": "array",
             "required": true,
             "items": {
-              "type": "object"
+              "type": "object",
+              "properties": {
+                "account_generation": {
+                  "type": "integer",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;positive_integer_equal_to_prepared_permission_generation"
+                  }
+                },
+                "artifact_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "required": true,
+                    "presence": {
+                      "present": "canonical_uuid"
+                    }
+                  },
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;canonical_uuid_array"
+                  }
+                },
+                "cancellation_requested": {
+                  "type": "boolean",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;authoritative_cancel_intent_flag"
+                  }
+                },
+                "cleanup": {
+                  "type": "object",
+                  "properties": {
+                    "resources_total": {
+                      "type": "integer",
+                      "required": true,
+                      "presence": {
+                        "present": "nonnegative_integer"
+                      }
+                    },
+                    "resources_verified_destroyed": {
+                      "type": "integer",
+                      "required": true,
+                      "presence": {
+                        "present": "between_zero_and_resources_total"
+                      }
+                    },
+                    "verified_at": {
+                      "type": "string",
+                      "presence": {
+                        "omitted": "cleanup_not_verified",
+                        "present": "rfc3339_nano_when_verified"
+                      }
+                    },
+                    "verified_destroyed": {
+                      "type": "boolean",
+                      "required": true,
+                      "presence": {
+                        "present": "true_only_after_all_resources_destroyed"
+                      }
+                    }
+                  },
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;strict_verified_cleanup_summary"
+                  }
+                },
+                "confirmation_id": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                  }
+                },
+                "conversation_id": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                  }
+                },
+                "created_at": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;rfc3339_nano"
+                  }
+                },
+                "digest": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;lowercase_sha256"
+                  }
+                },
+                "execution_digest": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;lowercase_sha256"
+                  }
+                },
+                "execution_id": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;canonical_uuid_equal_to_run_id"
+                  }
+                },
+                "failure_code": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;redacted_failure_code_or_empty"
+                  }
+                },
+                "failure_summary": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;redacted_failure_summary_or_empty"
+                  }
+                },
+                "owner_id": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;exact_prepared_permission_owner"
+                  }
+                },
+                "plan_digest": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;lowercase_sha256"
+                  }
+                },
+                "plan_id": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                  }
+                },
+                "plan_revision": {
+                  "type": "integer",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;positive_integer"
+                  }
+                },
+                "quote_digest": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;lowercase_sha256"
+                  }
+                },
+                "revision": {
+                  "type": "integer",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;positive_integer"
+                  }
+                },
+                "run_id": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;canonical_uuid_equal_to_execution_id"
+                  }
+                },
+                "status": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;cloud_worker_execution_state"
+                  }
+                },
+                "task_id": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                  }
+                },
+                "turn_id": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                  }
+                },
+                "updated_at": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;rfc3339_nano_not_before_created_at"
+                  }
+                },
+                "workspace_mode": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;one_of:none|read_only|write"
+                  }
+                }
+              }
             }
           }
         }
@@ -7636,6 +10161,13 @@
               "present": "canonical_uuid"
             }
           },
+          "record_kind": {
+            "type": "string",
+            "presence": {
+              "omitted": "generic_execution_v2_authority",
+              "present": "exact:cloud_worker"
+            }
+          },
           "run_id": {
             "type": "string",
             "required": true
@@ -7644,7 +10176,214 @@
         "response": {
           "run": {
             "type": "object",
-            "required": true
+            "required": true,
+            "properties": {
+              "account_generation": {
+                "type": "integer",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;positive_integer_equal_to_prepared_permission_generation"
+                }
+              },
+              "artifact_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "required": true,
+                  "presence": {
+                    "present": "canonical_uuid"
+                  }
+                },
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;canonical_uuid_array"
+                }
+              },
+              "cancellation_requested": {
+                "type": "boolean",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;authoritative_cancel_intent_flag"
+                }
+              },
+              "cleanup": {
+                "type": "object",
+                "properties": {
+                  "resources_total": {
+                    "type": "integer",
+                    "required": true,
+                    "presence": {
+                      "present": "nonnegative_integer"
+                    }
+                  },
+                  "resources_verified_destroyed": {
+                    "type": "integer",
+                    "required": true,
+                    "presence": {
+                      "present": "between_zero_and_resources_total"
+                    }
+                  },
+                  "verified_at": {
+                    "type": "string",
+                    "presence": {
+                      "omitted": "cleanup_not_verified",
+                      "present": "rfc3339_nano_when_verified"
+                    }
+                  },
+                  "verified_destroyed": {
+                    "type": "boolean",
+                    "required": true,
+                    "presence": {
+                      "present": "true_only_after_all_resources_destroyed"
+                    }
+                  }
+                },
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;strict_verified_cleanup_summary"
+                }
+              },
+              "confirmation_id": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                }
+              },
+              "conversation_id": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                }
+              },
+              "created_at": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;rfc3339_nano"
+                }
+              },
+              "digest": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;lowercase_sha256"
+                }
+              },
+              "execution_digest": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;lowercase_sha256"
+                }
+              },
+              "execution_id": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;canonical_uuid_equal_to_run_id"
+                }
+              },
+              "failure_code": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;redacted_failure_code_or_empty"
+                }
+              },
+              "failure_summary": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;redacted_failure_summary_or_empty"
+                }
+              },
+              "owner_id": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;exact_prepared_permission_owner"
+                }
+              },
+              "plan_digest": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;lowercase_sha256"
+                }
+              },
+              "plan_id": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                }
+              },
+              "plan_revision": {
+                "type": "integer",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;positive_integer"
+                }
+              },
+              "quote_digest": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;lowercase_sha256"
+                }
+              },
+              "revision": {
+                "type": "integer",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;positive_integer"
+                }
+              },
+              "run_id": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;canonical_uuid_equal_to_execution_id"
+                }
+              },
+              "status": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;cloud_worker_execution_state"
+                }
+              },
+              "task_id": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                }
+              },
+              "turn_id": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                }
+              },
+              "updated_at": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;rfc3339_nano_not_before_created_at"
+                }
+              },
+              "workspace_mode": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;one_of:none|read_only|write"
+                }
+              }
+            }
           }
         }
       }
@@ -7683,43 +10422,6 @@
       }
     },
     {
-      "name": "agent.execution.v2.runs.reconcile",
-      "auth": "owner",
-      "transport": "http_and_ws_request",
-      "schema": {
-        "request": {
-          "expected_revision": {
-            "type": "integer",
-            "required": true,
-            "presence": {
-              "present": "positive_integer"
-            }
-          },
-          "idempotency_key": {
-            "type": "string",
-            "required": true,
-            "presence": {
-              "present": "canonical_uuid"
-            }
-          },
-          "run_id": {
-            "type": "string",
-            "required": true
-          },
-          "stage_id": {
-            "type": "string",
-            "required": true
-          }
-        },
-        "response": {
-          "run": {
-            "type": "object",
-            "required": true
-          }
-        }
-      }
-    },
-    {
       "name": "agent.execution.v2.runs.events",
       "auth": "owner",
       "transport": "http_and_ws_request",
@@ -7739,6 +10441,13 @@
               "present": "integer_1_to_200"
             }
           },
+          "record_kind": {
+            "type": "string",
+            "presence": {
+              "omitted": "generic_execution_v2_authority",
+              "present": "exact:cloud_worker"
+            }
+          },
           "run_id": {
             "type": "string",
             "required": true,
@@ -7752,140 +10461,83 @@
             "type": "array",
             "required": true,
             "items": {
-              "type": "object"
+              "type": "object",
+              "properties": {
+                "account_generation": {
+                  "type": "integer",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;positive_integer_equal_to_prepared_permission_generation"
+                  }
+                },
+                "at": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;rfc3339_nano"
+                  }
+                },
+                "event_id": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                  }
+                },
+                "owner_id": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;exact_prepared_permission_owner"
+                  }
+                },
+                "payload_digest": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;lowercase_sha256"
+                  }
+                },
+                "revision": {
+                  "type": "integer",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;positive_integer"
+                  }
+                },
+                "run_id": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;canonical_uuid_equal_to_requested_run"
+                  }
+                },
+                "sequence": {
+                  "type": "integer",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;positive_strictly_increasing_integer"
+                  }
+                },
+                "status": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "event_has_no_state_transition",
+                    "present": "cloud_worker_execution_state"
+                  }
+                },
+                "type": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;nonempty_event_type"
+                  }
+                }
+              }
             }
           },
           "next_sequence": {
             "type": "integer",
-            "required": true
-          }
-        }
-      }
-    },
-    {
-      "name": "agent.execution.v2.confirmations.get",
-      "auth": "owner",
-      "transport": "http_and_ws_request",
-      "schema": {
-        "request": {
-          "confirmation_id": {
-            "type": "string",
-            "required": true,
-            "presence": {
-              "present": "canonical_uuid"
-            }
-          }
-        },
-        "response": {
-          "confirmation": {
-            "type": "object",
-            "required": true
-          }
-        }
-      }
-    },
-    {
-      "name": "agent.execution.v2.confirmations.list",
-      "auth": "owner",
-      "transport": "http_and_ws_request",
-      "schema": {
-        "request": {
-          "page_size": {
-            "type": "integer",
-            "presence": {
-              "omitted": "server_default_100",
-              "present": "integer_1_to_200"
-            }
-          },
-          "page_token": {
-            "type": "string",
-            "presence": {
-              "omitted": "first_page"
-            }
-          },
-          "states": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          }
-        },
-        "response": {
-          "confirmations": {
-            "type": "array",
-            "required": true,
-            "items": {
-              "type": "object"
-            }
-          },
-          "next_page_token": {
-            "type": "string",
-            "required": true
-          }
-        }
-      }
-    },
-    {
-      "name": "agent.execution.v2.confirmations.confirm",
-      "auth": "owner",
-      "transport": "http_and_ws_request",
-      "schema": {
-        "request": {
-          "confirmation_id": {
-            "type": "string",
-            "required": true
-          },
-          "expected_revision": {
-            "type": "integer",
-            "required": true,
-            "presence": {
-              "present": "positive_integer"
-            }
-          },
-          "idempotency_key": {
-            "type": "string",
-            "required": true,
-            "presence": {
-              "present": "canonical_uuid"
-            }
-          }
-        },
-        "response": {
-          "confirmation": {
-            "type": "object",
-            "required": true
-          }
-        }
-      }
-    },
-    {
-      "name": "agent.execution.v2.confirmations.reject",
-      "auth": "owner",
-      "transport": "http_and_ws_request",
-      "schema": {
-        "request": {
-          "confirmation_id": {
-            "type": "string",
-            "required": true
-          },
-          "expected_revision": {
-            "type": "integer",
-            "required": true,
-            "presence": {
-              "present": "positive_integer"
-            }
-          },
-          "idempotency_key": {
-            "type": "string",
-            "required": true,
-            "presence": {
-              "present": "canonical_uuid"
-            }
-          }
-        },
-        "response": {
-          "confirmation": {
-            "type": "object",
             "required": true
           }
         }
@@ -7903,12 +10555,214 @@
             "presence": {
               "present": "canonical_uuid"
             }
+          },
+          "record_kind": {
+            "type": "string",
+            "presence": {
+              "omitted": "generic_execution_v2_authority",
+              "present": "exact:cloud_worker"
+            }
           }
         },
         "response": {
           "artifact": {
             "type": "object",
-            "required": true
+            "required": true,
+            "properties": {
+              "account_generation": {
+                "type": "integer",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;positive_integer_equal_to_prepared_permission_generation"
+                }
+              },
+              "artifact_id": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                }
+              },
+              "created_at": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;rfc3339_nano"
+                }
+              },
+              "execution_id": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;approved_artifact_kind"
+                }
+              },
+              "media_type": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;nonempty_media_type"
+                }
+              },
+              "name": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;safe_display_name"
+                }
+              },
+              "owner_id": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;exact_prepared_permission_owner"
+                }
+              },
+              "sha256": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;lowercase_sha256"
+                }
+              },
+              "size_bytes": {
+                "type": "integer",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;nonnegative_integer"
+                }
+              },
+              "status": {
+                "type": "string",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;one_of:pending|verified|rejected"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.execution.v2.artifacts.download",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "artifact_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid"
+            }
+          },
+          "max_chunk_bytes": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "integer_1_to_524288"
+            }
+          },
+          "offset_bytes": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "integer_0_to_8388607"
+            }
+          },
+          "record_kind": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "exact:cloud_worker"
+            }
+          }
+        },
+        "response": {
+          "account_generation": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "positive_integer_equal_to_prepared_permission_generation"
+            }
+          },
+          "artifact_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid_equal_to_requested_artifact"
+            }
+          },
+          "artifact_sha256": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "lowercase_sha256_of_complete_artifact"
+            }
+          },
+          "chunk_sha256": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "lowercase_sha256_of_decoded_chunk"
+            }
+          },
+          "data_base64": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_standard_base64_for_1_to_524288_bytes"
+            }
+          },
+          "eof": {
+            "type": "boolean",
+            "required": true,
+            "presence": {
+              "present": "true_exactly_when_next_offset_equals_size"
+            }
+          },
+          "execution_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid"
+            }
+          },
+          "next_offset_bytes": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "offset_plus_decoded_chunk_length_strictly_advancing_not_above_size"
+            }
+          },
+          "offset_bytes": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "integer_0_to_8388607_equal_to_requested_offset"
+            }
+          },
+          "owner_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "exact_prepared_permission_owner"
+            }
+          },
+          "size_bytes": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "integer_1_to_8388608"
+            }
           }
         }
       }
