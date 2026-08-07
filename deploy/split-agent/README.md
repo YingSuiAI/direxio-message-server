@@ -163,7 +163,7 @@ message-server versions as direct argv:
 The wrapper accepts exactly `OUTPUT_DIR target_version minimum_server_version`;
 both version values must be canonical stable `vX.Y.Z`. It performs no channel
 directory, metadata file, path, or environment discovery. The minimum comes
-directly from the authenticated updater's persisted plan and is compared to
+directly from the authenticated updater command and is compared to
 the OCI version label of the exact receipt-bound running message-server
 container; it never compares a Flutter or other client version. An unmet
 minimum, a non-newer Agent target, or a non-production stack is an expected
@@ -172,15 +172,19 @@ Docker, migration, health, or rollback infrastructure failure. A successful
 update pulls the fixed
 `docker.io/dirextalk/agent:<version>` repository, resolves it to an immutable
 digest, migrates Agent storage, recreates both runners and then Agent from that
-one digest, verifies all three healthy, and updates the receipt binding. A
-post-mutation failure recreates and health-checks the previous immutable image.
+one digest, then atomically updates the Agent digest and source revision in the
+protected image attestation together with its manifest, environment, cleanup
+receipt, and three container IDs. The same transaction runs the production
+image smoke and isolated three-container topology gates. A post-mutation failure
+recreates and health-checks the previous immutable image and restores the exact
+four protected control files.
 
 This wrapper is the host execution adapter only. The current message-server
-`release.v1`/`release.v2` actions continue to delegate exclusively to the
+`release.v2` actions delegate exclusively to the
 root-owned updater Unix contract, and Flutter never calls this wrapper or Agent
 directly. The updater remains responsible for binding this argv invocation to
-the same authenticated persisted plan used for discovery; public requests
-cannot supply these wrapper arguments directly.
+the same authenticated receipt used for status; public requests cannot supply
+these wrapper arguments directly.
 
 Formal production message-server updates use the sibling receipt-bound host
 adapter with exactly `OUTPUT_DIR target_version`:

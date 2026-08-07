@@ -6,7 +6,10 @@
 set -euo pipefail
 
 script_dir=$(cd "$(dirname "$0")" && pwd -P)
-compose_file=$(cd "$script_dir/.." && pwd -P)/compose.yaml
+stack_dir=$(cd "$script_dir/.." && pwd -P)
+compose_file=$stack_dir/compose.yaml
+production_compose_file=$stack_dir/compose.production.yaml
+production_image_gate=$script_dir/verify-production-images.sh
 
 die() { printf 'split-agent update: %s\n' "$*" >&2; exit 1; }
 negative() { printf 'split-agent update: %s\n' "$*" >&2; exit 3; }
@@ -33,11 +36,13 @@ minimum_server_version=$3
 canonical_version "$target_version" || usage
 canonical_version "$minimum_server_version" || usage
 [ -d "$out" ] && [ ! -L "$out" ] && [ "$(stat -c '%a' "$out")" = 700 ] || die 'OUTPUT_DIR must be a mode-0700 non-symlink directory'
-env_file=$out/.env; manifest=$out/.manifest; receipt=$out/.cleanup-receipt
-for file in "$env_file" "$manifest" "$receipt"; do
+env_file=$out/.env; manifest=$out/.manifest; receipt=$out/.cleanup-receipt; attestation=$out/image-attestation
+for file in "$env_file" "$manifest" "$receipt" "$attestation"; do
   [ -f "$file" ] && [ ! -L "$file" ] && [ "$(stat -c '%a' "$file")" = 400 ] || die "invalid protected control file: $file"
   [ "$(stat -c '%u' "$file")" = "$(id -u)" ] || die "control file owner mismatch: $file"
 done
+[ -f "$production_compose_file" ] && [ ! -L "$production_compose_file" ] || die 'production Compose override is unavailable'
+[ -x "$production_image_gate" ] && [ ! -L "$production_image_gate" ] || die 'production image gate is unavailable'
 grep -Fqx '# dirextalk-split-cleanup-receipt-v1' "$receipt" || die 'cleanup receipt version is unsupported'
 [ "$(read_pair "$receipt" state)" = complete ] || die 'cleanup receipt is incomplete'
 [ "$(read_pair "$receipt" control.env_identity)" = "$(stat -c '%d:%i:%u' "$env_file")" ] || die '.env identity differs from receipt'
@@ -47,6 +52,13 @@ grep -Fqx '# dirextalk-split-cleanup-receipt-v1' "$receipt" || die 'cleanup rece
 [ "$(read_pair "$manifest" compose_mode)" = production ] || negative 'Agent release updates apply only to production stacks'
 stack=$(read_pair "$manifest" stack_name)
 [ "$stack" = "$(read_pair "$receipt" stack_name)" ] || die 'stack identity mismatch'
+[ "$(read_pair "$env_file" DIREXTALK_IMAGE_ATTESTATION_FILE)" = "$attestation" ] || die 'image attestation path is outside the receipt-bound run directory'
+[ "$(read_pair "$manifest" image_attestation_path)" = "$attestation" ] || die 'image attestation path differs from manifest'
+[ "$(stat -c '%d' "$attestation")" = "$(read_pair "$manifest" image_attestation_device)" ] || die 'image attestation device differs from manifest'
+[ "$(stat -c '%i' "$attestation")" = "$(read_pair "$manifest" image_attestation_inode)" ] || die 'image attestation inode differs from manifest'
+[ "$(stat -c '%u' "$attestation")" = "$(read_pair "$manifest" image_attestation_uid)" ] || die 'image attestation owner differs from manifest'
+[ "$(sha256sum "$attestation" | awk '{print $1}')" = "$(read_pair "$manifest" image_attestation_sha256)" ] || die 'image attestation digest differs from manifest'
+[ "$(sed -n '1p' "$attestation")" = '# dirextalk-image-attestation-v2' ] || die 'image attestation version is unsupported'
 
 container_count=$(read_pair "$receipt" container.count)
 message_id=''
@@ -69,6 +81,9 @@ semver_ge "$server_version" "$minimum_server_version" || negative "target requir
 
 current_ref=$(read_pair "$env_file" DIREXTALK_AGENT_IMAGE_IMMUTABLE)
 printf '%s\n' "$current_ref" | grep -Eq '^(docker\.io/)?dirextalk/agent@sha256:[0-9a-f]{64}$' || die 'current Agent image is not the fixed immutable repository'
+[ "$(read_pair "$attestation" image.DIREXTALK_AGENT_IMAGE_IMMUTABLE)" = "$current_ref" ] || die 'Agent image differs from image attestation'
+current_attested_revision=$(read_pair "$attestation" agent_source_revision)
+printf '%s\n' "$current_attested_revision" | grep -Eq '^[0-9a-f]{40}$' || die 'attested Agent revision is invalid'
 current_image_id=''
 for service in agent extension-runner core-runner; do
   data=$(docker inspect "${old_ids[$service]}" 2>/dev/null) || die "recorded $service container is unavailable"
@@ -80,22 +95,33 @@ for service in agent extension-runner core-runner; do
 done
 current_version=$(docker image inspect "$current_image_id" --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null) || die 'current Agent version inspection failed'
 canonical_version "$current_version" || die 'current Agent image version is not canonical'
+current_revision=$(docker image inspect "$current_image_id" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null) || die 'current Agent revision inspection failed'
+[ "$current_revision" = "$current_attested_revision" ] || die 'running Agent revision differs from image attestation'
 semver_ge "$current_version" "$target_version" && negative "Agent $target_version is not newer than running $current_version"
 
 target_tag=docker.io/dirextalk/agent:$target_version
 docker pull "$target_tag" >/dev/null || die 'Agent image pull failed'
-target_identity=$(docker image inspect "$target_tag" --format '{{index .Config.Labels "org.opencontainers.image.version"}}|{{.Id}}|{{range .RepoDigests}}{{println .}}{{end}}' 2>/dev/null) || die 'target Agent image inspection failed'
-target_label=${target_identity%%|*}; rest=${target_identity#*|}; target_id=${rest%%|*}; digests=${rest#*|}
+target_identity=$(docker image inspect "$target_tag" --format '{{index .Config.Labels "org.opencontainers.image.version"}}|{{.Id}}|{{index .Config.Labels "org.opencontainers.image.revision"}}|{{range .RepoDigests}}{{println .}}{{end}}' 2>/dev/null) || die 'target Agent image inspection failed'
+target_label=${target_identity%%|*}; rest=${target_identity#*|}; target_id=${rest%%|*}; rest=${rest#*|}; target_revision=${rest%%|*}; digests=${rest#*|}
 [ "$target_label" = "$target_version" ] || die 'target Agent image version label mismatch'
+printf '%s\n' "$target_revision" | grep -Eq '^[0-9a-f]{40}$' || die 'target Agent image revision label is invalid'
 target_ref=$(printf '%s\n' "$digests" | awk '$0 ~ /^(docker\.io\/)?dirextalk\/agent@sha256:[0-9a-f]{64}$/ {print; exit}')
 [ -n "$target_ref" ] || die 'target Agent image has no immutable repository digest'
 
+old_attestation=$(mktemp "$out/.agent-update-old-attestation.XXXXXX")
+rm -f "$old_attestation"
+ln -- "$attestation" "$old_attestation" || die 'could not preserve the exact pre-update attestation identity'
+old_manifest=$(mktemp "$out/.agent-update-old-manifest.XXXXXX")
+rm -f "$old_manifest"
+ln -- "$manifest" "$old_manifest" || { rm -f "$old_attestation"; die 'could not preserve the exact pre-update manifest identity'; }
 old_env=$(mktemp "$out/.agent-update-old-env.XXXXXX")
 rm -f "$old_env"
-ln -- "$env_file" "$old_env" || die 'could not preserve the exact pre-update environment identity'
+ln -- "$env_file" "$old_env" || { rm -f "$old_attestation" "$old_manifest"; die 'could not preserve the exact pre-update environment identity'; }
 old_receipt=$(mktemp "$out/.agent-update-old-receipt.XXXXXX")
 rm -f "$old_receipt"
-ln -- "$receipt" "$old_receipt" || { rm -f "$old_env"; die 'could not preserve the exact pre-update receipt identity'; }
+ln -- "$receipt" "$old_receipt" || { rm -f "$old_attestation" "$old_manifest" "$old_env"; die 'could not preserve the exact pre-update receipt identity'; }
+new_attestation=''
+new_manifest=''
 new_env=''
 new_receipt=''
 mutated=false
@@ -103,21 +129,21 @@ commit_complete=false
 rollback() {
   local status=0
   [ "$mutated" = true ] || return 0
-  DIREXTALK_AGENT_IMAGE_IMMUTABLE=$current_ref docker compose --env-file "$old_env" -f "$compose_file" --project-name "$stack" \
-    up -d --no-deps --force-recreate extension-runner core-runner >/dev/null || status=1
-  wait_services "$current_image_id" "$current_ref" extension-runner core-runner || status=1
-  DIREXTALK_AGENT_IMAGE_IMMUTABLE=$current_ref docker compose --env-file "$old_env" -f "$compose_file" --project-name "$stack" \
-    up -d --no-deps --force-recreate agent >/dev/null || status=1
-  wait_services "$current_image_id" "$current_ref" agent || status=1
+  DIREXTALK_AGENT_IMAGE_IMMUTABLE=$current_ref docker compose --env-file "$old_env" -f "$compose_file" -f "$production_compose_file" --project-name "$stack" \
+    up -d --no-deps --force-recreate --no-build --pull never extension-runner core-runner >/dev/null || status=1
+  wait_services "$current_image_id" "$current_ref" "$old_env" extension-runner core-runner || status=1
+  DIREXTALK_AGENT_IMAGE_IMMUTABLE=$current_ref docker compose --env-file "$old_env" -f "$compose_file" -f "$production_compose_file" --project-name "$stack" \
+    up -d --no-deps --force-recreate --no-build --pull never agent >/dev/null || status=1
+  wait_services "$current_image_id" "$current_ref" "$old_env" agent || status=1
   return "$status"
 }
 wait_services() {
-  local expected=$1 expected_ref=$2 service id data attempts
-  shift 2
+  local expected=$1 expected_ref=$2 compose_env=$3 service id data attempts
+  shift 3
   for service in "$@"; do
     attempts=${DIREXTALK_AGENT_UPDATE_HEALTH_ATTEMPTS:-60}
     while [ "$attempts" -gt 0 ]; do
-      id=$(docker compose --env-file "$env_file" -f "$compose_file" --project-name "$stack" ps -q "$service" 2>/dev/null) || return 1
+      id=$(docker compose --env-file "$compose_env" -f "$compose_file" -f "$production_compose_file" --project-name "$stack" ps -q "$service" 2>/dev/null) || return 1
       if [ -n "$id" ]; then
         data=$(docker inspect "$id" 2>/dev/null) || return 1
         if [ "$(jq -r '.[0].Image // empty' <<<"$data")" = "$expected" ] && \
@@ -134,6 +160,12 @@ wait_services() {
 
 restore_control_files() {
   local status=0
+  if [ -e "$old_attestation" ]; then
+    if [ -e "$attestation" ] && [ "$old_attestation" -ef "$attestation" ]; then rm -f "$old_attestation" || status=1; else mv -f "$old_attestation" "$attestation" || status=1; fi
+  fi
+  if [ -e "$old_manifest" ]; then
+    if [ -e "$manifest" ] && [ "$old_manifest" -ef "$manifest" ]; then rm -f "$old_manifest" || status=1; else mv -f "$old_manifest" "$manifest" || status=1; fi
+  fi
   if [ -e "$old_env" ]; then
     if [ -e "$env_file" ] && [ "$old_env" -ef "$env_file" ]; then
       rm -f "$old_env" || status=1
@@ -165,7 +197,9 @@ transaction_exit() {
   fi
   [ -z "$new_env" ] || rm -f "$new_env"
   [ -z "$new_receipt" ] || rm -f "$new_receipt"
-  rm -f "$old_env" "$old_receipt"
+  [ -z "$new_attestation" ] || rm -f "$new_attestation"
+  [ -z "$new_manifest" ] || rm -f "$new_manifest"
+  rm -f "$old_attestation" "$old_manifest" "$old_env" "$old_receipt"
   exit "$status"
 }
 trap transaction_exit EXIT
@@ -182,28 +216,48 @@ else
   die 'Agent runtime stop failed'
 fi
 mutated=true
-if ! DIREXTALK_AGENT_IMAGE_IMMUTABLE=$target_ref docker compose --env-file "$env_file" -f "$compose_file" --project-name "$stack" run --rm --no-deps agent-migrate >/dev/null ||
-   ! DIREXTALK_AGENT_IMAGE_IMMUTABLE=$target_ref docker compose --env-file "$env_file" -f "$compose_file" --project-name "$stack" up -d --no-deps --force-recreate extension-runner core-runner >/dev/null ||
-   ! wait_services "$target_id" "$target_ref" extension-runner core-runner ||
-   ! DIREXTALK_AGENT_IMAGE_IMMUTABLE=$target_ref docker compose --env-file "$env_file" -f "$compose_file" --project-name "$stack" up -d --no-deps --force-recreate agent >/dev/null ||
-   ! wait_services "$target_id" "$target_ref" agent; then
+if ! DIREXTALK_AGENT_IMAGE_IMMUTABLE=$target_ref docker compose --env-file "$env_file" -f "$compose_file" -f "$production_compose_file" --project-name "$stack" run --rm --no-deps agent-migrate >/dev/null ||
+   ! DIREXTALK_AGENT_IMAGE_IMMUTABLE=$target_ref docker compose --env-file "$env_file" -f "$compose_file" -f "$production_compose_file" --project-name "$stack" up -d --no-deps --force-recreate --no-build --pull never extension-runner core-runner >/dev/null ||
+   ! wait_services "$target_id" "$target_ref" "$env_file" extension-runner core-runner ||
+   ! DIREXTALK_AGENT_IMAGE_IMMUTABLE=$target_ref docker compose --env-file "$env_file" -f "$compose_file" -f "$production_compose_file" --project-name "$stack" up -d --no-deps --force-recreate --no-build --pull never agent >/dev/null ||
+   ! wait_services "$target_id" "$target_ref" "$env_file" agent; then
   die 'target Agent update failed'
 fi
 
+new_attestation=$(mktemp "$out/.image-attestation.XXXXXX")
+awk -F= -v ref="$target_ref" -v revision="$target_revision" '
+  $1=="agent_source_revision" {$0="agent_source_revision=" revision; revision_seen=1}
+  $1=="image.DIREXTALK_AGENT_IMAGE_IMMUTABLE" {$0="image.DIREXTALK_AGENT_IMAGE_IMMUTABLE=" ref; image_seen=1}
+  {print}
+  END {if (!revision_seen || !image_seen) exit 1}
+' "$attestation" >"$new_attestation" || die 'could not prepare the target Agent attestation'
+chmod 400 "$new_attestation"
+new_manifest=$(mktemp "$out/.manifest.XXXXXX")
+awk -F= -v device="$(stat -c '%d' "$new_attestation")" -v inode="$(stat -c '%i' "$new_attestation")" \
+  -v uid="$(stat -c '%u' "$new_attestation")" -v digest="$(sha256sum "$new_attestation" | awk '{print $1}')" '
+  $1=="image_attestation_device" {$0="image_attestation_device=" device; device_seen=1}
+  $1=="image_attestation_inode" {$0="image_attestation_inode=" inode; inode_seen=1}
+  $1=="image_attestation_uid" {$0="image_attestation_uid=" uid; uid_seen=1}
+  $1=="image_attestation_sha256" {$0="image_attestation_sha256=" digest; digest_seen=1}
+  {print}
+  END {if (!device_seen || !inode_seen || !uid_seen || !digest_seen) exit 1}
+' "$manifest" >"$new_manifest" || die 'could not prepare the target manifest'
+chmod 400 "$new_manifest"
 new_env=$(mktemp "$out/.env.XXXXXX")
-awk -F= -v replacement="$target_ref" '$1=="DIREXTALK_AGENT_IMAGE_IMMUTABLE" {$0="DIREXTALK_AGENT_IMAGE_IMMUTABLE=" replacement} {print}' "$env_file" >"$new_env"
+awk -F= -v replacement="$target_ref" '$1=="DIREXTALK_AGENT_IMAGE_IMMUTABLE" {$0="DIREXTALK_AGENT_IMAGE_IMMUTABLE=" replacement; seen=1} {print} END {if (!seen) exit 1}' "$env_file" >"$new_env" || die 'could not prepare the target environment'
 chmod 400 "$new_env"
 new_env_identity=$(stat -c '%d:%i:%u' "$new_env"); new_env_sha=$(sha256sum "$new_env" | awk '{print $1}')
+new_manifest_identity=$(stat -c '%d:%i:%u' "$new_manifest"); new_manifest_sha=$(sha256sum "$new_manifest" | awk '{print $1}')
 declare -A new_ids=()
 for service in agent extension-runner core-runner; do
-  new_ids[$service]=$(docker compose --env-file "$env_file" -f "$compose_file" --project-name "$stack" ps -q "$service")
+  new_ids[$service]=$(docker compose --env-file "$env_file" -f "$compose_file" -f "$production_compose_file" --project-name "$stack" ps -q "$service")
   printf '%s\n' "${new_ids[$service]}" | grep -Eq '^[0-9a-f]{64}$' || die 'new container identity is invalid'
 done
 new_receipt=$(mktemp "$out/.cleanup-receipt.XXXXXX")
-python3 - "$receipt" "$new_receipt" "$new_env_identity" "$new_env_sha" \
+python3 - "$receipt" "$new_receipt" "$new_env_identity" "$new_env_sha" "$new_manifest_identity" "$new_manifest_sha" \
   "${new_ids[agent]}" "${new_ids[extension-runner]}" "${new_ids[core-runner]}" <<'PY'
 import pathlib,sys
-source,dest,identity,digest,*ids=sys.argv[1:]
+source,dest,identity,digest,manifest_identity,manifest_digest,*ids=sys.argv[1:]
 mapping=dict(zip(("agent","extension-runner","core-runner"),ids))
 lines=pathlib.Path(source).read_text().splitlines()
 services={}
@@ -214,6 +268,8 @@ out=[]
 for line in lines:
     if line.startswith("control.env_identity="): line="control.env_identity="+identity
     elif line.startswith("control.env_sha256="): line="control.env_sha256="+digest
+    elif line.startswith("control.manifest_identity="): line="control.manifest_identity="+manifest_identity
+    elif line.startswith("control.manifest_sha256="): line="control.manifest_sha256="+manifest_digest
     elif line.startswith("container.") and ".id=" in line:
         key=line.split("=",1)[0]; index=key.split(".")[1]; service=services.get(index)
         if service in mapping: line=key+"="+mapping[service]
@@ -221,6 +277,10 @@ for line in lines:
 pathlib.Path(dest).write_text("\n".join(out)+"\n")
 PY
 chmod 400 "$new_receipt"
+mv -f "$new_attestation" "$attestation"
+new_attestation=''
+mv -f "$new_manifest" "$manifest"
+new_manifest=''
 mv -f "$new_env" "$env_file"
 new_env=''
 if [ "${DIREXTALK_AGENT_UPDATE_TEST_FIXTURE:-false}" = true ] && [ "${DIREXTALK_AGENT_UPDATE_FAIL_RECEIPT_COMMIT:-false}" = true ]; then
@@ -228,8 +288,29 @@ if [ "${DIREXTALK_AGENT_UPDATE_TEST_FIXTURE:-false}" = true ] && [ "${DIREXTALK_
 fi
 mv -f "$new_receipt" "$receipt"
 new_receipt=''
+
+"$production_image_gate" "$env_file" "$attestation" >/dev/null || die 'updated Agent failed the production image gate'
+topology_json=$(mktemp "$out/.agent-update-topology.XXXXXX")
+if ! docker compose --env-file "$env_file" -f "$compose_file" -f "$production_compose_file" --project-name "$stack" config --format json >"$topology_json" ||
+   ! jq -e --arg ref "$target_ref" '
+     .services.agent.image == $ref and
+     .services["extension-runner"].image == $ref and
+     .services["core-runner"].image == $ref and
+     .services["extension-runner"].network_mode == "none" and
+     .services["core-runner"].network_mode == "none" and
+     .services.agent.user == "65532:65532" and
+     .services["extension-runner"].user == "65531:65531" and
+     .services["core-runner"].user == "65530:65530" and
+     (.services.agent.build == null) and
+     (.services["extension-runner"].build == null) and
+     (.services["core-runner"].build == null)
+   ' "$topology_json" >/dev/null; then
+  rm -f "$topology_json"
+  die 'updated Agent failed the production topology gate'
+fi
+rm -f "$topology_json"
 commit_complete=true
 mutated=false
 trap - EXIT
-rm -f "$old_env" "$old_receipt"
+rm -f "$old_attestation" "$old_manifest" "$old_env" "$old_receipt"
 printf 'split-agent update passed: version=%s image=%s\n' "$target_version" "$target_ref"
