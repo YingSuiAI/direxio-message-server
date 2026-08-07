@@ -156,6 +156,8 @@ shellcheck \
   "$script_dir/verify-build-contexts.sh" \
   "$script_dir/initialize-capability-ca.sh" \
   "$script_dir/initialize-capability-ca.test.sh" \
+  "$script_dir/postgres-entrypoint.sh" \
+  "$script_dir/postgres-entrypoint.docker.test.sh" \
   "$script_dir/initialize-postgres.sh" \
   "$script_dir/initialize-postgres.test.sh" \
   "$script_dir/initialize-message-server.sh" \
@@ -377,6 +379,11 @@ jq -e '
   ((.services.agent.networks | has("message_database")) | not) and
   ((.services["message-server"].networks | has("agent_database")) | not) and
   ([.services | to_entries[] | select(any(.value.secrets[]?; .source == "postgres_admin_password")) | .key] == ["postgres"]) and
+  (.services.postgres.entrypoint == ["/usr/local/bin/dirextalk-postgres-entrypoint"]) and
+  (.services.postgres.environment.POSTGRES_PASSWORD_FILE == "/run/dirextalk-postgres-secrets/postgres_admin_password") and
+  (.services.postgres.environment.POSTGRES_INIT_SECRET_DIR == "/run/dirextalk-postgres-secrets") and
+  ([.services.postgres.tmpfs[] | select(test("^/run/dirextalk-postgres-secrets:.*mode=0700.*uid=0.*gid=0$"))] | length) == 1 and
+  ([.services.postgres.configs[] | select(.target == "/usr/local/bin/dirextalk-postgres-entrypoint" and .mode == "0555")] | length) == 1 and
   ([.services.postgres.configs[] | select(.target == "/docker-entrypoint-initdb.d/10-dirextalk-databases.sh" and .mode == "0555")] | length) == 1 and
   ([.services | to_entries[] | select(.key != "message-server") | .value.networks // {} | keys[] | select(. == "message_public")] | length) == 0
 ' "$rendered" >/dev/null

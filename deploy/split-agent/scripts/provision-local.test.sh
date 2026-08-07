@@ -85,6 +85,7 @@ done
 [ "$message_postgres_password" != "$agent_postgres_password" ]
 [ "$(stat -c '%a' "$generated_dir/postgres-admin-password")" = 400 ]
 grep -Fqx "DIREXTALK_POSTGRES_ADMIN_PASSWORD_FILE=$generated_dir/postgres-admin-password" "$generated_dir/.env"
+grep -Fqx "DIREXTALK_POSTGRES_ENTRYPOINT_FILE=$script_dir/postgres-entrypoint.sh" "$generated_dir/.env"
 grep -Fqx 'DIREXTALK_POSTGRES_VOLUME='"$(sed -n 's/^DIREXTALK_SPLIT_STACK_NAME=//p' "$generated_dir/.env")"'-postgres' "$generated_dir/.env"
 grep -Fqx 'resource.volume.postgres='"$(sed -n 's/^DIREXTALK_SPLIT_STACK_NAME=//p' "$generated_dir/.env")"'-postgres' "$generated_dir/.manifest"
 if grep -Eq '^DIREXTALK_(MESSAGE|AGENT)_POSTGRES_VOLUME=' "$generated_dir/.env" ||

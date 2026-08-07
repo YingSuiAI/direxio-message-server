@@ -484,6 +484,15 @@ authority/SNI and OpenRouter host validation; Compose does not provide an
 HTTPS egress allowlist or firewall, so network-level destination restriction
 must be supplied by the host/cloud boundary if required.
 
+The shared PostgreSQL container also keeps the provisioned administrator,
+message-server, and Agent password sources at mode 0400. Standalone Docker
+Compose does not apply secret `uid`, `gid`, or `mode` metadata, so a root
+startup wrapper copies exactly those three files into a private tmpfs before
+the official image drops privileges. The tmpfs directory remains root-owned
+and non-writable to the official `postgres` user; only the mode-0400 copies are
+owned by that user. Both the official `POSTGRES_PASSWORD_FILE` consumer and
+the fresh-state database initializer read only the materialized paths.
+
 ## Secret and identity map
 
 The provisioner writes these protected files outside Git:

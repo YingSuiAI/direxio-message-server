@@ -415,6 +415,7 @@ chmod 700 "$out"
 
 [ -x "$split_deploy_dir/scripts/message-server-entrypoint.sh" ] || die "message-server entrypoint helper is missing or not executable"
 [ -x "$split_deploy_dir/scripts/initialize-capability-ca.sh" ] || die "Capability CA initializer is missing or not executable"
+[ -x "$split_deploy_dir/scripts/postgres-entrypoint.sh" ] || die "PostgreSQL entrypoint helper is missing or not executable"
 
 uuid4() {
   local value
@@ -1083,6 +1084,7 @@ DIREXTALK_SPLIT_STACK_NAME=$stack_name
 DIREXTALK_SPLIT_COMPOSE_MODE=$compose_mode
 DIREXTALK_MESSAGE_SERVER_ENTRYPOINT_FILE=$split_deploy_dir/scripts/message-server-entrypoint.sh
 DIREXTALK_CAPABILITY_CA_INITIALIZER_FILE=$split_deploy_dir/scripts/initialize-capability-ca.sh
+DIREXTALK_POSTGRES_ENTRYPOINT_FILE=$split_deploy_dir/scripts/postgres-entrypoint.sh
 DIREXTALK_POSTGRES_INITIALIZER_FILE=$split_deploy_dir/scripts/initialize-postgres.sh
 DIREXTALK_MESSAGE_SERVER_INITIALIZER_FILE=$split_deploy_dir/scripts/initialize-message-server.sh
 DIREXTALK_AGENT_SECRET_MATERIALIZER_FILE=$split_deploy_dir/scripts/materialize-agent-secrets.sh

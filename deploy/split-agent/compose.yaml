@@ -28,6 +28,7 @@ x-postgres-hardening: &postgres-hardening
   tmpfs:
     - /tmp:rw,noexec,nosuid,nodev,mode=1777
     - /run/postgresql:rw,noexec,nosuid,nodev,mode=2775
+    - /run/dirextalk-postgres-secrets:rw,noexec,nosuid,nodev,mode=0700,uid=0,gid=0
 
 x-agent-hardening: &agent-hardening
   <<: *hardened-service
@@ -150,10 +151,12 @@ services:
 
   postgres:
     <<: *postgres-service
+    entrypoint: ["/usr/local/bin/dirextalk-postgres-entrypoint"]
     environment:
       POSTGRES_DB: postgres
       POSTGRES_USER: dirextalk_cluster_admin
-      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_admin_password
+      POSTGRES_PASSWORD_FILE: /run/dirextalk-postgres-secrets/postgres_admin_password
+      POSTGRES_INIT_SECRET_DIR: /run/dirextalk-postgres-secrets
     secrets:
       - source: postgres_admin_password
         target: postgres_admin_password
@@ -164,6 +167,9 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql
     configs:
+      - source: postgres_entrypoint
+        target: /usr/local/bin/dirextalk-postgres-entrypoint
+        mode: 0555
       - source: postgres_initializer
         target: /docker-entrypoint-initdb.d/10-dirextalk-databases.sh
         mode: 0555
@@ -613,6 +619,8 @@ configs:
     file: ${DIREXTALK_MESSAGE_SERVER_ENTRYPOINT_FILE:?set the message-server entrypoint helper file}
   capability_ca_initializer:
     file: ${DIREXTALK_CAPABILITY_CA_INITIALIZER_FILE:?set the Capability CA initializer helper file}
+  postgres_entrypoint:
+    file: ${DIREXTALK_POSTGRES_ENTRYPOINT_FILE:?set the PostgreSQL secret materializer entrypoint file}
   postgres_initializer:
     file: ${DIREXTALK_POSTGRES_INITIALIZER_FILE:?set the PostgreSQL initializer helper file}
 

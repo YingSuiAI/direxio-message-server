@@ -410,7 +410,7 @@ db_query() {
   esac
   new_file "$target"
   new_file "$error"
-  if run_compose exec -T postgres sh -ec 'password=$(cat "$1"); shift; PGPASSWORD="$password" psql -h 127.0.0.1 -At -U "$1" -d "$2" -c "$3"' sh "/run/secrets/$secret" "$user" "$database" "$sql" >"$target" 2>"$error"; then
+  if run_compose exec -T postgres sh -ec 'password=$(cat "$1"); shift; PGPASSWORD="$password" psql -h 127.0.0.1 -At -U "$1" -d "$2" -c "$3"' sh "/run/dirextalk-postgres-secrets/$secret" "$user" "$database" "$sql" >"$target" 2>"$error"; then
     :
   else
     die "database query failed for $service"
@@ -424,7 +424,7 @@ db_query_expect_denied() {
     message-postgres) secret=message_postgres_password ;;
     *) die "unsupported database service $service" ;;
   esac
-  if run_compose exec -T postgres sh -ec 'password=$(cat "$1"); shift; PGPASSWORD="$password" psql -h 127.0.0.1 -At -U "$1" -d "$2" -c "$3"' sh "/run/secrets/$secret" "$user" "$database" "$sql" >"$tmp/db-denied.out" 2>"$tmp/db-denied.err"; then
+  if run_compose exec -T postgres sh -ec 'password=$(cat "$1"); shift; PGPASSWORD="$password" psql -h 127.0.0.1 -At -U "$1" -d "$2" -c "$3"' sh "/run/dirextalk-postgres-secrets/$secret" "$user" "$database" "$sql" >"$tmp/db-denied.out" 2>"$tmp/db-denied.err"; then
     die "$service unexpectedly accessed $database"
   else
     status=$?
@@ -969,12 +969,12 @@ new_file "$message_dump"
 new_file "$agent_dump"
 new_file "$tmp/message-dump.err"
 new_file "$tmp/agent-dump.err"
-if run_compose exec -T postgres sh -ec 'password=$(cat /run/secrets/message_postgres_password); PGPASSWORD="$password" pg_dump -h 127.0.0.1 -U dirextalk_message_server -d dirextalk_message_server' >"$message_dump" 2>"$tmp/message-dump.err"; then
+if run_compose exec -T postgres sh -ec 'password=$(cat /run/dirextalk-postgres-secrets/message_postgres_password); PGPASSWORD="$password" pg_dump -h 127.0.0.1 -U dirextalk_message_server -d dirextalk_message_server' >"$message_dump" 2>"$tmp/message-dump.err"; then
   :
 else
   die "message PostgreSQL dump failed"
 fi
-if run_compose exec -T postgres sh -ec 'password=$(cat /run/secrets/agent_postgres_password); PGPASSWORD="$password" pg_dump -h 127.0.0.1 -U dirextalk_agent -d dirextalk_agent' >"$agent_dump" 2>"$tmp/agent-dump.err"; then
+if run_compose exec -T postgres sh -ec 'password=$(cat /run/dirextalk-postgres-secrets/agent_postgres_password); PGPASSWORD="$password" pg_dump -h 127.0.0.1 -U dirextalk_agent -d dirextalk_agent' >"$agent_dump" 2>"$tmp/agent-dump.err"; then
   :
 else
   die "Agent PostgreSQL dump failed"
