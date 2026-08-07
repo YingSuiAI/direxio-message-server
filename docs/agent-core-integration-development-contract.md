@@ -121,8 +121,13 @@ owner fences; it must not cross into a same-name replacement account or peer.
 
 Message Server and Agent may use the same PostgreSQL cluster, but they use
 separate database roles and schema/database ownership. Neither service role may
-read or mutate the other's private tables. Agent migrations are run only by the
-Agent migration role; Message Server migrations do not create Agent tables.
+connect to, read, or mutate the other's private database or tables. The split
+deployment uses one PostgreSQL container and volume attached to both isolated
+database networks, with one network-specific hostname per application. Each
+application receives only its own non-superuser role DSN; the PostgreSQL
+cluster-admin credential is a third protected secret mounted only into the
+database service. Agent migrations are run only by the Agent role; Message
+Server migrations do not create Agent tables.
 
 This project uses a fresh-state baseline. There is no embedded-Agent row
 upgrade, dual write, fallback store, compatibility adapter, or historical

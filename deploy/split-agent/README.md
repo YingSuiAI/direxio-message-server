@@ -11,18 +11,23 @@ This directory is the fresh-data deployment boundary for the split architecture:
   external Native Agent facade, and Product Capability on private port 50053.
 - dirextalk-agent owns Native Agent Core on private port 9443 and Agent
   Capability on private port 50052.
-- Agent and message-server use different PostgreSQL services, roles, databases,
-  volumes, and private database networks. Account deletion may wipe either
-  database; this harness does not attempt a historical migration.
+- Agent and message-server share one PostgreSQL container, cluster, and data
+  volume while using distinct non-superuser roles, owned databases, protected
+  DSNs, and private database networks. PostgreSQL alone joins both database
+  networks under network-specific aliases; neither application joins the
+  other's database network or can connect to the other's database. A separate
+  protected cluster-admin credential is mounted only into PostgreSQL. Account
+  deletion may wipe either application database; this fresh-state harness does
+  not attempt a historical migration.
 - Native Agent Core is the only service that owns model, Knowledge, memory,
   task, schedule, extension, and workload state. The extension and Core
   workload runners are separate isolated containers, and the default stack
   starts all three Agent runtime containers from one image.
-- Qdrant is reachable only from the Agent private network. Agent egress is
-  separate and is used only for configured OpenRouter/embedding HTTPS calls.
+- Agent Knowledge vectors live in the Agent-owned PostgreSQL database through
+  pgvector. Agent egress is used only for configured provider HTTPS calls.
 - A dedicated non-internal `message_public` bridge is attached only to
   message-server because rootless Docker needs one non-internal bridge for
-  host-port forwarding. Agent, database, Qdrant, and capability networks stay
+  host-port forwarding. Agent, database, and capability networks stay
   internal; no other service joins this edge network.
 - The canonical production mode is `edge-terminated`: message-server listens
   only on HTTP `:8008`, publishes that listener only on host loopback, and is
@@ -77,7 +82,7 @@ cryptographically secure random bytes. In either case the resulting mode 0400
 `message-portal-password` file is where the provisioner writes the initial
 password; the value never enters
 argv, environment, `.env`, logs, or stdout. The provisioner also creates
-disposable certs/tokens, two PostgreSQL URLs, UUIDs, the non-secret Agent YAML,
+disposable certs/tokens, two isolated PostgreSQL URLs, UUIDs, the non-secret Agent YAML,
 and a path-only `.env`.
 
 For a canonical production first provision behind Caddy, set
@@ -146,7 +151,7 @@ means the requested mutation completed, `3` means stop found the runtime
 already stopped, and `1` means an infrastructure or identity check failed.
 Restart always performs a real stop/start boundary, including for a healthy
 runtime. The wrappers never invoke Compose, stop `message-server`, Postgres,
-or Qdrant, or remove containers/resources. They are host-side updater/release
+or remove containers/resources. They are host-side updater/release
 operations. An updater consumer must invoke them as direct argv, treat stop
 status `3` as an expected negative state, and fail on other non-zero statuses.
 Flutter and other public clients must connect to message-server and must never
@@ -239,8 +244,9 @@ context, so that local overlay can never enter the released image.
 Verification builds `dirextalk/agent:v1.0.0` from
 `deploy/container/agent.Containerfile`, checks its source/version OCI labels,
 and executes all three bundled binaries. Publication pushes only after that
-commit-bound evidence and reports the immutable Docker Hub digest for the
-deployment channel; it does not move a `latest` tag.
+commit-bound evidence, verifies the version tag, then moves
+`dirextalk/agent:latest` to the same image and verifies both tags resolve to the
+same immutable Docker Hub digest used by the deployment channel.
 
 The message-server portal owner is initialized by the protected
 `portal.bootstrap` action, not by the ordinary Matrix `create-account` binary.
@@ -465,8 +471,8 @@ the same host-port variables written to `.env`):
 
     curl --fail "http://127.0.0.1:${DIREXTALK_MESSAGE_HTTP_BIND}/_p2p/health"
 
-No Agent Core, Agent Capability, Product Capability, PostgreSQL, or Qdrant
-port is published to the host.
+No Agent Core, Agent Capability, Product Capability, or PostgreSQL port is
+published to the host.
 
 message-server uses a read-only rootfs, drops all Linux capabilities except
 the narrowly required `DAC_READ_SEARCH` read-only bind-secret access, and sets
@@ -486,8 +492,10 @@ The provisioner writes these protected files outside Git:
   tokens, and Ed25519 grant keys: created in protected named volumes by
   `message-server-init`; they are not provisioner files and never appear in
   `.env`;
+- postgres-admin-password, mounted only into the shared PostgreSQL service;
 - agent-postgres-password, message-postgres-password, and the corresponding
-  database URL files;
+  role- and database-specific URL files. Applications receive only their own
+  URL and never receive the cluster-admin or peer application credential;
 - core-secret-master-key: a fresh raw 32-byte mode-0400 Agent master key. The
   Agent keyring uses it for authenticated encryption of Agent-owned durable
   secret snapshots (AWS and any enabled model, execution, extension, or chat
@@ -510,11 +518,12 @@ logs.
 
 ## Model, embedding, Knowledge, and memory acceptance
 
-The deployment config enables Knowledge with a fresh Qdrant collection and a
-generated embedding profile UUID. The default vector dimension is 1536; set
+The deployment config enables Knowledge in the fresh Agent PostgreSQL database
+with pgvector and a generated embedding profile UUID. The default vector
+dimension is 1536; set
 `DIREXTALK_CORE_KNOWLEDGE_VECTOR_DIMENSION` when provisioning a new stack if
 the selected OpenRouter-compatible embedding model returns another fixed
-dimension (1–65536). Dimension is immutable for that fresh collection and the
+dimension (1–2000). Dimension is immutable for the fresh Agent database and the
 acceptance helper verifies the configured value while performing a real
 embedding/index/search cycle. Model profiles are mutable
 Agent-owned database records, so provision the OpenRouter chat and embedding
@@ -545,8 +554,7 @@ RAG.
 
 Use the same embedding API key for OpenRouter-compatible embeddings when the
 provider permits it; keep the two protected host files separate so rotation
-does not require a YAML change. Qdrant is private and its collection name is
-unique per fresh Agent instance.
+does not require a YAML change.
 
 ### Disposable local end-to-end acceptance
 
@@ -564,7 +572,7 @@ The model IDs can also be supplied with
 `openrouter-api-key`, `embedding-api-key`, `tavily-api-key`, and
 portal-password files, and all request/session/response/log files are mode
 0400 under a mode-0700 temporary workspace. It talks only to message-server
-`/_p2p/query` and `/_p2p/health`; it never calls an Agent or Qdrant listener
+`/_p2p/query` and `/_p2p/health`; it never calls an Agent listener
 directly and never prints a token.
 
 The lane verifies both health listeners, Compose port/network isolation,
@@ -577,11 +585,11 @@ history, Product contacts and
 prepared-message exact-once replay, forged-owner rejection, Knowledge upload
 and automatic indexing/search, long-term memory update/re-index/search and
 fresh-conversation automatic recall
-after Agent restart, source/memory deletion, database-role/table isolation,
-Qdrant cleanup, and a key/log/config canary. By default it also performs the
+after Agent restart, source/memory deletion, database-role/table/pgvector
+isolation, and a key/log/config canary. By default it also performs the
 final `portal.account.delete` and verifies the sealed Agent, deprovision ledger,
-business-table purge, and base/stage Qdrant cleanup; post-delete checks use only
-Compose exec and private volumes. There is intentionally no
+business-table purge, including Agent-owned vector rows; post-delete checks use
+only Compose exec. There is intentionally no
 `agent.knowledge.index` workaround: a binding mismatch is a hard contract
 failure.
 
@@ -594,9 +602,9 @@ stand in for that protocol evidence.
 For the final persistent-account acceptance, set
 `DIREXTALK_ACCEPTANCE_ACCOUNT_DELETE=false`. This keeps the configured model
 profiles, Tavily configuration, and conversation records while still deleting
-the temporary Knowledge source and long-term memory created by the lane and its
-unrelated Qdrant sentinel. The account-delete, post-delete health/rejection,
-database purge, deprovision-ledger, and base/stage Qdrant assertions are then
+the temporary Knowledge source and long-term memory created by the lane. The
+account-delete, post-delete health/rejection, database purge, and
+deprovision-ledger assertions are then
 skipped. `DIREXTALK_ACCEPTANCE_ACCOUNT_DELETE` defaults to `true`; setting
 `DIREXTALK_ACCEPTANCE_CLEANUP_AFTER=true` while account deletion is disabled is
 rejected, so a persistent acceptance cannot accidentally purge its namespace.
@@ -635,7 +643,7 @@ Use `compose.yaml` together with `compose.production.yaml` and a reviewed
 - immutable digest-pinned application images for message-server and Agent; the
   extension-runner and Core workload-runner containers resolve the exact same
   Agent digest;
-- immutable digest-pinned PostgreSQL and Qdrant images;
+- an immutable digest-pinned PostgreSQL 18 plus pgvector image;
 - a unique stack name and unique network/volume names;
 - a protected output directory with mode 0700 and secret files mode 0400;
 - fresh message-server/Agent instance IDs and the generated positive account

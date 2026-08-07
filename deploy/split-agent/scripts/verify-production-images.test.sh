@@ -15,11 +15,10 @@ message_revision=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 agent_revision=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 
 cat >"$env_file" <<EOF
-DIREXTALK_POSTGRES_IMAGE_IMMUTABLE=docker.io/library/postgres:18@sha256:$digest
+DIREXTALK_POSTGRES_IMAGE_IMMUTABLE=docker.io/pgvector/pgvector:pg18@sha256:$digest
 DIREXTALK_UTILITY_IMAGE_IMMUTABLE=docker.io/library/postgres:18@sha256:$digest
 DIREXTALK_MESSAGE_SERVER_IMAGE_IMMUTABLE=docker.io/dirextalk/message-server@sha256:$digest
 DIREXTALK_AGENT_IMAGE_IMMUTABLE=docker.io/dirextalk/agent@sha256:$digest
-DIREXTALK_QDRANT_IMAGE_IMMUTABLE=qdrant/qdrant:v1.18.3@sha256:$digest
 DIREXTALK_COTURN_IMAGE_IMMUTABLE=coturn/coturn:4.6.3-alpine@sha256:$digest
 EOF
 chmod 400 "$env_file"
@@ -113,6 +112,14 @@ grep -Fq -- 'image inspect docker.io/dirextalk/message-server@sha256:' "$docker_
 grep -Fq -- 'run --rm --entrypoint /usr/local/bin/dirextalk-agent docker.io/dirextalk/agent@sha256:' "$docker_log"
 grep -Fq -- 'run --rm --entrypoint /usr/local/bin/dirextalk-extension-runner docker.io/dirextalk/agent@sha256:' "$docker_log"
 grep -Fq -- 'run --rm --entrypoint /usr/local/bin/dirextalk-core-runner docker.io/dirextalk/agent@sha256:' "$docker_log"
+
+sed -i 's#docker.io/pgvector/pgvector:pg18#docker.io/library/postgres:18#g' "$env_file" "$attestation"
+if output=$(run_gate 2>&1); then
+  echo "plain PostgreSQL image unexpectedly accepted for Agent Knowledge" >&2
+  exit 1
+fi
+printf '%s\n' "$output" | grep -Fq 'must use the maintained pgvector/pgvector:pg18 image'
+sed -i 's#docker.io/library/postgres:18#docker.io/pgvector/pgvector:pg18#g' "$env_file" "$attestation"
 
 if output=$(run_gate "$agent_revision" "$message_revision" '' '' 65532 2>&1); then
   echo "non-root message-server image unexpectedly accepted" >&2

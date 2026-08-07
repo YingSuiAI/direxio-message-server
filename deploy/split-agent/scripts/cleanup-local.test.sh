@@ -28,10 +28,10 @@ export DIREXTALK_APPARMOR_LOADED_PROFILES="$tmp_dir/apparmor-profiles"
 
 network_suffixes=(message-private message-public message-db agent-private agent-db agent-caller agent-egress)
 volume_suffixes=(
-  message-postgres message-config message-data message-plugins agent-postgres agent-secrets
+  postgres message-config message-data message-plugins agent-secrets
   agent-config agent-core-data agent-extension-socket agent-extension-install agent-extension-staging
   agent-extension-runner-workspaces agent-extension-runner-state
-  agent-knowledge-content agent-knowledge-mount agent-qdrant capability-authority capability-shared
+  agent-knowledge-content agent-knowledge-mount capability-authority capability-shared
   capability-private core-runner-socket core-runner-installs core-runner-workspaces core-runner-state
 )
 machine_id=$(tr -d '[:space:]' </etc/machine-id)
@@ -85,11 +85,10 @@ write_fixture() {
   done
   for suffix in "${volume_suffixes[@]}"; do
     case "$suffix" in
-      message-postgres) env_key=DIREXTALK_MESSAGE_POSTGRES_VOLUME ;;
+      postgres) env_key=DIREXTALK_POSTGRES_VOLUME ;;
       message-config) env_key=DIREXTALK_MESSAGE_CONFIG_VOLUME ;;
       message-data) env_key=DIREXTALK_MESSAGE_DATA_VOLUME ;;
       message-plugins) env_key=DIREXTALK_MESSAGE_PLUGINS_VOLUME ;;
-      agent-postgres) env_key=DIREXTALK_AGENT_POSTGRES_VOLUME ;;
       agent-secrets) env_key=DIREXTALK_AGENT_SECRET_VOLUME ;;
       agent-config) env_key=DIREXTALK_AGENT_CONFIG_VOLUME ;;
       agent-core-data) env_key=DIREXTALK_AGENT_CORE_DATA_VOLUME ;;
@@ -100,7 +99,6 @@ write_fixture() {
       agent-extension-runner-state) env_key=DIREXTALK_AGENT_RUNNER_STATE_VOLUME ;;
       agent-knowledge-content) env_key=DIREXTALK_AGENT_KNOWLEDGE_CONTENT_VOLUME ;;
       agent-knowledge-mount) env_key=DIREXTALK_AGENT_KNOWLEDGE_MOUNT_VOLUME ;;
-      agent-qdrant) env_key=DIREXTALK_AGENT_QDRANT_VOLUME ;;
       capability-authority) env_key=DIREXTALK_CAPABILITY_AUTHORITY_VOLUME ;;
       capability-shared) env_key=DIREXTALK_CAPABILITY_SHARED_VOLUME ;;
       capability-private) env_key=DIREXTALK_CAPABILITY_PRIVATE_VOLUME ;;
@@ -137,11 +135,10 @@ write_fixture() {
   done
   for suffix in "${volume_suffixes[@]}"; do
     case "$suffix" in
-      message-postgres) key=message_postgres ;;
+      postgres) key=postgres ;;
       message-config) key=message_config ;;
       message-data) key=message_data ;;
       message-plugins) key=message_plugins ;;
-      agent-postgres) key=agent_postgres ;;
       agent-secrets) key=agent_secrets ;;
       agent-config) key=agent_config ;;
       agent-core-data) key=agent_core_data ;;
@@ -152,7 +149,6 @@ write_fixture() {
       agent-extension-runner-state) key=agent_runner_state ;;
       agent-knowledge-content) key=agent_knowledge_content ;;
       agent-knowledge-mount) key=agent_knowledge_mount ;;
-      agent-qdrant) key=agent_qdrant ;;
       capability-authority) key=capability_authority ;;
       capability-shared) key=capability_shared ;;
       capability-private) key=capability_private ;;
@@ -366,7 +362,7 @@ if ! "$script" "$missing_fixture" >"$missing_fixture/output" 2>"$missing_fixture
 fi
 grep -Fq 'split-stack cleanup complete' "$missing_fixture/output"
 missing_network_id=$(printf '%064x' 10)
-missing_volume_name=$stack_name-message-postgres
+missing_volume_name=$stack_name-postgres
 if grep -Fqx "network rm $missing_network_id" "$missing_fixture/state/docker.log" || grep -Fqx "volume rm $missing_volume_name" "$missing_fixture/state/docker.log"; then
   echo "missing Docker objects were mutated" >&2
   exit 1

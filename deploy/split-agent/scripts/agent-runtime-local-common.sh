@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Shared receipt-bound lifecycle implementation for the three Agent runtime
 # containers.  The public wrappers below deliberately do not use Compose:
-# message-server, Postgres, Qdrant, networks, and volumes are outside scope.
+# message-server, Postgres, networks, and volumes are outside scope.
 
 set -euo pipefail
 

@@ -17,9 +17,8 @@ old_oneshot_id=$(printf '4%.0s' {1..64})
 old_ref=docker.io/dirextalk/agent@sha256:$old_digest
 target_ref=docker.io/dirextalk/agent@sha256:$target_digest
 message_ref=docker.io/dirextalk/message-server@sha256:$(printf '3%.0s' {1..64})
-postgres_ref=docker.io/library/postgres:18@sha256:$(printf '7%.0s' {1..64})
+postgres_ref=docker.io/pgvector/pgvector:pg18@sha256:$(printf '7%.0s' {1..64})
 utility_ref=docker.io/library/alpine:3.22@sha256:$(printf '8%.0s' {1..64})
-qdrant_ref=docker.io/qdrant/qdrant:v1.18.3@sha256:$(printf '9%.0s' {1..64})
 coturn_ref=docker.io/coturn/coturn:4.6.3-alpine@sha256:$(printf 'a%.0s' {1..64})
 machine_id=$(tr -d '[:space:]' </etc/machine-id)
 
@@ -41,9 +40,18 @@ set -euo pipefail
 printf '%s|image=%s\n' "$*" "${DIREXTALK_AGENT_IMAGE_IMMUTABLE:-}" >>"$FAKE_DOCKER_LOG"
 if [ "$1" = context ]; then printf 'unix:///run/docker.sock\n'; exit 0; fi
 if [ "$1" = info ]; then printf '%s\n' 'test-engine'; exit 0; fi
-if [ "$1 $2" = 'image rm' ]; then [ "${FAKE_IMAGE_RM_FAIL:-false}" != true ]; exit; fi
+if [ "$1 $2" = 'image rm' ]; then
+  [ "${FAKE_IMAGE_RM_FAIL:-false}" != true ] || exit 1
+  if [ "${FAKE_IMAGE_DISAPPEARS_AFTER_REF_RM:-false}" = true ] && [ "$3" = "$FAKE_OLD_REF" ]; then
+    : >"$FAKE_IMAGE_GONE_FILE"
+  fi
+  exit 0
+fi
 if [ "$1 $2" = 'image inspect' ]; then
   format=${5:-}
+  if [ -n "${FAKE_IMAGE_GONE_FILE:-}" ] && [ -f "$FAKE_IMAGE_GONE_FILE" ]; then
+    case "$3" in "$FAKE_OLD_IMAGE_ID"|"$FAKE_OLD_REF"|docker.io/dirextalk/agent:v1.0.0) exit 1;; esac
+  fi
   case "$3" in
     "$FAKE_MESSAGE_IMAGE_ID") printf '%s\n' "$FAKE_SERVER_VERSION" ;;
     "$FAKE_MESSAGE_REF")
@@ -182,6 +190,10 @@ printf 'prepare|stack=%s|image=%s\n' "$1" "${DIREXTALK_AGENT_IMAGE_IMMUTABLE:-}"
 if [ -n "${FAKE_PREP_FAIL_REF:-}" ] && [ "${DIREXTALK_AGENT_IMAGE_IMMUTABLE:-}" = "$FAKE_PREP_FAIL_REF" ]; then
   exit 1
 fi
+if [ -n "${FAKE_PREP_FAIL_ONCE_REF:-}" ] && [ "${DIREXTALK_AGENT_IMAGE_IMMUTABLE:-}" = "$FAKE_PREP_FAIL_ONCE_REF" ] &&
+   [ "$(grep -Fc "prepare|stack=$1|image=${DIREXTALK_AGENT_IMAGE_IMMUTABLE:-}" "$FAKE_PREP_LOG")" -eq 1 ]; then
+  exit 1
+fi
 keys='DIREXTALK_EXTENSION_CGROUP_ROOT DIREXTALK_CORE_RUNNER_CGROUP_ROOT DIREXTALK_EXTENSION_CGROUP_PARENT DIREXTALK_CORE_RUNNER_CGROUP_PARENT DIREXTALK_CORE_EXTENSION_RUNNER_UID DIREXTALK_CORE_WORKLOAD_RUNNER_UID DIREXTALK_EXTENSION_RUNNER_UNIT DIREXTALK_CORE_RUNNER_UNIT DIREXTALK_EXTENSION_RUNNER_FRAGMENT_PATH DIREXTALK_CORE_RUNNER_FRAGMENT_PATH DIREXTALK_EXTENSION_RUNNER_FRAGMENT_SHA256 DIREXTALK_CORE_RUNNER_FRAGMENT_SHA256 DIREXTALK_RUNNER_APPARMOR_PROFILE DIREXTALK_RUNNER_APPARMOR_PROFILE_PATH DIREXTALK_RUNNER_APPARMOR_PROFILE_SHA256 DIREXTALK_RUNNER_APPARMOR_MANAGER_PATH DIREXTALK_RUNNER_APPARMOR_MANAGER_SHA256 DIREXTALK_RUNNER_PREP_HELPER_PATH DIREXTALK_RUNNER_PREP_HELPER_SHA256 DIREXTALK_RUNNER_PREP_MACHINE_ID DIREXTALK_RUNNER_PREP_DOCKER_ENGINE_ID DIREXTALK_EXTENSION_CONTROL_GROUP DIREXTALK_CORE_RUNNER_CONTROL_GROUP DIREXTALK_EXTENSION_CGROUP_PARENT_ROOT DIREXTALK_CORE_RUNNER_CGROUP_PARENT_ROOT DIREXTALK_EXTENSION_CGROUP_PARENT_PROCS DIREXTALK_CORE_RUNNER_CGROUP_PARENT_PROCS DIREXTALK_EXTENSION_CGROUP_PARENT_PROCS_OWNER DIREXTALK_CORE_RUNNER_CGROUP_PARENT_PROCS_OWNER DIREXTALK_EXTENSION_CGROUP_PARENT_PROCS_MODE DIREXTALK_CORE_RUNNER_CGROUP_PARENT_PROCS_MODE'
 for key in $keys; do
   awk -F= -v wanted="$key" 'index($0,wanted "=")==1 {print; found=1; exit} END {if (!found) exit 1}' "$FAKE_RUNNER_ENV_FILE"
@@ -201,7 +213,6 @@ DIREXTALK_UTILITY_IMAGE_IMMUTABLE=$utility_ref
 DIREXTALK_MESSAGE_SERVER_IMAGE_IMMUTABLE=$message_ref
 DIREXTALK_AGENT_IMAGE_IMMUTABLE=$old_ref
 DIREXTALK_RELEASE_CATALOG_ORIGIN=https://imadmin.dirextalk.ai
-DIREXTALK_QDRANT_IMAGE_IMMUTABLE=$qdrant_ref
 DIREXTALK_COTURN_IMAGE_IMMUTABLE=$coturn_ref
 DIREXTALK_IMAGE_ATTESTATION_FILE=$root/image-attestation
 DIREXTALK_EXTENSION_CGROUP_ROOT=/sys/fs/cgroup/extension
@@ -246,7 +257,6 @@ image.DIREXTALK_POSTGRES_IMAGE_IMMUTABLE=$postgres_ref
 image.DIREXTALK_UTILITY_IMAGE_IMMUTABLE=$utility_ref
 image.DIREXTALK_MESSAGE_SERVER_IMAGE_IMMUTABLE=$message_ref
 image.DIREXTALK_AGENT_IMAGE_IMMUTABLE=$old_ref
-image.DIREXTALK_QDRANT_IMAGE_IMMUTABLE=$qdrant_ref
 image.DIREXTALK_COTURN_IMAGE_IMMUTABLE=$coturn_ref
 EOF
   chmod 400 "$root/.env" "$root/image-attestation"
@@ -323,6 +333,8 @@ run_update() {
   FAKE_NEW_AGENT_ID=$new_agent_id FAKE_NEW_EXTENSION_ID=$new_extension_id FAKE_NEW_CORE_ID=$new_core_id \
   FAKE_SHARED_OLD_ID=$shared_old_id \
   FAKE_OLD_ONESHOT_ID=$old_oneshot_id \
+  FAKE_IMAGE_DISAPPEARS_AFTER_REF_RM="${FAKE_IMAGE_DISAPPEARS_AFTER_REF_RM:-false}" \
+  FAKE_IMAGE_GONE_FILE="${FAKE_IMAGE_GONE_FILE:-}" \
   FAKE_RUNNER_ENV_FILE=$root/.env FAKE_PREP_LOG=$log \
   DIREXTALK_AGENT_UPDATE_TEST_FIXTURE=true DIREXTALK_AGENT_UPDATE_STOP_WRAPPER=$tmp/bin/stop \
   DIREXTALK_AGENT_UPDATE_HEALTH_ATTEMPTS=1 \
@@ -463,6 +475,24 @@ assert_before 'run --rm --no-deps --pull never -T --interactive=false extension-
 assert_before 'run --rm --no-deps --pull never -T --interactive=false extension-runner-storage-init' 'run --rm --no-deps --pull never -T --interactive=false core-runner-socket-init'
 assert_before 'run --rm --no-deps --pull never -T --interactive=false core-runner-socket-init' 'run --rm --no-deps --pull never -T --interactive=false core-runner-storage-init'
 assert_before 'run --rm --no-deps --pull never -T --interactive=false core-runner-storage-init' 'run --rm --no-deps --pull never -T --interactive=false agent-migrate'
+
+: >"$log"; : >"$state"; root=$(make_stack cgroup-preparation-retry)
+FAKE_PREP_FAIL_ONCE_REF=$target_ref run_update "$root" v1.0.1 v1.0.0 >/dev/null
+[ "$(grep -Fc "prepare|stack=d-abcdefghijklmnopqrstuvwxyz|image=$target_ref" "$log")" -eq 2 ]
+grep -Fqx "DIREXTALK_AGENT_IMAGE_IMMUTABLE=$target_ref" "$root/.env"
+grep -Fqx 'state=complete' "$root/.cleanup-receipt"
+
+: >"$log"; : >"$state"; root=$(make_stack disappearing-old-image)
+image_gone_file=$tmp/disappearing-old-image.marker
+rm -f "$image_gone_file"
+FAKE_IMAGE_DISAPPEARS_AFTER_REF_RM=true FAKE_IMAGE_GONE_FILE=$image_gone_file \
+  run_update "$root" v1.0.1 v1.0.0 >/dev/null
+[ -f "$image_gone_file" ]
+grep -Fqx 'state=complete' "$root/.cleanup-receipt"
+if grep -Fq "image rm $old_image_id" "$log"; then
+  echo 'already absent old Agent image ID was removed again' >&2
+  exit 1
+fi
 
 : >"$log"; : >"$state"; root=$(make_stack shared-old-image)
 FAKE_SHARED_OLD_IMAGE=true run_update "$root" v1.0.1 v1.0.0 >/dev/null 2>&1

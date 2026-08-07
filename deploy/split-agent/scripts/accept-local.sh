@@ -74,9 +74,6 @@ case "$manifest_compose_mode" in local|production) ;; *) die "manifest compose m
 [ "$env_compose_mode" = "$manifest_compose_mode" ] || die "compose mode differs between .manifest and .env"
 [ "$compose_mode" = "$manifest_compose_mode" ] || die "DIREXTALK_ACCEPTANCE_COMPOSE_MODE differs from the provisioned stack"
 printf '%s\n' "$stack_name" | grep -Eq '^d-[a-z2-7]{26}$' || die "stack identity is not a fresh namespace"
-manifest_qdrant=$(read_pair "$manifest" resource.volume.agent_qdrant)
-[ "$manifest_qdrant" = "$stack_name-agent-qdrant" ] || die "manifest Qdrant volume is not owned by this fresh stack"
-
 http_bind=$(read_pair "$env_file" DIREXTALK_MESSAGE_HTTP_BIND)
 https_bind=$(read_pair "$env_file" DIREXTALK_MESSAGE_HTTPS_BIND)
 tls_mode=$(read_pair "$env_file" DIREXTALK_MESSAGE_TLS_MODE)
@@ -110,8 +107,6 @@ embedding_key=$(read_pair "$env_file" DIREXTALK_EMBEDDING_API_KEY_FILE)
 tavily_key=$(read_pair "$env_file" DIREXTALK_TAVILY_API_KEY_FILE)
 portal_password=$(read_pair "$env_file" DIREXTALK_MESSAGE_PORTAL_PASSWORD_FILE)
 agent_config=$(read_pair "$env_file" DIREXTALK_AGENT_CONFIG_FILE)
-qdrant_volume=$(read_pair "$env_file" DIREXTALK_AGENT_QDRANT_VOLUME)
-[ "$qdrant_volume" = "$manifest_qdrant" ] || die ".env Qdrant volume differs from the immutable manifest"
 [ "$openrouter_key" = "$out/openrouter-api-key" ] || die "OpenRouter key path is outside the provisioned stack"
 [ "$embedding_key" = "$out/embedding-api-key" ] || die "embedding key path is outside the provisioned stack"
 [ "$tavily_key" = "$out/tavily-api-key" ] || die "Tavily key path is outside the provisioned stack"
@@ -144,9 +139,7 @@ check_secret_file "Tavily key file" "$tavily_key"
 check_secret_file "portal password file" "$portal_password"
 [ -f "$agent_config" ] && [ ! -L "$agent_config" ] || die "Agent config is not a regular file"
 [ "$(stat -c '%a' "$agent_config" 2>/dev/null || true)" = 400 ] || die "Agent config must be mode 0400"
-collection=$(awk -F: '$1 == "core_knowledge_qdrant_collection" { value=$2; sub(/^[[:space:]]+/, "", value); gsub(/["'\'']/, "", value); print value; exit }' "$agent_config")
-[ -n "$collection" ] || die "Agent config has no Qdrant collection"
-embedding_dimension=$(awk -F: '$1 == "core_knowledge_qdrant_dimension" { value=$2; sub(/^[[:space:]]+/, "", value); print value; exit }' "$agent_config")
+embedding_dimension=$(awk -F: '$1 == "core_knowledge_vector_dimension" { value=$2; sub(/^[[:space:]]+/, "", value); print value; exit }' "$agent_config")
 case "$embedding_dimension" in ''|0*|*[!0-9]*) die "Agent config has an invalid embedding dimension" ;; esac
 
 script_dir=$(cd -- "$(dirname -- "$0")" && pwd -P)
@@ -366,8 +359,10 @@ jq -e --arg http "$http_bind" --arg https "$https_bind" --arg tls_mode "$tls_mod
   (.services["core-runner"].cgroup == "host") and
   ([.services.agent.volumes[] | select(.target == "/var/lib/dirextalk-agent/extension-workspaces" and .source == "agent_runner_workspaces")] | length == 1) and
   ([.services["extension-runner"].volumes[] | select(.target == "/var/lib/dirextalk-agent/extension-workspaces" and .source == "agent_runner_workspaces")] | length == 1) and
-  ((.services["message-postgres"].networks | has("agent_database")) | not) and
-  ((.services["agent-postgres"].networks | has("message_database")) | not)
+  ((.services.postgres.networks | keys) == ["agent_database","message_database"]) and
+  ((.services.agent.networks | has("message_database")) | not) and
+  ((.services["message-server"].networks | has("agent_database")) | not) and
+  ([.services | to_entries[] | select(any(.value.secrets[]?; .source == "postgres_admin_password")) | .key] == ["postgres"])
 ' "$topology" >/dev/null || die "Compose topology violates public-port or private-network isolation"
 
 portal_request=$tmp/portal-request.json
@@ -405,27 +400,6 @@ while ! agent_health; do
   i=$((i + 2))
 done
 
-# Use Qdrant's loopback HTTP listener from inside its own private container.
-# This avoids publishing a host port or attaching a diagnostic container to
-# the Agent network. Only the response body is returned to the protected
-# acceptance workspace.
-qdrant_http() {
-  local method=$1 path=$2 body=$3 target=$4
-  local error=$tmp/qdrant-http.err
-  new_file "$target"
-  new_file "$error"
-  if run_compose exec -T qdrant perl -MIO::Socket::INET -e '
-    my ($method,$path,$body)=@ARGV;
-    my $socket=IO::Socket::INET->new(PeerAddr=>"127.0.0.1",PeerPort=>6333,Proto=>"tcp",Timeout=>10) or die "connect failed\n";
-    print $socket "$method $path HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: ".length($body)."\r\nConnection: close\r\n\r\n$body";
-    local $/; my $response=<$socket>; $response =~ s/^.*?\r?\n\r?\n//s; print $response;
-  ' "$method" "$path" "$body" >"$target" 2>"$error"; then
-    :
-  else
-    die "private Qdrant HTTP request failed"
-  fi
-}
-
 db_query() {
   local service=$1 user=$2 database=$3 sql=$4 target=$5 secret
   local error=$tmp/db-$service.err
@@ -436,18 +410,49 @@ db_query() {
   esac
   new_file "$target"
   new_file "$error"
-  if run_compose exec -T "$service" sh -ec 'password=$(cat "$1"); shift; PGPASSWORD="$password" psql -At -U "$1" -d "$2" -c "$3"' sh "/run/secrets/$secret" "$user" "$database" "$sql" >"$target" 2>"$error"; then
+  if run_compose exec -T postgres sh -ec 'password=$(cat "$1"); shift; PGPASSWORD="$password" psql -h 127.0.0.1 -At -U "$1" -d "$2" -c "$3"' sh "/run/secrets/$secret" "$user" "$database" "$sql" >"$target" 2>"$error"; then
     :
   else
     die "database query failed for $service"
   fi
 }
 
-# A non-Agent sentinel proves deprovision deletes only the configured base and
-# base__stage_* collections, rather than clearing unrelated Qdrant data.
-qdrant_sentinel="split_acceptance_unrelated_$(uuid4 | tr -d '-')"
-qdrant_http PUT "/collections/$qdrant_sentinel" '{"vectors":{"size":4,"distance":"Cosine"}}' "$tmp/qdrant-sentinel-create.json"
-jq -e '.status == "ok" and .result == true' "$tmp/qdrant-sentinel-create.json" >/dev/null || die "could not create unrelated Qdrant sentinel collection"
+db_query_expect_denied() {
+  local service=$1 user=$2 database=$3 sql=$4 secret status
+  case "$service" in
+    agent-postgres) secret=agent_postgres_password ;;
+    message-postgres) secret=message_postgres_password ;;
+    *) die "unsupported database service $service" ;;
+  esac
+  if run_compose exec -T postgres sh -ec 'password=$(cat "$1"); shift; PGPASSWORD="$password" psql -h 127.0.0.1 -At -U "$1" -d "$2" -c "$3"' sh "/run/secrets/$secret" "$user" "$database" "$sql" >"$tmp/db-denied.out" 2>"$tmp/db-denied.err"; then
+    die "$service unexpectedly accessed $database"
+  else
+    status=$?
+    [ "$status" -ne 125 ] || die "database isolation check infrastructure failed"
+  fi
+}
+
+db_query agent-postgres dirextalk_agent dirextalk_agent \
+  "SELECT rolsuper::text || '|' || rolcreatedb::text || '|' || rolcreaterole::text || '|' || rolinherit::text FROM pg_roles WHERE rolname=current_user;" \
+  "$tmp/agent-role-flags.out"
+[ "$(tr -d '[:space:]' <"$tmp/agent-role-flags.out")" = 'false|false|false|false' ] || die "Agent database role is overprivileged"
+db_query message-postgres dirextalk_message_server dirextalk_message_server \
+  "SELECT rolsuper::text || '|' || rolcreatedb::text || '|' || rolcreaterole::text || '|' || rolinherit::text FROM pg_roles WHERE rolname=current_user;" \
+  "$tmp/message-role-flags.out"
+[ "$(tr -d '[:space:]' <"$tmp/message-role-flags.out")" = 'false|false|false|false' ] || die "message-server database role is overprivileged"
+db_query_expect_denied agent-postgres dirextalk_agent dirextalk_message_server 'SELECT 1;'
+db_query_expect_denied message-postgres dirextalk_message_server dirextalk_agent 'SELECT 1;'
+db_query_expect_denied agent-postgres dirextalk_agent dirextalk_agent 'SET ROLE dirextalk_message_server;'
+db_query_expect_denied message-postgres dirextalk_message_server dirextalk_message_server 'SET ROLE dirextalk_agent;'
+db_query agent-postgres dirextalk_agent dirextalk_agent \
+  "SELECT count(*) FROM pg_extension WHERE extname = 'vector';" "$tmp/agent-vector-extension.count"
+[ "$(tr -d '[:space:]' <"$tmp/agent-vector-extension.count")" = 1 ] || die "Agent database does not have exactly one pgvector extension"
+db_query agent-postgres dirextalk_agent dirextalk_agent \
+  "SELECT vector_dims('[1,2,3]'::vector);" "$tmp/agent-vector-dimensions.out"
+[ "$(tr -d '[:space:]' <"$tmp/agent-vector-dimensions.out")" = 3 ] || die "Agent database pgvector operations failed"
+db_query message-postgres dirextalk_message_server dirextalk_message_server \
+  "SELECT count(*) FROM pg_extension WHERE extname = 'vector';" "$tmp/message-vector-extension.count"
+[ "$(tr -d '[:space:]' <"$tmp/message-vector-extension.count")" = 0 ] || die "pgvector was installed in the message-server database"
 
 params=$tmp/empty.params.json
 new_file "$params"
@@ -915,7 +920,7 @@ if [ "$account_delete_enabled" = true ]; then
 
   # Account deprovision seals the Agent but does not stop its process. Observe two
   # complete image healthcheck intervals so a crash-loop, a late background write,
-  # or post-purge Knowledge/Qdrant recovery cannot pass on a transient sample.
+  # or post-purge Knowledge recovery cannot pass on a transient sample.
   for health_interval in 1 2; do
     sleep 16
     post_delete_agent_container=$(run_compose ps -q agent 2>"$tmp/agent-ps-after-delete-$health_interval.err" || true)
@@ -956,30 +961,7 @@ if [ "$account_delete_enabled" = true ]; then
   agent_business_audit='DO $audit$ DECLARE item record; row_count bigint; BEGIN FOR item IN SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=current_schema() AND c.relkind='\''r'\'' AND (left(c.relname,5)='\''core_'\'' OR left(c.relname,6)='\''agent_'\'') AND c.relname NOT IN ('\''agent_instance_metadata'\'','\''agent_schema_migrations'\'','\''agent_capability_operations'\'','\''agent_capability_operation_events'\'','\''agent_account_deprovisions'\'') ORDER BY c.relname LOOP EXECUTE format('\''SELECT count(*) FROM %I'\'',item.relname) INTO row_count; IF row_count <> 0 THEN RAISE EXCEPTION '\''Agent business table % retained % rows after deprovision'\'',item.relname,row_count; END IF; END LOOP; END $audit$;'
   db_query agent-postgres dirextalk_agent dirextalk_agent "$agent_business_audit" "$tmp/agent-business-audit.out"
 
-  qdrant_check=$tmp/qdrant-check.err
-  new_file "$qdrant_check"
-  if run_compose run --rm --no-deps -v "$qdrant_volume:/mnt/qdrant:ro" --entrypoint sh message-postgres \
-    -ec 'needle=$1; [ ! -e "/mnt/qdrant/collections/$needle" ] || exit 7; if grep -R -F -q -- "$needle" /mnt/qdrant; then exit 7; else status=$?; [ "$status" -eq 1 ] && exit 0; exit "$status"; fi' sh "$collection" >"$tmp/qdrant-check.out" 2>"$qdrant_check"; then
-    :
-  else
-    qdrant_status=$?
-    [ "$qdrant_status" -eq 7 ] || die "Qdrant cleanup inspection failed"
-    die "Qdrant collection data survived account deletion"
-  fi
-
-  qdrant_http GET /collections '' "$tmp/qdrant-collections-after-delete.json"
-  jq -e --arg base "$collection" --arg sentinel "$qdrant_sentinel" '
-    (.status == "ok") and
-    (any(.result.collections[]?; .name == $sentinel)) and
-    (all(.result.collections[]?; (.name != $base) and ((.name | startswith($base + "__stage_")) | not)))
-  ' "$tmp/qdrant-collections-after-delete.json" >/dev/null || die "Qdrant base/stage cleanup or unrelated-collection isolation failed"
 fi
-
-# The sentinel is test-only data and must be removed in both persistent-account
-# and disposable-account modes. It is deliberately outside the account-delete
-# assertions because production acceptance retains the account state.
-qdrant_http DELETE "/collections/$qdrant_sentinel" '' "$tmp/qdrant-sentinel-delete.json"
-jq -e '.status == "ok" and .result == true' "$tmp/qdrant-sentinel-delete.json" >/dev/null || die "could not remove Qdrant sentinel collection"
 
 message_dump=$tmp/message-db.dump
 agent_dump=$tmp/agent-db.dump
@@ -987,12 +969,12 @@ new_file "$message_dump"
 new_file "$agent_dump"
 new_file "$tmp/message-dump.err"
 new_file "$tmp/agent-dump.err"
-if run_compose exec -T message-postgres sh -ec 'password=$(cat /run/secrets/message_postgres_password); PGPASSWORD="$password" pg_dump -U dirextalk_message_server -d dirextalk_message_server' >"$message_dump" 2>"$tmp/message-dump.err"; then
+if run_compose exec -T postgres sh -ec 'password=$(cat /run/secrets/message_postgres_password); PGPASSWORD="$password" pg_dump -h 127.0.0.1 -U dirextalk_message_server -d dirextalk_message_server' >"$message_dump" 2>"$tmp/message-dump.err"; then
   :
 else
   die "message PostgreSQL dump failed"
 fi
-if run_compose exec -T agent-postgres sh -ec 'password=$(cat /run/secrets/agent_postgres_password); PGPASSWORD="$password" pg_dump -U dirextalk_agent -d dirextalk_agent' >"$agent_dump" 2>"$tmp/agent-dump.err"; then
+if run_compose exec -T postgres sh -ec 'password=$(cat /run/secrets/agent_postgres_password); PGPASSWORD="$password" pg_dump -h 127.0.0.1 -U dirextalk_agent -d dirextalk_agent' >"$agent_dump" 2>"$tmp/agent-dump.err"; then
   :
 else
   die "Agent PostgreSQL dump failed"

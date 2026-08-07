@@ -68,7 +68,7 @@ x-postgres-service: &postgres-service
   <<: *postgres-hardening
   restart: unless-stopped
   healthcheck:
-    test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+    test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d postgres"]
     interval: 5s
     timeout: 5s
     retries: 30
@@ -148,44 +148,30 @@ services:
       retries: 12
       start_period: 5s
 
-  message-postgres:
+  postgres:
     <<: *postgres-service
     environment:
-      POSTGRES_DB: dirextalk_message_server
-      POSTGRES_USER: dirextalk_message_server
-      POSTGRES_PASSWORD_FILE: /run/secrets/message_postgres_password
+      POSTGRES_DB: postgres
+      POSTGRES_USER: dirextalk_cluster_admin
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_admin_password
     secrets:
+      - source: postgres_admin_password
+        target: postgres_admin_password
       - source: message_postgres_password
         target: message_postgres_password
-    volumes:
-      - message_postgres_data:/var/lib/postgresql
-    networks: [message_database]
-
-  agent-postgres:
-    <<: *postgres-service
-    environment:
-      POSTGRES_DB: dirextalk_agent
-      POSTGRES_USER: dirextalk_agent
-      POSTGRES_PASSWORD_FILE: /run/secrets/agent_postgres_password
-    secrets:
       - source: agent_postgres_password
         target: agent_postgres_password
     volumes:
-      - agent_postgres_data:/var/lib/postgresql
-    networks: [agent_database]
-
-  qdrant:
-    image: ${DIREXTALK_QDRANT_IMAGE_IMMUTABLE:?set an immutable Qdrant image reference}
-    restart: unless-stopped
-    read_only: true
-    cap_drop: ["ALL"]
-    security_opt: ["no-new-privileges:true"]
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,nodev,mode=1777
-      - /qdrant/snapshots:rw,noexec,nosuid,nodev,mode=0700
-    volumes:
-      - agent_qdrant_data:/qdrant/storage
-    networks: [agent_private]
+      - postgres_data:/var/lib/postgresql
+    configs:
+      - source: postgres_initializer
+        target: /docker-entrypoint-initdb.d/10-dirextalk-databases.sh
+        mode: 0555
+    networks:
+      message_database:
+        aliases: [message-postgres]
+      agent_database:
+        aliases: [agent-postgres]
 
   agent-secret-init:
     image: ${DIREXTALK_UTILITY_IMAGE_IMMUTABLE:?set an immutable utility image reference}
@@ -232,7 +218,7 @@ services:
     depends_on:
       agent-secret-init:
         condition: service_completed_successfully
-      agent-postgres:
+      postgres:
         condition: service_healthy
 
   agent:
@@ -264,8 +250,6 @@ services:
     depends_on:
       agent-migrate:
         condition: service_completed_successfully
-      qdrant:
-        condition: service_started
       extension-runner:
         condition: service_healthy
       core-runner:
@@ -489,7 +473,7 @@ services:
         target: /usr/local/bin/initialize-capability-ca
         mode: 0555
     depends_on:
-      message-postgres:
+      postgres:
         condition: service_healthy
 
   message-server:
@@ -537,7 +521,7 @@ services:
     depends_on:
       coturn:
         condition: service_healthy
-      message-postgres:
+      postgres:
         condition: service_healthy
       message-server-init:
         condition: service_completed_successfully
@@ -557,7 +541,7 @@ networks:
   message_public:
     # Rootless Docker's published-port forwarding requires the service to be
     # attached to one non-internal bridge. This network is intentionally
-    # dedicated to message-server; every Agent/DB/Qdrant network remains
+    # dedicated to message-server; every Agent/database network remains
     # internal and no other service joins this public edge.
     name: ${DIREXTALK_MESSAGE_PUBLIC_NETWORK:?set a fresh message public network name}
     internal: false
@@ -577,16 +561,14 @@ networks:
     name: ${DIREXTALK_AGENT_EGRESS_NETWORK:?set a fresh Agent egress network name}
 
 volumes:
-  message_postgres_data:
-    name: ${DIREXTALK_MESSAGE_POSTGRES_VOLUME:?set a fresh message PostgreSQL volume name}
+  postgres_data:
+    name: ${DIREXTALK_POSTGRES_VOLUME:?set a fresh shared PostgreSQL volume name}
   message_server_config:
     name: ${DIREXTALK_MESSAGE_CONFIG_VOLUME:?set a fresh message config volume name}
   message_server_data:
     name: ${DIREXTALK_MESSAGE_DATA_VOLUME:?set a fresh message data volume name}
   message_plugins_data:
     name: ${DIREXTALK_MESSAGE_PLUGINS_VOLUME:?set a fresh message plugins volume name}
-  agent_postgres_data:
-    name: ${DIREXTALK_AGENT_POSTGRES_VOLUME:?set a fresh Agent PostgreSQL volume name}
   agent_secret_material:
     name: ${DIREXTALK_AGENT_SECRET_VOLUME:?set a fresh Agent secret volume name}
   agent_config_material:
@@ -607,8 +589,6 @@ volumes:
     name: ${DIREXTALK_AGENT_KNOWLEDGE_CONTENT_VOLUME:?set a fresh Knowledge content volume name}
   agent_knowledge_mount:
     name: ${DIREXTALK_AGENT_KNOWLEDGE_MOUNT_VOLUME:?set a fresh Knowledge mount volume name}
-  agent_qdrant_data:
-    name: ${DIREXTALK_AGENT_QDRANT_VOLUME:?set a fresh Qdrant volume name}
   capability_authority_material:
     name: ${DIREXTALK_CAPABILITY_AUTHORITY_VOLUME:?set a fresh Capability authority volume name}
   capability_shared_material:
@@ -633,12 +613,16 @@ configs:
     file: ${DIREXTALK_MESSAGE_SERVER_ENTRYPOINT_FILE:?set the message-server entrypoint helper file}
   capability_ca_initializer:
     file: ${DIREXTALK_CAPABILITY_CA_INITIALIZER_FILE:?set the Capability CA initializer helper file}
+  postgres_initializer:
+    file: ${DIREXTALK_POSTGRES_INITIALIZER_FILE:?set the PostgreSQL initializer helper file}
 
 secrets:
   coturn_config:
     file: ${DIREXTALK_COTURN_CONFIG_FILE:?set the protected coturn configuration file}
   turn_shared_secret:
     file: ${DIREXTALK_TURN_SHARED_SECRET_FILE:?set the protected TURN shared secret file}
+  postgres_admin_password:
+    file: ${DIREXTALK_POSTGRES_ADMIN_PASSWORD_FILE:?set the protected PostgreSQL cluster-admin password file}
   message_postgres_password:
     file: ${DIREXTALK_MESSAGE_POSTGRES_PASSWORD_FILE:?set the message PostgreSQL password file}
   agent_postgres_password:

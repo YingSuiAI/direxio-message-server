@@ -156,6 +156,8 @@ shellcheck \
   "$script_dir/verify-build-contexts.sh" \
   "$script_dir/initialize-capability-ca.sh" \
   "$script_dir/initialize-capability-ca.test.sh" \
+  "$script_dir/initialize-postgres.sh" \
+  "$script_dir/initialize-postgres.test.sh" \
   "$script_dir/initialize-message-server.sh" \
   "$script_dir/initialize-message-server.test.sh" \
   "$script_dir/materialize-agent-secrets.sh" \
@@ -167,6 +169,7 @@ shellcheck \
 "$script_dir/message-server-entrypoint.test.sh" >/dev/null
 "$script_dir/message-server-healthcheck.test.sh" >/dev/null
 "$script_dir/initialize-capability-ca.test.sh" >/dev/null
+"$script_dir/initialize-postgres.test.sh" >/dev/null
 "$script_dir/initialize-message-server.test.sh" >/dev/null
 "$script_dir/accept-local.test.sh" >/dev/null
 "$script_dir/start-local.test.sh" >/dev/null
@@ -209,9 +212,10 @@ jq -e '
   .services.agent.ports == null and
   .services.agent["expose"] == ["9443","50052","8444"] and
   .services["message-server"].expose == ["50053"] and
-  .services["agent-postgres"].ports == null and
-  .services["message-postgres"].ports == null and
-  .services.qdrant.ports == null
+  .services.postgres.ports == null and
+  (.services | has("agent-postgres") | not) and
+  (.services | has("message-postgres") | not) and
+  (.services | has("qdrant") | not)
 ' "$rendered" >/dev/null
 
 jq -e '
@@ -256,8 +260,7 @@ jq -e '
   and (.services.coturn.read_only == true)
   and (.services.coturn.cap_drop == ["ALL"])
   and (.services.coturn.cap_add == ["NET_BIND_SERVICE"])
-  and ([.services.coturn.secrets[] | select(.source == "coturn_config" and .target == "/run/secrets/turnserver.conf" and .mode == "0400")] | length) == 1
-  and (.services.qdrant.tmpfs | any(test("^/qdrant/snapshots:rw"))) and
+  and ([.services.coturn.secrets[] | select(.source == "coturn_config" and .target == "/run/secrets/turnserver.conf" and .mode == "0400")] | length) == 1 and
   ([.services["agent-secret-init"].secrets[] | select(.source == "core_secret_master_key" and .target == "core_secret_master_key")] | length) == 1 and
   ([.services | to_entries[] | select(.key != "agent-secret-init") | .value.secrets // [] | .[] | select(.source == "core_secret_master_key" or (.target // "" | test("core_secret_master_key")))] | length) == 0
 ' "$production_rendered" >/dev/null
@@ -365,10 +368,16 @@ jq -e '
 ' "$rendered" >/dev/null
 
 jq -e '
-  (.services["agent-postgres"].networks | keys) == ["agent_database"] and
-  (.services["message-postgres"].networks | keys) == ["message_database"] and
+  (.services.postgres.networks | keys) == ["agent_database","message_database"] and
+  (.services.postgres.networks.agent_database.aliases == ["agent-postgres"]) and
+  (.services.postgres.networks.message_database.aliases == ["message-postgres"]) and
+  (.services.postgres.image | test("^docker.io/pgvector/pgvector:pg18@sha256:[0-9a-f]{64}$")) and
   ((.services.agent.networks | keys) | sort) == ["agent_caller","agent_database","agent_egress","agent_private"] and
   ((.services["message-server"].networks | keys) | sort) == ["agent_caller","message_database","message_private","message_public"] and
+  ((.services.agent.networks | has("message_database")) | not) and
+  ((.services["message-server"].networks | has("agent_database")) | not) and
+  ([.services | to_entries[] | select(any(.value.secrets[]?; .source == "postgres_admin_password")) | .key] == ["postgres"]) and
+  ([.services.postgres.configs[] | select(.target == "/docker-entrypoint-initdb.d/10-dirextalk-databases.sh" and .mode == "0555")] | length) == 1 and
   ([.services | to_entries[] | select(.key != "message-server") | .value.networks // {} | keys[] | select(. == "message_public")] | length) == 0
 ' "$rendered" >/dev/null
 
@@ -383,6 +392,7 @@ jq -e '
 ' "$rendered" >/dev/null
 
 for secret in \
+  "$run_dir/provision/postgres-admin-password" \
   "$run_dir/provision/agent-postgres-password" \
   "$run_dir/provision/message-postgres-password" \
   "$run_dir/provision/agent-database-url" \
@@ -405,6 +415,7 @@ done
 [ "$(stat -c '%a' "$run_dir/provision/agent-config.yaml")" = 400 ]
 
 for secret in \
+  "$run_dir/provision/postgres-admin-password" \
   "$run_dir/provision/agent-postgres-password" \
   "$run_dir/provision/message-postgres-password" \
   "$run_dir/provision/agent-database-url" \

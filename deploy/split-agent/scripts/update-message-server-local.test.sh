@@ -47,8 +47,17 @@ case "$1" in
     [ "${FAKE_PULL_FAIL:-false}" != true ]
     ;;
   image)
-    if [ "$2" = rm ]; then [ "${FAKE_IMAGE_RM_FAIL:-false}" != true ]; exit; fi
+    if [ "$2" = rm ]; then
+      [ "${FAKE_IMAGE_RM_FAIL:-false}" != true ] || exit 1
+      if [ "${FAKE_IMAGE_DISAPPEARS_AFTER_REF_RM:-false}" = true ] && [ "$3" = "$FAKE_OLD_REF" ]; then
+        : >"$FAKE_IMAGE_GONE_FILE"
+      fi
+      exit 0
+    fi
     [ "$2" = inspect ]
+    if [ -n "${FAKE_IMAGE_GONE_FILE:-}" ] && [ -f "$FAKE_IMAGE_GONE_FILE" ]; then
+      case "$3" in "$FAKE_OLD_IMAGE_ID"|"$FAKE_OLD_REF"|docker.io/dirextalk/message-server:v1.0.0) exit 1;; esac
+    fi
     if [ "${5:-}" = '{{.Id}}' ]; then
       case "$3" in
         "$FAKE_OLD_REF") printf '%s\n' "$FAKE_OLD_IMAGE_ID" ;;
@@ -82,6 +91,7 @@ case "$1" in
       exit 0
     fi
     case "$3" in
+      "$FAKE_OLD_IMAGE_ID") : ;;
       "$FAKE_OLD_REF") printf '%s|%s|%s|%s\n' "$FAKE_OLD_VERSION" "$FAKE_OLD_IMAGE_ID" "$FAKE_OLD_REVISION" "$FAKE_OLD_REPO_DIGEST" ;;
       "$FAKE_TARGET_REF"|docker.io/dirextalk/message-server:*)
         printf '%s|%s|%s|%s\n' "$FAKE_TARGET_VERSION" "$FAKE_TARGET_IMAGE_ID" "$FAKE_TARGET_REVISION" "$FAKE_TARGET_REF"
@@ -231,7 +241,7 @@ container.1.service=agent
 container.1.project=d-abcdefghijklmnopqrstuvwxyz
 container.2.id=$postgres_id
 container.2.name=postgres
-container.2.service=message-postgres
+container.2.service=postgres
 container.2.project=d-abcdefghijklmnopqrstuvwxyz
 container.3.id=$old_oneshot_id
 container.3.name=message-init
@@ -258,6 +268,8 @@ run_update() {
   FAKE_STACK=d-abcdefghijklmnopqrstuvwxyz FAKE_OLD_MESSAGE_ID=$old_message_id FAKE_NEW_MESSAGE_ID=$new_message_id \
   FAKE_SHARED_OLD_ID=$shared_old_id \
   FAKE_OLD_ONESHOT_ID=$old_oneshot_id \
+  FAKE_IMAGE_DISAPPEARS_AFTER_REF_RM="${FAKE_IMAGE_DISAPPEARS_AFTER_REF_RM:-false}" \
+  FAKE_IMAGE_GONE_FILE="${FAKE_IMAGE_GONE_FILE:-}" \
   FAKE_OLD_REF=$old_ref FAKE_OLD_REPO_DIGEST=${FAKE_OLD_REPO_DIGEST_OVERRIDE:-$old_repo_digest} FAKE_OLD_IMAGE_ID=$old_image_id FAKE_OLD_VERSION=v1.0.0 \
   FAKE_OLD_REVISION=$old_revision FAKE_TARGET_REVISION=$target_revision \
   FAKE_TARGET_REF=$target_ref FAKE_TARGET_IMAGE_ID=$target_image_id FAKE_TARGET_VERSION=v1.0.1 \
@@ -357,8 +369,21 @@ grep -Fqx 'state=complete' "$root/.cleanup-receipt"
 grep -Fq "image rm $old_ref" "$log"
 grep -Fq 'image rm docker.io/dirextalk/message-server:v1.0.0' "$log"
 grep -Fq "container rm $old_oneshot_id" "$log"
-if grep -Eq 'up .* (agent|message-postgres)( |$)' "$log"; then
+if grep -Eq 'up .* (agent|postgres)( |$)' "$log"; then
   echo 'message-server update mutated Agent or PostgreSQL' >&2; exit 1
+fi
+
+root=$(make_stack disappearing-old-image)
+: >"$log"; : >"$state"
+image_gone_file=$tmp/disappearing-old-message-image.marker
+rm -f "$image_gone_file"
+FAKE_IMAGE_DISAPPEARS_AFTER_REF_RM=true FAKE_IMAGE_GONE_FILE=$image_gone_file \
+  run_update "$root" v1.0.1 >/dev/null
+[ -f "$image_gone_file" ]
+grep -Fqx 'state=complete' "$root/.cleanup-receipt"
+if grep -Fq "image rm $old_image_id" "$log"; then
+  echo 'already absent old message-server image ID was removed again' >&2
+  exit 1
 fi
 
 root=$(make_stack shared-old-alias)

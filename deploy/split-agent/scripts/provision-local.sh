@@ -75,7 +75,7 @@ validate_vector_dimension() {
   case "$value" in
     ''|0*|*[!0-9]*) die "$name must be a positive decimal dimension without leading zeros" ;;
   esac
-  [ "$value" -le 65536 ] 2>/dev/null || die "$name must be at most 65536"
+  [ "$value" -le 2000 ] 2>/dev/null || die "$name must be at most 2000"
 }
 
 validate_fixed_runner_uid() {
@@ -722,6 +722,7 @@ generation_hex=$(od -An -N6 -tx1 /dev/urandom | tr -d '[:space:]')
 account_generation=$((16#$generation_hex + 1))
 agent_password=$(openssl rand -hex 24)
 message_password=$(openssl rand -hex 24)
+postgres_admin_password=$(openssl rand -hex 24)
 message_registration_shared_secret=$(openssl rand -hex 32)
 turn_shared_secret=$(openssl rand -hex 32)
 if [ -n "$portal_password_source" ]; then
@@ -843,30 +844,28 @@ require_fresh_docker_namespace \
   "$stack_name-message-private" "$stack_name-message-public" "$stack_name-message-db" \
   "$stack_name-agent-private" "$stack_name-agent-db" \
   "$stack_name-agent-caller" "$stack_name-agent-egress" \
-  "$stack_name-message-postgres" "$stack_name-message-config" \
+  "$stack_name-postgres" "$stack_name-message-config" \
   "$stack_name-message-data" "$stack_name-message-plugins" \
-  "$stack_name-agent-postgres" "$stack_name-agent-secrets" \
+  "$stack_name-agent-secrets" \
   "$stack_name-agent-config" "$stack_name-agent-core-data" \
   "$stack_name-agent-extension-socket" "$stack_name-agent-extension-install" \
   "$stack_name-agent-extension-staging" \
   "$stack_name-agent-extension-runner-workspaces" "$stack_name-agent-extension-runner-state" \
   "$stack_name-agent-knowledge-content" "$stack_name-agent-knowledge-mount" \
-  "$stack_name-agent-qdrant" "$stack_name-capability-authority" \
+  "$stack_name-capability-authority" \
   "$stack_name-capability-shared" "$stack_name-capability-private" \
   "$stack_name-core-runner-socket" \
   "$stack_name-core-runner-installs" "$stack_name-core-runner-workspaces" \
   "$stack_name-core-runner-state"
 
 postgres_image=$(printenv DIREXTALK_POSTGRES_IMAGE_IMMUTABLE 2>/dev/null || true)
-[ -n "$postgres_image" ] || postgres_image=docker.io/library/postgres:18@sha256:3a82e1f56c8f0f5616a11103ac3d47e632c3938698946a7ad26da0df1334744a
+[ -n "$postgres_image" ] || postgres_image=docker.io/pgvector/pgvector:pg18@sha256:691673308c99d2161ba298736f3147f1f22d79de2fb7ec93ae9b4afcab870b62
 utility_image=$(printenv DIREXTALK_UTILITY_IMAGE_IMMUTABLE 2>/dev/null || true)
 [ -n "$utility_image" ] || utility_image=$postgres_image
 message_image=$(printenv DIREXTALK_MESSAGE_SERVER_IMAGE_IMMUTABLE 2>/dev/null || true)
 [ -n "$message_image" ] || message_image=registry.invalid/dirextalk-message-server@sha256:0000000000000000000000000000000000000000000000000000000000000000
 agent_image=$(printenv DIREXTALK_AGENT_IMAGE_IMMUTABLE 2>/dev/null || true)
 [ -n "$agent_image" ] || agent_image=registry.invalid/dirextalk-agent@sha256:0000000000000000000000000000000000000000000000000000000000000000
-qdrant_image=$(printenv DIREXTALK_QDRANT_IMAGE_IMMUTABLE 2>/dev/null || true)
-[ -n "$qdrant_image" ] || qdrant_image=qdrant/qdrant:v1.18.3@sha256:0bd98fa7977f1e75694779359ca4e212822e5a71334e28421182f72f209d5286
 coturn_image=$(printenv DIREXTALK_COTURN_IMAGE_IMMUTABLE 2>/dev/null || true)
 [ -n "$coturn_image" ] || coturn_image=docker.io/coturn/coturn:4.6.3-alpine@sha256:e2bca2f79a4269d7240de5872ab60a9305013ad37296d2acf14f9510874346be
 for image_pair in \
@@ -874,7 +873,6 @@ for image_pair in \
   DIREXTALK_UTILITY_IMAGE_IMMUTABLE:$utility_image \
   DIREXTALK_MESSAGE_SERVER_IMAGE_IMMUTABLE:$message_image \
   DIREXTALK_AGENT_IMAGE_IMMUTABLE:$agent_image \
-  DIREXTALK_QDRANT_IMAGE_IMMUTABLE:$qdrant_image \
   DIREXTALK_COTURN_IMAGE_IMMUTABLE:$coturn_image; do
   image_name=${image_pair%%:*}
   image_value=${image_pair#*:}
@@ -890,6 +888,7 @@ fi
 
 write_secret "$out/agent-postgres-password" "$agent_password"
 write_secret "$out/message-postgres-password" "$message_password"
+write_secret "$out/postgres-admin-password" "$postgres_admin_password"
 write_secret "$out/agent-database-url" "postgresql://dirextalk_agent:$agent_password@agent-postgres:5432/dirextalk_agent?sslmode=disable"
 write_secret "$out/message-database-url" "postgresql://dirextalk_message_server:$message_password@message-postgres:5432/dirextalk_message_server?sslmode=disable"
 write_secret "$out/message-registration-shared-secret" "$message_registration_shared_secret"
@@ -1003,7 +1002,6 @@ message_tls_key_inode=$(stat -c '%i' -- "$message_tls_key_file")
 message_tls_key_uid=$(stat -c '%u' -- "$message_tls_key_file")
 message_tls_key_sha256=$(sha256sum -- "$message_tls_key_file" | awk '{print $1}')
 
-knowledge_collection=$(printf '%s' "$agent_instance_id" | tr -d '-')
 cat >"$out/agent-config.yaml" <<EOF
 instance_id: $agent_instance_id
 database_url_file: /run/secrets/database_url
@@ -1074,11 +1072,8 @@ cat >>"$out/agent-config.yaml" <<EOF
 core_knowledge_enabled: true
 core_knowledge_content_root: /var/lib/dirextalk-agent/knowledge-content
 core_knowledge_mount_root: /var/lib/dirextalk-agent/knowledge-mount
-core_knowledge_content_quota_bytes: 1073741824
 core_knowledge_embedding_profile_id: $embedding_profile_id
-core_knowledge_qdrant_endpoint: http://qdrant:6333
-core_knowledge_qdrant_collection: dirextalk_knowledge_$knowledge_collection
-core_knowledge_qdrant_dimension: $core_knowledge_vector_dimension
+core_knowledge_vector_dimension: $core_knowledge_vector_dimension
 core_knowledge_sweep_interval: 1s
 EOF
 chmod 400 "$out/agent-config.yaml"
@@ -1088,13 +1083,13 @@ DIREXTALK_SPLIT_STACK_NAME=$stack_name
 DIREXTALK_SPLIT_COMPOSE_MODE=$compose_mode
 DIREXTALK_MESSAGE_SERVER_ENTRYPOINT_FILE=$split_deploy_dir/scripts/message-server-entrypoint.sh
 DIREXTALK_CAPABILITY_CA_INITIALIZER_FILE=$split_deploy_dir/scripts/initialize-capability-ca.sh
+DIREXTALK_POSTGRES_INITIALIZER_FILE=$split_deploy_dir/scripts/initialize-postgres.sh
 DIREXTALK_MESSAGE_SERVER_INITIALIZER_FILE=$split_deploy_dir/scripts/initialize-message-server.sh
 DIREXTALK_AGENT_SECRET_MATERIALIZER_FILE=$split_deploy_dir/scripts/materialize-agent-secrets.sh
 DIREXTALK_MESSAGE_SERVER_IMAGE_IMMUTABLE=$message_image
 DIREXTALK_AGENT_IMAGE_IMMUTABLE=$agent_image
 DIREXTALK_POSTGRES_IMAGE_IMMUTABLE=$postgres_image
 DIREXTALK_UTILITY_IMAGE_IMMUTABLE=$utility_image
-DIREXTALK_QDRANT_IMAGE_IMMUTABLE=$qdrant_image
 DIREXTALK_COTURN_IMAGE_IMMUTABLE=$coturn_image
 DIREXTALK_AGENT_BUILD_CONTEXT=$agent_root
 DIREXTALK_MESSAGE_BUILD_CONTEXT=$message_root
@@ -1121,6 +1116,7 @@ DIREXTALK_TURN_EXTERNAL_IP=$turn_external_ip
 DIREXTALK_COTURN_CONFIG_FILE=$out/turnserver.conf
 DIREXTALK_TURN_SHARED_SECRET_FILE=$out/turn-shared-secret
 DIREXTALK_AGENT_CONFIG_FILE=$out/agent-config.yaml
+DIREXTALK_POSTGRES_ADMIN_PASSWORD_FILE=$out/postgres-admin-password
 DIREXTALK_MESSAGE_POSTGRES_PASSWORD_FILE=$out/message-postgres-password
 DIREXTALK_AGENT_POSTGRES_PASSWORD_FILE=$out/agent-postgres-password
 DIREXTALK_MESSAGE_DATABASE_URL_FILE=$out/message-database-url
@@ -1138,11 +1134,10 @@ DIREXTALK_AGENT_PRIVATE_NETWORK=$stack_name-agent-private
 DIREXTALK_AGENT_DATABASE_NETWORK=$stack_name-agent-db
 DIREXTALK_AGENT_CALLER_NETWORK=$stack_name-agent-caller
 DIREXTALK_AGENT_EGRESS_NETWORK=$stack_name-agent-egress
-DIREXTALK_MESSAGE_POSTGRES_VOLUME=$stack_name-message-postgres
+DIREXTALK_POSTGRES_VOLUME=$stack_name-postgres
 DIREXTALK_MESSAGE_CONFIG_VOLUME=$stack_name-message-config
 DIREXTALK_MESSAGE_DATA_VOLUME=$stack_name-message-data
 DIREXTALK_MESSAGE_PLUGINS_VOLUME=$stack_name-message-plugins
-DIREXTALK_AGENT_POSTGRES_VOLUME=$stack_name-agent-postgres
 DIREXTALK_AGENT_SECRET_VOLUME=$stack_name-agent-secrets
 DIREXTALK_AGENT_CONFIG_VOLUME=$stack_name-agent-config
 DIREXTALK_AGENT_CORE_DATA_VOLUME=$stack_name-agent-core-data
@@ -1153,7 +1148,6 @@ DIREXTALK_AGENT_RUNNER_WORKSPACE_VOLUME=$stack_name-agent-extension-runner-works
 DIREXTALK_AGENT_RUNNER_STATE_VOLUME=$stack_name-agent-extension-runner-state
 DIREXTALK_AGENT_KNOWLEDGE_CONTENT_VOLUME=$stack_name-agent-knowledge-content
 DIREXTALK_AGENT_KNOWLEDGE_MOUNT_VOLUME=$stack_name-agent-knowledge-mount
-DIREXTALK_AGENT_QDRANT_VOLUME=$stack_name-agent-qdrant
 DIREXTALK_CAPABILITY_AUTHORITY_VOLUME=$stack_name-capability-authority
 DIREXTALK_CAPABILITY_SHARED_VOLUME=$stack_name-capability-shared
 DIREXTALK_CAPABILITY_PRIVATE_VOLUME=$stack_name-capability-private
@@ -1313,11 +1307,10 @@ resource.network.agent_private=$stack_name-agent-private
 resource.network.agent_database=$stack_name-agent-db
 resource.network.agent_caller=$stack_name-agent-caller
 resource.network.agent_egress=$stack_name-agent-egress
-resource.volume.message_postgres=$stack_name-message-postgres
+resource.volume.postgres=$stack_name-postgres
 resource.volume.message_config=$stack_name-message-config
 resource.volume.message_data=$stack_name-message-data
 resource.volume.message_plugins=$stack_name-message-plugins
-resource.volume.agent_postgres=$stack_name-agent-postgres
 resource.volume.agent_secrets=$stack_name-agent-secrets
 resource.volume.agent_config=$stack_name-agent-config
 resource.volume.agent_core_data=$stack_name-agent-core-data
@@ -1328,7 +1321,6 @@ resource.volume.agent_runner_workspaces=$stack_name-agent-extension-runner-works
 resource.volume.agent_runner_state=$stack_name-agent-extension-runner-state
 resource.volume.agent_knowledge_content=$stack_name-agent-knowledge-content
 resource.volume.agent_knowledge_mount=$stack_name-agent-knowledge-mount
-resource.volume.agent_qdrant=$stack_name-agent-qdrant
 resource.volume.capability_authority=$stack_name-capability-authority
 resource.volume.capability_shared=$stack_name-capability-shared
 resource.volume.capability_private=$stack_name-capability-private

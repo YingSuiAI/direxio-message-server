@@ -424,12 +424,18 @@ cleanup_previous_image() {
     fi
   done <<<"$refs"
   for ref in "${fixed_refs[@]}"; do
+    if ! docker image inspect "$current_image_id" >/dev/null 2>&1; then
+      break
+    fi
     verify_output_dir_identity
     verify_host_docker_identity
     resolved_id=$(docker image inspect "$ref" --format '{{.Id}}' 2>/dev/null) || return 1
     [ "$resolved_id" = "$current_image_id" ] || return 1
     docker image rm "$ref" >/dev/null || return 1
   done
+  if ! docker image inspect "$current_image_id" >/dev/null 2>&1; then
+    return 0
+  fi
   if [ "$retain_image" = true ]; then
     printf 'split message-server update: previous image ID retained because another container or foreign repository alias still uses it\n' >&2
     return 0

@@ -23,7 +23,7 @@ engine=cleanup-failure-engine
 fragment=/usr/lib/systemd/system/systemd-journald.service
 fragment_hash=$(sha256sum -- "$fragment" | awk '{print $1}')
 network_keys=(message_private message_public message_database agent_private agent_database agent_caller agent_egress)
-volume_keys=(message_postgres message_config message_data message_plugins agent_postgres agent_secrets agent_config agent_core_data agent_extension_socket agent_extension_install agent_extension_staging agent_runner_workspaces agent_runner_state agent_knowledge_content agent_knowledge_mount agent_qdrant capability_authority capability_shared capability_private core_runner_socket core_runner_installs core_runner_workspaces core_runner_state)
+volume_keys=(postgres message_config message_data message_plugins agent_secrets agent_config agent_core_data agent_extension_socket agent_extension_install agent_extension_staging agent_runner_workspaces agent_runner_state agent_knowledge_content agent_knowledge_mount capability_authority capability_shared capability_private core_runner_socket core_runner_installs core_runner_workspaces core_runner_state)
 
 write_fixture() {
   local dir=$1 key

@@ -436,6 +436,22 @@ verify_identity() {
   [ "$actual_gid" = "$gid" ] || die "static group identity mismatch: $group"
 }
 
+runner_identities_exist() {
+  getent passwd "$extension_user" >/dev/null 2>&1 &&
+    getent passwd "$extension_uid" >/dev/null 2>&1 &&
+    getent group "$extension_user" >/dev/null 2>&1 &&
+    getent group "$extension_gid" >/dev/null 2>&1 &&
+    getent passwd "$core_user" >/dev/null 2>&1 &&
+    getent passwd "$core_uid" >/dev/null 2>&1 &&
+    getent group "$core_user" >/dev/null 2>&1 &&
+    getent group "$core_gid" >/dev/null 2>&1
+}
+
+runner_identities_present=false
+if runner_identities_exist; then
+  runner_identities_present=true
+fi
+
 existing_passwd_identity "$extension_user" "$extension_uid" "$extension_gid"
 existing_group_identity "$extension_user" "$extension_gid"
 existing_passwd_identity "$core_user" "$core_uid" "$core_gid"
@@ -454,8 +470,10 @@ check_existing_exact_file "$core_source" "$unit_dir/$core_template"
 systemd-sysusers --dry-run "$sysusers_source" >/dev/null 2>&1 || \
   die "repository sysusers configuration failed systemd-sysusers validation"
 install_exact_file "$sysusers_source" "$sysusers_dir/$sysusers_file"
-systemd-sysusers "$sysusers_dir/$sysusers_file" >/dev/null 2>&1 || \
-  die "systemd-sysusers failed to realize static runner identities"
+if [ "$runner_identities_present" != true ]; then
+  systemd-sysusers "$sysusers_dir/$sysusers_file" >/dev/null 2>&1 || \
+    die "systemd-sysusers failed to realize static runner identities"
+fi
 verify_identity "$extension_user" "$extension_uid" "$extension_gid" "$extension_user"
 verify_identity "$core_user" "$core_uid" "$core_gid" "$core_user"
 

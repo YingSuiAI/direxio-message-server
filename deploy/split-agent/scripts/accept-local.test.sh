@@ -19,7 +19,7 @@ if command -v shellcheck >/dev/null 2>&1; then
 fi
 
 # Contract guard: the helper must use protected files and the message-server
-# public envelope, never a direct Agent/Qdrant HTTP listener or shell tracing.
+# public envelope, never a direct Agent listener or shell tracing.
 grep -Fq -- '--rawfile' "$script"
 grep -Fq -- '--config' "$script"
 grep -Fq -- '/_p2p/query' "$script"
@@ -60,6 +60,14 @@ grep -Fq -- 'ACCEPT_KNOWLEDGE_' "$script"
 grep -Fq -- 'ACCEPT_MEMORY_NEW_' "$script"
 grep -Fq -- 'fresh Native Agent conversation did not recall the updated long-term-memory marker' "$script"
 grep -Fq -- 'core_message_tool_results' "$script"
+grep -Fq -- 'db_query_expect_denied agent-postgres dirextalk_agent dirextalk_message_server' "$script"
+grep -Fq -- 'db_query_expect_denied message-postgres dirextalk_message_server dirextalk_agent' "$script"
+grep -Fq -- 'SET ROLE dirextalk_message_server' "$script"
+grep -Fq -- 'SET ROLE dirextalk_agent' "$script"
+grep -Fq -- 'services.postgres.networks' "$script"
+grep -Fq -- 'postgres_admin_password' "$script"
+grep -Fq -- "SELECT count(*) FROM pg_extension WHERE extname = 'vector'" "$script"
+grep -Fq -- "SELECT vector_dims('[1,2,3]'::vector)" "$script"
 grep -Fq -- 'DIREXTALK_MESSAGE_SERVER_NAME' "$script"
 grep -Fq -- "--resolve \"\${resolve_host}:\${https_bind}:127.0.0.1\"" "$script"
 # The literal marker is intentionally matched in the target script.
@@ -123,23 +131,11 @@ history_context_line=$(grep -nF -- 'call agent.chat "$history_context_chat" hist
 
 # Account deletion remains the default disposable-account gate, but the final
 # persistent-account lane must be able to skip only the deprovision assertions.
-# Keep the test-only Qdrant sentinel cleanup unconditional in either mode.
-# shellcheck disable=SC2016
 account_guard_line=$(grep -nF -- 'if [ "$account_delete_enabled" = true ]; then' "$script" | head -n 1 | cut -d: -f1)
 account_delete_line=$(grep -nF -- "call portal.account.delete \"\$account_delete\" account-delete" "$script" | head -n 1 | cut -d: -f1)
-sentinel_anchor_line=$(grep -nF -- '# The sentinel is test-only data and must be removed in both persistent-account' "$script" | head -n 1 | cut -d: -f1)
-sentinel_delete_line=$(grep -nF -- "qdrant_http DELETE \"/collections/\$qdrant_sentinel\"" "$script" | head -n 1 | cut -d: -f1)
-[ -n "$account_guard_line" ] && [ -n "$account_delete_line" ] && [ -n "$sentinel_anchor_line" ] && [ -n "$sentinel_delete_line" ]
+[ -n "$account_guard_line" ] && [ -n "$account_delete_line" ]
 [ "$account_delete_line" -gt "$account_guard_line" ] || {
   echo "portal.account.delete is not guarded by account deletion switch" >&2
-  exit 1
-}
-[ "$account_delete_line" -lt "$sentinel_anchor_line" ] || {
-  echo "account deletion block does not end before unconditional sentinel cleanup" >&2
-  exit 1
-}
-[ "$sentinel_delete_line" -gt "$sentinel_anchor_line" ] || {
-  echo "Qdrant sentinel cleanup is not unconditional" >&2
   exit 1
 }
 
@@ -172,8 +168,8 @@ fi
 grep -Fq -- 'does not automatically inject ordinary uploaded Knowledge' "$readme"
 grep -Fq -- 'does not claim Native Agent WebSocket streaming' "$readme"
 grep -Fq -- 'an HTTP `agent.chat` response cannot' "$readme"
-if grep -Eiq -- 'https?://(agent|qdrant)(:|/)' "$script"; then
-  echo "accept-local.sh must not bypass message-server with direct Agent/Qdrant HTTP" >&2
+if grep -Eiq -- 'https?://agent(:|/)' "$script"; then
+  echo "accept-local.sh must not bypass message-server with direct Agent HTTP" >&2
   exit 1
 fi
 if grep -Fq -- 'set -x' "$script"; then

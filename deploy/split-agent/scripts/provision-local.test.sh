@@ -74,6 +74,39 @@ if grep -Eq '^DIREXTALK_(EXTENSION_RUNNER|CORE_RUNNER)_IMAGE_' "$generated_dir/.
   echo "runner-specific image variables must not be provisioned" >&2
   exit 1
 fi
+postgres_admin_password=$(tr -d '\n' <"$generated_dir/postgres-admin-password")
+message_postgres_password=$(tr -d '\n' <"$generated_dir/message-postgres-password")
+agent_postgres_password=$(tr -d '\n' <"$generated_dir/agent-postgres-password")
+for password in "$postgres_admin_password" "$message_postgres_password" "$agent_postgres_password"; do
+  printf '%s\n' "$password" | grep -Eq '^[0-9a-f]{48}$'
+done
+[ "$postgres_admin_password" != "$message_postgres_password" ]
+[ "$postgres_admin_password" != "$agent_postgres_password" ]
+[ "$message_postgres_password" != "$agent_postgres_password" ]
+[ "$(stat -c '%a' "$generated_dir/postgres-admin-password")" = 400 ]
+grep -Fqx "DIREXTALK_POSTGRES_ADMIN_PASSWORD_FILE=$generated_dir/postgres-admin-password" "$generated_dir/.env"
+grep -Fqx 'DIREXTALK_POSTGRES_VOLUME='"$(sed -n 's/^DIREXTALK_SPLIT_STACK_NAME=//p' "$generated_dir/.env")"'-postgres' "$generated_dir/.env"
+grep -Fqx 'resource.volume.postgres='"$(sed -n 's/^DIREXTALK_SPLIT_STACK_NAME=//p' "$generated_dir/.env")"'-postgres' "$generated_dir/.manifest"
+if grep -Eq '^DIREXTALK_(MESSAGE|AGENT)_POSTGRES_VOLUME=' "$generated_dir/.env" ||
+   grep -Eq '^resource\.volume\.(message_postgres|agent_postgres)=' "$generated_dir/.manifest"; then
+  echo "split PostgreSQL volumes survived fresh-state provisioning" >&2
+  exit 1
+fi
+grep -Eq '^postgresql://dirextalk_message_server:[0-9a-f]{48}@message-postgres:5432/dirextalk_message_server\?sslmode=disable$' "$generated_dir/message-database-url"
+grep -Eq '^postgresql://dirextalk_agent:[0-9a-f]{48}@agent-postgres:5432/dirextalk_agent\?sslmode=disable$' "$generated_dir/agent-database-url"
+grep -Fqx 'core_knowledge_vector_dimension: 1536' "$generated_dir/agent-config.yaml"
+if grep -Eiq 'qdrant|core_knowledge_content_quota_bytes' "$generated_dir/agent-config.yaml"; then
+  echo "retired Knowledge storage configuration survived fresh-state provisioning" >&2
+  exit 1
+fi
+for public_file in "$generated_log" "$generated_dir/.env" "$generated_dir/.manifest"; do
+  for password in "$postgres_admin_password" "$message_postgres_password" "$agent_postgres_password"; do
+    if grep -Fq "$password" "$public_file"; then
+      echo "PostgreSQL credential leaked into public provisioning output" >&2
+      exit 1
+    fi
+  done
+done
 turn_secret=$(tr -d '\n' <"$generated_dir/turn-shared-secret")
 [ "${#turn_secret}" -eq 64 ]
 printf '%s\n' "$turn_secret" | grep -Eq '^[0-9a-f]{64}$'

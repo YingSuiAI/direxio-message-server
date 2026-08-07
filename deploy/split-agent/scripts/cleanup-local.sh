@@ -171,11 +171,10 @@ network_pairs=(
   'DIREXTALK_AGENT_EGRESS_NETWORK:resource.network.agent_egress'
 )
 volume_pairs=(
-  'DIREXTALK_MESSAGE_POSTGRES_VOLUME:resource.volume.message_postgres'
+  'DIREXTALK_POSTGRES_VOLUME:resource.volume.postgres'
   'DIREXTALK_MESSAGE_CONFIG_VOLUME:resource.volume.message_config'
   'DIREXTALK_MESSAGE_DATA_VOLUME:resource.volume.message_data'
   'DIREXTALK_MESSAGE_PLUGINS_VOLUME:resource.volume.message_plugins'
-  'DIREXTALK_AGENT_POSTGRES_VOLUME:resource.volume.agent_postgres'
   'DIREXTALK_AGENT_SECRET_VOLUME:resource.volume.agent_secrets'
   'DIREXTALK_AGENT_CONFIG_VOLUME:resource.volume.agent_config'
   'DIREXTALK_AGENT_CORE_DATA_VOLUME:resource.volume.agent_core_data'
@@ -186,7 +185,6 @@ volume_pairs=(
   'DIREXTALK_AGENT_RUNNER_STATE_VOLUME:resource.volume.agent_runner_state'
   'DIREXTALK_AGENT_KNOWLEDGE_CONTENT_VOLUME:resource.volume.agent_knowledge_content'
   'DIREXTALK_AGENT_KNOWLEDGE_MOUNT_VOLUME:resource.volume.agent_knowledge_mount'
-  'DIREXTALK_AGENT_QDRANT_VOLUME:resource.volume.agent_qdrant'
   'DIREXTALK_CAPABILITY_AUTHORITY_VOLUME:resource.volume.capability_authority'
   'DIREXTALK_CAPABILITY_SHARED_VOLUME:resource.volume.capability_shared'
   'DIREXTALK_CAPABILITY_PRIVATE_VOLUME:resource.volume.capability_private'

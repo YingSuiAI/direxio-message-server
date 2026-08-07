@@ -279,6 +279,18 @@ prepare_runner_cgroups() {
   rm -f "$runner_preparation"
   runner_preparation=''
 }
+prepare_runner_cgroups_after_stop() {
+  local image_ref=$1 compose_env=$2
+  if prepare_runner_cgroups "$image_ref" "$compose_env"; then
+    return 0
+  fi
+  verify_control_identity
+  verify_host_docker_identity
+  if [ "$test_fixture" != true ]; then
+    sleep 2
+  fi
+  prepare_runner_cgroups "$image_ref" "$compose_env"
+}
 normalize_runner_volumes() {
   local image_ref=$1 compose_env=$2 service
   for service in \
@@ -378,12 +390,18 @@ cleanup_previous_image() {
     fi
   done <<<"$refs"
   for ref in "${fixed_refs[@]}"; do
+    if ! docker image inspect "$current_image_id" >/dev/null 2>&1; then
+      break
+    fi
     verify_output_dir_identity
     verify_host_docker_identity
     resolved_id=$(docker image inspect "$ref" --format '{{.Id}}' 2>/dev/null) || return 1
     [ "$resolved_id" = "$current_image_id" ] || return 1
     docker image rm "$ref" >/dev/null || return 1
   done
+  if ! docker image inspect "$current_image_id" >/dev/null 2>&1; then
+    return 0
+  fi
   if [ "$retain_image" = true ]; then
     printf 'split-agent update: previous image ID retained because another container or foreign repository alias still uses it\n' >&2
     return 0
@@ -561,7 +579,7 @@ else
   die 'Agent runtime stop failed'
 fi
 failure_phase=runner-preparation
-prepare_runner_cgroups "$target_ref" "$env_file" || die 'target runner cgroup preparation failed'
+prepare_runner_cgroups_after_stop "$target_ref" "$env_file" || die 'target runner cgroup preparation failed'
 failure_phase=volume-normalization
 normalize_runner_volumes "$target_ref" "$env_file" || die 'target runner volume normalization failed'
 failure_phase=storage-migration

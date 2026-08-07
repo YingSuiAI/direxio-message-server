@@ -194,12 +194,16 @@ EOF
   sed -n '/^existing_passwd_identity() {/,/^}$/p' "$script"
   sed -n '/^existing_group_identity() {/,/^}$/p' "$script"
   sed -n '/^verify_identity() {/,/^}$/p' "$script"
+  sed -n '/^runner_identities_exist() {/,/^}$/p' "$script"
 } >>"$runner_test_tmp/identity-functions.sh"
 cat >"$runner_test_tmp/bin/getent" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 kind=$1
 key=$2
+if [ "${DIREXTALK_FAKE_IDENTITY_MISSING:-false}" = true ] && [ "$kind:$key" = passwd:65530 ]; then
+  exit 2
+fi
 if [ "${DIREXTALK_FAKE_IDENTITY_COLLISION:-false}" = true ] && [ "$kind:$key" = passwd:65531 ]; then
   printf 'another-runner:x:65531:65531:Unexpected:/nonexistent:/usr/sbin/nologin\n'
   exit 0
@@ -211,6 +215,12 @@ case "$kind:$key" in
   group:dirextalk-extension-runner|group:65531)
     printf 'dirextalk-extension-runner:x:65531:\n'
     ;;
+  passwd:dirextalk-core-runner|passwd:65530)
+    printf 'dirextalk-core-runner:x:65530:65530:Dirextalk Core Runner:/nonexistent:/usr/sbin/nologin\n'
+    ;;
+  group:dirextalk-core-runner|group:65530)
+    printf 'dirextalk-core-runner:x:65530:\n'
+    ;;
   *) exit 2 ;;
 esac
 EOF
@@ -219,16 +229,29 @@ cat >"$runner_test_tmp/bin/id" <<'EOF'
 set -euo pipefail
 case "$1:$2" in
   -u:dirextalk-extension-runner|-g:dirextalk-extension-runner) printf '65531\n' ;;
+  -u:dirextalk-core-runner|-g:dirextalk-core-runner) printf '65530\n' ;;
   *) exit 2 ;;
 esac
 EOF
 chmod 755 "$runner_test_tmp/bin/getent" "$runner_test_tmp/bin/id"
 PATH="$runner_test_path" bash -c '
   source "$1"
+  extension_user=dirextalk-extension-runner; extension_uid=65531; extension_gid=65531
+  core_user=dirextalk-core-runner; core_uid=65530; core_gid=65530
+  runner_identities_exist
   existing_passwd_identity dirextalk-extension-runner 65531 65531
   existing_group_identity dirextalk-extension-runner 65531
   verify_identity dirextalk-extension-runner 65531 65531 dirextalk-extension-runner
 ' _ "$runner_test_tmp/identity-functions.sh"
+if PATH="$runner_test_path" DIREXTALK_FAKE_IDENTITY_MISSING=true bash -c '
+  source "$1"
+  extension_user=dirextalk-extension-runner; extension_uid=65531; extension_gid=65531
+  core_user=dirextalk-core-runner; core_uid=65530; core_gid=65530
+  runner_identities_exist
+' _ "$runner_test_tmp/identity-functions.sh"; then
+  echo "missing runner identity was unexpectedly reported as complete" >&2
+  exit 1
+fi
 if PATH="$runner_test_path" DIREXTALK_FAKE_IDENTITY_COLLISION=true bash -c '
   source "$1"
   existing_passwd_identity dirextalk-extension-runner 65531 65531

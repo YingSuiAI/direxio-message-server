@@ -55,12 +55,18 @@ validate_image_ref() {
     *) canonical="library/$repository" ;;
   esac
   canonical=${canonical%:*}
+  if [ "$name" = DIREXTALK_POSTGRES_IMAGE_IMMUTABLE ]; then
+    case "$repository" in
+      docker.io/pgvector/pgvector:pg18|pgvector/pgvector:pg18) ;;
+      *) die "$name must use the maintained pgvector/pgvector:pg18 image" ;;
+    esac
+  fi
   case "$name:$canonical" in
     DIREXTALK_MESSAGE_SERVER_IMAGE_IMMUTABLE:dirextalk/message-server|\
     DIREXTALK_AGENT_IMAGE_IMMUTABLE:dirextalk/agent|\
-    DIREXTALK_POSTGRES_IMAGE_IMMUTABLE:library/postgres|\
-    DIREXTALK_QDRANT_IMAGE_IMMUTABLE:qdrant/qdrant|\
+    DIREXTALK_POSTGRES_IMAGE_IMMUTABLE:pgvector/pgvector|\
     DIREXTALK_COTURN_IMAGE_IMMUTABLE:coturn/coturn|\
+    DIREXTALK_UTILITY_IMAGE_IMMUTABLE:pgvector/pgvector|\
     DIREXTALK_UTILITY_IMAGE_IMMUTABLE:library/postgres|\
     DIREXTALK_UTILITY_IMAGE_IMMUTABLE:library/alpine|\
     DIREXTALK_UTILITY_IMAGE_IMMUTABLE:library/busybox|\
@@ -77,7 +83,6 @@ image_keys=(
   DIREXTALK_UTILITY_IMAGE_IMMUTABLE
   DIREXTALK_MESSAGE_SERVER_IMAGE_IMMUTABLE
   DIREXTALK_AGENT_IMAGE_IMMUTABLE
-  DIREXTALK_QDRANT_IMAGE_IMMUTABLE
   DIREXTALK_COTURN_IMAGE_IMMUTABLE
 )
 
@@ -108,7 +113,7 @@ awk -F= '
   NR == 1 && $0 == "# dirextalk-image-attestation-v1" { next }
   /^[[:space:]]*#/ { next }
   /^[[:space:]]*$/ { next }
-  $1 !~ /^(capability_api_version|message_source_revision|agent_source_revision|capability_api_source|image\.DIREXTALK_(POSTGRES|UTILITY|MESSAGE_SERVER|AGENT|QDRANT|COTURN)_IMAGE_IMMUTABLE)$/ { exit 1 }
+  $1 !~ /^(capability_api_version|message_source_revision|agent_source_revision|capability_api_source|image\.DIREXTALK_(POSTGRES|UTILITY|MESSAGE_SERVER|AGENT|COTURN)_IMAGE_IMMUTABLE)$/ { exit 1 }
 ' "$attestation_file" || die "attestation contains an unknown or malformed field"
 
 agent_image=$(read_env_value DIREXTALK_AGENT_IMAGE_IMMUTABLE)
