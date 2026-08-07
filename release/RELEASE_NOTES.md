@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v1.1.4
+
+1. Keep durable Native Agent execution running when a client detaches its WebSocket stream; only an explicit turn-stop action cancels execution.
+
 ## v1.1.3
 
 1. Unify Message Server and Agent updates behind the single `release.v2` status, apply, ticket, and recovery contract.
