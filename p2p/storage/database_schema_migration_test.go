@@ -37,7 +37,7 @@ func TestFreshProductBaselineIsSingleVersionAndReopenIdempotent(t *testing.T) {
 	assertP2PMigrationSet(t, store.DB(), baseline)
 
 	for _, table := range []string{
-		"p2p_portal", "p2p_read_markers", "p2p_channels", "p2p_channel_posts", "p2p_channel_comments",
+		"p2p_portal", "p2p_read_markers", "p2p_channels", "p2p_channel_posts", "p2p_channel_post_settings", "p2p_channel_comments",
 		"p2p_contacts", "p2p_groups", "p2p_calls", "p2p_favorites", "p2p_follows", "p2p_reactions",
 		"p2p_members", "p2p_events", "p2p_channel_invite_grants", "p2p_conversations", "p2p_operations",
 		"p2p_plugins", "p2p_plugin_jobs", "p2p_plugin_secrets", "p2p_reports", "p2p_blocks",

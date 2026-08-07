@@ -9,6 +9,12 @@ import (
 func (s *MemoryStore) InsertChannelPost(ctx context.Context, post channelPostRecord) error {
 	post = normalizeChannelPostRecord(post)
 	s.mu.Lock()
+	if settings, ok := s.postSettings[post.PostID]; ok && settings.PostEventID == post.EventID {
+		post.Visibility = settings.Visibility
+		post.CommentsEnabled = settings.CommentsEnabled
+		post.CommentsEnabledSet = true
+		post.SettingsUpdated = true
+	}
 	for i := range s.posts {
 		if s.posts[i].PostID == post.PostID {
 			if s.posts[i].SettingsUpdated {
@@ -29,23 +35,26 @@ func (s *MemoryStore) InsertChannelPost(ctx context.Context, post channelPostRec
 	return nil
 }
 
-func (s *MemoryStore) UpdateChannelPostSettings(_ context.Context, postID, eventID string, visibility *string, commentsEnabled *bool) (bool, error) {
+func (s *MemoryStore) ApplyChannelPostSettings(_ context.Context, settings channelPostSettingsRecord) error {
+	settings.PostID = strings.TrimSpace(settings.PostID)
+	settings.PostEventID = strings.TrimSpace(settings.PostEventID)
+	settings.Visibility = normalizeChannelPostRecord(channelPostRecord{Visibility: settings.Visibility}).Visibility
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if current, ok := s.postSettings[settings.PostID]; ok && current.UpdatedAt > settings.UpdatedAt {
+		return nil
+	}
+	s.postSettings[settings.PostID] = settings
 	for i := range s.posts {
-		if s.posts[i].PostID == postID && s.posts[i].EventID == eventID {
-			if visibility != nil {
-				s.posts[i].Visibility = normalizeChannelPostRecord(channelPostRecord{Visibility: *visibility}).Visibility
-			}
-			if commentsEnabled != nil {
-				s.posts[i].CommentsEnabled = *commentsEnabled
-				s.posts[i].CommentsEnabledSet = true
-			}
+		if s.posts[i].PostID == settings.PostID && s.posts[i].EventID == settings.PostEventID {
+			s.posts[i].Visibility = settings.Visibility
+			s.posts[i].CommentsEnabled = settings.CommentsEnabled
+			s.posts[i].CommentsEnabledSet = true
 			s.posts[i].SettingsUpdated = true
-			return true, nil
+			break
 		}
 	}
-	return false, nil
+	return nil
 }
 
 func (s *MemoryStore) GetChannelPostByID(ctx context.Context, postID, channelID string) (channelPostRecord, bool, error) {

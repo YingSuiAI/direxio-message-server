@@ -85,7 +85,7 @@ type ReactionHistory struct {
 // by the Matrix projector/backfill adapters in the root package.
 type ContentStore interface {
 	InsertChannelPost(context.Context, dirextalkdomain.ChannelPostRecord) error
-	UpdateChannelPostSettings(context.Context, string, string, *string, *bool) (bool, error)
+	ApplyChannelPostSettings(context.Context, dirextalkdomain.ChannelPostSettingsRecord) error
 	GetChannelPostByID(context.Context, string, string) (dirextalkdomain.ChannelPostRecord, bool, error)
 	GetChannelPostByEventID(context.Context, string, string) (dirextalkdomain.ChannelPostRecord, bool, error)
 	ListChannelPosts(context.Context, string) ([]dirextalkdomain.ChannelPostRecord, error)
@@ -115,6 +115,7 @@ type ChannelCatalog interface {
 
 type MatrixContentPort interface {
 	SendMessage(context.Context, dirextalktransport.SendMessageRequest) (dirextalktransport.SendMessageResult, error)
+	SendStateEvent(context.Context, dirextalktransport.SendStateEventRequest) error
 	RedactEvent(context.Context, dirextalktransport.RedactEventRequest) (dirextalktransport.RedactEventResult, error)
 }
 

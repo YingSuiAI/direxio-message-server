@@ -296,7 +296,7 @@ Channel posts/comments/reactions：
 - 仍是产品内容 projection。
 - 使用 Matrix `m.room.message` 携带 `p2p_kind=channel_post` 或 `p2p_kind=channel_comment`。
 - `channels.posts.create` 的 `visibility` 只接受 `public`/`private`，缺省为 `private`；该字段随 Matrix 帖子事件传播并投影到 PostgreSQL，缺少字段的历史帖子按私有处理。
-- `channels.posts.update` 由帖子作者或频道主更新单个帖子的可变设置，接受 `post_id` 与可选的 `visibility`、`comments_enabled`，两项至少提供一项。关闭 `comments_enabled` 只拒绝该帖的新评论，不影响频道讨论区、频道聊天或其他帖子；重新开启后恢复。更新值持久化在 PostgreSQL，Matrix 原始帖子事件重放或历史回填不得覆盖。
+- `channels.posts.update` 由帖子作者或频道主更新单个帖子的可变设置，接受 `post_id` 与可选的 `visibility`、`comments_enabled`，两项至少提供一项。完整设置先写入当前频道房间的 `io.dirextalk.channel.post.settings` Matrix state（`state_key=post_id`），再投影到各成员节点 PostgreSQL；state 写入失败不提前修改本地投影。关闭 `comments_enabled` 只拒绝该帖的新评论，不影响频道讨论区、频道聊天、该帖点赞/收藏或其他帖子；重新开启后恢复。评论发送端的 Matrix ProductPolicy 与接收端投影均校验该帖设置；独立 durable settings 记录保证 state 先于帖子历史到达时仍能合并，Matrix 原始帖子事件重放或历史回填不得覆盖。
 - `channels.posts.list` 保持原有 owner 鉴权且不接受 `visibility`；不传 `page/page_size` 时仍一次返回频道全部帖子，传任一分页字段时按最新优先分页，另一字段缺省为 `page=1`/`page_size=5`，每页最大 100 条。每条帖子都返回帖子级 `comments_enabled`；频道 DTO 原有的同名字段仍只表示频道级设置。
 - `channels.public.posts.list` 是无需 bearer 的独立公开帖子只读接口，接受 `channel_id` 或 `room_id`，始终只查帖子 `visibility=public`，默认每页 5 条并支持翻页与跨节点转发；帖子可见性独立于频道可见性，已知私有频道标识的访客也只能获得其中明确公开的帖子。每条结果提供 `comment_count`、`like_count`/兼容字段 `reaction_count`、`favorite_count`，但不计算访客的 `reacted_by_me`/`favorited_by_me`。非成员不能评论、点赞或收藏，写动作在 Matrix 写入和本地 projection 写入前要求 joined 成员投影，Matrix ProductPolicy 继续做最终权限校验。
 - reaction 使用 Matrix reaction/内容字段投影到 P2P reaction read model；点赞开关事件携带 `active`，因此取消点赞也会覆盖到其他节点的 read model。

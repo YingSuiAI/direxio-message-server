@@ -252,8 +252,8 @@ func (s *DatabaseStore) ListChannelInviteGrants(ctx context.Context) ([]channelI
 
 func (s *DatabaseStore) InsertChannelPost(ctx context.Context, post channelPostRecord) error {
 	post = normalizeChannelPostRecord(post)
-	return s.writer.Do(nil, nil, func(txn *sql.Tx) error {
-		_, err := s.db.ExecContext(ctx, `
+	return s.writer.Do(s.db, nil, func(txn *sql.Tx) error {
+		if _, err := txn.ExecContext(ctx, `
 			INSERT INTO p2p_channel_posts (
 				post_id, channel_id, room_id, event_id, author_mxid, author_name,
 				body, message_type, media_json, visibility, comments_enabled, settings_updated, origin_server_ts, comment_count
@@ -273,40 +273,56 @@ func (s *DatabaseStore) InsertChannelPost(ctx context.Context, post channelPostR
 				origin_server_ts = EXCLUDED.origin_server_ts,
 				comment_count = EXCLUDED.comment_count
 		`, post.PostID, post.ChannelID, post.RoomID, post.EventID, post.AuthorMXID, post.AuthorName,
-			post.Body, post.MessageType, post.MediaJSON, post.Visibility, post.CommentsEnabled, post.SettingsUpdated, post.OriginServerTS, post.CommentCount)
+			post.Body, post.MessageType, post.MediaJSON, post.Visibility, post.CommentsEnabled, post.SettingsUpdated, post.OriginServerTS, post.CommentCount); err != nil {
+			return err
+		}
+		_, err := txn.ExecContext(ctx, `
+			UPDATE p2p_channel_posts AS post
+			SET visibility = settings.visibility,
+				comments_enabled = settings.comments_enabled,
+				settings_updated = TRUE
+			FROM p2p_channel_post_settings AS settings
+			WHERE post.post_id = $1
+				AND settings.post_id = post.post_id
+				AND settings.post_event_id = post.event_id
+		`, post.PostID)
 		return err
 	})
 }
 
-func (s *DatabaseStore) UpdateChannelPostSettings(ctx context.Context, postID, eventID string, visibility *string, commentsEnabled *bool) (bool, error) {
-	var visibilityValue any
-	if visibility != nil {
-		visibilityValue = normalizeChannelPostRecord(channelPostRecord{Visibility: *visibility}).Visibility
-	}
-	var commentsEnabledValue any
-	if commentsEnabled != nil {
-		commentsEnabledValue = *commentsEnabled
-	}
-	var updated bool
-	err := s.writer.Do(nil, nil, func(txn *sql.Tx) error {
-		result, err := s.db.ExecContext(ctx, `
-			UPDATE p2p_channel_posts
-			SET visibility = COALESCE($1, visibility),
-				comments_enabled = COALESCE($2, comments_enabled),
+func (s *DatabaseStore) ApplyChannelPostSettings(ctx context.Context, settings channelPostSettingsRecord) error {
+	settings.PostID = strings.TrimSpace(settings.PostID)
+	settings.PostEventID = strings.TrimSpace(settings.PostEventID)
+	settings.Visibility = normalizeChannelPostRecord(channelPostRecord{Visibility: settings.Visibility}).Visibility
+	return s.writer.Do(s.db, nil, func(txn *sql.Tx) error {
+		if _, err := txn.ExecContext(ctx, `
+			INSERT INTO p2p_channel_post_settings (
+				post_id, channel_id, room_id, post_event_id, visibility, comments_enabled, updated_at
+			) VALUES ($1, $2, $3, $4, $5, $6, $7)
+			ON CONFLICT(post_id) DO UPDATE SET
+				channel_id = EXCLUDED.channel_id,
+				room_id = EXCLUDED.room_id,
+				post_event_id = EXCLUDED.post_event_id,
+				visibility = EXCLUDED.visibility,
+				comments_enabled = EXCLUDED.comments_enabled,
+				updated_at = EXCLUDED.updated_at
+			WHERE EXCLUDED.updated_at >= p2p_channel_post_settings.updated_at
+		`, settings.PostID, settings.ChannelID, settings.RoomID, settings.PostEventID,
+			settings.Visibility, settings.CommentsEnabled, settings.UpdatedAt); err != nil {
+			return err
+		}
+		_, err := txn.ExecContext(ctx, `
+			UPDATE p2p_channel_posts AS post
+			SET visibility = settings.visibility,
+				comments_enabled = settings.comments_enabled,
 				settings_updated = TRUE
-			WHERE post_id = $3 AND event_id = $4
-		`, visibilityValue, commentsEnabledValue, postID, eventID)
-		if err != nil {
-			return err
-		}
-		rows, err := result.RowsAffected()
-		if err != nil {
-			return err
-		}
-		updated = rows == 1
-		return nil
+			FROM p2p_channel_post_settings AS settings
+			WHERE post.post_id = $1
+				AND settings.post_id = post.post_id
+				AND settings.post_event_id = post.event_id
+		`, settings.PostID)
+		return err
 	})
-	return updated, err
 }
 
 func (s *DatabaseStore) GetChannelPostByID(ctx context.Context, postID, channelID string) (channelPostRecord, bool, error) {

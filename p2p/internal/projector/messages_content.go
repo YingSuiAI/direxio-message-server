@@ -117,6 +117,25 @@ func (m *Module) projectChannelPost(ctx context.Context, event *types.HeaderedEv
 	})
 }
 
+func (m *Module) projectChannelPostSettings(ctx context.Context, event *types.HeaderedEvent) error {
+	if m.dependencies.ChannelContent == nil {
+		return errors.New("channel content module is not configured")
+	}
+	content := map[string]any{}
+	if err := json.Unmarshal(event.Content(), &content); err != nil {
+		return err
+	}
+	stateKey := ""
+	if event.StateKey() != nil {
+		stateKey = *event.StateKey()
+	}
+	return m.dependencies.ChannelContent.ProjectPostSettings(ctx, channelsmodule.ProjectionEvent{
+		RoomID: event.RoomID().String(), EventID: event.EventID(), StateKey: stateKey,
+		SenderMXID: string(event.SenderID()), OriginServerTS: int64(event.OriginServerTS()),
+		Content: content,
+	})
+}
+
 func (m *Module) projectChannelComment(ctx context.Context, event *types.HeaderedEvent, content map[string]any, body, msgType string) error {
 	if m.dependencies.ChannelContent == nil {
 		return errors.New("channel content module is not configured")

@@ -204,6 +204,47 @@ func TestChannelPostAndCommentUseChannelRoomAndMediaThroughTransport(t *testing.
 	if transport.messages[1].RoomID != ch.RoomID || commentContent["msgtype"] != "m.image" || commentContent["url"] != "mxc://example.com/reply" {
 		t.Fatalf("expected image comment Matrix content with channel room, got %#v", transport.messages[1])
 	}
+	updated := mustHandle[channelPostRecord](t, service, "channels.posts.update", map[string]any{
+		"channel_id": ch.ChannelID, "post_id": post.PostID, "comments_enabled": false,
+	})
+	if updated.CommentsEnabled || len(transport.stateEvents) != 1 {
+		t.Fatalf("post settings update did not publish one Matrix state event: post=%#v states=%#v", updated, transport.stateEvents)
+	}
+	settings := transport.stateEvents[0]
+	if settings.RoomID != ch.RoomID || settings.Event.Type != DirextalkChannelPostSettingsEventType ||
+		settings.Event.StateKey != post.PostID || settings.Event.Content["post_event_id"] != post.EventID ||
+		settings.Event.Content["comments_enabled"] != false {
+		t.Fatalf("unexpected post settings state: %#v", settings)
+	}
+	if _, apiErr := service.Handle(context.Background(), "channels.comments.create", map[string]any{
+		"channel_id": ch.ChannelID, "post_id": post.PostID, "body": "blocked",
+	}); apiErr == nil || apiErr.Status != http.StatusForbidden {
+		t.Fatalf("disabled post comment error = %#v, want 403", apiErr)
+	}
+	if len(transport.messages) != 2 {
+		t.Fatalf("disabled post comment reached Matrix transport: %#v", transport.messages)
+	}
+}
+
+func TestChannelPostSettingsStayUnchangedWhenMatrixStateWriteFails(t *testing.T) {
+	transport := &failingStateTransport{
+		recordingTransport: recordingTransport{roomID: "!channel:example.com"},
+		err:                productpolicy.Forbidden("state write denied"),
+	}
+	service := NewServiceWithTransport(Config{ServerName: "example.com"}, transport)
+	bootstrapService(t, service)
+	ch := mustHandle[channel](t, service, "channels.create", map[string]any{"channel_id": "ch_state_failure", "name": "State Failure"})
+	post := mustHandle[channelPostRecord](t, service, "channels.posts.create", map[string]any{"channel_id": ch.ChannelID, "body": "post"})
+
+	if _, apiErr := service.Handle(context.Background(), "channels.posts.update", map[string]any{
+		"channel_id": ch.ChannelID, "post_id": post.PostID, "comments_enabled": false,
+	}); apiErr == nil || apiErr.Status != http.StatusForbidden {
+		t.Fatalf("state write failure = %#v, want 403", apiErr)
+	}
+	stored, found, err := service.store.GetChannelPostByID(context.Background(), post.PostID, ch.ChannelID)
+	if err != nil || !found || !stored.CommentsEnabled {
+		t.Fatalf("failed state write changed local post settings: post=%#v found=%v err=%v", stored, found, err)
+	}
 }
 
 func TestChannelReactionDoesNotSaveProjectionWhenMatrixSendFails(t *testing.T) {

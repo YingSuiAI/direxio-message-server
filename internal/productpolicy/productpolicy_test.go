@@ -103,6 +103,45 @@ func TestValidateClientEventRejectsChannelCommentWhenCommentsDisabled(t *testing
 	}
 }
 
+func TestValidateClientEventRejectsOnlyDisabledChannelPostComments(t *testing.T) {
+	roomID := "!channel:example.com"
+	userID := "@member:example.com"
+	disabledPostID := "post_disabled"
+	querier := stateQuerier{state: map[gomatrixserverlib.StateKeyTuple]*types.HeaderedEvent{
+		{EventType: DirextalkRoomProfileEventType, StateKey: ""}: stateEvent(t, roomID, "@owner:example.com", DirextalkRoomProfileEventType, "", map[string]any{
+			"room_type": DirextalkRoomTypeChannel, "comments_enabled": true,
+		}),
+		{EventType: DirextalkChannelPostSettingsEventType, StateKey: disabledPostID}: stateEvent(t, roomID, "@owner:example.com", DirextalkChannelPostSettingsEventType, disabledPostID, map[string]any{
+			"post_id": disabledPostID, "comments_enabled": false,
+		}),
+		{EventType: spec.MRoomMember, StateKey: userID}: stateEvent(t, roomID, userID, spec.MRoomMember, userID, map[string]any{
+			"membership": spec.Join,
+		}),
+	}}
+
+	blocked := ValidateClientEvent(context.Background(), querier, ClientEventRequest{
+		RoomID: roomID, SenderMXID: userID, EventType: "m.room.message",
+		Content: map[string]any{"msgtype": "m.text", "body": "blocked", "p2p_kind": "channel_comment", "post_id": disabledPostID},
+	})
+	if blocked == nil {
+		t.Fatal("expected disabled post comment to be rejected")
+	}
+	allowed := ValidateClientEvent(context.Background(), querier, ClientEventRequest{
+		RoomID: roomID, SenderMXID: userID, EventType: "m.room.message",
+		Content: map[string]any{"msgtype": "m.text", "body": "allowed", "p2p_kind": "channel_comment", "post_id": "post_enabled"},
+	})
+	if allowed != nil {
+		t.Fatalf("another post without a disabling state must remain commentable: %v", allowed)
+	}
+	reaction := ValidateClientEvent(context.Background(), querier, ClientEventRequest{
+		RoomID: roomID, SenderMXID: userID, EventType: "m.reaction",
+		Content: map[string]any{"post_id": disabledPostID, "reaction": "like"},
+	})
+	if reaction != nil {
+		t.Fatalf("post comment setting must not block reactions: %v", reaction)
+	}
+}
+
 func TestValidateClientEventAllowsPlainChannelMessageWhenCommentsDisabled(t *testing.T) {
 	roomID := "!channel:example.com"
 	userID := "@member:example.com"

@@ -17,9 +17,10 @@ const (
 	DirextalkRoomTypeChannel = productpolicy.DirextalkRoomTypeChannel
 	DirextalkRoomTypeSystem  = "io.dirextalk.room.system"
 
-	DirextalkRoomProfileEventType  = productpolicy.DirextalkRoomProfileEventType
-	DirextalkMemberPolicyEventType = productpolicy.DirextalkMemberPolicyEventType
-	DirextalkJoinRequestEventType  = productpolicy.DirextalkJoinRequestEventType
+	DirextalkRoomProfileEventType         = productpolicy.DirextalkRoomProfileEventType
+	DirextalkMemberPolicyEventType        = productpolicy.DirextalkMemberPolicyEventType
+	DirextalkJoinRequestEventType         = productpolicy.DirextalkJoinRequestEventType
+	DirextalkChannelPostSettingsEventType = productpolicy.DirextalkChannelPostSettingsEventType
 
 	DirextalkAgentStatusEventType = "io.dirextalk.agent.status"
 	AgentGatewayContentKey        = "io.dirextalk.agent_gateway"

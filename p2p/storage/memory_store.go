@@ -20,6 +20,7 @@ type MemoryStore struct {
 	channels      map[string]channel
 	inviteGrants  map[string]channelInviteGrant
 	posts         []channelPostRecord
+	postSettings  map[string]channelPostSettingsRecord
 	comments      []channelCommentRecord
 	contacts      map[string]contactRecord
 	blocks        map[string]blockRecord
@@ -47,6 +48,7 @@ func NewMemoryStore() *MemoryStore {
 		conversations: make(map[string]conversationRecord),
 		channels:      make(map[string]channel),
 		inviteGrants:  make(map[string]channelInviteGrant),
+		postSettings:  make(map[string]channelPostSettingsRecord),
 		contacts:      make(map[string]contactRecord),
 		blocks:        make(map[string]blockRecord),
 		groups:        make(map[string]groupRecord),

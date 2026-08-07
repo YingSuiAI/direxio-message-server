@@ -66,6 +66,10 @@ func (m *Module) ProjectRoomEvent(ctx context.Context, event *types.HeaderedEven
 		if event.StateKey() != nil {
 			return m.projectRoomProfileState(ctx, event)
 		}
+	case dirextalkstate.ChannelPostSettingsEventType:
+		if event.StateKey() != nil {
+			return m.projectChannelPostSettings(ctx, event)
+		}
 	case dirextalkstate.MemberPolicyEventType:
 		if event.StateKey() != nil {
 			return m.projectMemberPolicyState(ctx, event)

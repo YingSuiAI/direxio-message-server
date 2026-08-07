@@ -78,6 +78,21 @@ func TestGroupAndChannelRoomProfilesApplyDefaults(t *testing.T) {
 	}
 }
 
+func TestChannelPostSettingsUsesPostStateKeyAndFullSettings(t *testing.T) {
+	at := time.Date(2026, 8, 7, 9, 30, 0, 123, time.UTC)
+	event := ChannelPostSettings(ChannelPostSettingsInput{
+		PostID: " post_1 ", ChannelID: " ch_1 ", RoomID: " !channel:example.com ",
+		PostEventID: " $post ", Visibility: " public ", CommentsEnabled: false, UpdatedAt: at,
+	})
+	if event.Type != ChannelPostSettingsEventType || event.StateKey != "post_1" ||
+		event.Content["post_id"] != "post_1" || event.Content["channel_id"] != "ch_1" ||
+		event.Content["room_id"] != "!channel:example.com" || event.Content["post_event_id"] != "$post" ||
+		event.Content["visibility"] != "public" || event.Content["comments_enabled"] != false ||
+		event.Content["updated_at"] != at.Format(time.RFC3339Nano) {
+		t.Fatalf("unexpected channel post settings state: %#v", event)
+	}
+}
+
 func TestMemberPolicyAndJoinRequestState(t *testing.T) {
 	memberPolicy := MemberPolicyState(dirextalkdomain.MemberRecord{
 		RoomID: "!room:example.com",

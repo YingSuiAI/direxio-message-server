@@ -260,13 +260,17 @@ func TestDatabaseStorePersistsChannelPostSettingsAcrossReplayAndReopen(t *testin
 	if err := store.InsertChannelPost(ctx, original); err != nil {
 		t.Fatal(err)
 	}
-	visibility, commentsEnabled := "public", false
-	updated, err := store.UpdateChannelPostSettings(ctx, original.PostID, original.EventID, &visibility, &commentsEnabled)
-	if err != nil || !updated {
-		t.Fatalf("update settings = (%v, %v), want (true, nil)", updated, err)
+	if err := store.ApplyChannelPostSettings(ctx, channelPostSettingsRecord{
+		PostID: original.PostID, ChannelID: original.ChannelID, RoomID: original.RoomID,
+		PostEventID: original.EventID, Visibility: "public", CommentsEnabled: false, UpdatedAt: 2,
+	}); err != nil {
+		t.Fatalf("apply settings: %v", err)
 	}
-	if updated, err = store.UpdateChannelPostSettings(ctx, original.PostID, "$replacement", &visibility, nil); err != nil || updated {
-		t.Fatalf("replacement event update = (%v, %v), want (false, nil)", updated, err)
+	if err := store.ApplyChannelPostSettings(ctx, channelPostSettingsRecord{
+		PostID: original.PostID, ChannelID: original.ChannelID, RoomID: original.RoomID,
+		PostEventID: "$replacement", Visibility: "private", CommentsEnabled: true, UpdatedAt: 1,
+	}); err != nil {
+		t.Fatalf("apply stale replacement settings: %v", err)
 	}
 	if err := store.InsertChannelPost(ctx, original); err != nil {
 		t.Fatal(err)

@@ -11,6 +11,7 @@ type readMarker = dirextalkdomain.ReadMarker
 type channel = dirextalkdomain.Channel
 type channelInviteGrant = dirextalkdomain.ChannelInviteGrant
 type channelPostRecord = dirextalkdomain.ChannelPostRecord
+type channelPostSettingsRecord = dirextalkdomain.ChannelPostSettingsRecord
 type channelCommentRecord = dirextalkdomain.ChannelCommentRecord
 type contactRecord = dirextalkdomain.ContactRecord
 type groupRecord = dirextalkdomain.GroupRecord
