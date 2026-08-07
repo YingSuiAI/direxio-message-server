@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v1.1.5
+
+1. Propagate durable Agent operation sequence cursors to Native Agent WebSocket frames so clients can resume streams with a real `after_seq` cursor.
+
 ## v1.1.4
 
 1. Keep durable Native Agent execution running when a client detaches its WebSocket stream; only an explicit turn-stop action cancels execution.
