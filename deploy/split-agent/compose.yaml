@@ -152,6 +152,7 @@ services:
   postgres:
     <<: *postgres-service
     entrypoint: ["/usr/local/bin/dirextalk-postgres-entrypoint"]
+    command: ["postgres"]
     environment:
       POSTGRES_DB: postgres
       POSTGRES_USER: dirextalk_cluster_admin
