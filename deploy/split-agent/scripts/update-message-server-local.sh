@@ -493,12 +493,14 @@ read_image_identity() {
   docker image inspect "$1" --format '{{index .Config.Labels "org.opencontainers.image.version"}}|{{.Id}}|{{index .Config.Labels "org.opencontainers.image.revision"}}|{{join .RepoDigests ","}}' 2>/dev/null
 }
 parse_image_identity() {
-  local identity=$1 expected_repo=$2
+  local identity=$1 expected_repo=$2 normalized_expected_repo
   IFS='|' read -r parsed_version parsed_id parsed_revision parsed_digests <<<"$identity"
   canonical_version "$parsed_version" || die 'message-server image version label is not canonical'
   printf '%s\n' "$parsed_id" | grep -Eq '^sha256:[0-9a-f]{64}$' || die 'message-server image ID is invalid'
   printf '%s\n' "$parsed_revision" | grep -Eq '^[0-9a-f]{40}$' || die 'message-server image revision label is invalid'
-  printf '%s\n' "$parsed_digests" | tr ',' '\n' | grep -Fqx "$expected_repo" || die 'message-server image RepoDigest is missing'
+  normalized_expected_repo=${expected_repo#docker.io/}
+  printf '%s\n' "$parsed_digests" | tr ',' '\n' | sed 's#^docker\.io/##' | grep -Fqx "$normalized_expected_repo" || \
+    die 'message-server image RepoDigest is missing'
 }
 
 verify_control_identity

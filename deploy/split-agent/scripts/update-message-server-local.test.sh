@@ -18,6 +18,7 @@ new_message_id=$(printf 'd%.0s' {1..64})
 agent_id=$(printf 'e%.0s' {1..64})
 postgres_id=$(printf 'f%.0s' {1..64})
 old_ref=docker.io/dirextalk/message-server@sha256:$old_digest
+old_repo_digest=dirextalk/message-server@sha256:$old_digest
 target_ref=docker.io/dirextalk/message-server@sha256:$target_digest
 old_revision=$(printf '4%.0s' {1..40})
 target_revision=$(printf '5%.0s' {1..40})
@@ -56,7 +57,7 @@ case "$1" in
       exit 0
     fi
     case "$3" in
-      "$FAKE_OLD_REF") printf '%s|%s|%s|%s\n' "$FAKE_OLD_VERSION" "$FAKE_OLD_IMAGE_ID" "$FAKE_OLD_REVISION" "$FAKE_OLD_REF" ;;
+      "$FAKE_OLD_REF") printf '%s|%s|%s|%s\n' "$FAKE_OLD_VERSION" "$FAKE_OLD_IMAGE_ID" "$FAKE_OLD_REVISION" "$FAKE_OLD_REPO_DIGEST" ;;
       "$FAKE_TARGET_REF"|docker.io/dirextalk/message-server:*)
         printf '%s|%s|%s|%s\n' "$FAKE_TARGET_VERSION" "$FAKE_TARGET_IMAGE_ID" "$FAKE_TARGET_REVISION" "$FAKE_TARGET_REF"
         ;;
@@ -199,7 +200,7 @@ run_update() {
   PATH="$tmp/bin:$PATH" \
   FAKE_DOCKER_LOG=$log FAKE_DOCKER_STATE=$state FAKE_ENGINE_ID=engine-message-update-test \
   FAKE_STACK=d-abcdefghijklmnopqrstuvwxyz FAKE_OLD_MESSAGE_ID=$old_message_id FAKE_NEW_MESSAGE_ID=$new_message_id \
-  FAKE_OLD_REF=$old_ref FAKE_OLD_IMAGE_ID=$old_image_id FAKE_OLD_VERSION=v1.0.0 \
+  FAKE_OLD_REF=$old_ref FAKE_OLD_REPO_DIGEST=${FAKE_OLD_REPO_DIGEST_OVERRIDE:-$old_repo_digest} FAKE_OLD_IMAGE_ID=$old_image_id FAKE_OLD_VERSION=v1.0.0 \
   FAKE_OLD_REVISION=$old_revision FAKE_TARGET_REVISION=$target_revision \
   FAKE_TARGET_REF=$target_ref FAKE_TARGET_IMAGE_ID=$target_image_id FAKE_TARGET_VERSION=v1.0.1 \
   DIREXTALK_MESSAGE_SERVER_UPDATE_TEST_FIXTURE=true \
@@ -222,6 +223,26 @@ if grep -Eq '(^|\|)(pull|compose)( |\|)' "$log"; then
   echo 'non-newer target crossed the Docker mutation boundary' >&2; exit 1
 fi
 [ "$before" = "$(sha256sum "$root/.env" "$root/.cleanup-receipt")" ]
+
+invalid_repo_digest_index=0
+for invalid_repo_digest in \
+  other/message-server@sha256:$old_digest \
+  dirextalk/message-server@sha256:$(printf '9%.0s' {1..64}); do
+  invalid_repo_digest_index=$((invalid_repo_digest_index+1))
+  root=$(make_stack invalid-repo-digest-$invalid_repo_digest_index)
+  : >"$log"
+  output=$root/wrapper-output
+  if FAKE_OLD_REPO_DIGEST_OVERRIDE=$invalid_repo_digest run_update "$root" v1.0.0 >"$output" 2>&1; then
+    echo 'invalid current RepoDigest unexpectedly passed' >&2; exit 1
+  else
+    status=$?
+  fi
+  [ "$status" -eq 1 ]
+  grep -Fq 'message-server image RepoDigest is missing' "$output"
+  if grep -Eq '(^|\|)(pull|compose .* up)( |\|)' "$log"; then
+    echo 'invalid current RepoDigest crossed the Docker mutation boundary' >&2; exit 1
+  fi
+done
 
 root=$(make_stack success false)
 : >"$log"; : >"$state"
