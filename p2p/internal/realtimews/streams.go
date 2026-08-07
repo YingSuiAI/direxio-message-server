@@ -21,7 +21,6 @@ type connection struct {
 	streamMu       sync.Mutex
 	streamCancels  map[string]context.CancelFunc
 	durableStreams map[string]bool
-	durableParams  map[string]map[string]any
 }
 
 func newConnection(sessionID string, record Ticket) *connection {
@@ -79,7 +78,6 @@ func (c *connection) finishStream(id string) {
 	defer c.streamMu.Unlock()
 	delete(c.streamCancels, strings.TrimSpace(id))
 	delete(c.durableStreams, strings.TrimSpace(id))
-	delete(c.durableParams, strings.TrimSpace(id))
 }
 
 func (c *connection) markDurableStream(id string) {
@@ -94,35 +92,6 @@ func (c *connection) markDurableStream(id string) {
 		}
 		c.durableStreams[strings.TrimSpace(id)] = true
 	}
-}
-
-func (c *connection) setDurableStreamParams(id string, params map[string]any) {
-	if c == nil {
-		return
-	}
-	c.streamMu.Lock()
-	defer c.streamMu.Unlock()
-	if _, ok := c.streamCancels[strings.TrimSpace(id)]; !ok {
-		return
-	}
-	if c.durableParams == nil {
-		c.durableParams = map[string]map[string]any{}
-	}
-	// Cancellation only needs the validated turn identity. Never retain the
-	// original chat payload (which may contain arbitrary nested values) in the
-	// connection's durable state.
-	c.durableParams[strings.TrimSpace(id)] = map[string]any{
-		"turn_id": actionbase.String(params["turn_id"]),
-	}
-}
-
-func (c *connection) durableStreamParams(id string) map[string]any {
-	if c == nil {
-		return nil
-	}
-	c.streamMu.Lock()
-	defer c.streamMu.Unlock()
-	return cloneMap(c.durableParams[strings.TrimSpace(id)])
 }
 
 func (c *connection) durableStream(id string) bool {
@@ -143,7 +112,6 @@ func (c *connection) cancelStream(id string) bool {
 	if ok {
 		delete(c.streamCancels, strings.TrimSpace(id))
 		delete(c.durableStreams, strings.TrimSpace(id))
-		delete(c.durableParams, strings.TrimSpace(id))
 	}
 	c.streamMu.Unlock()
 	if ok {
@@ -163,7 +131,6 @@ func (c *connection) cancelAllStreams() {
 	}
 	c.streamCancels = map[string]context.CancelFunc{}
 	c.durableStreams = map[string]bool{}
-	c.durableParams = map[string]map[string]any{}
 	c.streamMu.Unlock()
 	for _, cancel := range cancels {
 		cancel()
@@ -342,7 +309,6 @@ func (m *Module) startNativeAgentStream(ctx context.Context, client *connection,
 	}
 	if turnID != "" {
 		client.markDurableStream(id)
-		client.setDurableStreamParams(id, params)
 		durable, ok := m.agent.(DurableAgentStreamPort)
 		if !ok {
 			client.finishStream(id)
@@ -475,20 +441,9 @@ func (m *Module) cancelNativeAgentStream(client *connection, frame map[string]an
 		return
 	}
 	durable := client.durableStream(id)
-	durableParams := client.durableStreamParams(id)
 	if !client.cancelStream(id) {
 		client.send(nativeAgentStreamError(id, "", http.StatusNotFound, "stream is not active"))
 		return
-	}
-	if durable {
-		if controller, ok := m.agent.(interface {
-			CancelExternal(context.Context, string, map[string]any) (map[string]any, error)
-		}); ok {
-			if _, err := controller.CancelExternal(context.WithoutCancel(context.Background()), "agent.chat.turn.stop", durableParams); err != nil {
-				client.send(nativeAgentStreamError(id, "agent.chat.stream", http.StatusBadGateway, err.Error()))
-				return
-			}
-		}
 	}
 	response := map[string]any{
 		"type": "server.native_agent_stream.cancelled",

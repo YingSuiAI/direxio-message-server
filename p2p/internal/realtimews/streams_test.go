@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -194,7 +193,7 @@ func TestNativeAgentStreamRejectsSensitiveKeysBeforeForwardAndReplay(t *testing.
 	}
 }
 
-func TestNativeAgentStreamValidatesImmediatelyAndCancelsOnlyTurnID(t *testing.T) {
+func TestNativeAgentStreamValidatesImmediatelyAndDetachesDurableTurn(t *testing.T) {
 	agent := &cancelTrackingAgent{started: make(chan struct{})}
 	module := New(Dependencies{Agent: agent}, Config{})
 	connection := newConnection("session", Ticket{Role: "owner", UserID: "@owner:example.test"})
@@ -244,11 +243,11 @@ func TestNativeAgentStreamValidatesImmediatelyAndCancelsOnlyTurnID(t *testing.T)
 	}
 	module.cancelNativeAgentStream(connection, map[string]any{"id": "valid"})
 	cancelled := nextOutbound(t, connection)
-	if cancelled["type"] != "server.native_agent_stream.cancelled" || cancelled["ok"] != true {
+	if cancelled["type"] != "server.native_agent_stream.cancelled" || cancelled["ok"] != true || cancelled["execution_continues"] != true {
 		t.Fatalf("valid stream cancel frame = %#v", cancelled)
 	}
-	if agent.cancelCalls != 1 || !reflect.DeepEqual(agent.cancelParams, map[string]any{"turn_id": "valid-turn"}) {
-		t.Fatalf("cancel forwarded params = %#v, calls=%d; want only turn_id", agent.cancelParams, agent.cancelCalls)
+	if agent.cancelCalls != 0 {
+		t.Fatalf("attachment detach stopped durable turn: params=%#v calls=%d", agent.cancelParams, agent.cancelCalls)
 	}
 }
 
