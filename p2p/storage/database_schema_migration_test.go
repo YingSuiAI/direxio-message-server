@@ -542,6 +542,7 @@ func TestFreshAgentExecutionV2SchemaRegistersOnceWithoutV1Ledgers(t *testing.T) 
 	const version = "p2p: agent and execution v2 fresh schema v78"
 	const terminalImmutabilityVersion = "p2p: execution run stage terminal immutability v79"
 	const channelPostSettingsVersion = "p2p: channel post settings v80"
+	const federatedChannelPostSettingsVersion = "p2p: federated channel post settings v81"
 	for _, run := range []int{1, 2} {
 		if run == 2 {
 			if err := store.Migrate(ctx); err != nil {
@@ -564,13 +565,14 @@ func TestFreshAgentExecutionV2SchemaRegistersOnceWithoutV1Ledgers(t *testing.T) 
 		t.Fatalf("close/reopen fresh schema: %v", err)
 	}
 	defer store.Close()
-	expectedMigrations := make(map[string]struct{}, len(frozenUpstreamMigrationVersions)+3)
+	expectedMigrations := make(map[string]struct{}, len(frozenUpstreamMigrationVersions)+4)
 	for _, frozen := range frozenUpstreamMigrationVersions {
 		expectedMigrations[frozen] = struct{}{}
 	}
 	expectedMigrations[version] = struct{}{}
 	expectedMigrations[terminalImmutabilityVersion] = struct{}{}
 	expectedMigrations[channelPostSettingsVersion] = struct{}{}
+	expectedMigrations[federatedChannelPostSettingsVersion] = struct{}{}
 	rows, err := store.DB().QueryContext(ctx, `SELECT version FROM db_migrations`)
 	if err != nil {
 		t.Fatal(err)
@@ -588,7 +590,7 @@ func TestFreshAgentExecutionV2SchemaRegistersOnceWithoutV1Ledgers(t *testing.T) 
 		t.Fatal(err)
 	}
 	if len(actualMigrations) != len(expectedMigrations) {
-		t.Fatalf("migration registrations = %d, want exactly frozen upstream + v78/v79/v80 = %d: %#v", len(actualMigrations), len(expectedMigrations), actualMigrations)
+		t.Fatalf("migration registrations = %d, want exactly frozen upstream + v78/v79/v80/v81 = %d: %#v", len(actualMigrations), len(expectedMigrations), actualMigrations)
 	}
 	for expected := range expectedMigrations {
 		if _, ok := actualMigrations[expected]; !ok {
@@ -601,6 +603,7 @@ func TestFreshAgentExecutionV2SchemaRegistersOnceWithoutV1Ledgers(t *testing.T) 
 		}
 	}
 	for _, table := range []string{
+		"p2p_channel_post_settings",
 		"p2p_agent_model_profiles", "p2p_agent_secrets", "core_execution_secrets", "core_execution_secret_parameter_intents", "agent_tasks",
 		"core_aws_credentials", "core_aws_credential_current", "core_aws_replays", "core_execution_projects", "core_execution_source_artifacts", "core_execution_runs", "core_execution_run_revisions",
 		"core_execution_deployments", "core_execution_deployment_events",

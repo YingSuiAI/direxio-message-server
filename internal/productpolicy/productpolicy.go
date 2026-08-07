@@ -19,10 +19,11 @@ const (
 	DirextalkRoomTypeGroup   = "io.dirextalk.room.group"
 	DirextalkRoomTypeChannel = "io.dirextalk.room.channel"
 
-	DirextalkRoomProfileEventType  = "io.dirextalk.room.profile"
-	DirextalkMemberPolicyEventType = "io.dirextalk.member.policy"
-	DirextalkJoinRequestEventType  = "io.dirextalk.join_request"
-	PublicJoinRequestIDContentKey  = "io.dirextalk.public_join_request_id"
+	DirextalkRoomProfileEventType         = "io.dirextalk.room.profile"
+	DirextalkMemberPolicyEventType        = "io.dirextalk.member.policy"
+	DirextalkJoinRequestEventType         = "io.dirextalk.join_request"
+	DirextalkChannelPostSettingsEventType = "io.dirextalk.channel.post.settings"
+	PublicJoinRequestIDContentKey         = "io.dirextalk.public_join_request_id"
 )
 
 const (
@@ -193,8 +194,20 @@ func ValidateClientEvent(ctx context.Context, querier CurrentStateQuerier, req C
 		switch {
 		case isChannelPostEvent(req.Content):
 			return Forbidden("sender cannot create channel posts in this dirextalk room")
-		case !room.CommentsEnabled && isChannelCommentEvent(eventType, req.Content):
-			return Forbidden("channel comments are disabled")
+		case isChannelCommentEvent(eventType, req.Content):
+			if !room.CommentsEnabled {
+				return Forbidden("channel comments are disabled")
+			}
+			if !strings.EqualFold(channelEventKind(req.Content), "channel_comment") {
+				break
+			}
+			enabled, settingsErr := channelPostCommentsEnabled(ctx, querier, req.RoomID, stringValue(req.Content["post_id"]))
+			if settingsErr != nil {
+				return settingsErr
+			}
+			if !enabled {
+				return Forbidden("comments are disabled for this channel post")
+			}
 		}
 	}
 	return nil
@@ -340,6 +353,36 @@ func isChannelCommentEvent(eventType string, content map[string]any) bool {
 
 func channelEventKind(content map[string]any) string {
 	return stringValue(content["p2p_kind"])
+}
+
+func channelPostCommentsEnabled(ctx context.Context, querier CurrentStateQuerier, roomID, postID string) (bool, error) {
+	postID = strings.TrimSpace(postID)
+	if postID == "" {
+		return false, nil
+	}
+	tuple := gomatrixserverlib.StateKeyTuple{EventType: DirextalkChannelPostSettingsEventType, StateKey: postID}
+	var res api.QueryCurrentStateResponse
+	if err := querier.QueryCurrentState(ctx, &api.QueryCurrentStateRequest{
+		RoomID: roomID, StateTuples: []gomatrixserverlib.StateKeyTuple{tuple},
+	}, &res); err != nil {
+		return false, err
+	}
+	event := res.StateEvents[tuple]
+	if event == nil {
+		return true, nil
+	}
+	content, err := eventContent(event)
+	if err != nil {
+		return false, err
+	}
+	if statePostID := strings.TrimSpace(stringValue(content["post_id"])); statePostID != "" && statePostID != postID {
+		return false, nil
+	}
+	enabled, ok := content["comments_enabled"].(bool)
+	if !ok {
+		return false, nil
+	}
+	return enabled, nil
 }
 
 func queryTargetEvent(ctx context.Context, querier RedactionQuerier, roomID, eventID string) (*types.HeaderedEvent, error) {

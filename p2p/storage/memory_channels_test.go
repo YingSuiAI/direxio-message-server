@@ -252,9 +252,11 @@ func TestMemoryStoreChannelPostSettingsOverrideOnlyAfterExplicitUpdate(t *testin
 	if err != nil || !found || post.Visibility != "public" || post.CommentsEnabled {
 		t.Fatalf("authoritative projection did not replace placeholder: post=%#v found=%v err=%v", post, found, err)
 	}
-	visibility, commentsEnabled := "private", true
-	if updated, err := store.UpdateChannelPostSettings(ctx, "post", "$post", &visibility, &commentsEnabled); err != nil || !updated {
-		t.Fatalf("update settings = (%v, %v)", updated, err)
+	if err := store.ApplyChannelPostSettings(ctx, channelPostSettingsRecord{
+		PostID: "post", PostEventID: "$post", Visibility: "private",
+		CommentsEnabled: true, UpdatedAt: 2,
+	}); err != nil {
+		t.Fatalf("apply settings: %v", err)
 	}
 	if err := store.InsertChannelPost(ctx, projected); err != nil {
 		t.Fatal(err)

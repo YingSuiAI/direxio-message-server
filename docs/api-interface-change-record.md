@@ -5,6 +5,20 @@
 > generated contract metadata, `README.md`, and maintained current docs take
 > precedence. Git history is the complete audit trail.
 
+## 2026-08-07 Federated channel post settings
+
+`channels.posts.update` now publishes the post's complete mutable settings as
+`io.dirextalk.channel.post.settings` Matrix room state keyed by `post_id`.
+Every joined member node projects that state into durable PostgreSQL storage,
+including when the state arrives before the original post history. A failed
+Matrix state write leaves the local post projection unchanged.
+
+For `p2p_kind=channel_comment`, the sending node's Matrix ProductPolicy checks
+the target post state and the receiving projector independently rejects a
+comment when that post has `comments_enabled=false`. The setting remains
+post-scoped: channel discussion/chat, reactions, favorites, and other posts are
+unaffected. The same state synchronizes post `visibility` between nodes.
+
 ## 2026-08-06 Release V2 development server versions
 
 `release.v2.apply.target_version` now accepts canonical stable `vX.Y.Z` and

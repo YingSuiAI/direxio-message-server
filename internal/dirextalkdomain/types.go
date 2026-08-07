@@ -126,6 +126,16 @@ type ChannelPostRecord struct {
 	CommentCount       int64  `json:"comment_count"`
 }
 
+type ChannelPostSettingsRecord struct {
+	PostID          string
+	ChannelID       string
+	RoomID          string
+	PostEventID     string
+	Visibility      string
+	CommentsEnabled bool
+	UpdatedAt       int64
+}
+
 type ChannelCommentRecord struct {
 	CommentID         string `json:"comment_id"`
 	PostID            string `json:"post_id"`

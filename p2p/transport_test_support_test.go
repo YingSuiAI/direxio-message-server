@@ -96,6 +96,16 @@ type failingSendTransport struct {
 	err error
 }
 
+type failingStateTransport struct {
+	recordingTransport
+	err error
+}
+
+func (t *failingStateTransport) SendStateEvent(ctx context.Context, req SendStateEventRequest) error {
+	t.stateEvents = append(t.stateEvents, req)
+	return t.err
+}
+
 func (t *failingSendTransport) SendMessage(ctx context.Context, req SendMessageRequest) (SendMessageResult, error) {
 	t.messages = append(t.messages, req)
 	return SendMessageResult{}, t.err

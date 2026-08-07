@@ -257,11 +257,36 @@ func (m *ContentModule) historyChannel(ctx context.Context, channelID string) *C
 type ProjectionEvent struct {
 	RoomID         string
 	EventID        string
+	StateKey       string
 	SenderMXID     string
 	OriginServerTS int64
 	Content        map[string]any
 	Body           string
 	MessageType    string
+}
+
+func (m *ContentModule) ProjectPostSettings(ctx context.Context, event ProjectionEvent) error {
+	if m.store == nil {
+		return errors.New("channel content store is not configured")
+	}
+	params := actionbase.Params(event.Content)
+	postID := strings.TrimSpace(event.StateKey)
+	if contentPostID := params.String("post_id"); postID == "" {
+		postID = contentPostID
+	} else if contentPostID != "" && contentPostID != postID {
+		return nil
+	}
+	postEventID := params.String("post_event_id")
+	visibility, visibilityOK := validatedPostVisibility(params.String("visibility"))
+	commentsEnabled, commentsOK := event.Content["comments_enabled"].(bool)
+	if postID == "" || postEventID == "" || !visibilityOK || !commentsOK {
+		return nil
+	}
+	return m.store.ApplyChannelPostSettings(ctx, dirextalkdomain.ChannelPostSettingsRecord{
+		PostID: postID, ChannelID: params.String("channel_id"), RoomID: event.RoomID,
+		PostEventID: postEventID, Visibility: visibility,
+		CommentsEnabled: commentsEnabled, UpdatedAt: event.OriginServerTS,
+	})
 }
 
 func (m *ContentModule) ProjectPost(ctx context.Context, event ProjectionEvent) error {
@@ -293,6 +318,12 @@ func (m *ContentModule) ProjectComment(ctx context.Context, event ProjectionEven
 		return errors.New("channel content store is not configured")
 	}
 	params := actionbase.Params(event.Content)
+	postID := params.String("post_id")
+	if post, ok, err := m.PostByID(ctx, postID, params.String("channel_id")); err != nil {
+		return err
+	} else if ok && !post.CommentsEnabled {
+		return nil
+	}
 	commentID := params.String("comment_id")
 	if commentID == "" {
 		commentID = "comment_" + strings.TrimPrefix(event.EventID, "$")
@@ -308,7 +339,7 @@ func (m *ContentModule) ProjectComment(ctx context.Context, event ProjectionEven
 		}
 	}
 	return m.store.InsertChannelComment(ctx, dirextalkdomain.ChannelCommentRecord{
-		CommentID: commentID, PostID: params.String("post_id"), ChannelID: params.String("channel_id"),
+		CommentID: commentID, PostID: postID, ChannelID: params.String("channel_id"),
 		EventID: event.EventID, AuthorMXID: event.SenderMXID, AuthorName: params.String("sender_name"),
 		Body: event.Body, MessageType: event.MessageType, MediaJSON: params.String("media_json"),
 		ReplyToCommentID:  params.String("reply_to_comment_id"),

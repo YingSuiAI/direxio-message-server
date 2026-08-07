@@ -863,6 +863,34 @@ func (s *DatabaseStore) migrate(ctx context.Context) error {
 			})
 		},
 	})
+	m.AddMigrations(sqlutil.Migration{
+		Version: "p2p: federated channel post settings v81",
+		Up: func(ctx context.Context, txn *sql.Tx) error {
+			exists, err := productTableExists(ctx, txn, "p2p_channel_posts")
+			if err != nil || !exists {
+				return err
+			}
+			return execMigrationStatements(ctx, txn, []string{
+				`CREATE TABLE IF NOT EXISTS p2p_channel_post_settings (
+					post_id TEXT PRIMARY KEY NOT NULL,
+					channel_id TEXT NOT NULL,
+					room_id TEXT NOT NULL,
+					post_event_id TEXT NOT NULL,
+					visibility TEXT NOT NULL CHECK (visibility IN ('public', 'private')),
+					comments_enabled BOOLEAN NOT NULL,
+					updated_at BIGINT NOT NULL
+				)`,
+				`CREATE INDEX IF NOT EXISTS p2p_channel_post_settings_room_idx ON p2p_channel_post_settings(room_id, post_id)`,
+				`INSERT INTO p2p_channel_post_settings (
+					post_id, channel_id, room_id, post_event_id, visibility, comments_enabled, updated_at
+				)
+				SELECT post_id, channel_id, room_id, event_id, visibility, comments_enabled, origin_server_ts
+				FROM p2p_channel_posts
+				WHERE settings_updated = TRUE
+				ON CONFLICT(post_id) DO NOTHING`,
+			})
+		},
+	})
 	return m.Up(ctx)
 }
 

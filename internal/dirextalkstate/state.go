@@ -13,9 +13,10 @@ const (
 	RoomTypeGroup   = productpolicy.DirextalkRoomTypeGroup
 	RoomTypeChannel = productpolicy.DirextalkRoomTypeChannel
 
-	RoomProfileEventType  = productpolicy.DirextalkRoomProfileEventType
-	MemberPolicyEventType = productpolicy.DirextalkMemberPolicyEventType
-	JoinRequestEventType  = productpolicy.DirextalkJoinRequestEventType
+	RoomProfileEventType         = productpolicy.DirextalkRoomProfileEventType
+	MemberPolicyEventType        = productpolicy.DirextalkMemberPolicyEventType
+	JoinRequestEventType         = productpolicy.DirextalkJoinRequestEventType
+	ChannelPostSettingsEventType = productpolicy.DirextalkChannelPostSettingsEventType
 )
 
 type StateEvent struct {
@@ -43,6 +44,16 @@ type GroupProfile struct {
 	AvatarURL    string
 	InvitePolicy string
 	Muted        bool
+}
+
+type ChannelPostSettingsInput struct {
+	PostID          string
+	ChannelID       string
+	RoomID          string
+	PostEventID     string
+	Visibility      string
+	CommentsEnabled bool
+	UpdatedAt       time.Time
 }
 
 func DirectRoomProfile(input DirectRoomProfileInput) StateEvent {
@@ -100,6 +111,23 @@ func ChannelRoomProfile(ch dirextalkdomain.Channel, dissolved bool) StateEvent {
 			"comments_enabled": ch.CommentsEnabled,
 			"muted":            ch.Muted,
 			"dissolved":        dissolved,
+		},
+	}
+}
+
+func ChannelPostSettings(input ChannelPostSettingsInput) StateEvent {
+	updatedAt := input.UpdatedAt.UTC()
+	return StateEvent{
+		Type:     ChannelPostSettingsEventType,
+		StateKey: strings.TrimSpace(input.PostID),
+		Content: map[string]any{
+			"post_id":          strings.TrimSpace(input.PostID),
+			"channel_id":       strings.TrimSpace(input.ChannelID),
+			"room_id":          strings.TrimSpace(input.RoomID),
+			"post_event_id":    strings.TrimSpace(input.PostEventID),
+			"visibility":       fallbackString(input.Visibility, "private"),
+			"comments_enabled": input.CommentsEnabled,
+			"updated_at":       updatedAt.Format(time.RFC3339Nano),
 		},
 	}
 }

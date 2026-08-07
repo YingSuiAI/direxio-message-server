@@ -1748,6 +1748,43 @@ func TestProjectOutputRedactionRemovesBusinessRecords(t *testing.T) {
 	}
 }
 
+func TestProjectChannelPostSettingsBeforePostBlocksRemoteComments(t *testing.T) {
+	owner := test.NewUser(t)
+	room := test.NewRoom(t, owner)
+	service := NewService(Config{ServerName: "member.example"})
+	settingsTime := time.UnixMilli(2000).UTC()
+	post := room.CreateAndInsert(t, owner, "m.room.message", map[string]any{
+		"msgtype": "m.text", "body": "remote post", "p2p_kind": "channel_post",
+		"channel_id": "ch_remote", "post_id": "post_remote", "visibility": "private", "comments_enabled": true,
+	})
+	settings := room.CreateAndInsert(t, owner, DirextalkChannelPostSettingsEventType, map[string]any{
+		"post_id": "post_remote", "channel_id": "ch_remote", "room_id": room.ID,
+		"post_event_id": post.EventID(), "visibility": "public", "comments_enabled": false,
+		"updated_at": settingsTime.Format(time.RFC3339Nano),
+	}, test.WithStateKey("post_remote"), test.WithTimestamp(settingsTime))
+	if err := service.ProjectRoomEvent(context.Background(), settings); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ProjectRoomEvent(context.Background(), post); err != nil {
+		t.Fatal(err)
+	}
+	posts := mustHandle[map[string]any](t, service, "channels.posts.list", map[string]any{"channel_id": "ch_remote"})["posts"].([]channelPostRecord)
+	if len(posts) != 1 || posts[0].Visibility != "public" || posts[0].CommentsEnabled {
+		t.Fatalf("federated settings were not merged into remote post projection: %#v", posts)
+	}
+	comment := room.CreateAndInsert(t, owner, "m.room.message", map[string]any{
+		"msgtype": "m.text", "body": "must be ignored", "p2p_kind": "channel_comment",
+		"channel_id": "ch_remote", "post_id": "post_remote", "comment_id": "comment_remote",
+	})
+	if err := service.ProjectRoomEvent(context.Background(), comment); err != nil {
+		t.Fatal(err)
+	}
+	comments := mustHandle[map[string]any](t, service, "channels.comments.list", map[string]any{"post_id": "post_remote"})["comments"].([]channelCommentRecord)
+	if len(comments) != 0 {
+		t.Fatalf("disabled remote post accepted projected comments: %#v", comments)
+	}
+}
+
 func TestProjectOutputRedactionDeactivatesFavoriteReaction(t *testing.T) {
 	user := test.NewUser(t)
 	room := test.NewRoom(t, user)

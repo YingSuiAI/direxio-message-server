@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/YingSuiAI/dirextalk-message-server/internal/dirextalkdomain"
+	"github.com/YingSuiAI/dirextalk-message-server/internal/dirextalkstate"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/dirextalktransport"
 	actionbase "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/action"
 )
@@ -119,20 +120,41 @@ func (m *ContentModule) UpdatePost(ctx context.Context, raw map[string]any) (any
 			return nil, actionErr
 		}
 	}
-	updated, err := m.store.UpdateChannelPostSettings(ctx, record.PostID, record.EventID, visibility, commentsEnabled)
-	if err != nil {
-		return nil, actionbase.InternalError(err)
-	}
-	if !updated {
-		return nil, actionbase.StatusError(http.StatusConflict, "post changed before settings update")
-	}
+	now := m.now()
+	effectiveVisibility := dirextalkdomain.NormalizeChannelPostVisibility(record.Visibility)
+	effectiveCommentsEnabled := record.CommentsEnabled
 	if visibility != nil {
-		record.Visibility = *visibility
+		effectiveVisibility = *visibility
 	}
 	if commentsEnabled != nil {
-		record.CommentsEnabled = *commentsEnabled
-		record.CommentsEnabledSet = true
+		effectiveCommentsEnabled = *commentsEnabled
 	}
+	settingsState := dirextalkstate.ChannelPostSettings(dirextalkstate.ChannelPostSettingsInput{
+		PostID: record.PostID, ChannelID: record.ChannelID, RoomID: record.RoomID,
+		PostEventID: record.EventID, Visibility: effectiveVisibility,
+		CommentsEnabled: effectiveCommentsEnabled, UpdatedAt: now,
+	})
+	if matrix := m.matrixPort(); matrix != nil && record.RoomID != "" {
+		if err := matrix.SendStateEvent(ctx, dirextalktransport.SendStateEventRequest{
+			RoomID: record.RoomID, SenderMXID: m.owner().MXID,
+			Event: dirextalktransport.RoomStateEvent{
+				Type: settingsState.Type, StateKey: settingsState.StateKey, Content: settingsState.Content,
+			},
+			Timestamp: now,
+		}); err != nil {
+			return nil, m.transportError(err)
+		}
+	}
+	if err := m.store.ApplyChannelPostSettings(ctx, dirextalkdomain.ChannelPostSettingsRecord{
+		PostID: record.PostID, ChannelID: record.ChannelID, RoomID: record.RoomID,
+		PostEventID: record.EventID, Visibility: effectiveVisibility,
+		CommentsEnabled: effectiveCommentsEnabled, UpdatedAt: now.UnixMilli(),
+	}); err != nil {
+		return nil, actionbase.InternalError(err)
+	}
+	record.Visibility = effectiveVisibility
+	record.CommentsEnabled = effectiveCommentsEnabled
+	record.CommentsEnabledSet = true
 	post := postFromRecord(record)
 	posts := []Post{post}
 	m.EnrichPosts(ctx, posts, m.owner().MXID)

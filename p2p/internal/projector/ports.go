@@ -31,6 +31,7 @@ type ChannelPort interface {
 
 type ChannelContentPort interface {
 	ProjectPost(context.Context, channelsmodule.ProjectionEvent) error
+	ProjectPostSettings(context.Context, channelsmodule.ProjectionEvent) error
 	ProjectComment(context.Context, channelsmodule.ProjectionEvent) error
 	ProjectReaction(context.Context, channelsmodule.ProjectionEvent) error
 	RemoveProjectedEvent(context.Context, string) (bool, error)
