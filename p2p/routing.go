@@ -26,11 +26,11 @@ func Register(router *mux.Router, service *Service) {
 	router.HandleFunc("/ws", realtimeWSHandler(service)).Methods(http.MethodGet, http.MethodOptions)
 	router.HandleFunc("/agent/voice/volc/custom-llm", voiceCustomLLMHandler(service)).Methods(http.MethodPost, http.MethodOptions)
 	router.HandleFunc("/agent/voice/webhook", voiceEventWebhookHandler(service)).Methods(http.MethodPost, http.MethodOptions)
-	var readiness func() error
-	if service != nil {
-		readiness = service.nativeAgentCatalogReadinessError
-	}
-	router.HandleFunc("/health", httpapi.HealthHandler(nil, readiness)).Methods(http.MethodGet, http.MethodOptions)
+	// The process health endpoint gates deployment and component updates. Agent
+	// capability readiness remains fail-closed on Agent actions, but must not
+	// make an otherwise healthy Message Server impossible to upgrade before the
+	// independently versioned Agent image.
+	router.HandleFunc("/health", httpapi.HealthHandler(nil)).Methods(http.MethodGet, http.MethodOptions)
 }
 
 func voiceEventWebhookHandler(service *Service) http.HandlerFunc {

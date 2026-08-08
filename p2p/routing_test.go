@@ -325,6 +325,22 @@ func TestHealthReportsAdditiveBuildInfo(t *testing.T) {
 	}
 }
 
+func TestHealthDoesNotConflateNativeAgentReadiness(t *testing.T) {
+	service := NewService(Config{ServerName: "example.com"})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/_p2p/health", nil)
+
+	newP2PTestRouter(service).ServeHTTP(rec, req)
+
+	var got map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusOK || got["status"] != "ok" {
+		t.Fatalf("Message Server health must remain independent of Agent readiness: status=%d body=%#v", rec.Code, got)
+	}
+}
+
 func TestProductionMountPreservesMethodAndPathErrors(t *testing.T) {
 	service := NewService(Config{ServerName: "example.com"})
 	routers := httputil.NewRouters()
