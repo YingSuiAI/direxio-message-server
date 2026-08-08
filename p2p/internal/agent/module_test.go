@@ -41,6 +41,23 @@ func TestExecutionV2ExternalAllowlistKeepsGenericRunMutationsOnly(t *testing.T) 
 	}
 }
 
+func TestImageToolsAreOwnerProxyActions(t *testing.T) {
+	actions := make(map[string]bool, len(externalNativeActions))
+	for _, action := range externalNativeActions {
+		actions[action] = true
+	}
+	module := New(Config{Runner: &requestValidationRunner{}})
+	handlers := module.Handlers()
+	for _, action := range []string{
+		"agent.image_tools.upload.begin", "agent.image_tools.upload.append", "agent.image_tools.upload.commit",
+		"agent.image_tools.extract_text", "agent.image_tools.translate_text",
+	} {
+		if !actions[action] || handlers[action] == nil {
+			t.Errorf("image tool action %s is not routed through the external owner proxy", action)
+		}
+	}
+}
+
 func TestExternalAgentActionErrorClassifiesForgedServerDerivedIdentity(t *testing.T) {
 	err := externalAgentActionError(errors.New(`agent operation failed: query error: request field "owner_id" is server-derived`))
 	if err == nil || err.Status != http.StatusBadRequest {

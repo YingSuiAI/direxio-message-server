@@ -67,6 +67,21 @@ capability live.
 - `text_tools.server` is advertised only when the registered
   `agent.text_tools.v1` capability is ready with all three operations and the
   exact pinned request/result schema identities.
+- Image text tools are a separate owner-authenticated, one-shot typed surface:
+  `agent.image_tools.upload.begin`, `agent.image_tools.upload.append`,
+  `agent.image_tools.upload.commit`, `agent.image_tools.extract_text`, and
+  `agent.image_tools.translate_text`. Flutter downloads and decrypts Matrix
+  media, then uploads only JPEG, PNG, or WebP bytes through the bounded 8 MiB,
+  1 MiB-chunk flow. The contract never accepts an MXC/HTTP URL, local path,
+  data URI, inline prompt/history, selected text, model/profile identifier, or
+  credential field. A committed source has revision 1 and is owner/account-
+  generation scoped, expires after the Agent-defined short lifetime, and is
+  consumed by exactly one extraction or translation execution. Translation
+  requires a canonical BCP-47 target locale; successful execution returns only
+  the request/source identity, optional target locale, and at most 64 KiB of
+  UTF-8 text (which may be empty). Message Server stores no image or OCR state,
+  pins `agent.image_tools.v1` schemas on each live lookup, and deliberately does
+  not add this optional capability to the ordinary model/chat readiness gate.
 - Durable Native Agent turn digests and events are secret-free. Reconnect and
   resume requests never carry, persist, or reconstruct a credential from turn
   state; the Agent resolves web-search configuration through its encrypted

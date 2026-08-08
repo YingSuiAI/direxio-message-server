@@ -3,6 +3,7 @@ package p2p
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -196,6 +197,14 @@ func TestNativeAgentCatalogRequirementsKeepOptionalCapabilitiesExplicit(t *testi
 	}
 	if !found {
 		t.Fatal("explicit optional voice requirement was dropped")
+	}
+}
+
+func TestImageToolsDoNotBlockNativeAgentBaselineReadiness(t *testing.T) {
+	for _, requirement := range nativeAgentCatalogRequirements(nil) {
+		if strings.HasPrefix(requirement.Action, "agent.image_tools.") {
+			t.Fatalf("optional image action %s was added to the global Native Agent readiness baseline", requirement.Action)
+		}
 	}
 }
 

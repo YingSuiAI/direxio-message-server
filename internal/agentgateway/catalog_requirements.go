@@ -155,6 +155,26 @@ var expectedCatalogSchemaDigests = map[string]catalogSchemaDigest{
 		inputHex:  "59b37979b65e9e0b1bdc57bae5950f0d53533b10060741be7fc6a36529beb9bf",
 		resultHex: "fa162b3374031e87711fa47067322839256115b2818d73506e8d99a288c9a316",
 	},
+	"agent.image_tools.upload.begin": {
+		inputHex:  "2797dbc61371d343647866a9116151065eb633838f917d584c6394f237ea2b5a",
+		resultHex: "5c1795955a5b5cd63c390c11fa24654389a9c42bea108584831eb7b0fa4f7bc7",
+	},
+	"agent.image_tools.upload.append": {
+		inputHex:  "f3c65322ece7aca25c93e12046b4919aa6b942e5e252b3802ba86184898e013e",
+		resultHex: "5c1795955a5b5cd63c390c11fa24654389a9c42bea108584831eb7b0fa4f7bc7",
+	},
+	"agent.image_tools.upload.commit": {
+		inputHex:  "1f5a339393a28aaa60a08d4ba3d8e43d4320eef387d59f3524a4fb598320c875",
+		resultHex: "2012c595a14cb1a5630822bbf4a033278d10dafccc97254c61ab7375ae21ce11",
+	},
+	"agent.image_tools.extract_text": {
+		inputHex:  "475db24a1d6efb6ddeceeeb5f3bba9214bfa745b7046d65c61e7bb62fc2e7c8f",
+		resultHex: "a9ae62acacbb5f5417461e9d46dde99eff836ccbabdd8e71c3d7b356a7ef829e",
+	},
+	"agent.image_tools.translate_text": {
+		inputHex:  "695285a75e6b3c2d0706d01b50e7b3d57b072599efe362a48cb192ec44735a8d",
+		resultHex: "b17197b1c57c81abf31fbb19a815d47f2af52d25236d999fb13d5553a2c34599",
+	},
 	"agent.core.model_profiles.sync": {
 		inputHex:  "25374faf14f544c968d39368e2ba28394f7e2e04c51188a1cba37f1a0eec8b84",
 		resultHex: "627867fcd8ef94e4425c8756c0b9ea76bc999626736d5656adf2ca6c68e3bb59",

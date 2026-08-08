@@ -170,6 +170,9 @@ func projectActionResult(action string, output map[string]any) map[string]any {
 		return textToolsConfigResult(result)
 	case "agent.text_tools.execute":
 		return textToolsExecutionResult(result)
+	case "agent.image_tools.upload.begin", "agent.image_tools.upload.append", "agent.image_tools.upload.commit",
+		"agent.image_tools.extract_text", "agent.image_tools.translate_text":
+		return result
 	case "agent.core.confirmations.get", "agent.core.confirmations.confirm", "agent.core.confirmations.reject":
 		return confirmationResult(result)
 	case "agent.core.confirmations.list":
@@ -211,6 +214,9 @@ func validateActionResult(action string, request, output map[string]any, authori
 		return validateTextToolsConfigResult(action, output)
 	case "agent.text_tools.execute":
 		return validateTextToolsExecutionResult(action, request, output)
+	case "agent.image_tools.upload.begin", "agent.image_tools.upload.append", "agent.image_tools.upload.commit",
+		"agent.image_tools.extract_text", "agent.image_tools.translate_text":
+		return validateImageToolActionResult(action, request, output, authority)
 	case "agent.models.list":
 		return validateModelCatalogResult(output)
 	case "agent.core.model_profiles.sync", "agent.model_profiles.sync", "agent.core.model_profiles.list", "agent.model_profiles.list":

@@ -18,6 +18,7 @@ import (
 
 	capv1 "github.com/YingSuiAI/dirextalk-capability-api/gen/go/dirextalk/capability/v1"
 	"github.com/google/uuid"
+	"golang.org/x/text/language"
 )
 
 // ErrInvalidActionRequest marks ProductCore parameters that cannot be sent to
@@ -111,9 +112,83 @@ func ValidateActionRequest(action string, params map[string]any) error {
 		return validateTextToolsConfigUpdateRequest(action, params)
 	case "agent.text_tools.execute":
 		return validateTextToolsExecuteRequest(action, params)
+	case "agent.image_tools.upload.begin":
+		return validateImageToolUploadBeginRequest(action, params)
+	case "agent.image_tools.upload.append":
+		return validateChatAttachmentAppendRequest(action, params)
+	case "agent.image_tools.upload.commit":
+		return validateChatAttachmentCommitRequest(action, params)
+	case "agent.image_tools.extract_text":
+		return validateImageToolExecuteRequest(action, params, false)
+	case "agent.image_tools.translate_text":
+		return validateImageToolExecuteRequest(action, params, true)
 	default:
 		return nil
 	}
+}
+
+func validateImageToolUploadBeginRequest(action string, params map[string]any) error {
+	if err := rejectUnknownActionFields(action, params,
+		"idempotency_key", "image_request_id", "name", "mime_type", "declared_size", "content_sha256"); err != nil {
+		return err
+	}
+	for _, field := range []string{"idempotency_key", "image_request_id"} {
+		if !canonicalActionUUID(params[field]) {
+			return invalidActionRequest(action, field, "must be a canonical UUID")
+		}
+	}
+	if !validChatAttachmentName(params["name"]) {
+		return invalidActionRequest(action, "name", "must be a 1 to 255 byte basename")
+	}
+	if !validImageToolMIME(params["mime_type"]) {
+		return invalidActionRequest(action, "mime_type", "must be image/jpeg, image/png, or image/webp")
+	}
+	if !actionIntegerInRange(params["declared_size"], 1, maxChatAttachmentBytes) {
+		return invalidActionRequest(action, "declared_size", "must be an integer from 1 to 8388608")
+	}
+	if !canonicalActionSHA256(params["content_sha256"]) {
+		return invalidActionRequest(action, "content_sha256", "must be a lowercase SHA-256 digest")
+	}
+	return nil
+}
+
+func validateImageToolExecuteRequest(action string, params map[string]any, translate bool) error {
+	allowed := []string{"idempotency_key", "source_id", "source_revision"}
+	if translate {
+		allowed = append(allowed, "target_locale")
+	}
+	if err := rejectUnknownActionFields(action, params, allowed...); err != nil {
+		return err
+	}
+	for _, field := range []string{"idempotency_key", "source_id"} {
+		if !canonicalActionUUID(params[field]) {
+			return invalidActionRequest(action, field, "must be a canonical UUID")
+		}
+	}
+	if !actionIntegerInRange(params["source_revision"], 1, 1) {
+		return invalidActionRequest(action, "source_revision", "must be exactly 1")
+	}
+	if translate && !canonicalBCP47Locale(params["target_locale"]) {
+		return invalidActionRequest(action, "target_locale", "must be a canonical BCP-47 language tag")
+	}
+	return nil
+}
+
+func validImageToolMIME(value any) bool {
+	mimeType, ok := value.(string)
+	if !ok || mimeType != strings.TrimSpace(mimeType) {
+		return false
+	}
+	return mimeType == "image/jpeg" || mimeType == "image/png" || mimeType == "image/webp"
+}
+
+func canonicalBCP47Locale(value any) bool {
+	text, ok := value.(string)
+	if !ok || text == "" || text != strings.TrimSpace(text) || len(text) > 64 || !utf8.ValidString(text) {
+		return false
+	}
+	tag, err := language.Parse(text)
+	return err == nil && tag != language.Und && tag.String() == text
 }
 
 func validateModelProfileSyncRequest(action string, params map[string]any) error {

@@ -6895,6 +6895,468 @@
       }
     },
     {
+      "name": "agent.image_tools.upload.begin",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "content_sha256": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "lowercase_sha256"
+            }
+          },
+          "declared_size": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "integer_1_to_8388608"
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid"
+            }
+          },
+          "image_request_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid"
+            }
+          },
+          "mime_type": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "one_of:image/jpeg|image/png|image/webp"
+            }
+          },
+          "name": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "basename;utf8_bytes_1_to_255"
+            }
+          }
+        },
+        "response": {
+          "expires_at": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "rfc3339"
+            }
+          },
+          "image_request_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid"
+            }
+          },
+          "max_chunk_bytes": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "exactly_1048576"
+            }
+          },
+          "received_size": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "integer_0_to_8388608"
+            }
+          },
+          "revision": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "positive_integer"
+            }
+          },
+          "source_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid"
+            }
+          },
+          "status": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "one_of:receiving|committed|consumed"
+            }
+          },
+          "upload_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.image_tools.upload.append",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "chunk_sha256": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "lowercase_sha256_matching_decoded_data"
+            }
+          },
+          "data_base64": {
+            "type": "string",
+            "required": true,
+            "write_only": true,
+            "presence": {
+              "present": "canonical_standard_base64_decoding_to_1_to_1048576_bytes"
+            }
+          },
+          "expected_revision": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "positive_integer"
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid"
+            }
+          },
+          "offset_bytes": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "non_negative_integer"
+            }
+          },
+          "ordinal": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "non_negative_integer"
+            }
+          },
+          "upload_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid"
+            }
+          }
+        },
+        "response": {
+          "expires_at": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "rfc3339"
+            }
+          },
+          "image_request_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid"
+            }
+          },
+          "max_chunk_bytes": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "exactly_1048576"
+            }
+          },
+          "received_size": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "integer_0_to_8388608"
+            }
+          },
+          "revision": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "positive_integer"
+            }
+          },
+          "source_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid"
+            }
+          },
+          "status": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "one_of:receiving|committed|consumed"
+            }
+          },
+          "upload_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.image_tools.upload.commit",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "content_sha256": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "lowercase_sha256_matching_declared_upload"
+            }
+          },
+          "expected_revision": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "positive_integer"
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid"
+            }
+          },
+          "upload_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid"
+            }
+          }
+        },
+        "response": {
+          "expires_at": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "rfc3339"
+            }
+          },
+          "image_request_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid"
+            }
+          },
+          "mime_type": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "one_of:image/jpeg|image/png|image/webp"
+            }
+          },
+          "name": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "basename;utf8_bytes_1_to_255"
+            }
+          },
+          "sha256": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "lowercase_sha256_matching_committed_content"
+            }
+          },
+          "size_bytes": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "integer_1_to_8388608"
+            }
+          },
+          "source_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid"
+            }
+          },
+          "source_revision": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "exactly_1"
+            }
+          },
+          "status": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "exactly:committed"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.image_tools.extract_text",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "idempotency_key": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid"
+            }
+          },
+          "source_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid"
+            }
+          },
+          "source_revision": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "exactly_1"
+            }
+          }
+        },
+        "response": {
+          "idempotency_key": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid_matching_request"
+            }
+          },
+          "source_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid_matching_request"
+            }
+          },
+          "source_revision": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "exactly_1_matching_request"
+            }
+          },
+          "text": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "utf8_bytes_0_to_65536"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.image_tools.translate_text",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "idempotency_key": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid"
+            }
+          },
+          "source_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid"
+            }
+          },
+          "source_revision": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "exactly_1"
+            }
+          },
+          "target_locale": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_bcp47"
+            }
+          }
+        },
+        "response": {
+          "idempotency_key": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid_matching_request"
+            }
+          },
+          "source_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid_matching_request"
+            }
+          },
+          "source_revision": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "exactly_1_matching_request"
+            }
+          },
+          "target_locale": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_bcp47_matching_request"
+            }
+          },
+          "text": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "utf8_bytes_0_to_65536"
+            }
+          }
+        }
+      }
+    },
+    {
       "name": "agent.chat.turn.stop",
       "auth": "owner",
       "transport": "http_and_ws_request",
