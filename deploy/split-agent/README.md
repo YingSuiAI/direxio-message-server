@@ -40,6 +40,50 @@ This directory is the fresh-data deployment boundary for the split architecture:
 - AWS is deliberately disabled in the baseline. No file here creates or changes
   AWS resources.
 
+## Opt-in Cloud Worker edge
+
+`compose.cloud-worker.yaml` is an opt-in production overlay for the Agent-owned
+Cloud Worker listeners. It publishes WorkerControl and Model Relay on one
+explicit, proved s2 private bind address at ports 10443 and 11443. It never
+publishes a wildcard or public listener. The deployer-owned edge EC2 runs the
+single public HAProxy and controlled Squid proxy; three private hosted-zone
+hostnames resolve to that edge and HAProxy TCP/SNI-passthroughs control/model
+traffic across the proved peering route. Each Agent listener terminates its
+own TLS. The proxy
+certificate must chain to the Worker image's independent outbound-proxy CA; it
+must not chain to the WorkerControl or Model Relay CA.
+
+Render the non-secret edge configuration into a new directory with
+`scripts/render-cloud-worker-edge.sh`. `DIREXTALK_CLOUD_WORKER_REGION` defaults
+to `ap-east-1`. `DIREXTALK_CLOUD_WORKER_ENDPOINT_MODE` has no default and must
+be exactly `private` or `controlled-public`; deployment must prove the selected
+same-Region private path or explicitly select the controlled public TLS path.
+There is no reachability-driven direct fallback. The edge renderer requires
+exact `HOST:PORT` values for control, model, and the local proxy backend; it
+never hard-codes a Docker Agent address.
+`DIREXTALK_CLOUD_WORKER_ALLOWED_FQDNS` is a whitespace-separated list of exact
+lowercase FQDNs and must contain WorkerControl, Model Relay, and the exact
+plan-bound S3/STS authorities. Wildcards, IP addresses, and duplicates fail
+rendering. Build the proxy image from
+`container/cloud-worker-proxy.Containerfile` with the deployment's existing
+immutable Alpine base, publish it immutably, and supply that reference through
+`DIREXTALK_CLOUD_WORKER_PROXY_IMAGE_IMMUTABLE`.
+
+This edge rendering does not enable the paid route by itself. The canonical
+Agent config must also contain one complete, reviewed `core_cloud_worker`
+binding, including the matching listener addresses `:10443` and `:11443`, the
+rendered HTTPS endpoints, exact CA digests, AWS/AMI/catalog/qualification
+bindings, limits, and credential revision. Missing input remains a startup
+failure rather than a partial Cloud Worker deployment.
+`scripts/render-cloud-worker-agent-config.sh` renders that strict fragment
+separately for safe append to a fresh Agent config. It requires every
+AWS/AMI/VPC/subnet/credential-revision, S3/KMS, digest, listener, cost, limit,
+and controller input; validates both TLS private keys as non-symlink mode 0400
+files owned by UID 65532; and emits only fixed `/run/cloud-worker/*` paths.
+The Compose overlay mounts the two listener identities plus IID certificate,
+pricing catalog, and runtime qualification as seven read-only files. The
+renderer never reads or emits an AWS credential value.
+
 The two gRPC directions use the neutral Capability API with mTLS, one exact
 direction token per direction, instance/generation metadata, and Ed25519
 grants. `message-server-init` creates the private CA and issues the initial
