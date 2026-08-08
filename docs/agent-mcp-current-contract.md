@@ -157,7 +157,9 @@ capability live.
   search pages additionally expose the exact embedding generation and replay
   those values from opaque cursor snapshots. Retained Knowledge content has a
   64 MiB owner quota. `agent.knowledge.status` strictly projects the Agent-owned
-  `quota_used_bytes`, `quota_limit_bytes`, `quota_remaining_bytes`, and
+  source lifecycle counters `ready_count`, `uploading_count`, `indexing_count`,
+  `failed_count`, and `cleanup_pending_count`, their `checked_at` timestamp, and
+  the `quota_used_bytes`, `quota_limit_bytes`, `quota_remaining_bytes`, and
   `max_source_bytes` counters. Agent `RESOURCE_EXHAUSTED` failures carrying
   `details.code=knowledge_quota_exceeded` map to ProductCore HTTP 413 with both
   `code` and `error_code` set to `knowledge_quota_exceeded`.

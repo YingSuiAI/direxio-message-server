@@ -118,11 +118,11 @@ func TestPublicResultAdaptersPreserveLegacyEnvelopes(t *testing.T) {
 				t.Fatalf("upload start keys=%v value=%#v", keys, got)
 			}
 		}},
-		{"knowledge status exact projection", "agent.knowledge.status", map[string]any{"Supported": true, "Count": float64(3), "ReadyCount": float64(2), "FailedCount": float64(1), "EmbeddingIndexed": float64(1), "EmbeddingStale": float64(2), "EmbeddingProfileID": "embed", "EmbeddingProfileRevision": float64(4), "EmbeddingModel": "text-embedding-3-small", "QuotaUsedBytes": float64(1024), "QuotaLimitBytes": float64(67108864), "QuotaRemainingBytes": float64(67107840), "MaxSourceBytes": float64(16777216), "extra": "drop"}, func(t *testing.T, got map[string]any) {
-			if keys := sortedMapKeys(got); !reflect.DeepEqual(keys, []string{"count", "embedding_indexed", "embedding_model", "embedding_profile_id", "embedding_profile_revision", "embedding_stale", "max_source_bytes", "quota_limit_bytes", "quota_remaining_bytes", "quota_used_bytes", "supported"}) {
+		{"knowledge status exact projection", "agent.knowledge.status", map[string]any{"Supported": true, "Count": float64(6), "ReadyCount": float64(2), "UploadingCount": float64(1), "IndexingCount": float64(1), "FailedCount": float64(1), "CleanupPendingCount": float64(1), "CheckedAt": "2026-08-08T12:00:00Z", "EmbeddingIndexed": float64(1), "EmbeddingStale": float64(2), "EmbeddingProfileID": "embed", "EmbeddingProfileRevision": float64(4), "EmbeddingModel": "text-embedding-3-small", "QuotaUsedBytes": float64(1024), "QuotaLimitBytes": float64(67108864), "QuotaRemainingBytes": float64(67107840), "MaxSourceBytes": float64(16777216), "extra": "drop"}, func(t *testing.T, got map[string]any) {
+			if keys := sortedMapKeys(got); !reflect.DeepEqual(keys, []string{"checked_at", "cleanup_pending_count", "count", "embedding_indexed", "embedding_model", "embedding_profile_id", "embedding_profile_revision", "embedding_stale", "failed_count", "indexing_count", "max_source_bytes", "quota_limit_bytes", "quota_remaining_bytes", "quota_used_bytes", "ready_count", "supported", "uploading_count"}) {
 				t.Fatalf("knowledge status keys=%v value=%#v", keys, got)
 			}
-			if got["embedding_indexed"] != float64(1) || got["embedding_stale"] != float64(2) || got["quota_used_bytes"] != float64(1024) || got["quota_limit_bytes"] != float64(67108864) || got["quota_remaining_bytes"] != float64(67107840) || got["max_source_bytes"] != float64(16777216) {
+			if got["ready_count"] != float64(2) || got["uploading_count"] != float64(1) || got["indexing_count"] != float64(1) || got["failed_count"] != float64(1) || got["cleanup_pending_count"] != float64(1) || got["checked_at"] != "2026-08-08T12:00:00Z" || got["embedding_indexed"] != float64(1) || got["embedding_stale"] != float64(2) || got["quota_used_bytes"] != float64(1024) || got["quota_limit_bytes"] != float64(67108864) || got["quota_remaining_bytes"] != float64(67107840) || got["max_source_bytes"] != float64(16777216) {
 				t.Fatalf("knowledge status counters were inferred/changed: %#v", got)
 			}
 		}},
@@ -184,6 +184,21 @@ func TestPublicResultAdaptersPreserveLegacyEnvelopes(t *testing.T) {
 			}
 			test.check(t, got)
 		})
+	}
+}
+
+func TestKnowledgeStatusResultPreservesRequiredSnakeCaseFields(t *testing.T) {
+	input := map[string]any{
+		"ready_count":           float64(2),
+		"uploading_count":       float64(1),
+		"indexing_count":        float64(3),
+		"failed_count":          float64(4),
+		"cleanup_pending_count": float64(5),
+		"checked_at":            "2026-08-08T12:00:00Z",
+	}
+	got := knowledgeStatusResult(input)
+	if !reflect.DeepEqual(got, input) {
+		t.Fatalf("knowledge status required fields = %#v, want %#v", got, input)
 	}
 }
 

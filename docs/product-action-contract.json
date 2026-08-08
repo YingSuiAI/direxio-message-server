@@ -8323,11 +8323,21 @@
       "transport": "http_and_ws_request",
       "schema": {
         "response": {
+          "checked_at": {
+            "type": "string",
+            "required": true
+          },
+          "cleanup_pending_count": {
+            "type": "integer",
+            "required": true
+          },
           "count": {
-            "type": "integer"
+            "type": "integer",
+            "required": true
           },
           "embedding_indexed": {
-            "type": "integer"
+            "type": "integer",
+            "required": true
           },
           "embedding_model": {
             "type": "string"
@@ -8339,7 +8349,16 @@
             "type": "integer"
           },
           "embedding_stale": {
-            "type": "integer"
+            "type": "integer",
+            "required": true
+          },
+          "failed_count": {
+            "type": "integer",
+            "required": true
+          },
+          "indexing_count": {
+            "type": "integer",
+            "required": true
           },
           "max_source_bytes": {
             "type": "integer",
@@ -8357,8 +8376,17 @@
             "type": "integer",
             "required": true
           },
+          "ready_count": {
+            "type": "integer",
+            "required": true
+          },
           "supported": {
-            "type": "boolean"
+            "type": "boolean",
+            "required": true
+          },
+          "uploading_count": {
+            "type": "integer",
+            "required": true
           }
         }
       }
