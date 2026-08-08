@@ -144,7 +144,7 @@ func (r *Runner) Stream(ctx context.Context, action string, params map[string]an
 			continue
 		}
 		if result, ok := event.Event.(*capv1.WatchOperationEvent_Result); ok && result.Result != nil {
-			nativeEvents, projectionErr := nativeEventsFromResult(result.Result.ResultJson, event.Sequence, authority)
+			nativeEvents, projectionErr := nativeEventsFromResult(result.Result.ResultJson, event.Sequence, operationID, authority)
 			if projectionErr != nil {
 				return projectionErr
 			}
@@ -557,7 +557,7 @@ func afterSequence(params map[string]any) int64 {
 // nativeEventsFromResult projects the durable operation's canonical Agent
 // ChatResponse into one public done event. Legacy collected-stream envelopes
 // are intentionally rejected; progress arrives through WatchOperation events.
-func nativeEventsFromResult(resultJSON []byte, resultSequence int64, authority actionResultAuthority) ([]agentstream.Event, error) {
+func nativeEventsFromResult(resultJSON []byte, resultSequence int64, operationID string, authority actionResultAuthority) ([]agentstream.Event, error) {
 	var response map[string]any
 	if len(resultJSON) == 0 || json.Unmarshal(resultJSON, &response) != nil || response == nil {
 		return nil, fmt.Errorf("%w: canonical chat operation result is missing", ErrInvalidActionResult)
@@ -565,8 +565,15 @@ func nativeEventsFromResult(resultJSON []byte, resultSequence int64, authority a
 	if err := validateDurableChatResult(response, authority); err != nil {
 		return nil, err
 	}
+	if !canonicalTurnUUID(operationID) || response["idempotency_key"] != operationID {
+		return nil, fmt.Errorf("%w: durable chat result idempotency_key does not match its operation", ErrInvalidActionResult)
+	}
 	sequence := positiveSequence(resultSequence)
 	data := chatResult(response)
+	data["idempotency_key"] = operationID
+	data["conversation_id"] = response["conversation_id"]
+	data["turn_id"] = operationID
+	data["revision"] = response["revision"]
 	data["sequence"] = sequence
 	return []agentstream.Event{{Event: "done", Seq: sequence, Data: data}}, nil
 }
@@ -618,23 +625,11 @@ func nativeEventFromProto(event *capv1.WatchOperationEvent, authority actionResu
 			return &agentstream.Event{Event: "delta", Seq: sequence, Data: payload}, false, nil
 		}
 	case *capv1.WatchOperationEvent_Result:
-		var payload map[string]any
-		if len(value.Result.ResultJson) > 0 {
-			if err := json.Unmarshal(value.Result.ResultJson, &payload); err != nil {
-				return nil, true, err
-			}
-		}
-		if payload == nil {
-			return nil, true, fmt.Errorf("%w: canonical chat operation result is missing", ErrInvalidActionResult)
-		}
-		if err := validateDurableChatResult(payload, authority); err != nil {
+		events, err := nativeEventsFromResult(value.Result.ResultJson, event.Sequence, event.OperationId, authority)
+		if err != nil {
 			return nil, true, err
 		}
-		payload = chatResult(payload)
-		for key, item := range base {
-			payload[key] = item
-		}
-		return &agentstream.Event{Event: "done", Seq: sequence, Data: payload}, true, nil
+		return &events[0], true, nil
 	case *capv1.WatchOperationEvent_Error:
 		capabilityErr := capabilityErrorFromProto(nil)
 		if value.Error != nil {

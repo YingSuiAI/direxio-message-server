@@ -162,6 +162,33 @@ func TestDurableStreamProjectsRunnerSequence(t *testing.T) {
 	}
 }
 
+func TestDurableStreamAcceptsTerminalResultIdentityBoundToOperation(t *testing.T) {
+	const operationID = "11111111-1111-4111-8111-111111111111"
+	const conversationID = "22222222-2222-4222-8222-222222222222"
+	module := New(Config{Runner: authoredTurnStreamRunner{events: []agentstream.Event{{
+		Event: "done", Seq: 17, Data: map[string]any{
+			"idempotency_key": operationID, "conversation_id": conversationID,
+			"turn_id": operationID, "revision": float64(2), "sequence": int64(17),
+			"text": "done",
+		},
+	}}}})
+	params := map[string]any{
+		"idempotency_key": operationID, "conversation_id": conversationID,
+		"message": "hello", "model_profile_id": "33333333-3333-4333-8333-333333333333",
+		"model_profile_revision": int64(1), "credential_version": int64(1),
+	}
+	var got agentstream.StreamEvent
+	if err := module.DurableStream(context.Background(), "@owner:example.test", "agent.chat.stream", params, func(event agentstream.StreamEvent) error {
+		got = event
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got.TurnID != operationID || got.IdempotencyKey != operationID || got.ConversationID != conversationID || got.Revision != 2 || got.Turn.State != agentstream.StateSucceeded {
+		t.Fatalf("terminal result projection = %#v", got)
+	}
+}
+
 func (r *requestValidationRunner) Apply(context.Context, string) error { return nil }
 
 func (r *requestValidationRunner) Invoke(_ context.Context, action string, params map[string]any) (map[string]any, error) {

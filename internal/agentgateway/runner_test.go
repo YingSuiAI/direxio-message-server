@@ -183,7 +183,7 @@ func TestNativeEventsFromResultProjectsCanonicalChatResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	events, err := nativeEventsFromResult(result, 17, actionResultAuthority{})
+	events, err := nativeEventsFromResult(result, 17, durableTestStartID, actionResultAuthority{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,8 +191,21 @@ func TestNativeEventsFromResultProjectsCanonicalChatResponse(t *testing.T) {
 		t.Fatalf("canonical result events = %#v", events)
 	}
 	done := events[0].Data
+	if done["idempotency_key"] != durableTestStartID || done["conversation_id"] != durableTestConversationID || done["turn_id"] != durableTestStartID || done["revision"] != float64(2) {
+		t.Fatalf("done event identity = %#v", done)
+	}
 	if len(done["references"].([]any)) != 1 || len(done["related_task_ids"].([]any)) != 1 || len(done["related_plan_ids"].([]any)) != 1 {
 		t.Fatalf("done event did not promote server-authored linkage: %#v", done)
+	}
+}
+
+func TestNativeEventsFromResultRejectsOperationIdentityMismatch(t *testing.T) {
+	result, err := json.Marshal(durableChatResponseForTest("done", nil, nil, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if events, err := nativeEventsFromResult(result, 17, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", actionResultAuthority{}); err == nil || events != nil {
+		t.Fatalf("mismatched operation result = events %#v err %v", events, err)
 	}
 }
 
@@ -209,7 +222,7 @@ func TestNativeChatStreamDoneRejectsMalformedReferenceOnProgressAndResult(t *tes
 	}
 
 	result := []byte(`{"message":{"content":"done","references":[{"kind":"service_binding"}]},"done":true,"references":[{"kind":"service_binding"}]}`)
-	if events, err := nativeEventsFromResult(result, 2, actionResultAuthority{}); err == nil || events != nil {
+	if events, err := nativeEventsFromResult(result, 2, durableTestStartID, actionResultAuthority{}); err == nil || events != nil {
 		t.Fatalf("malformed result done = events %#v err %v", events, err)
 	}
 }
@@ -273,7 +286,7 @@ func TestNativeChatStreamRejectsCloudWorkerReferenceFromForeignPreparedGeneratio
 		t.Fatal(err)
 	}
 	authority := actionResultAuthority{ownerID: "@owner:example.test", accountGeneration: 7}
-	if events, err := nativeEventsFromResult(result, 1, authority); err == nil || events != nil {
+	if events, err := nativeEventsFromResult(result, 1, durableTestStartID, authority); err == nil || events != nil {
 		t.Fatalf("foreign result generation = events %#v err %v", events, err)
 	}
 
