@@ -143,13 +143,25 @@ var expectedCatalogSchemaDigests = map[string]catalogSchemaDigest{
 		inputHex:  "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
 		resultHex: "91ecbe4507c45e14f794bdd8569a8b9681d077f977485874592183dc7f5faccb",
 	},
+	"agent.text_tools.config.get": {
+		inputHex:  "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
+		resultHex: "ce1c828fed02c65c9ba92123d5e88f8087acec7ca3007c6fb57e6a1aa34eef56",
+	},
+	"agent.text_tools.config.update": {
+		inputHex:  "27e28f1ad68d20dc25e63264a830391adcd2fb9b24203fce8b9e311022f87e1e",
+		resultHex: "ce1c828fed02c65c9ba92123d5e88f8087acec7ca3007c6fb57e6a1aa34eef56",
+	},
+	"agent.text_tools.execute": {
+		inputHex:  "59b37979b65e9e0b1bdc57bae5950f0d53533b10060741be7fc6a36529beb9bf",
+		resultHex: "fa162b3374031e87711fa47067322839256115b2818d73506e8d99a288c9a316",
+	},
 	"agent.core.model_profiles.sync": {
-		inputHex:  "c485c99597be7bdd69e1e6526555d39ffbf0634b4ac2bd4f1f42343818952b56",
-		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+		inputHex:  "25374faf14f544c968d39368e2ba28394f7e2e04c51188a1cba37f1a0eec8b84",
+		resultHex: "627867fcd8ef94e4425c8756c0b9ea76bc999626736d5656adf2ca6c68e3bb59",
 	},
 	"agent.core.model_profiles.list": {
 		inputHex:  "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
-		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+		resultHex: "327e27f75fcac55ef777b6bf895df90cff1f3c7e3edd3f386fceeeceeb568e85",
 	},
 	"agent.core.model_profiles.get": {
 		inputHex:  "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
@@ -172,12 +184,12 @@ var expectedCatalogSchemaDigests = map[string]catalogSchemaDigest{
 		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
 	},
 	"agent.model_profiles.sync": {
-		inputHex:  "c485c99597be7bdd69e1e6526555d39ffbf0634b4ac2bd4f1f42343818952b56",
-		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+		inputHex:  "25374faf14f544c968d39368e2ba28394f7e2e04c51188a1cba37f1a0eec8b84",
+		resultHex: "627867fcd8ef94e4425c8756c0b9ea76bc999626736d5656adf2ca6c68e3bb59",
 	},
 	"agent.model_profiles.list": {
 		inputHex:  "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
-		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+		resultHex: "327e27f75fcac55ef777b6bf895df90cff1f3c7e3edd3f386fceeeceeb568e85",
 	},
 	"agent.model_profiles.get": {
 		inputHex:  "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",

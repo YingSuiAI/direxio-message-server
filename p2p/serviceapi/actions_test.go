@@ -170,6 +170,9 @@ func TestModelProfileActionSchemasDescribePresenceSensitiveFields(t *testing.T) 
 		}
 	}
 	syncSpec, _ := ActionSpecFor("agent.core.model_profiles.sync")
+	if syncSpec.Schema.Request["default_tool_client_profile_id"].Type != "string" || !syncSpec.Schema.Response["default_tool_client_profile_id"].Required {
+		t.Fatal("sync schema must expose the optional tool default and required readback")
+	}
 	entry := syncSpec.Schema.Request["entries"].Items
 	if entry == nil || entry.Properties["client_profile_id"].Presence == nil || entry.Properties["api_key"].Presence == nil {
 		t.Fatal("sync schema must expose client reference and API-key presence")

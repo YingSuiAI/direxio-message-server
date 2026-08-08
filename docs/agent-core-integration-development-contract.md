@@ -82,6 +82,7 @@ skills.server
 mcp
 aws.control
 voice.server
+text_tools.server
 execution.v2
 execution.v2.plan
 execution.v2.run
@@ -97,6 +98,12 @@ A token is omitted when its backing descriptor or required operation is not
 published. In particular, a Product Capability bridge alone does not publish
 `skills.server` or `mcp`. Registration, schema presence, or documentation alone
 never makes an action live.
+
+The model-profile sync/list contract includes
+`default_tool_client_profile_id`. An empty value means no tool default; a
+non-empty value must identify a conversation-kind profile in the same
+authoritative profile set. This distinct role is part of the readiness proof
+behind `model_profiles.server` and `model_roles.server`.
 
 ## 3. Capability protocols
 

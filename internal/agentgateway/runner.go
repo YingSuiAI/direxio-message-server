@@ -701,6 +701,9 @@ var actionBindings = map[string]actionBinding{
 	"agent.web_search.config.get":     {"agent.web_search.v1", "get_config"},
 	"agent.web_search.config.update":  {"agent.web_search.v1", "update_config"},
 	"agent.web_search.test":           {"agent.web_search.v1", "test"},
+	"agent.text_tools.config.get":     {"agent.text_tools.v1", "get_config"},
+	"agent.text_tools.config.update":  {"agent.text_tools.v1", "update_config"},
+	"agent.text_tools.execute":        {"agent.text_tools.v1", "execute"},
 
 	// Model profiles. Sync is retained as a legacy alias while the typed Core
 	// create/update/test operations are also exposed to current clients.

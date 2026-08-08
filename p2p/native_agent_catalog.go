@@ -224,6 +224,7 @@ func nativeAgentCatalogRequirements(extra []string) []agentgateway.CatalogRequir
 		"agent.chat", "agent.chat.stream",
 		"agent.chat.attachment.begin", "agent.chat.attachment.append", "agent.chat.attachment.commit",
 		"agent.web_search.config.get", "agent.web_search.config.update", "agent.web_search.test",
+		"agent.text_tools.config.get", "agent.text_tools.config.update", "agent.text_tools.execute",
 		"agent.chat.conversations.create", "agent.chat.conversations.list", "agent.chat.conversations.get", "agent.chat.conversations.rename", "agent.chat.conversations.delete", "agent.chat.turn.stop", "agent.chat.turns.list",
 		"agent.context.compress", "agent.summarize",
 		"agent.core.model_profiles.sync", "agent.core.model_profiles.list", "agent.core.model_profiles.get", "agent.core.model_profiles.delete",

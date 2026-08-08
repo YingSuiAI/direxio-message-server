@@ -292,6 +292,9 @@
           "default_speech_client_profile_id": {
             "type": "string"
           },
+          "default_tool_client_profile_id": {
+            "type": "string"
+          },
           "entries": {
             "type": "array",
             "required": true,
@@ -429,6 +432,10 @@
           },
           "default_speech_client_profile_id": {
             "type": "string"
+          },
+          "default_tool_client_profile_id": {
+            "type": "string",
+            "required": true
           },
           "profiles": {
             "type": "array",
@@ -575,6 +582,10 @@
           },
           "default_speech_client_profile_id": {
             "type": "string"
+          },
+          "default_tool_client_profile_id": {
+            "type": "string",
+            "required": true
           },
           "next_page_token": {
             "type": "string"
@@ -871,6 +882,9 @@
           "default_speech_client_profile_id": {
             "type": "string"
           },
+          "default_tool_client_profile_id": {
+            "type": "string"
+          },
           "entries": {
             "type": "array",
             "required": true,
@@ -1008,6 +1022,10 @@
           },
           "default_speech_client_profile_id": {
             "type": "string"
+          },
+          "default_tool_client_profile_id": {
+            "type": "string",
+            "required": true
           },
           "profiles": {
             "type": "array",
@@ -1154,6 +1172,10 @@
           },
           "default_speech_client_profile_id": {
             "type": "string"
+          },
+          "default_tool_client_profile_id": {
+            "type": "string",
+            "required": true
           },
           "next_page_token": {
             "type": "string"
@@ -6675,6 +6697,197 @@
             "required": true
           },
           "tested_at": {
+            "type": "string",
+            "required": true
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.text_tools.config.get",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "response": {
+          "enabled": {
+            "type": "boolean",
+            "required": true
+          },
+          "revision": {
+            "type": "integer",
+            "required": true
+          },
+          "tools": {
+            "type": "array",
+            "required": true,
+            "items": {
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "required": true
+                },
+                "name": {
+                  "type": "string",
+                  "required": true
+                },
+                "order": {
+                  "type": "integer",
+                  "required": true
+                },
+                "system_prompt": {
+                  "type": "string",
+                  "required": true
+                },
+                "tool_id": {
+                  "type": "string",
+                  "required": true
+                }
+              }
+            }
+          },
+          "updated_at": {
+            "type": "string",
+            "required": true
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.text_tools.config.update",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "enabled": {
+            "type": "boolean",
+            "required": true
+          },
+          "expected_revision": {
+            "type": "integer",
+            "required": true
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          },
+          "tools": {
+            "type": "array",
+            "required": true,
+            "items": {
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "required": true
+                },
+                "name": {
+                  "type": "string",
+                  "required": true
+                },
+                "order": {
+                  "type": "integer",
+                  "required": true
+                },
+                "system_prompt": {
+                  "type": "string",
+                  "required": true
+                },
+                "tool_id": {
+                  "type": "string",
+                  "required": true
+                }
+              }
+            }
+          }
+        },
+        "response": {
+          "enabled": {
+            "type": "boolean",
+            "required": true
+          },
+          "revision": {
+            "type": "integer",
+            "required": true
+          },
+          "tools": {
+            "type": "array",
+            "required": true,
+            "items": {
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "required": true
+                },
+                "name": {
+                  "type": "string",
+                  "required": true
+                },
+                "order": {
+                  "type": "integer",
+                  "required": true
+                },
+                "system_prompt": {
+                  "type": "string",
+                  "required": true
+                },
+                "tool_id": {
+                  "type": "string",
+                  "required": true
+                }
+              }
+            }
+          },
+          "updated_at": {
+            "type": "string",
+            "required": true
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.text_tools.execute",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "selected_text": {
+            "type": "string",
+            "required": true
+          },
+          "tool_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "output": {
+            "type": "string",
+            "required": true
+          },
+          "sources": {
+            "type": "array",
+            "required": true,
+            "items": {
+              "type": "object",
+              "properties": {
+                "snippet": {
+                  "type": "string",
+                  "required": true
+                },
+                "title": {
+                  "type": "string",
+                  "required": true
+                },
+                "url": {
+                  "type": "string",
+                  "required": true
+                }
+              }
+            }
+          },
+          "tool_id": {
             "type": "string",
             "required": true
           }

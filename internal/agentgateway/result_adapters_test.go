@@ -58,8 +58,8 @@ func TestPublicResultAdaptersPreserveLegacyEnvelopes(t *testing.T) {
 				t.Fatalf("core id leaked into model profile: %#v", profile)
 			}
 		}},
-		{"model list", "agent.model_profiles.list", map[string]any{"Profiles": []any{}, "NextCursor": "p"}, func(t *testing.T, got map[string]any) {
-			if _, ok := got["profiles"]; !ok || got["next_page_token"] != "p" {
+		{"model list", "agent.model_profiles.list", map[string]any{"Profiles": []any{}, "NextCursor": "p", "default_tool_client_profile_id": ""}, func(t *testing.T, got map[string]any) {
+			if _, ok := got["profiles"]; !ok || got["next_page_token"] != "p" || got["default_tool_client_profile_id"] != "" {
 				t.Fatalf("model list = %#v", got)
 			}
 		}},

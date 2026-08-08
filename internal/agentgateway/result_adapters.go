@@ -28,8 +28,13 @@ import (
 var ErrInvalidActionResult = errors.New("native agent action result is invalid")
 
 const (
-	knowledgeQuotaLimitBytes int64 = 64 << 20
-	knowledgeMaxSourceBytes  int64 = 16 << 20
+	knowledgeQuotaLimitBytes      int64 = 64 << 20
+	knowledgeMaxSourceBytes       int64 = 16 << 20
+	maxTextToolOutputBytes              = 64 << 10
+	maxTextToolSources                  = 5
+	maxTextToolSourceTitleBytes         = 512
+	maxTextToolSourceURLBytes           = 8 << 10
+	maxTextToolSourceSnippetBytes       = 4 << 10
 )
 
 // actionResultAuthority is captured once by Runner.prepare and travels with
@@ -161,6 +166,10 @@ func projectActionResult(action string, output map[string]any) map[string]any {
 		return webSearchConfigResult(result)
 	case "agent.web_search.test":
 		return webSearchTestResult(result)
+	case "agent.text_tools.config.get", "agent.text_tools.config.update":
+		return textToolsConfigResult(result)
+	case "agent.text_tools.execute":
+		return textToolsExecutionResult(result)
 	case "agent.core.confirmations.get", "agent.core.confirmations.confirm", "agent.core.confirmations.reject":
 		return confirmationResult(result)
 	case "agent.core.confirmations.list":
@@ -198,8 +207,14 @@ func validateActionResult(action string, request, output map[string]any, authori
 		return validateWebSearchConfigResult(action, output)
 	case "agent.web_search.test":
 		return validateWebSearchTestResult(action, output)
+	case "agent.text_tools.config.get", "agent.text_tools.config.update":
+		return validateTextToolsConfigResult(action, output)
+	case "agent.text_tools.execute":
+		return validateTextToolsExecutionResult(action, request, output)
 	case "agent.models.list":
 		return validateModelCatalogResult(output)
+	case "agent.core.model_profiles.sync", "agent.model_profiles.sync", "agent.core.model_profiles.list", "agent.model_profiles.list":
+		return validateToolModelDefaultResult(output)
 	case "agent.chat.turn.stop":
 		return validateTurnStopResult(request, output)
 	case "agent.chat.turns.list":
@@ -211,6 +226,145 @@ func validateActionResult(action string, request, output map[string]any, authori
 	default:
 		return nil
 	}
+}
+
+func validateToolModelDefaultResult(output map[string]any) error {
+	for _, alias := range []string{"default_tool_profile_id", "DefaultToolProfileID", "DefaultToolClientProfileID"} {
+		if _, present := output[alias]; present {
+			return fmt.Errorf("%w: default tool client profile id must use the canonical field", ErrInvalidActionResult)
+		}
+	}
+	value := output["default_tool_client_profile_id"]
+	profileID, ok := value.(string)
+	if !ok {
+		return fmt.Errorf("%w: default tool client profile id must be a string", ErrInvalidActionResult)
+	}
+	if profileID == "" {
+		return nil
+	}
+	profiles, _ := actionObjectSlice(output["profiles"])
+	for _, profile := range profiles {
+		if profile["client_profile_id"] != profileID {
+			continue
+		}
+		kind, _ := profile["model_kind"].(string)
+		if kind == "" || kind == "conversation" {
+			return nil
+		}
+		return fmt.Errorf("%w: default tool client profile must reference a conversation profile", ErrInvalidActionResult)
+	}
+	// A paginated profile response need not contain the separately identified
+	// default. Agent validates the authoritative role binding before returning.
+	return nil
+}
+
+func validateTextToolsConfigResult(action string, output map[string]any) error {
+	if output == nil {
+		return fmt.Errorf("%w: text tools config response is missing", ErrInvalidActionResult)
+	}
+	if err := rejectUnexpectedTextToolsResultFields(output, "enabled", "revision", "tools", "updated_at"); err != nil {
+		return err
+	}
+	if _, ok := output["enabled"].(bool); !ok {
+		return fmt.Errorf("%w: text tools config enabled must be a boolean", ErrInvalidActionResult)
+	}
+	if revision, ok := turnInt64(output["revision"]); !ok || revision < 0 {
+		return fmt.Errorf("%w: text tools config revision must be a non-negative integer", ErrInvalidActionResult)
+	}
+	if err := validateTextTools(action, output["tools"]); err != nil {
+		return fmt.Errorf("%w: text tools config is invalid", ErrInvalidActionResult)
+	}
+	updatedAt, ok := output["updated_at"].(string)
+	if !ok || len(updatedAt) == 0 || len(updatedAt) > 128 || !utf8.ValidString(updatedAt) {
+		return fmt.Errorf("%w: text tools config updated_at is invalid", ErrInvalidActionResult)
+	}
+	if _, err := time.Parse(time.RFC3339Nano, updatedAt); err != nil {
+		return fmt.Errorf("%w: text tools config updated_at is invalid", ErrInvalidActionResult)
+	}
+	return nil
+}
+
+func validateTextToolsExecutionResult(action string, request, output map[string]any) error {
+	if output == nil {
+		return fmt.Errorf("%w: text tools execution response is missing", ErrInvalidActionResult)
+	}
+	if err := rejectUnexpectedTextToolsResultFields(output, "tool_id", "output", "sources"); err != nil {
+		return err
+	}
+	toolID := output["tool_id"]
+	if !validTextToolID(toolID) || request == nil || toolID != request["tool_id"] {
+		return fmt.Errorf("%w: text tools execution tool_id does not match the request", ErrInvalidActionResult)
+	}
+	if !validTextToolString(output["output"], 1, maxTextToolOutputBytes, false) {
+		return fmt.Errorf("%w: text tools execution output must be UTF-8 of 1 to 65536 bytes", ErrInvalidActionResult)
+	}
+	sources, ok := actionObjectSlice(output["sources"])
+	if !ok || len(sources) > maxTextToolSources {
+		return fmt.Errorf("%w: text tools execution sources must contain at most 5 items", ErrInvalidActionResult)
+	}
+	for _, source := range sources {
+		if err := rejectUnexpectedTextToolsResultFields(source, "title", "url", "snippet"); err != nil {
+			return err
+		}
+		if !validTextToolString(source["title"], 1, maxTextToolSourceTitleBytes, false) ||
+			!validTextToolString(source["url"], 1, maxTextToolSourceURLBytes, false) ||
+			!validTextToolString(source["snippet"], 0, maxTextToolSourceSnippetBytes, false) {
+			return fmt.Errorf("%w: text tools execution source is invalid", ErrInvalidActionResult)
+		}
+	}
+	return nil
+}
+
+func rejectUnexpectedTextToolsResultFields(value map[string]any, allowed ...string) error {
+	allowedSet := make(map[string]struct{}, len(allowed))
+	for _, field := range allowed {
+		allowedSet[field] = struct{}{}
+	}
+	for field := range value {
+		if _, ok := allowedSet[field]; !ok {
+			return fmt.Errorf("%w: text tools response contains an unexpected field", ErrInvalidActionResult)
+		}
+	}
+	return nil
+}
+
+func textToolsConfigResult(result map[string]any) map[string]any {
+	projected := map[string]any{
+		"enabled":    result["enabled"],
+		"revision":   result["revision"],
+		"updated_at": result["updated_at"],
+	}
+	tools, _ := actionObjectSlice(result["tools"])
+	projectedTools := make([]any, 0, len(tools))
+	for _, tool := range tools {
+		projectedTools = append(projectedTools, map[string]any{
+			"tool_id":       tool["tool_id"],
+			"name":          tool["name"],
+			"system_prompt": tool["system_prompt"],
+			"order":         tool["order"],
+			"enabled":       tool["enabled"],
+		})
+	}
+	projected["tools"] = projectedTools
+	return projected
+}
+
+func textToolsExecutionResult(result map[string]any) map[string]any {
+	projected := map[string]any{
+		"tool_id": result["tool_id"],
+		"output":  result["output"],
+	}
+	sources, _ := actionObjectSlice(result["sources"])
+	projectedSources := make([]any, 0, len(sources))
+	for _, source := range sources {
+		projectedSources = append(projectedSources, map[string]any{
+			"title":   source["title"],
+			"url":     source["url"],
+			"snippet": source["snippet"],
+		})
+	}
+	projected["sources"] = projectedSources
+	return projected
 }
 
 func validateKnowledgeStatusResult(output map[string]any) error {
@@ -817,6 +971,7 @@ func copyModelDefaults(result, value map[string]any) {
 	aliases := map[string][]string{
 		"default_client_profile_id":              {"default_client_profile_id", "DefaultClientProfileID"},
 		"default_conversation_client_profile_id": {"default_conversation_client_profile_id", "default_conversation_profile_id", "DefaultConversationProfileID"},
+		"default_tool_client_profile_id":         {"default_tool_client_profile_id"},
 		"default_embedding_client_profile_id":    {"default_embedding_client_profile_id", "default_embedding_profile_id", "DefaultEmbeddingProfileID"},
 		"default_speech_client_profile_id":       {"default_speech_client_profile_id", "default_speech_profile_id", "DefaultSpeechProfileID"},
 	}

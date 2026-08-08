@@ -159,6 +159,32 @@ func (r *requestValidationRunner) Stream(context.Context, string, map[string]any
 	return nil
 }
 
+func TestTextToolsActionsAreAllowlistedAndValidatedBeforeDispatch(t *testing.T) {
+	runner := &requestValidationRunner{}
+	handlers := New(Config{Runner: runner}).Handlers()
+	for _, action := range []string{"agent.text_tools.config.get", "agent.text_tools.config.update", "agent.text_tools.execute"} {
+		if handlers[action] == nil {
+			t.Fatalf("text tools action %s is not externally routed", action)
+		}
+	}
+	if _, actionErr := handlers["agent.text_tools.execute"](context.Background(), map[string]any{
+		"tool_id": "summary", "selected_text": "hello", "prompt": "forbidden",
+	}); actionErr == nil || actionErr.Status != http.StatusBadRequest {
+		t.Fatalf("closed execute request error = %#v", actionErr)
+	}
+	if runner.invokeCalls != 0 {
+		t.Fatal("invalid text tools request reached the external Agent runner")
+	}
+	if _, actionErr := handlers["agent.text_tools.execute"](context.Background(), map[string]any{
+		"tool_id": "summary", "selected_text": "hello",
+	}); actionErr != nil {
+		t.Fatalf("valid execute rejected: %#v", actionErr)
+	}
+	if runner.invokeCalls != 1 || runner.lastAction != "agent.text_tools.execute" {
+		t.Fatalf("valid execute dispatch = calls %d action %q", runner.invokeCalls, runner.lastAction)
+	}
+}
+
 func TestTurnStopUsesTypedMutationWithExactConcurrencyFields(t *testing.T) {
 	runner := &requestValidationRunner{}
 	module := New(Config{Runner: runner})

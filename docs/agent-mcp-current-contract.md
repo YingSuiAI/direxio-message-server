@@ -52,6 +52,21 @@ capability live.
   `web_search` Eino tool is available only from enabled, configured Agent-owned
   web-search state. This is a single credential path, not a request fallback.
 - Web search performs one bounded HTTPS Tavily request (a local injected endpoint is only a test seam), rejects redirects, trims queries to 1,000 Unicode characters, clamps and re-enforces `max_results` to 1–10, limits provider bodies to 2 MiB, and applies a 15-second timeout. Responses contain only bounded answer/title/content previews, URLs, scores, and provider metadata. Provider bodies and credential values are not returned on errors.
+- Typed selection tools are Agent-owned and are exposed only through the
+  owner-authenticated ProductCore actions `agent.text_tools.config.get`,
+  `agent.text_tools.config.update`, and `agent.text_tools.execute`. Config get
+  has empty parameters. Config update is a revision-checked, idempotent
+  full-list replacement of at most 32 ordered tools, with at most six enabled;
+  it may add, delete, or reorder stable default IDs (`translation`, `summary`, `explanation`,
+  `search`) and UUID custom IDs. Execute accepts exactly `tool_id` and a
+  bounded selected-text value; it never accepts a prompt, model/profile,
+  history, or credential field. Results expose only bounded output and at most
+  five bounded `{title,url,snippet}` sources. Message Server has no text-tool
+  database or runtime fallback, and a possibly dispatched config mutation is
+  reconciled with config get rather than automatically replayed.
+- `text_tools.server` is advertised only when the registered
+  `agent.text_tools.v1` capability is ready with all three operations and the
+  exact pinned request/result schema identities.
 - Durable Native Agent turn digests and events are secret-free. Reconnect and
   resume requests never carry, persist, or reconstruct a credential from turn
   state; the Agent resolves web-search configuration through its encrypted
@@ -141,10 +156,24 @@ capability live.
 
 ### Native Agent schedule chat tools
 
-- Interactive Native Agent turns expose only bounded read-only `native_agent_schedules_list`, `native_agent_schedules_get`, `native_agent_schedule_runs_list`, and `native_agent_schedule_runs_get` tools. ProductCore `agent.schedules.*` actions remain the owner-authenticated CRUD/runtime surface.
-- Native Agent does not stage or confirm create, update, enable, delete, or
-  run-now schedule mutations.
-- These read-only tools are separate from the restricted scheduled runner allowlist and from the Online Agent Matrix room/timeline. The scheduled runner cannot call mutation tools.
+- Interactive Native Agent turns expose bounded read-only
+  `native_agent_schedules_list`, `native_agent_schedules_get`,
+  `native_agent_schedule_runs_list`, and `native_agent_schedule_runs_get`
+  tools. When the Agent conversation/schedule store is composed, a durable
+  turn also receives the Core-owned `agent.schedule.create` intrinsic for
+  natural-language creation of one-time or recurring schedules.
+- `agent.schedule.create` is internal to Agent Core. It is not a new
+  ProductCore action or a Product Capability callback. The model supplies only
+  bounded schedule intent, trigger, timezone, and timeout arguments; Core
+  injects owner, account generation, conversation, and pinned model profile
+  authority from the fenced `TurnLease` and commits the schedule with the turn
+  receipt.
+- ProductCore `agent.schedules.*` actions remain the owner-authenticated
+  CRUD/runtime surface. Native turns do not expose schedule update, enable,
+  disable, delete, or run-now mutations to the model. The read tools and Core
+  create intrinsic remain separate from the restricted scheduled-runner
+  allowlist and from the Online Agent Matrix room/timeline; the scheduled
+  runner cannot call mutation tools.
 
 ## Execution Orchestration V2 (contract and release gate)
 

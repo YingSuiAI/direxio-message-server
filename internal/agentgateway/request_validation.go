@@ -41,6 +41,11 @@ const (
 	maxChatAttachments               = 4
 	maxCloudWorkerArtifactBytes      = int64(8 << 20)
 	maxCloudWorkerArtifactChunkBytes = int64(512 << 10)
+	maxTextToolNameBytes             = 64
+	maxTextToolPromptBytes           = 16 << 10
+	maxSelectedTextBytes             = 64 << 10
+	maxTextTools                     = 32
+	maxEnabledTextTools              = 6
 )
 
 // InvalidActionRequestError carries only a field name and a stable reason. It
@@ -92,15 +97,171 @@ func ValidateActionRequest(action string, params map[string]any) error {
 		return validateChatAttachmentCommitRequest(action, params)
 	case "agent.models.list":
 		return validateModelCatalogRequest(action, params)
+	case "agent.core.model_profiles.sync", "agent.model_profiles.sync":
+		return validateModelProfileSyncRequest(action, params)
 	case "agent.chat.turn.stop":
 		return validateTurnStopRequest(action, params)
 	case "agent.chat.turns.list":
 		return validateTurnsListRequest(action, params)
 	case "agent.execution.v2.artifacts.download":
 		return validateCloudWorkerArtifactDownloadRequest(action, params)
+	case "agent.text_tools.config.get":
+		return rejectUnknownActionFields(action, params)
+	case "agent.text_tools.config.update":
+		return validateTextToolsConfigUpdateRequest(action, params)
+	case "agent.text_tools.execute":
+		return validateTextToolsExecuteRequest(action, params)
 	default:
 		return nil
 	}
+}
+
+func validateModelProfileSyncRequest(action string, params map[string]any) error {
+	value, present := params["default_tool_client_profile_id"]
+	if !present {
+		return nil
+	}
+	profileID, ok := value.(string)
+	if !ok {
+		return invalidActionRequest(action, "default_tool_client_profile_id", "must be a string")
+	}
+	if profileID == "" {
+		return nil
+	}
+	entries, ok := actionObjectSlice(params["entries"])
+	if !ok {
+		return invalidActionRequest(action, "entries", "must be an array")
+	}
+	for _, entry := range entries {
+		if entry["client_profile_id"] != profileID {
+			continue
+		}
+		kind, _ := entry["model_kind"].(string)
+		if kind == "" || kind == "conversation" {
+			return nil
+		}
+		return invalidActionRequest(action, "default_tool_client_profile_id", "must reference a conversation profile")
+	}
+	// Agent owns persisted profiles and validates a default that is not part of
+	// this sync batch against its authoritative store.
+	return nil
+}
+
+func validateTextToolsConfigUpdateRequest(action string, params map[string]any) error {
+	if err := rejectUnknownActionFields(action, params, "idempotency_key", "expected_revision", "enabled", "tools"); err != nil {
+		return err
+	}
+	if params == nil || !canonicalActionUUID(params["idempotency_key"]) {
+		return invalidActionRequest(action, "idempotency_key", "must be a canonical UUID")
+	}
+	if !actionIntegerInRange(params["expected_revision"], 0, math.MaxInt64) {
+		return invalidActionRequest(action, "expected_revision", "must be a non-negative integer")
+	}
+	if _, ok := params["enabled"].(bool); !ok {
+		return invalidActionRequest(action, "enabled", "must be a boolean")
+	}
+	return validateTextTools(action, params["tools"])
+}
+
+func validateTextToolsExecuteRequest(action string, params map[string]any) error {
+	if err := rejectUnknownActionFields(action, params, "tool_id", "selected_text"); err != nil {
+		return err
+	}
+	if params == nil || !validTextToolID(params["tool_id"]) {
+		return invalidActionRequest(action, "tool_id", "must be a stable default id or canonical UUID")
+	}
+	if !validTextToolString(params["selected_text"], 1, maxSelectedTextBytes, false) {
+		return invalidActionRequest(action, "selected_text", "must be UTF-8 of 1 to 65536 bytes")
+	}
+	return nil
+}
+
+func validateTextTools(action string, value any) error {
+	tools, ok := actionObjectSlice(value)
+	if !ok || len(tools) > maxTextTools {
+		return invalidActionRequest(action, "tools", "must be an array of at most 32 tools")
+	}
+	orders := make(map[int64]struct{}, len(tools))
+	ids := make(map[string]struct{}, len(tools))
+	enabledCount := 0
+	for _, tool := range tools {
+		if err := rejectUnknownActionFields(action, tool, "tool_id", "name", "system_prompt", "order", "enabled"); err != nil {
+			return err
+		}
+		toolID, _ := tool["tool_id"].(string)
+		if !validTextToolID(toolID) {
+			return invalidActionRequest(action, "tools.tool_id", "must be a stable default id or canonical UUID")
+		}
+		if _, duplicate := ids[toolID]; duplicate {
+			return invalidActionRequest(action, "tools.tool_id", "must be unique")
+		}
+		ids[toolID] = struct{}{}
+		if !validTextToolString(tool["name"], 1, maxTextToolNameBytes, false) {
+			return invalidActionRequest(action, "tools.name", "must be UTF-8 of 1 to 64 bytes")
+		}
+		if !validTextToolString(tool["system_prompt"], 1, maxTextToolPromptBytes, false) {
+			return invalidActionRequest(action, "tools.system_prompt", "must be UTF-8 of 1 to 16384 bytes")
+		}
+		order, valid := actionInteger(tool["order"])
+		if !valid || order < 0 || order >= int64(len(tools)) {
+			return invalidActionRequest(action, "tools.order", "must form a contiguous zero-based sequence")
+		}
+		if _, duplicate := orders[order]; duplicate {
+			return invalidActionRequest(action, "tools.order", "must be unique")
+		}
+		orders[order] = struct{}{}
+		enabled, ok := tool["enabled"].(bool)
+		if !ok {
+			return invalidActionRequest(action, "tools.enabled", "must be a boolean")
+		}
+		if enabled {
+			enabledCount++
+			if enabledCount > maxEnabledTextTools {
+				return invalidActionRequest(action, "tools.enabled", "must enable at most 6 tools")
+			}
+		}
+	}
+	return nil
+}
+
+func validTextToolID(value any) bool {
+	id, ok := value.(string)
+	if !ok {
+		return false
+	}
+	switch id {
+	case "translation", "summary", "explanation", "search":
+		return true
+	default:
+		return canonicalActionUUID(id)
+	}
+}
+
+func validTextToolString(value any, minimum, maximum int, rejectBlank bool) bool {
+	text, ok := value.(string)
+	if !ok || len(text) < minimum || len(text) > maximum || !utf8.ValidString(text) {
+		return false
+	}
+	return !rejectBlank || strings.TrimSpace(text) != ""
+}
+
+func actionObjectSlice(value any) ([]map[string]any, bool) {
+	items, ok := value.([]any)
+	if !ok {
+		if typed, typedOK := value.([]map[string]any); typedOK {
+			return typed, true
+		}
+		return nil, false
+	}
+	result := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		object, ok := item.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		result = append(result, object)
+	}
+	return result, true
 }
 
 func validateCloudWorkerArtifactDownloadRequest(action string, params map[string]any) error {
