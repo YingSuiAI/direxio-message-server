@@ -286,27 +286,52 @@ func (c *Client) WatchOperation(ctx context.Context, operationID string, afterSe
 	if err := c.acquireWatchSem(ctx); err != nil {
 		return nil, err
 	}
-	stream, err := c.client.WatchOperation(c.authenticatedContext(ctx), &capv1.WatchOperationRequest{
+	// A successful WatchOperation may deliver a terminal event while the Agent
+	// keeps the server stream open for replay/live handoff. Give the returned
+	// stream its own cancellation boundary so Close tears down the HTTP/2 stream
+	// instead of only releasing the local admission slot. Otherwise completed
+	// operations accumulate until the peer's MaxConcurrentStreams limit blocks
+	// unrelated calls such as DescribeCapabilities.
+	streamCtx, cancel := context.WithCancel(c.authenticatedContext(ctx))
+	stream, err := c.client.WatchOperation(streamCtx, &capv1.WatchOperationRequest{
 		CallContext: callCtx, Permission: permission, OperationId: operationID, AfterSequence: afterSequence,
 	})
 	if err != nil {
+		cancel()
 		c.releaseWatchSem()
 		return nil, err
 	}
-	return &watchStream{AgentCapabilityService_WatchOperationClient: stream, release: c.releaseWatchSem}, nil
+	return &watchStream{AgentCapabilityService_WatchOperationClient: stream, cancel: cancel, release: c.releaseWatchSem}, nil
 }
 
 type watchStream struct {
 	capv1.AgentCapabilityService_WatchOperationClient
 	release     func()
+	cancel      context.CancelFunc
 	releaseOnce sync.Once
+	closeErr    error
 }
 
 func (s *watchStream) Close() {
-	if s == nil || s.release == nil {
-		return
+	_ = s.close()
+}
+
+func (s *watchStream) close() error {
+	if s == nil {
+		return nil
 	}
-	s.releaseOnce.Do(s.release)
+	s.releaseOnce.Do(func() {
+		if s.cancel != nil {
+			s.cancel()
+		}
+		if s.AgentCapabilityService_WatchOperationClient != nil {
+			s.closeErr = s.AgentCapabilityService_WatchOperationClient.CloseSend()
+		}
+		if s.release != nil {
+			s.release()
+		}
+	})
+	return s.closeErr
 }
 
 // Recv releases the admission slot as soon as the peer closes the stream or
@@ -321,11 +346,7 @@ func (s *watchStream) Recv() (*capv1.WatchOperationEvent, error) {
 }
 
 func (s *watchStream) CloseSend() error {
-	err := s.AgentCapabilityService_WatchOperationClient.CloseSend()
-	if err != nil {
-		s.Close()
-	}
-	return err
+	return s.close()
 }
 
 // authenticatedContext attaches the directional credentials to the gRPC
