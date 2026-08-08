@@ -42,6 +42,7 @@ func TestFreshProductBaselineIsSingleVersionAndReopenIdempotent(t *testing.T) {
 		"p2p_members", "p2p_events", "p2p_channel_invite_grants", "p2p_conversations", "p2p_operations",
 		"p2p_plugins", "p2p_plugin_jobs", "p2p_plugin_secrets", "p2p_reports", "p2p_blocks",
 		"p2p_capability_operations", "p2p_capability_operation_events", "p2p_capability_matrix_prepared_events",
+		"p2p_agent_execution_completion_receipts",
 	} {
 		assertRelationPresent(t, store.DB(), table)
 	}

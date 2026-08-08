@@ -3,9 +3,12 @@ package p2p
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
+	"github.com/YingSuiAI/dirextalk-message-server/internal/dirextalkdomain"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/dirextalkmcp"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/dirextalktransport"
 	p2pstorage "github.com/YingSuiAI/dirextalk-message-server/p2p/storage"
@@ -92,6 +95,47 @@ func (s *Service) InvokeProductCapability(ctx context.Context, action string, pa
 		return nil, fmt.Errorf("product capability %s failed: %s", action, mcpErr.Message)
 	}
 	return value, nil
+}
+
+type agentExecutionCompletionStore interface {
+	RecordAgentExecutionCompletion(context.Context, dirextalkdomain.AgentExecutionCompletionReceipt, dirextalkdomain.Event) (bool, int64, error)
+}
+
+// RecordAgentExecutionCompletion persists only the minimal Agent completion
+// receipt and the owner realtime invalidation. Result text, artifacts, plan,
+// quote, and AWS resource details remain in Agent authority.
+func (s *Service) RecordAgentExecutionCompletion(ctx context.Context, receipt dirextalkdomain.AgentExecutionCompletionReceipt) (bool, error) {
+	if s == nil || s.eventsModule == nil {
+		return false, errors.New("agent execution completion store is unavailable")
+	}
+	ownerID := s.OwnerMXID()
+	if receipt.OwnerID != ownerID || receipt.AccountGeneration != s.accountGeneration {
+		return false, dirextalkdomain.ErrAgentExecutionCompletionConflict
+	}
+	if err := receipt.Validate(); err != nil {
+		return false, err
+	}
+	store, ok := s.store.(agentExecutionCompletionStore)
+	if !ok || store == nil {
+		return false, errors.New("agent execution completion store is unavailable")
+	}
+	now := time.Now().UTC()
+	event := dirextalkdomain.Event{
+		Seq:       now.UnixNano(),
+		Type:      "agent.execution.v2.completed",
+		EventID:   receipt.EventID,
+		DedupeKey: "agent.execution.v2.completed:" + receipt.EventID,
+		Payload:   receipt.PublicPayload(),
+		CreatedAt: now.Format(time.RFC3339Nano),
+	}
+	inserted, sequence, err := store.RecordAgentExecutionCompletion(ctx, receipt, event)
+	if err != nil {
+		return false, err
+	}
+	if inserted {
+		s.eventsModule.NotifyPersisted(sequence)
+	}
+	return !inserted, nil
 }
 
 func actionbaseString(value any) string {

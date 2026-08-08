@@ -286,10 +286,12 @@ func (m *Module) startNativeAgentStream(ctx context.Context, client *connection,
 		client.send(nativeAgentStreamError(id, action, http.StatusBadRequest, err.Error()))
 		return
 	}
-	turnID := actionbase.String(params["turn_id"])
-	if turnID != "" {
-		if !agentstream.ValidID(turnID) {
-			client.send(nativeAgentStreamError(id, action, http.StatusBadRequest, "turn_id is invalid"))
+	durableChat := runnerAction == "agent.chat.stream"
+	startID := ""
+	if durableChat {
+		startID = actionbase.String(params["idempotency_key"])
+		if !agentstream.ValidID(startID) {
+			client.send(nativeAgentStreamError(id, action, http.StatusBadRequest, "idempotency_key is invalid"))
 			return
 		}
 		if !agentstream.ValidID(durableStreamConversationID(params)) {
@@ -307,7 +309,7 @@ func (m *Module) startNativeAgentStream(ctx context.Context, client *connection,
 		client.send(nativeAgentStreamError(id, action, http.StatusConflict, "stream id is already active"))
 		return
 	}
-	if turnID != "" {
+	if durableChat {
 		client.markDurableStream(id)
 		durable, ok := m.agent.(DurableAgentStreamPort)
 		if !ok {
@@ -324,11 +326,12 @@ func (m *Module) startNativeAgentStream(ctx context.Context, client *connection,
 				case agentstream.EventAccepted:
 					return client.sendBlocking(streamCtx, map[string]any{
 						"type": "server.native_agent_stream.accepted", "id": id,
-						"action": wireAction, "turn_id": event.TurnID,
+						"action": wireAction, "idempotency_key": event.IdempotencyKey,
+						"turn_id": event.TurnID, "revision": event.Revision,
 						"conversation_id": event.ConversationID, "state": string(event.Turn.State), "seq": event.Seq,
 					})
 				case agentstream.EventError:
-					message := actionbase.String(event.Data["error"])
+					message := actionbase.String(event.Data["error_summary"])
 					if message == "" {
 						message = event.Event
 					}
@@ -342,6 +345,7 @@ func (m *Module) startNativeAgentStream(ctx context.Context, client *connection,
 						"type": "server.native_agent_stream.error", "id": id,
 						"action": wireAction, "ok": false, "status": status,
 						"error": message, "event": event.Event, "turn_id": event.TurnID,
+						"idempotency_key": event.IdempotencyKey, "revision": event.Revision,
 						"conversation_id": event.ConversationID, "seq": event.Seq, "data": event.Data,
 					})
 				default:
@@ -349,6 +353,7 @@ func (m *Module) startNativeAgentStream(ctx context.Context, client *connection,
 						"type": "server.native_agent_stream.event", "id": id,
 						"action": wireAction, "event": event.Event,
 						"data": event.Data, "turn_id": event.TurnID,
+						"idempotency_key": event.IdempotencyKey, "revision": event.Revision,
 						"conversation_id": event.ConversationID, "seq": event.Seq,
 					})
 				}
@@ -369,7 +374,7 @@ func (m *Module) startNativeAgentStream(ctx context.Context, client *connection,
 				frame["code"] = code
 				frame["error_code"] = code
 			}
-			frame["turn_id"] = turnID
+			frame["idempotency_key"] = startID
 			frame["conversation_id"] = durableStreamConversationID(params)
 			frame["seq"] = int64(0)
 			_ = client.sendBlocking(ctx, frame)

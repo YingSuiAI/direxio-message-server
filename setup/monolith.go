@@ -231,6 +231,8 @@ func startProductCapabilityServer(processCtx *process.ProcessContext, service *p
 		return err
 	}
 	config.PreparedMatrixStore = service.PreparedMatrixMutationStore()
+	config.ServiceOwnerID = service.OwnerMXID()
+	config.RecordAgentExecutionCompletion = service.RecordAgentExecutionCompletion
 	registry, registryErr := productcapability.NewRegistryWithInvokerAndOptionsChecked(service.InvokeProductCapability, productcapability.RegistryOptions{
 		MatrixMutationReady: service.DurableMatrixMutationReady(),
 	})

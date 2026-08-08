@@ -1,0 +1,63 @@
+package serviceapi
+
+import "testing"
+
+func TestCoreConfirmationSchemasPinCloudWorkerAuthorityAndPurposeOnlyGrants(t *testing.T) {
+	for _, action := range []string{
+		"agent.core.confirmations.get",
+		"agent.core.confirmations.list",
+		"agent.core.confirmations.confirm",
+		"agent.core.confirmations.reject",
+	} {
+		t.Run(action, func(t *testing.T) {
+			spec, ok := ActionSpecFor(action)
+			if !ok || spec.Schema == nil {
+				t.Fatalf("missing action schema for %s", action)
+			}
+			var confirmation map[string]ActionFieldSchema
+			if action == "agent.core.confirmations.list" {
+				items := spec.Schema.Response["confirmations"].Items
+				if items == nil {
+					t.Fatal("confirmation list item schema is missing")
+				}
+				confirmation = items.Properties
+			} else {
+				confirmation = spec.Schema.Response["confirmation"].Properties
+			}
+			for _, field := range []string{"confirmation_id", "owner_id", "binding", "task_id", "state", "revision", "created_at", "updated_at", "expires_at"} {
+				if !confirmation[field].Required {
+					t.Errorf("confirmation.%s must be required", field)
+				}
+			}
+			if rule := confirmation["owner_id"].Presence; rule == nil || rule.Present != "authenticated_owner_id" {
+				t.Fatalf("confirmation owner authority=%#v", confirmation["owner_id"])
+			}
+			binding := confirmation["binding"].Properties
+			if !binding["owner_id"].Required || binding["owner_id"].Presence == nil {
+				t.Fatalf("binding owner authority=%#v", binding["owner_id"])
+			}
+			for _, field := range []string{
+				"account_generation", "execution_id", "plan_id", "plan_revision", "plan_digest",
+				"run_id", "run_revision", "run_digest", "quote_digest", "digest",
+			} {
+				value := binding[field]
+				if value.Required || value.Presence == nil || value.Presence.Omitted != "non_cloud_worker_confirmation" || value.Presence.Present == "" {
+					t.Errorf("conditional Cloud Worker binding.%s=%#v", field, value)
+				}
+			}
+			grant := binding["secret_grants"].Items
+			if grant == nil || !grant.Properties["purpose"].Required {
+				t.Fatalf("secret grant purpose schema=%#v", grant)
+			}
+			if _, present := grant.Properties["secret_revision"]; present {
+				t.Fatal("public confirmation schema exposes unsupported secret_revision")
+			}
+			for _, field := range []string{"reference_id", "binding_digest"} {
+				value := grant.Properties[field]
+				if value.Required || value.Presence == nil || value.Presence.Omitted != "cloud_worker.execute exposes purpose only" || value.Presence.Present != "required_for_non_cloud_worker_confirmation" {
+					t.Errorf("secret grant conditional %s=%#v", field, value)
+				}
+			}
+		})
+	}
+}

@@ -137,6 +137,8 @@ func TestNativeAgentCatalogReadinessGenerationFence(t *testing.T) {
 func TestNativeAgentCatalogRequirementsKeepOptionalCapabilitiesExplicit(t *testing.T) {
 	requirements := nativeAgentCatalogRequirements(nil)
 	requiredActions := map[string]bool{
+		"agent.chat.turn.stop":            false,
+		"agent.chat.turns.list":           false,
 		"agent.models.list":               false,
 		"agent.web_search.config.get":     false,
 		"agent.web_search.config.update":  false,
@@ -165,6 +167,9 @@ func TestNativeAgentCatalogRequirementsKeepOptionalCapabilitiesExplicit(t *testi
 		}
 		if len(requirement.InputSchemaDigest) != 32 || len(requirement.ResultSchemaDigest) != 32 {
 			t.Errorf("baseline Native Agent action %q is missing pinned schema digests", requirement.Action)
+		}
+		if requirement.Action == "agent.chat.stream" && (!requirement.RequireEventSchemaPin || len(requirement.EventSchemaDigest) != 32) {
+			t.Error("durable Native Agent chat stream is missing its event schema pin")
 		}
 		if requirement.Action == "agent.voice.session.create" {
 			t.Fatal("optional voice capability entered the base readiness catalog")

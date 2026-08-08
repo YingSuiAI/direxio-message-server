@@ -56,15 +56,28 @@ capability live.
   resume requests never carry, persist, or reconstruct a credential from turn
   state; the Agent resolves web-search configuration through its encrypted
   owner-scoped store.
-- With persistent server conversation memory, the client sends only the current prompt, `conversation_id`, durable `turn_id`, and attachment references. It does not replay `messages`; the server rejects such history, loads the authoritative transcript, automatically summarizes older context against the model token budget, and generates the first successful conversation title with a redacted first-instruction fallback.
+- With persistent server conversation memory, the client sends only the current `message`, canonical `conversation_id`, one canonical `idempotency_key`, and committed attachment references. Reconnect reuses the same idempotency key with the latest `after_seq`; `turn_id`, `client_message_id`, `request_id`, and `prompt` are not start-stream aliases. It does not replay `messages`; the server rejects such history, loads the authoritative transcript, automatically summarizes older context against the model token budget, and generates the first successful conversation title with a redacted first-instruction fallback.
+- Agent-authored durable progress is the only source of the internal turn
+  identity. Every business event, including `accepted`, carries the same
+  canonical `idempotency_key`, `conversation_id`, `turn_id`, and a positive
+  authoritative `revision`; the ProductCore request correlation `id` and the
+  capability protocol operation ID are never projected as `turn_id`. The
+  `stream_chat` result and nested done response use `idempotency_key`, not a
+  `request_id` alias. Input, result, and event schema digests are all pinned by
+  Message Server readiness.
 - Durable turn reconciliation uses `agent.chat.turns.list` with one canonical
   conversation UUID, an optional opaque page token of at most 4,096 bytes, and
   an optional limit from 1 through 1,000. Each returned turn is the exact
-  nine-field public metadata projection: `turn_id`, `conversation_id`, `state`,
-  `revision`, `last_sequence`, `terminal_code`, `terminal_summary`,
-  `created_at`, and `updated_at`. Prompt/request identity, model/profile data,
-  credential material, and execution snapshots remain Agent-private; aliases,
-  extra fields, and malformed UUIDs fail closed at both proxy boundaries.
+  ten-field public metadata projection: internal `turn_id`, original start
+  `idempotency_key`, `conversation_id`, `state`, `revision`, `last_sequence`,
+  `terminal_code`, `terminal_summary`, `created_at`, and `updated_at`. Prompt,
+  request fingerprints, model/profile data, credential material, and execution
+  snapshots remain Agent-private; aliases, extra fields, and malformed UUIDs
+  fail closed at both proxy boundaries. `agent.chat.turn.stop` is the typed
+  `agent.chat.v1/stop_turn` mutation and accepts exactly `idempotency_key`,
+  internal `turn_id`, and `expected_revision`; it returns the same exact
+  ten-field authoritative metadata. It never calls the generic capability
+  `CancelOperation` RPC.
 - Native Agent deployment planning treats an empty target inventory as a signal
   to compare and reserve a new AWS target, not as a terminal error. The bounded
   target-reservation tool creates only a logical revision-1 reservation; EC2
@@ -123,7 +136,7 @@ capability live.
   editable durable-memory records; they are distinct from conversation
   summaries and uploaded source chunks. Managed mutations are owner-scoped,
   revision-checked, and idempotent.
-- Successful `agent.chat` responses and Native Agent stream `done` payloads may include additive `references[]` derived deterministically from the full successful built-in Dirextalk tool results from that run. Room references use `kind=room`, `room_id`, optional `room_type=direct|group|channel`, `title`, and optional `preview`; channel-post references use `kind=channel_post`, `room_id`, `channel_id`, `post_id`, `title`, and optional `preview`. References preserve tool/result order, deduplicate rooms and posts, never include message `event_id`, and are not inferred from model-authored text or third-party/runtime tool output.
+- Successful `agent.chat` responses and Native Agent stream `done` payloads may include additive `related_task_ids`, `related_plan_ids`, and strict `references[]`. Message Server promotes only fields authored by Agent at the top level, on the assistant message, or in the nested stream response; it never synthesizes a reference from a related id. Room references derived from successful built-in Dirextalk tool results use `kind=room`, `room_id`, optional `room_type=direct|group|channel`, `title`, and optional `preview`; channel-post references use `kind=channel_post`, `room_id`, `channel_id`, `post_id`, `title`, and optional `preview`. Execution references use `kind=execution_plan|execution_run|execution_confirmation` and require the complete account-generation, task/plan/run/confirmation UUID, revision, and digest linkage authored by Agent. They are informational projections, not confirmation authority. References preserve producer order, reject duplicates or unknown fields/kinds, never include message `event_id`, and are not inferred from model-authored text or third-party/runtime tool output.
 - `mcp.channel_posts.list` and the Agent-side `dirextalk_channel_posts_list` result envelope include both top-level `channel_id` and `room_id`, allowing a post reference to identify its product channel and Matrix room without parsing post content.
 
 ### Native Agent schedule chat tools
@@ -142,16 +155,29 @@ the accepted architecture decision is
 V2 planning is declarative and side-effect free; remote mutations use the
 Agent-owned typed coordinator with durable receipts and explicit uncertainty.
 The Message Server is only the authenticated product proxy and does not execute
-third-party shell/code/Skills or expose raw SSM/SSH/AWS passthrough.
+third-party shell/code/Skills or expose raw SSM/SSH/AWS passthrough. Agent's
+single Pi Cloud Worker path preserves local Native Agent MCP/Skills for local
+work but does not copy those installations, their credentials, or the Extension
+Runner into an ephemeral Worker.
 
 Every `execution.v2.*` capability and ProductCore action is published only
 after its authenticated route, durable PostgreSQL state, typed
 executor/transport, focused tests, and explicit readiness/enablement all pass.
 The final Execution V2 schema is registered by the Agent migration registry,
 but runtime capability/readiness remains separately gated; action registration,
-schemas, and docs alone are not live. AWS SSM is the first production slice; SSH,
-generic HTTP, DNS, TLS, and Coding Worker remain deferred and must not be
-advertised.
+schemas, and docs alone are not live. Cloud Worker offers originate only in an
+Agent conversation and use generic `agent.core.confirmations.*`; the former
+Execution V2 confirmation aliases and public `runs.reconcile` are absent.
+Worker completion reaches Message Server only through the private fixed
+`product.agent_execution.v1/record_completion` receipt callback after Agent
+result validation and verified cleanup.
+
+Verified Cloud Worker output is retrievable only through the owner-authenticated
+`agent.execution.v2.artifacts.download` proxy. It is a bounded 512 KiB,
+offset-based read with exact per-chunk and whole-artifact SHA-256 metadata.
+Message Server returns the validated bytes and public identity/range fields;
+it never exposes the Agent's S3 locator, a pre-signed storage URL, retention
+ledger, Worker diagnostics, or provider credentials.
 
 ## Consumer Boundaries
 

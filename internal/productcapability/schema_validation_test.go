@@ -38,3 +38,18 @@ func TestValidateOperationInputRejectsServerDerivedIdentity(t *testing.T) {
 		t.Fatalf("normal contacts input rejected: %v", err)
 	}
 }
+
+func TestValidateOperationInputEnforcesRecordKindEnum(t *testing.T) {
+	operation := &capv1.OperationDescriptor{InputSchemaJson: `{"type":"object","additionalProperties":false,"properties":{"record_kind":{"type":"string","enum":["cloud_worker"]}}}`}
+	if err := validateOperationInput(operation, []byte(`{"record_kind":"cloud_worker"}`)); err != nil {
+		t.Fatalf("cloud_worker record kind rejected: %v", err)
+	}
+	for _, raw := range []string{`{"record_kind":"legacy"}`, `{"record_kind":""}`, `{"record_kind":1}`} {
+		if err := validateOperationInput(operation, []byte(raw)); err == nil {
+			t.Fatalf("invalid record kind accepted: %s", raw)
+		}
+	}
+	if err := validateOperationInput(operation, []byte(`{}`)); err != nil {
+		t.Fatalf("optional record kind omission rejected: %v", err)
+	}
+}

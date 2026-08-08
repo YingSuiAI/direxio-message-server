@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -18,6 +19,9 @@ func TestActionBindingIsExplicit(t *testing.T) {
 	if binding, ok := actionBindingFor("agent.chat.turns.list"); !ok || binding.operation != "list_turns" {
 		t.Fatalf("turn listing binding = %#v, want list_turns", binding)
 	}
+	if binding, ok := actionBindingFor("agent.chat.turn.stop"); !ok || binding.capabilityID != "agent.chat.v1" || binding.operation != "stop_turn" {
+		t.Fatalf("turn stop binding = %#v, want agent.chat.v1/stop_turn", binding)
+	}
 	if _, ok := actionBindingFor("agent.chat.conversations.list.stream"); ok {
 		t.Fatal("unknown stream suffix must not use heuristic fallback")
 	}
@@ -29,6 +33,9 @@ func TestActionBindingIsExplicit(t *testing.T) {
 	}
 	if binding, ok := actionBindingFor("agent.model_profiles.list"); !ok || binding.capabilityID != "agent.models.v1" || binding.operation != "list_models" {
 		t.Fatalf("model profile list binding = %#v, want agent.models.v1/list_models", binding)
+	}
+	if binding, ok := actionBindingFor("agent.execution.v2.artifacts.download"); !ok || binding.capabilityID != "agent.execution.v2" || binding.operation != "artifacts_download" {
+		t.Fatalf("artifact download binding = %#v, want agent.execution.v2/artifacts_download", binding)
 	}
 	for action, operation := range map[string]string{
 		"agent.web_search.config.get":    "get_config",
@@ -42,12 +49,34 @@ func TestActionBindingIsExplicit(t *testing.T) {
 	}
 }
 
+func TestTransformArtifactDownloadRequestPassesExactTypedQuery(t *testing.T) {
+	binding, ok := actionBindingFor("agent.execution.v2.artifacts.download")
+	if !ok {
+		t.Fatal("artifact download binding is missing")
+	}
+	raw, err := transformCapabilityRequest("agent.execution.v2.artifacts.download", "transport-operation", map[string]any{
+		"record_kind": "cloud_worker", "artifact_id": "9e728519-ea72-52cc-bb5a-8eb2860722b8",
+		"offset_bytes": int64(8), "max_chunk_bytes": int64(512 << 10),
+	}, binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []byte(`{"artifact_id":"9e728519-ea72-52cc-bb5a-8eb2860722b8","max_chunk_bytes":524288,"offset_bytes":8,"record_kind":"cloud_worker"}`)
+	if !bytes.Equal(raw, want) {
+		t.Fatalf("typed artifact download input = %s, want %s", raw, want)
+	}
+}
+
 func TestEveryLiveActionBindingHasPinnedCatalogSchema(t *testing.T) {
 	for action := range actionBindings {
 		requirement := NewCatalogRequirement(action)
 		if !requirement.RequireSchemaPin || len(requirement.InputSchemaDigest) != sha256.Size || len(requirement.ResultSchemaDigest) != sha256.Size {
 			t.Errorf("live action %q is missing exact schema pins: require=%v input=%d result=%d", action, requirement.RequireSchemaPin, len(requirement.InputSchemaDigest), len(requirement.ResultSchemaDigest))
 		}
+	}
+	stream := NewCatalogRequirement("agent.chat.stream")
+	if !stream.RequireEventSchemaPin || len(stream.EventSchemaDigest) != sha256.Size {
+		t.Fatalf("durable chat stream event schema pin = require %v length %d, want true/%d", stream.RequireEventSchemaPin, len(stream.EventSchemaDigest), sha256.Size)
 	}
 }
 
@@ -84,78 +113,215 @@ func TestModelCatalogDefaultsKindAtGatewayBoundary(t *testing.T) {
 
 func TestRunnerOperationIDForTurnIsStableAndCanonical(t *testing.T) {
 	runner := &Runner{config: RunnerConfig{OwnerID: func() string { return "@owner:example" }}}
-	params := map[string]any{"turn_id": "turn-123"}
+	const idempotencyKey = "11111111-1111-4111-8111-111111111111"
+	params := map[string]any{"idempotency_key": idempotencyKey}
 	first := runner.operationIDFor(params)
 	second := runner.operationIDFor(params)
-	if first == "" || first != second {
+	if first != idempotencyKey || first != second {
 		t.Fatalf("turn operation id is not stable: %q/%q", first, second)
+	}
+	if stopped := runner.operationIDFor(map[string]any{"idempotency_key": idempotencyKey, "turn_id": "22222222-2222-4222-8222-222222222222"}); stopped != idempotencyKey {
+		t.Fatalf("stop operation id = %q, want mutation idempotency key %q", stopped, idempotencyKey)
 	}
 	if _, ok := actionBindingFor("agent.chat"); !ok {
 		t.Fatal("chat binding missing")
 	}
 }
 
-func TestNativeEventsFromResultFlattensCoreChatEnvelope(t *testing.T) {
-	result := []byte(`{"events":[{"kind":"started","request_id":"r"},{"kind":"delta","text":"hi"},{"kind":"tool_call","tool_call":{"name":"search"}},{"kind":"done"}],"response":{"done":true}}`)
-	events := nativeEventsFromResult(result, 17)
-	if len(events) != 4 {
-		t.Fatalf("flattened event count = %d, want 4", len(events))
+func TestTransformChatRequestEmitsExactAgentInput(t *testing.T) {
+	binding, ok := actionBindingFor("agent.chat.stream")
+	if !ok {
+		t.Fatal("agent.chat.stream binding is missing")
 	}
-	want := []string{"accepted", "delta", "tool", "done"}
-	for i, event := range events {
-		if event.Event != want[i] {
-			t.Errorf("event[%d] = %q, want %q", i, event.Event, want[i])
-		}
-		if event.Seq != 17 {
-			t.Errorf("event[%d] seq = %d, want outer result sequence 17", i, event.Seq)
-		}
+	raw, err := transformCapabilityRequest("agent.chat.stream", "operation-id", map[string]any{
+		"idempotency_key":        "11111111-1111-4111-8111-111111111111",
+		"conversation_id":        "22222222-2222-4222-8222-222222222222",
+		"message":                "run this",
+		"model_profile_id":       "33333333-3333-4333-8333-333333333333",
+		"model_profile_revision": int64(3),
+		"credential_version":     int64(4),
+		"accepted_attachment_ids": []any{
+			"44444444-4444-4444-8444-444444444444",
+		},
+		"after_seq":         int64(7),
+		"turn_id":           "must-not-cross",
+		"client_message_id": "must-not-cross",
+		"request_id":        "must-not-cross",
+		"prompt":            "must-not-cross",
+	}, binding)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, ok := any(events[1].Data["events"]).([]any); ok {
-		t.Fatal("flattened delta must not contain nested events")
-	}
-}
-
-func TestNativeEventsFromResultProjectsOnlyPositiveIntegerSequences(t *testing.T) {
-	events := nativeEventsFromResult([]byte(`{"events":[{"kind":"delta","sequence":7},{"kind":"delta","sequence":2.5},{"kind":"delta","sequence":"8"},{"kind":"delta","sequence":-1},{"kind":"delta","sequence":9223372036854775808},{"kind":"done","sequence":9223372036854775807}]}`), 0)
-	if len(events) != 6 {
-		t.Fatalf("event count = %d, want 6", len(events))
-	}
-	want := []int64{7, 0, 0, 0, 0, 9223372036854775807}
-	for i, event := range events {
-		if event.Seq != want[i] {
-			t.Errorf("event[%d] seq = %d, want %d", i, event.Seq, want[i])
-		}
-	}
-
-	envelopeEvents := nativeEventsFromResult([]byte(`{"sequence":9,"events":[{"kind":"delta"},{"kind":"done"}]}`), 0)
-	for i, event := range envelopeEvents {
-		if event.Seq != 9 {
-			t.Errorf("envelope event[%d] seq = %d, want 9", i, event.Seq)
-		}
+	want := []byte(`{"accepted_attachment_ids":["44444444-4444-4444-8444-444444444444"],"conversation_id":"22222222-2222-4222-8222-222222222222","credential_version":4,"idempotency_key":"11111111-1111-4111-8111-111111111111","message":"run this","model_profile_id":"33333333-3333-4333-8333-333333333333","model_profile_revision":3}`)
+	if !bytes.Equal(raw, want) {
+		t.Fatalf("canonical Agent chat input = %s, want %s", raw, want)
 	}
 }
 
-func TestNativeEventFromProtoProjectsSequence(t *testing.T) {
-	event, terminal, err := nativeEventFromProto(&capv1.WatchOperationEvent{
-		OperationId: "operation-1",
-		Sequence:    23,
-		Event:       &capv1.WatchOperationEvent_Progress{Progress: &capv1.ProgressEvent{EventJson: []byte(`{"kind":"delta","text":"hi"}`)}},
-	})
-	if err != nil || terminal || event == nil {
-		t.Fatalf("native event = %#v, terminal=%v, err=%v", event, terminal, err)
+func TestTransformTurnStopRequestPassesExactTypedMutation(t *testing.T) {
+	binding, ok := actionBindingFor("agent.chat.turn.stop")
+	if !ok {
+		t.Fatal("agent.chat.turn.stop binding is missing")
 	}
-	if event.Seq != 23 || event.Data["sequence"] != int64(23) {
-		t.Fatalf("native event sequence = %#v, want 23", event)
+	raw, err := transformCapabilityRequest("agent.chat.turn.stop", "transport-operation", map[string]any{
+		"idempotency_key":   "11111111-1111-4111-8111-111111111111",
+		"turn_id":           "22222222-2222-4222-8222-222222222222",
+		"expected_revision": int64(3),
+	}, binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []byte(`{"expected_revision":3,"idempotency_key":"11111111-1111-4111-8111-111111111111","turn_id":"22222222-2222-4222-8222-222222222222"}`)
+	if !bytes.Equal(raw, want) {
+		t.Fatalf("typed turn stop input = %s, want %s", raw, want)
+	}
+}
+
+func TestNativeEventsFromResultProjectsCanonicalChatResponse(t *testing.T) {
+	response := durableChatResponseForTest("done", []any{map[string]any{"kind": "room", "room_id": "!room:example"}}, []any{"11111111-1111-4111-8111-111111111111"}, []any{"22222222-2222-4222-8222-222222222222"})
+	result, err := json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := nativeEventsFromResult(result, 17, actionResultAuthority{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].Event != "done" || events[0].Seq != 17 || events[0].Data["sequence"] != int64(17) {
+		t.Fatalf("canonical result events = %#v", events)
+	}
+	done := events[0].Data
+	if len(done["references"].([]any)) != 1 || len(done["related_task_ids"].([]any)) != 1 || len(done["related_plan_ids"].([]any)) != 1 {
+		t.Fatalf("done event did not promote server-authored linkage: %#v", done)
+	}
+}
+
+func TestNativeChatStreamDoneRejectsMalformedReferenceOnProgressAndResult(t *testing.T) {
+	progress := &capv1.WatchOperationEvent{
+		OperationId: "operation-1",
+		Sequence:    2,
+		Event: &capv1.WatchOperationEvent_Progress{Progress: &capv1.ProgressEvent{
+			EventJson: []byte(`{"kind":"done","response":{"message":{"content":"done","references":[{"kind":"execution_run"}]},"done":true,"references":[{"kind":"execution_run"}]}}`),
+		}},
+	}
+	if event, terminal, err := nativeEventFromProto(progress, actionResultAuthority{}); event != nil || !terminal || err == nil {
+		t.Fatalf("malformed progress done = event %#v terminal %v err %v", event, terminal, err)
 	}
 
-	event, _, _ = nativeEventFromProto(&capv1.WatchOperationEvent{
+	result := []byte(`{"message":{"content":"done","references":[{"kind":"service_binding"}]},"done":true,"references":[{"kind":"service_binding"}]}`)
+	if events, err := nativeEventsFromResult(result, 2, actionResultAuthority{}); err == nil || events != nil {
+		t.Fatalf("malformed result done = events %#v err %v", events, err)
+	}
+}
+
+func TestNativeChatProgressDonePromotesNestedResponseLinkage(t *testing.T) {
+	const startID = "33333333-3333-4333-8333-333333333333"
+	const conversationID = "44444444-4444-4444-8444-444444444444"
+	progress := &capv1.WatchOperationEvent{
 		OperationId: "operation-1",
-		Sequence:    -1,
+		Sequence:    2,
+		Event: &capv1.WatchOperationEvent_Progress{Progress: &capv1.ProgressEvent{
+			EventJson: []byte(`{"kind":"done","idempotency_key":"` + startID + `","conversation_id":"` + conversationID + `","turn_id":"55555555-5555-4555-8555-555555555555","revision":2,"response":{"idempotency_key":"` + startID + `","conversation_id":"` + conversationID + `","revision":3,"model_profile_id":"66666666-6666-4666-8666-666666666666","message":{"content":"finished","related_task_ids":["11111111-1111-4111-8111-111111111111"],"related_plan_ids":["22222222-2222-4222-8222-222222222222"],"references":[{"kind":"channel_post","room_id":"!room:example","channel_id":"!room:example","post_id":"post-1"}]},"done":true,"related_task_ids":["11111111-1111-4111-8111-111111111111"],"related_plan_ids":["22222222-2222-4222-8222-222222222222"],"references":[{"kind":"channel_post","room_id":"!room:example","channel_id":"!room:example","post_id":"post-1"}]}}`),
+		}},
+	}
+	event, terminal, err := nativeEventFromProto(progress, actionResultAuthority{})
+	if err != nil || !terminal || event == nil || event.Event != "done" {
+		t.Fatalf("progress done = event %#v terminal %v err %v", event, terminal, err)
+	}
+	if event.Data["text"] != "finished" || len(event.Data["references"].([]any)) != 1 || len(event.Data["related_task_ids"].([]any)) != 1 || len(event.Data["related_plan_ids"].([]any)) != 1 {
+		t.Fatalf("progress done linkage = %#v", event.Data)
+	}
+}
+
+func TestNativeChatProgressProjectsOnlyAgentAuthoredTurnIdentity(t *testing.T) {
+	const startID = "11111111-1111-4111-8111-111111111111"
+	const conversationID = "22222222-2222-4222-8222-222222222222"
+	const internalTurnID = "33333333-3333-4333-8333-333333333333"
+	progress := &capv1.WatchOperationEvent{
+		OperationId: startID,
+		Sequence:    3,
+		Event: &capv1.WatchOperationEvent_Progress{Progress: &capv1.ProgressEvent{EventJson: []byte(
+			`{"kind":"accepted","idempotency_key":"` + startID + `","conversation_id":"` + conversationID + `","turn_id":"` + internalTurnID + `","revision":1}`,
+		)}},
+	}
+	event, terminal, err := nativeEventFromProto(progress, actionResultAuthority{})
+	if err != nil || terminal || event == nil || event.Event != "accepted" {
+		t.Fatalf("accepted progress = event %#v terminal %v err %v", event, terminal, err)
+	}
+	if event.Data["idempotency_key"] != startID || event.Data["turn_id"] != internalTurnID || event.Data["revision"] != float64(1) || event.Data["sequence"] != int64(3) {
+		t.Fatalf("accepted progress identity = %#v", event.Data)
+	}
+	if _, leaked := event.Data["operation_id"]; leaked {
+		t.Fatalf("transport operation id leaked into business progress: %#v", event.Data)
+	}
+
+	transportAccepted := &capv1.WatchOperationEvent{
+		OperationId: startID,
+		Sequence:    1,
 		Event:       &capv1.WatchOperationEvent_Accepted{Accepted: &capv1.AcceptedEvent{}},
-	})
-	if event == nil || event.Seq != 0 || event.Data["sequence"] != int64(0) {
-		t.Fatalf("non-positive proto sequence was projected: %#v", event)
 	}
+	if projected, terminal, err := nativeEventFromProto(transportAccepted, actionResultAuthority{}); err != nil || terminal || projected != nil {
+		t.Fatalf("transport accepted was projected as a business turn: event=%#v terminal=%v err=%v", projected, terminal, err)
+	}
+}
+
+func TestNativeChatStreamRejectsCloudWorkerReferenceFromForeignPreparedGeneration(t *testing.T) {
+	reference := validExecutionReferenceForTest()
+	reference["account_generation"] = float64(8)
+	result, err := json.Marshal(durableChatResponseForTest("done", []any{reference}, nil, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority := actionResultAuthority{ownerID: "@owner:example.test", accountGeneration: 7}
+	if events, err := nativeEventsFromResult(result, 1, authority); err == nil || events != nil {
+		t.Fatalf("foreign result generation = events %#v err %v", events, err)
+	}
+
+	progressJSON, err := json.Marshal(map[string]any{
+		"kind": "done", "idempotency_key": durableTestStartID,
+		"conversation_id": durableTestConversationID, "turn_id": durableTestTurnID, "revision": float64(2),
+		"response": durableChatResponseForTest("done", []any{reference}, nil, nil),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	progress := &capv1.WatchOperationEvent{
+		OperationId: "operation-1", Sequence: 2,
+		Event: &capv1.WatchOperationEvent_Progress{Progress: &capv1.ProgressEvent{EventJson: progressJSON}},
+	}
+	if event, terminal, err := nativeEventFromProto(progress, authority); err == nil || !terminal || event != nil {
+		t.Fatalf("foreign progress generation = event %#v terminal %v err %v", event, terminal, err)
+	}
+
+	deltaJSON, err := json.Marshal(map[string]any{
+		"kind":       "delta",
+		"references": []any{reference},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	delta := &capv1.WatchOperationEvent{
+		OperationId: "operation-1", Sequence: 1,
+		Event: &capv1.WatchOperationEvent_Progress{Progress: &capv1.ProgressEvent{EventJson: deltaJSON}},
+	}
+	if event, terminal, err := nativeEventFromProto(delta, authority); err == nil || !terminal || event != nil {
+		t.Fatalf("foreign delta generation = event %#v terminal %v err %v", event, terminal, err)
+	}
+}
+
+const (
+	durableTestStartID        = "66666666-6666-4666-8666-666666666666"
+	durableTestConversationID = "77777777-7777-4777-8777-777777777777"
+	durableTestTurnID         = "88888888-8888-4888-8888-888888888888"
+)
+
+func durableChatResponseForTest(content string, references, taskIDs, planIDs []any) map[string]any {
+	response := canonicalChatResponseForTest(content, references, taskIDs, planIDs)
+	response["idempotency_key"] = durableTestStartID
+	response["conversation_id"] = durableTestConversationID
+	response["revision"] = float64(2)
+	response["model_profile_id"] = "99999999-9999-4999-8999-999999999999"
+	return response
 }
 
 func TestNativeEventFromProtoProjectsKnowledgeQuotaCode(t *testing.T) {
@@ -168,7 +334,7 @@ func TestNativeEventFromProtoProjectsKnowledgeQuotaCode(t *testing.T) {
 				"code": KnowledgeQuotaExceededCode,
 			},
 		}}},
-	})
+	}, actionResultAuthority{})
 	var capabilityErr *CapabilityError
 	if !terminal || !errors.As(err, &capabilityErr) || capabilityErr.ClientCode != KnowledgeQuotaExceededCode {
 		t.Fatalf("knowledge quota event terminal=%v err=%#v", terminal, err)

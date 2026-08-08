@@ -6,12 +6,17 @@ package agentgateway
 // field names, pagination cursors, or envelope changes.
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
+	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
@@ -27,8 +32,34 @@ const (
 	knowledgeMaxSourceBytes  int64 = 16 << 20
 )
 
+// actionResultAuthority is captured once by Runner.prepare and travels with
+// the capability response. Result validation must never call the mutable
+// OwnerID/AccountGeneration getters after the request has been dispatched.
+type actionResultAuthority struct {
+	ownerID           string
+	accountGeneration int64
+}
+
+func (authority actionResultAuthority) valid() bool {
+	return strings.TrimSpace(authority.ownerID) != "" && authority.accountGeneration > 0
+}
+
 func adaptActionResult(action string, output map[string]any) (map[string]any, error) {
-	if err := validateActionResult(strings.TrimSpace(action), output); err != nil {
+	return adaptActionResultForRequest(action, nil, output)
+}
+
+func adaptActionResultForRequest(action string, request, output map[string]any) (map[string]any, error) {
+	return adaptActionResultForRequestWithAuthority(action, request, output, actionResultAuthority{})
+}
+
+func adaptActionResultForRequestWithAuthority(action string, request, output map[string]any, authority actionResultAuthority) (map[string]any, error) {
+	recordKind, _ := request["record_kind"].(string)
+	if strings.TrimSpace(recordKind) == "cloud_worker" {
+		if err := validateCloudWorkerActionResult(strings.TrimSpace(action), request, output, authority); err != nil {
+			return nil, err
+		}
+	}
+	if err := validateActionResult(strings.TrimSpace(action), request, output, authority); err != nil {
 		return nil, err
 	}
 	return projectActionResult(action, output), nil
@@ -50,6 +81,8 @@ func projectActionResult(action string, output map[string]any) map[string]any {
 		return conversationListResult(result)
 	case "agent.chat.turns.list":
 		return turnsListResult(result)
+	case "agent.chat.attachment.commit":
+		return objectWrapper(result, "attachment")
 	case "agent.core.tasks.get", "agent.core.tasks.cancel", "agent.core.tasks.retry":
 		return taskResult(result)
 	case "agent.core.tasks.list":
@@ -155,18 +188,26 @@ func projectActionResult(action string, output map[string]any) map[string]any {
 	}
 }
 
-func validateActionResult(action string, output map[string]any) error {
+func validateActionResult(action string, request, output map[string]any, authority actionResultAuthority) error {
 	switch action {
+	case "agent.core.confirmations.get", "agent.core.confirmations.list", "agent.core.confirmations.confirm", "agent.core.confirmations.reject":
+		return validateCloudWorkerConfirmationActionResult(action, request, output, authority)
+	case "agent.chat.attachment.begin", "agent.chat.attachment.append", "agent.chat.attachment.commit":
+		return validateChatAttachmentActionResult(action, request, output, authority)
 	case "agent.web_search.config.get", "agent.web_search.config.update":
 		return validateWebSearchConfigResult(action, output)
 	case "agent.web_search.test":
 		return validateWebSearchTestResult(action, output)
 	case "agent.models.list":
 		return validateModelCatalogResult(output)
+	case "agent.chat.turn.stop":
+		return validateTurnStopResult(request, output)
 	case "agent.chat.turns.list":
 		return validateTurnsListResult(output)
 	case "agent.knowledge.status":
 		return validateKnowledgeStatusResult(output)
+	case "agent.chat":
+		return validateChatResult(output, authority)
 	default:
 		return nil
 	}
@@ -469,6 +510,7 @@ func turnsListResult(value map[string]any) map[string]any {
 		turn := item.(map[string]any)
 		projected = append(projected, map[string]any{
 			"turn_id":          turn["turn_id"],
+			"idempotency_key":  turn["idempotency_key"],
 			"conversation_id":  turn["conversation_id"],
 			"state":            turn["state"],
 			"revision":         turn["revision"],
@@ -483,6 +525,16 @@ func turnsListResult(value map[string]any) map[string]any {
 		"turns":       projected,
 		"next_cursor": value["next_page_token"],
 	}
+}
+
+func validateTurnStopResult(request, value map[string]any) error {
+	if !validCanonicalTurn(value) {
+		return fmt.Errorf("%w: stopped turn metadata is malformed", ErrInvalidActionResult)
+	}
+	if request == nil || value["turn_id"] != request["turn_id"] {
+		return fmt.Errorf("%w: stopped turn identity does not match the request", ErrInvalidActionResult)
+	}
+	return nil
 }
 
 func validateTurnsListResult(value map[string]any) error {
@@ -506,18 +558,18 @@ func validateTurnsListResult(value map[string]any) error {
 }
 
 func validCanonicalTurn(turn map[string]any) bool {
-	if len(turn) != 9 {
+	if len(turn) != 10 {
 		return false
 	}
 	for _, key := range []string{
-		"turn_id", "conversation_id", "state", "revision", "last_sequence",
+		"turn_id", "idempotency_key", "conversation_id", "state", "revision", "last_sequence",
 		"terminal_code", "terminal_summary", "created_at", "updated_at",
 	} {
 		if _, ok := turn[key]; !ok {
 			return false
 		}
 	}
-	if !canonicalTurnUUID(turn["turn_id"]) || !canonicalTurnUUID(turn["conversation_id"]) {
+	if !canonicalTurnUUID(turn["turn_id"]) || !canonicalTurnUUID(turn["idempotency_key"]) || !canonicalTurnUUID(turn["conversation_id"]) {
 		return false
 	}
 	state, ok := turn["state"].(string)
@@ -542,14 +594,20 @@ func validCanonicalTurn(turn map[string]any) bool {
 			return false
 		}
 	}
-	for _, key := range []string{"created_at", "updated_at"} {
+	var stamps [2]time.Time
+	for index, key := range []string{"created_at", "updated_at"} {
 		stamp, ok := turn[key].(string)
 		if !ok {
 			return false
 		}
-		if _, err := time.Parse(time.RFC3339Nano, stamp); err != nil {
+		parsed, err := time.Parse(time.RFC3339Nano, stamp)
+		if err != nil {
 			return false
 		}
+		stamps[index] = parsed
+	}
+	if stamps[1].Before(stamps[0]) {
+		return false
 	}
 	return true
 }
@@ -919,30 +977,576 @@ func embeddingConfigResult(value map[string]any) map[string]any {
 	return result
 }
 
+const (
+	maxChatRelatedIDs    = 32
+	maxChatReferences    = 32
+	maxReferenceIdentity = 512
+	maxReferenceRoomType = 128
+	maxReferenceTitle    = 512
+	maxReferencePreview  = 4096
+)
+
+var chatReferenceFields = map[string]struct{}{
+	"kind": {}, "account_generation": {}, "task_id": {}, "plan_id": {},
+	"plan_revision": {}, "plan_digest": {}, "run_id": {}, "run_revision": {},
+	"run_digest": {}, "deployment_id": {}, "execution_id": {}, "confirmation_id": {},
+	"confirmation_revision": {}, "stage_id": {}, "stage_revision": {},
+	"stage_digest": {}, "target_id": {}, "target_revision": {}, "target_digest": {},
+	"preview_digest": {}, "binding_digest": {}, "quote_digest": {},
+	"execution_digest": {}, "risk_level": {}, "gate_type": {}, "binding_id": {},
+	"binding_revision": {}, "project_id": {}, "status": {}, "state": {},
+	"room_id": {}, "room_type": {}, "channel_id": {}, "post_id": {}, "title": {},
+	"preview": {},
+}
+
+var canonicalChatResponseFields = map[string]struct{}{
+	"request_id": {}, "conversation_id": {}, "revision": {}, "message": {},
+	"done": {}, "model_profile_id": {}, "related_task_ids": {},
+	"related_plan_ids": {}, "references": {}, "tool_summaries": {}, "tool_results": {},
+}
+
+var canonicalDurableChatResponseFields = map[string]struct{}{
+	"idempotency_key": {}, "conversation_id": {}, "revision": {}, "message": {},
+	"done": {}, "model_profile_id": {}, "related_task_ids": {},
+	"related_plan_ids": {}, "references": {}, "tool_summaries": {}, "tool_results": {},
+}
+
+var canonicalChatMessageFields = map[string]struct{}{
+	"id": {}, "role": {}, "content": {}, "tool_calls": {}, "tool_results": {},
+	"created_at": {}, "model_profile_id": {}, "related_task_ids": {},
+	"related_plan_ids": {}, "references": {}, "tool_summaries": {},
+}
+
+var canonicalChatStreamEventFields = map[string]struct{}{
+	"kind": {}, "idempotency_key": {}, "conversation_id": {}, "turn_id": {},
+	"revision": {}, "text": {},
+	"tool_call": {}, "tool_result": {}, "response": {},
+	"error_code": {}, "error_summary": {}, "sequence": {},
+}
+
+// chatResult projects only the canonical Agent ChatResponse shape. Assistant
+// text and tool calls belong to message; authority-bearing linkage belongs to
+// the response root. Alternate casing and wrapper locations are rejected by
+// validateChatResult instead of being treated as compatibility aliases.
 func chatResult(value map[string]any) map[string]any {
 	result := map[string]any{}
-	if text := stringValue(valueByKey(value, "text", "Text")); text != "" {
+	message, _ := value["message"].(map[string]any)
+	if text, ok := message["content"].(string); ok && text != "" {
 		result["text"] = text
 	}
-	if calls := valueByKey(value, "tool_calls", "ToolCalls"); calls != nil {
-		result["tool_calls"] = calls
+	if toolCalls, present := message["tool_calls"]; present {
+		result["tool_calls"] = toolCalls
 	}
-	if references := valueByKey(value, "references", "References"); references != nil {
-		result["references"] = references
-	}
-	if message, ok := valueByKey(value, "message", "Message").(map[string]any); ok {
-		if _, exists := result["text"]; !exists {
-			if text := stringValue(valueByKey(message, "content", "Content")); text != "" {
-				result["text"] = text
-			}
-		}
-		if _, exists := result["tool_calls"]; !exists {
-			if calls := valueByKey(message, "tool_calls", "ToolCalls"); calls != nil {
-				result["tool_calls"] = calls
-			}
+	for _, field := range []string{"references", "related_task_ids", "related_plan_ids"} {
+		if item, present := value[field]; present {
+			result[field] = item
 		}
 	}
 	return result
+}
+
+func validateChatResult(value map[string]any, authority actionResultAuthority) error {
+	return validateCanonicalChatResult(value, authority, canonicalChatResponseFields, "")
+}
+
+func validateDurableChatResult(value map[string]any, authority actionResultAuthority) error {
+	return validateCanonicalChatResult(value, authority, canonicalDurableChatResponseFields, "idempotency_key")
+}
+
+func validateCanonicalChatResult(value map[string]any, authority actionResultAuthority, allowed map[string]struct{}, requiredIdentity string) error {
+	if value == nil {
+		return fmt.Errorf("%w: canonical chat response is missing", ErrInvalidActionResult)
+	}
+	if field := firstUnknownChatResultField(value, allowed); field != "" {
+		return fmt.Errorf("%w: chat response field %s is not canonical", ErrInvalidActionResult, field)
+	}
+	if requiredIdentity != "" {
+		if !canonicalTurnUUID(value[requiredIdentity]) || !canonicalTurnUUID(value["conversation_id"]) {
+			return fmt.Errorf("%w: durable chat response identity is invalid", ErrInvalidActionResult)
+		}
+		if revision, ok := turnInt64(value["revision"]); !ok || revision <= 0 {
+			return fmt.Errorf("%w: durable chat response revision is invalid", ErrInvalidActionResult)
+		}
+		if done, ok := value["done"].(bool); !ok || !done {
+			return fmt.Errorf("%w: durable chat response is not terminal", ErrInvalidActionResult)
+		}
+	}
+	for _, field := range []string{
+		"Message", "Response", "response", "text", "Text", "content", "Content",
+		"tool_calls", "ToolCalls", "References", "RelatedTaskIDs", "RelatedPlanIDs",
+	} {
+		if _, present := value[field]; present {
+			return fmt.Errorf("%w: chat response field %s is not canonical", ErrInvalidActionResult, field)
+		}
+	}
+	message, ok := value["message"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("%w: canonical chat response message is missing", ErrInvalidActionResult)
+	}
+	if field := firstUnknownChatResultField(message, canonicalChatMessageFields); field != "" {
+		return fmt.Errorf("%w: chat message field %s is not canonical", ErrInvalidActionResult, field)
+	}
+	for _, field := range []string{"Content", "ToolCalls", "References", "RelatedTaskIDs", "RelatedPlanIDs", "Message", "Response", "response", "text", "Text"} {
+		if _, present := message[field]; present {
+			return fmt.Errorf("%w: chat message field %s is not canonical", ErrInvalidActionResult, field)
+		}
+	}
+	if content, present := message["content"]; present {
+		if _, ok := content.(string); !ok {
+			return fmt.Errorf("%w: chat message content must be a string", ErrInvalidActionResult)
+		}
+	}
+	if toolCalls, present := message["tool_calls"]; present {
+		if _, ok := toolCalls.([]any); !ok {
+			return fmt.Errorf("%w: chat message tool_calls must be an array", ErrInvalidActionResult)
+		}
+	}
+	for _, field := range []string{"references", "related_task_ids", "related_plan_ids"} {
+		rootValue, rootPresent := value[field]
+		messageValue, messagePresent := message[field]
+		if rootPresent != messagePresent || (rootPresent && !reflect.DeepEqual(rootValue, messageValue)) {
+			return fmt.Errorf("%w: chat %s copies are missing or conflict", ErrInvalidActionResult, field)
+		}
+	}
+	return validateCanonicalChatLinkage(value, authority)
+}
+
+func validateCanonicalChatLinkage(value map[string]any, authority actionResultAuthority) error {
+	for _, field := range []struct {
+		name  string
+		limit int
+	}{
+		{name: "related_task_ids", limit: maxChatRelatedIDs},
+		{name: "related_plan_ids", limit: maxChatRelatedIDs},
+	} {
+		item, present := value[field.name]
+		if !present {
+			continue
+		}
+		ids, ok := item.([]any)
+		if !ok || len(ids) > field.limit {
+			return fmt.Errorf("%w: chat %s must be a bounded UUID array", ErrInvalidActionResult, field.name)
+		}
+		for index, raw := range ids {
+			if !canonicalTurnUUID(raw) {
+				return fmt.Errorf("%w: chat %s item %d must be a canonical UUID", ErrInvalidActionResult, field.name, index)
+			}
+		}
+	}
+
+	rawReferences, present := value["references"]
+	if !present {
+		return nil
+	}
+	references, ok := rawReferences.([]any)
+	if !ok || len(references) > maxChatReferences {
+		return fmt.Errorf("%w: chat references must be a bounded array", ErrInvalidActionResult)
+	}
+	seen := make(map[string]struct{}, len(references))
+	for index, raw := range references {
+		reference, ok := raw.(map[string]any)
+		if !ok || !validChatReference(reference, authority) {
+			return fmt.Errorf("%w: chat reference %d violates the strict producer schema", ErrInvalidActionResult, index)
+		}
+		key := chatReferenceKey(reference)
+		if _, duplicate := seen[key]; duplicate {
+			return fmt.Errorf("%w: chat reference %d is duplicated", ErrInvalidActionResult, index)
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
+}
+
+func chatReferenceKey(reference map[string]any) string {
+	normalized := map[string]any{"kind": reference["kind"]}
+	for _, field := range []string{
+		"task_id", "plan_id", "plan_digest", "run_id", "run_digest", "deployment_id",
+		"execution_id", "confirmation_id", "stage_id", "stage_digest", "target_id",
+		"target_digest", "preview_digest", "binding_digest", "quote_digest",
+		"execution_digest", "risk_level", "gate_type", "binding_id", "project_id",
+		"status", "state", "room_id", "room_type", "channel_id", "post_id", "title",
+		"preview",
+	} {
+		if value, ok := reference[field].(string); ok && value != "" {
+			normalized[field] = value
+		}
+	}
+	for _, field := range []string{
+		"account_generation", "plan_revision", "run_revision", "confirmation_revision",
+		"stage_revision", "target_revision", "binding_revision",
+	} {
+		if value, ok := turnInt64(reference[field]); ok && value != 0 {
+			normalized[field] = value
+		}
+	}
+	encoded, _ := json.Marshal(normalized)
+	return string(encoded)
+}
+
+func validChatReference(reference map[string]any, authority actionResultAuthority) bool {
+	if len(reference) == 0 {
+		return false
+	}
+	for field := range reference {
+		if _, allowed := chatReferenceFields[field]; !allowed {
+			return false
+		}
+	}
+	kind, ok := reference["kind"].(string)
+	if !ok || kind == "" || kind != strings.TrimSpace(kind) {
+		return false
+	}
+	switch kind {
+	case "room":
+		return noExecutionReferenceFields(reference) &&
+			validBoundedReferenceString(reference, "room_id", true, maxReferenceIdentity) &&
+			validBoundedReferenceString(reference, "room_type", false, maxReferenceRoomType) &&
+			zeroReferenceString(reference, "channel_id") && zeroReferenceString(reference, "post_id") &&
+			validReferencePresentation(reference)
+	case "channel_post":
+		return noExecutionReferenceFields(reference) &&
+			validBoundedReferenceString(reference, "room_id", true, maxReferenceIdentity) &&
+			validBoundedReferenceString(reference, "channel_id", true, maxReferenceIdentity) &&
+			validBoundedReferenceString(reference, "post_id", true, maxReferenceIdentity) &&
+			zeroReferenceString(reference, "room_type") && validReferencePresentation(reference)
+	case "execution_plan", "execution_run", "execution_confirmation":
+		if _, cloud := reference["task_id"]; cloud {
+			return validCloudWorkerChatReference(reference, kind, authority)
+		}
+		return validGenericExecutionChatReference(reference, kind)
+	case "service_binding":
+		return validServiceBindingChatReference(reference)
+	default:
+		return false
+	}
+}
+
+func validCloudWorkerChatReference(reference map[string]any, kind string, authority actionResultAuthority) bool {
+	generation, generationOK := turnInt64(reference["account_generation"])
+	if !authority.valid() || !generationOK || generation != authority.accountGeneration ||
+		!canonicalTurnUUID(reference["task_id"]) || !canonicalTurnUUID(reference["plan_id"]) ||
+		!validPositiveReferenceInteger(reference["plan_revision"]) || !validReferenceDigest(reference["plan_digest"]) ||
+		!canonicalTurnUUID(reference["run_id"]) || !validPositiveReferenceInteger(reference["run_revision"]) ||
+		!validReferenceDigest(reference["run_digest"]) || !canonicalTurnUUID(reference["execution_id"]) ||
+		reference["run_id"] != reference["execution_id"] || !canonicalTurnUUID(reference["confirmation_id"]) ||
+		!validPositiveReferenceInteger(reference["confirmation_revision"]) || !validReferenceDigest(reference["binding_digest"]) ||
+		!validReferenceDigest(reference["quote_digest"]) || !validReferenceDigest(reference["execution_digest"]) ||
+		!noConversationReferenceFields(reference) {
+		return false
+	}
+	for _, field := range []string{
+		"deployment_id", "stage_id", "stage_revision", "stage_digest", "target_id",
+		"target_revision", "target_digest", "preview_digest", "risk_level", "gate_type",
+		"binding_id", "binding_revision", "project_id",
+	} {
+		if !zeroReferenceValue(reference, field) {
+			return false
+		}
+	}
+	if kind == "execution_confirmation" {
+		return zeroReferenceString(reference, "status") && validConfirmationReferenceState(reference["state"])
+	}
+	return zeroReferenceString(reference, "state") && validExecutionReferenceStatus(reference["status"])
+}
+
+func validGenericExecutionChatReference(reference map[string]any, kind string) bool {
+	if !noCloudReferenceFields(reference) || !noConversationReferenceFields(reference) {
+		return false
+	}
+	switch kind {
+	case "execution_plan":
+		if !canonicalTurnUUID(reference["plan_id"]) || !validPositiveReferenceInteger(reference["plan_revision"]) ||
+			!validReferenceDigest(reference["plan_digest"]) {
+			return false
+		}
+		return zeroReferenceFields(reference,
+			"run_id", "run_revision", "run_digest", "deployment_id", "confirmation_id",
+			"confirmation_revision", "stage_id", "stage_revision", "stage_digest", "target_id",
+			"target_revision", "target_digest", "preview_digest", "binding_digest", "risk_level",
+			"gate_type", "binding_id", "binding_revision", "project_id", "status", "state")
+	case "execution_run":
+		if !canonicalTurnUUID(reference["run_id"]) || !validPositiveReferenceInteger(reference["run_revision"]) ||
+			!validReferenceDigest(reference["run_digest"]) || !canonicalTurnUUID(reference["plan_id"]) ||
+			!validPositiveReferenceInteger(reference["plan_revision"]) || !validReferenceDigest(reference["plan_digest"]) ||
+			!validOptionalReferenceUUID(reference["deployment_id"]) || !validOptionalReferenceString(reference["status"], 64) {
+			return false
+		}
+		return zeroReferenceFields(reference,
+			"confirmation_id", "confirmation_revision", "stage_id", "stage_revision", "stage_digest",
+			"target_id", "target_revision", "target_digest", "preview_digest", "binding_digest",
+			"risk_level", "gate_type", "binding_id", "binding_revision", "project_id", "state")
+	case "execution_confirmation":
+		if !canonicalTurnUUID(reference["confirmation_id"]) || !canonicalTurnUUID(reference["plan_id"]) ||
+			!validPositiveReferenceInteger(reference["plan_revision"]) || !validReferenceDigest(reference["plan_digest"]) ||
+			!canonicalTurnUUID(reference["run_id"]) || !validPositiveReferenceInteger(reference["run_revision"]) ||
+			!canonicalTurnUUID(reference["stage_id"]) || !validPositiveReferenceInteger(reference["stage_revision"]) ||
+			!validReferenceDigest(reference["stage_digest"]) || !canonicalTurnUUID(reference["target_id"]) ||
+			!validPositiveReferenceInteger(reference["target_revision"]) || !validReferenceDigest(reference["target_digest"]) ||
+			!zeroReferenceFields(reference, "deployment_id", "binding_id", "binding_revision", "project_id", "status") {
+			return false
+		}
+		full := !zeroReferenceValue(reference, "confirmation_revision") ||
+			!zeroReferenceValue(reference, "binding_digest") || !zeroReferenceValue(reference, "preview_digest")
+		if full {
+			return validPositiveReferenceInteger(reference["confirmation_revision"]) &&
+				validReferenceDigest(reference["binding_digest"]) && validReferenceDigest(reference["preview_digest"]) &&
+				zeroReferenceString(reference, "run_digest") && validOptionalReferenceString(reference["state"], 64) &&
+				validOptionalReferenceString(reference["risk_level"], 16) && validOptionalReferenceString(reference["gate_type"], 128)
+		}
+		return validReferenceDigest(reference["run_digest"]) &&
+			zeroReferenceFields(reference, "state", "risk_level", "gate_type")
+	default:
+		return false
+	}
+}
+
+func validServiceBindingChatReference(reference map[string]any) bool {
+	if !noCloudReferenceFields(reference) || !noConversationReferenceFields(reference) ||
+		!canonicalTurnUUID(reference["binding_id"]) || !validPositiveReferenceInteger(reference["binding_revision"]) ||
+		!validReferenceDigest(reference["binding_digest"]) || !canonicalTurnUUID(reference["deployment_id"]) ||
+		!canonicalTurnUUID(reference["project_id"]) || !canonicalTurnUUID(reference["run_id"]) ||
+		!canonicalTurnUUID(reference["target_id"]) || !validPositiveReferenceInteger(reference["target_revision"]) ||
+		!validReferenceDigest(reference["target_digest"]) {
+		return false
+	}
+	return zeroReferenceFields(reference,
+		"plan_id", "plan_revision", "plan_digest", "run_revision", "run_digest", "confirmation_id",
+		"confirmation_revision", "stage_id", "stage_revision", "stage_digest", "preview_digest",
+		"risk_level", "gate_type", "status", "state")
+}
+
+func zeroReferenceFields(reference map[string]any, fields ...string) bool {
+	for _, field := range fields {
+		if !zeroReferenceValue(reference, field) {
+			return false
+		}
+	}
+	return true
+}
+
+func noConversationReferenceFields(reference map[string]any) bool {
+	return zeroReferenceFields(reference, "room_id", "room_type", "channel_id", "post_id", "title", "preview")
+}
+
+func validOptionalReferenceUUID(value any) bool {
+	if value == nil || value == "" {
+		return true
+	}
+	return canonicalTurnUUID(value)
+}
+
+func validOptionalReferenceString(value any, limit int) bool {
+	if value == nil {
+		return true
+	}
+	text, ok := value.(string)
+	return ok && utf8.ValidString(text) && text == strings.TrimSpace(text) && len(text) <= limit
+}
+
+func noCloudReferenceFields(reference map[string]any) bool {
+	for _, field := range []string{
+		"account_generation", "task_id", "execution_id", "quote_digest", "execution_digest",
+	} {
+		if !zeroReferenceValue(reference, field) {
+			return false
+		}
+	}
+	return true
+}
+
+func noExecutionReferenceFields(reference map[string]any) bool {
+	return zeroReferenceFields(reference,
+		"account_generation", "task_id", "plan_id", "plan_revision", "plan_digest",
+		"run_id", "run_revision", "run_digest", "deployment_id", "execution_id",
+		"confirmation_id", "confirmation_revision", "stage_id", "stage_revision", "stage_digest",
+		"target_id", "target_revision", "target_digest", "preview_digest", "binding_digest",
+		"quote_digest", "execution_digest", "risk_level", "gate_type", "binding_id",
+		"binding_revision", "project_id", "status", "state")
+}
+
+func zeroReferenceValue(reference map[string]any, field string) bool {
+	value, present := reference[field]
+	if !present || value == nil {
+		return true
+	}
+	switch typed := value.(type) {
+	case string:
+		return typed == ""
+	default:
+		integer, ok := turnInt64(typed)
+		return ok && integer == 0
+	}
+}
+
+func zeroReferenceString(reference map[string]any, field string) bool {
+	value, present := reference[field]
+	if !present {
+		return true
+	}
+	text, ok := value.(string)
+	return ok && text == ""
+}
+
+func validBoundedReferenceString(reference map[string]any, field string, required bool, limit int) bool {
+	value, present := reference[field]
+	if !present {
+		return !required
+	}
+	text, ok := value.(string)
+	if !ok || !utf8.ValidString(text) || len(text) > limit {
+		return false
+	}
+	if required {
+		return text != "" && text == strings.TrimSpace(text)
+	}
+	return true
+}
+
+func validReferencePresentation(reference map[string]any) bool {
+	return validBoundedReferenceString(reference, "title", false, maxReferenceTitle) &&
+		validBoundedReferenceString(reference, "preview", false, maxReferencePreview)
+}
+
+func validPositiveReferenceInteger(value any) bool {
+	integer, ok := turnInt64(value)
+	return ok && integer > 0
+}
+
+func validReferenceDigest(value any) bool {
+	text, ok := value.(string)
+	if !ok || len(text) != sha256.Size*2 || text != strings.ToLower(text) {
+		return false
+	}
+	_, err := hex.DecodeString(text)
+	return err == nil
+}
+
+func validExecutionReferenceStatus(value any) bool {
+	state, ok := value.(string)
+	if !ok {
+		return false
+	}
+	switch state {
+	case "waiting_user", "queued", "provisioning", "awaiting_worker", "running", "collecting", "validating", "cleaning", "succeeded", "failed", "canceled", "rejected", "expired":
+		return true
+	default:
+		return false
+	}
+}
+
+func validConfirmationReferenceState(value any) bool {
+	state, ok := value.(string)
+	if !ok {
+		return false
+	}
+	switch state {
+	case "pending", "confirmed", "consumed", "rejected", "expired":
+		return true
+	default:
+		return false
+	}
+}
+
+func validateChatStreamEvent(value map[string]any, authority actionResultAuthority) error {
+	if value == nil {
+		return fmt.Errorf("%w: chat stream event is missing", ErrInvalidActionResult)
+	}
+	if field := firstUnknownChatResultField(value, canonicalChatStreamEventFields); field != "" {
+		return fmt.Errorf("%w: chat stream event field %s is not canonical", ErrInvalidActionResult, field)
+	}
+	kind, ok := value["kind"].(string)
+	if !ok {
+		return fmt.Errorf("%w: chat stream event kind is missing", ErrInvalidActionResult)
+	}
+	switch kind {
+	case "accepted", "started", "delta", "tool_call", "tool_result", "done", "error":
+	default:
+		return fmt.Errorf("%w: chat stream event kind is invalid", ErrInvalidActionResult)
+	}
+	for _, field := range []string{"idempotency_key", "conversation_id", "turn_id"} {
+		if !canonicalTurnUUID(value[field]) {
+			return fmt.Errorf("%w: chat stream event %s must be a canonical UUID", ErrInvalidActionResult, field)
+		}
+	}
+	if revision, ok := turnInt64(value["revision"]); !ok || revision <= 0 {
+		return fmt.Errorf("%w: chat stream event revision must be positive", ErrInvalidActionResult)
+	}
+	if sequence, present := value["sequence"]; present {
+		if parsed, ok := turnInt64(sequence); !ok || parsed < 0 {
+			return fmt.Errorf("%w: chat stream event sequence must be non-negative", ErrInvalidActionResult)
+		}
+	}
+	for _, field := range []string{
+		"event", "Message", "Response", "References", "RelatedTaskIDs", "RelatedPlanIDs",
+		"references", "related_task_ids", "related_plan_ids", "content", "Content", "ToolCalls",
+	} {
+		if _, present := value[field]; present {
+			return fmt.Errorf("%w: chat stream event field %s is not canonical", ErrInvalidActionResult, field)
+		}
+	}
+	rawResponse, present := value["response"]
+	if !present {
+		if kind == "done" {
+			return fmt.Errorf("%w: done chat stream response is missing", ErrInvalidActionResult)
+		}
+		return nil
+	}
+	if kind != "done" {
+		return fmt.Errorf("%w: only a done chat stream event may carry response", ErrInvalidActionResult)
+	}
+	for _, field := range []string{"text", "tool_calls", "references", "related_task_ids", "related_plan_ids", "message"} {
+		if _, duplicate := value[field]; duplicate {
+			return fmt.Errorf("%w: chat stream field %s duplicates the canonical response", ErrInvalidActionResult, field)
+		}
+	}
+	response, ok := rawResponse.(map[string]any)
+	if !ok {
+		return fmt.Errorf("%w: chat stream response must be an object", ErrInvalidActionResult)
+	}
+	if response["idempotency_key"] != value["idempotency_key"] || response["conversation_id"] != value["conversation_id"] {
+		return fmt.Errorf("%w: chat stream response identity conflicts with its turn event", ErrInvalidActionResult)
+	}
+	return validateDurableChatResult(response, authority)
+}
+
+func firstUnknownChatResultField(value map[string]any, allowed map[string]struct{}) string {
+	unknown := make([]string, 0)
+	for field := range value {
+		if _, ok := allowed[field]; !ok {
+			unknown = append(unknown, field)
+		}
+	}
+	if len(unknown) == 0 {
+		return ""
+	}
+	sort.Strings(unknown)
+	return unknown[0]
+}
+
+func promoteChatResultFields(target map[string]any, authority actionResultAuthority) error {
+	if target == nil {
+		return fmt.Errorf("%w: chat stream done payload is missing", ErrInvalidActionResult)
+	}
+	rawResponse, present := target["response"]
+	if !present {
+		return fmt.Errorf("%w: canonical chat stream response is missing", ErrInvalidActionResult)
+	}
+	response, ok := rawResponse.(map[string]any)
+	if !ok {
+		return fmt.Errorf("%w: chat stream response must be an object", ErrInvalidActionResult)
+	}
+	if err := validateChatStreamEvent(target, authority); err != nil {
+		return err
+	}
+	projected := chatResult(response)
+	for field, item := range projected {
+		if existing, present := target[field]; present && !reflect.DeepEqual(existing, item) {
+			return fmt.Errorf("%w: chat stream field %s conflicts with canonical response", ErrInvalidActionResult, field)
+		}
+		target[field] = item
+	}
+	delete(target, "response")
+	return nil
 }
 
 func webSearchConfigResult(value map[string]any) map[string]any {
@@ -978,14 +1582,20 @@ func webSearchTestResult(value map[string]any) map[string]any {
 
 func confirmationResult(value map[string]any) map[string]any {
 	if confirmation, ok := valueByKey(value, "confirmation", "Confirmation").(map[string]any); ok {
-		return map[string]any{"confirmation": confirmation}
+		return map[string]any{"confirmation": projectCloudWorkerConfirmation(confirmation)}
 	}
-	return map[string]any{"confirmation": value}
+	return map[string]any{"confirmation": projectCloudWorkerConfirmation(value)}
 }
 
 func confirmationListResult(value map[string]any) map[string]any {
+	confirmations := anySlice(valueByKey(value, "confirmations", "Confirmations"))
+	for index, item := range confirmations {
+		if confirmation, ok := item.(map[string]any); ok {
+			confirmations[index] = projectCloudWorkerConfirmation(confirmation)
+		}
+	}
 	return map[string]any{
-		"confirmations":   anySlice(valueByKey(value, "confirmations", "Confirmations")),
+		"confirmations":   confirmations,
 		"next_page_token": stringValue(valueByKey(value, "next_page_token", "next_cursor", "NextPageToken")),
 	}
 }

@@ -245,8 +245,16 @@ func TestBuildActionSpecIndexRejectsDuplicateNames(t *testing.T) {
 
 func TestNativeAgentReferenceSchemaMatchesStrictProducerShape(t *testing.T) {
 	wantFields := map[string]bool{
-		"kind": true, "room_id": true, "room_type": true, "title": true,
-		"preview": true, "channel_id": true, "post_id": true,
+		"kind": true, "account_generation": true, "task_id": true, "plan_id": true,
+		"plan_revision": true, "plan_digest": true, "run_id": true, "run_revision": true,
+		"run_digest": true, "deployment_id": true, "execution_id": true, "confirmation_id": true,
+		"confirmation_revision": true, "stage_id": true, "stage_revision": true,
+		"stage_digest": true, "target_id": true, "target_revision": true,
+		"target_digest": true, "preview_digest": true, "binding_digest": true,
+		"quote_digest": true, "execution_digest": true, "risk_level": true,
+		"gate_type": true, "binding_id": true, "binding_revision": true,
+		"project_id": true, "status": true, "state": true, "room_id": true,
+		"room_type": true, "title": true, "preview": true, "channel_id": true, "post_id": true,
 	}
 	for _, action := range []string{"agent.chat", "agent.chat.stream"} {
 		spec, ok := ActionSpecFor(action)
@@ -267,15 +275,135 @@ func TestNativeAgentReferenceSchemaMatchesStrictProducerShape(t *testing.T) {
 			}
 		}
 		kind := field.Items.Properties["kind"]
-		if !kind.Required {
-			t.Errorf("%s reference kind must be required", action)
+		if !kind.Required || kind.Presence == nil || kind.Presence.Present != "one_of:room|channel_post|execution_plan|execution_run|execution_confirmation|service_binding" {
+			t.Errorf("%s reference kind schema = %#v", action, kind)
+		}
+		taskID := field.Items.Properties["task_id"]
+		if taskID.Required || taskID.Presence == nil || taskID.Presence.Omitted != "generic_execution_v2_reference" {
+			t.Errorf("%s task_id discriminator schema = %#v", action, taskID)
 		}
 		roomID := field.Items.Properties["room_id"]
-		if !roomID.Required {
-			t.Errorf("%s reference room_id must be required", action)
+		if roomID.Required || roomID.Presence == nil || roomID.Presence.Present != "required_for_room_or_channel_post" {
+			t.Errorf("%s reference room_id must be conditionally required: %#v", action, roomID)
 		}
-		if field.Presence == nil || field.Presence.Omitted != "No room or channel references were produced." {
+		if field.Presence == nil || field.Presence.Omitted != "No room, channel-post, or Execution V2 references were produced." {
 			t.Errorf("%s reference presence = %#v", action, field.Presence)
+		}
+		for _, name := range []string{"related_task_ids", "related_plan_ids"} {
+			related := spec.Schema.Response[name]
+			if related.Type != "array" || related.Items == nil || related.Items.Type != "string" || related.Items.Presence == nil || related.Items.Presence.Present != "canonical_uuid" {
+				t.Errorf("%s %s schema = %#v", action, name, related)
+			}
+		}
+	}
+}
+
+func TestNativeAgentAttachmentsAreStreamOnlyAndUseClosedUploadSchemas(t *testing.T) {
+	unary, ok := ActionSpecFor("agent.chat")
+	if !ok || unary.Schema == nil {
+		t.Fatal("agent.chat must publish a schema")
+	}
+	if _, present := unary.Schema.Request["accepted_attachment_ids"]; present {
+		t.Fatal("unary agent.chat must not advertise committed attachment IDs")
+	}
+	stream, ok := ActionSpecFor("agent.chat.stream")
+	if !ok || stream.Schema == nil {
+		t.Fatal("agent.chat.stream must publish a schema")
+	}
+	accepted, present := stream.Schema.Request["accepted_attachment_ids"]
+	if !present || accepted.Type != "array" || accepted.Items == nil || accepted.Items.Presence == nil || accepted.Items.Presence.Present != "canonical_uuid" {
+		t.Fatalf("stream attachment IDs schema = %#v", accepted)
+	}
+	for _, action := range []string{
+		"agent.chat.attachment.begin",
+		"agent.chat.attachment.append",
+		"agent.chat.attachment.commit",
+	} {
+		spec, ok := ActionSpecFor(action)
+		if !ok || spec.Schema == nil {
+			t.Fatalf("%s must publish a schema", action)
+		}
+		for field, schema := range spec.Schema.Request {
+			if !schema.Required {
+				t.Errorf("%s request field %s must be required", action, field)
+			}
+		}
+	}
+	appendSpec, _ := ActionSpecFor("agent.chat.attachment.append")
+	if !appendSpec.Schema.Request["data_base64"].WriteOnly {
+		t.Fatal("attachment chunk bytes must be write-only")
+	}
+	begin, _ := ActionSpecFor("agent.chat.attachment.begin")
+	if kind := begin.Schema.Request["kind"]; !kind.Required || kind.Presence == nil || kind.Presence.Present != "one_of:image|file|workspace_archive" {
+		t.Fatalf("attachment kind schema = %#v", kind)
+	}
+	if size := begin.Schema.Request["declared_size"]; size.Presence == nil || size.Presence.Present != "integer_1_to_8388608" {
+		t.Fatalf("attachment declared size schema = %#v", size)
+	}
+	commit, _ := ActionSpecFor("agent.chat.attachment.commit")
+	if attachment := commit.Schema.Response["attachment"]; !attachment.Required || attachment.Type != "object" ||
+		!attachment.Properties["source_id"].Required || attachment.Properties["kind"].Presence == nil ||
+		attachment.Properties["kind"].Presence.Present != "one_of:image|file|workspace_archive" ||
+		attachment.Properties["size_bytes"].Presence == nil || attachment.Properties["size_bytes"].Presence.Present != "integer_1_to_8388608" {
+		t.Fatalf("commit attachment envelope schema = %#v", attachment)
+	}
+}
+
+func TestNativeAgentChatPublishesOneClosedStartShape(t *testing.T) {
+	for _, action := range []string{"agent.chat", "agent.chat.stream"} {
+		spec, ok := ActionSpecFor(action)
+		if !ok || spec.Schema == nil {
+			t.Fatalf("%s must publish a schema", action)
+		}
+		request := spec.Schema.Request
+		for _, field := range []string{"idempotency_key", "message", "model_profile_id", "model_profile_revision", "credential_version"} {
+			if !request[field].Required {
+				t.Errorf("%s request field %s must be required", action, field)
+			}
+		}
+		for _, field := range []string{"prompt", "turn_id", "client_message_id", "request_id", "operation_id"} {
+			if _, present := request[field]; present {
+				t.Errorf("%s publishes unsupported start field %s", action, field)
+			}
+		}
+	}
+	unary, _ := ActionSpecFor("agent.chat")
+	if unary.Schema.Request["conversation_id"].Required {
+		t.Fatal("unary agent.chat must allow Agent to create a conversation")
+	}
+	if _, present := unary.Schema.Request["after_seq"]; present {
+		t.Fatal("unary agent.chat must not advertise a stream cursor")
+	}
+	stream, _ := ActionSpecFor("agent.chat.stream")
+	if !stream.Schema.Request["conversation_id"].Required {
+		t.Fatal("agent.chat.stream must require the authoritative conversation")
+	}
+	if _, present := stream.Schema.Request["after_seq"]; !present {
+		t.Fatal("agent.chat.stream must advertise its reconnect cursor")
+	}
+}
+
+func TestNativeAgentTurnControlPublishesDistinctStartAndInternalIdentities(t *testing.T) {
+	stop, ok := ActionSpecFor("agent.chat.turn.stop")
+	if !ok || stop.Schema == nil {
+		t.Fatal("agent.chat.turn.stop must publish a schema")
+	}
+	if len(stop.Schema.Request) != 3 {
+		t.Fatalf("turn stop request is not closed: %#v", stop.Schema.Request)
+	}
+	for _, field := range []string{"idempotency_key", "turn_id", "expected_revision"} {
+		if !stop.Schema.Request[field].Required {
+			t.Errorf("turn stop request field %s must be required", field)
+		}
+	}
+	for _, action := range []string{"agent.chat.turn.stop", "agent.chat.turns.list"} {
+		spec, _ := ActionSpecFor(action)
+		fields := spec.Schema.Response
+		if action == "agent.chat.turns.list" {
+			fields = spec.Schema.Response["turns"].Items.Properties
+		}
+		if len(fields) != 10 || !fields["turn_id"].Required || !fields["idempotency_key"].Required {
+			t.Errorf("%s turn metadata schema = %#v", action, fields)
 		}
 	}
 }

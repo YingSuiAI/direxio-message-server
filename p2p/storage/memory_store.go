@@ -16,54 +16,60 @@ type MemoryStore struct {
 	portal    *portalState
 	readMarks map[string]readMarker
 
-	conversations map[string]conversationRecord
-	channels      map[string]channel
-	inviteGrants  map[string]channelInviteGrant
-	posts         []channelPostRecord
-	postSettings  map[string]channelPostSettingsRecord
-	comments      []channelCommentRecord
-	contacts      map[string]contactRecord
-	blocks        map[string]blockRecord
-	groups        map[string]groupRecord
-	calls         map[string]callRecord
-	favorites     map[int64]favoriteRecord
-	follows       map[string]followRecord
-	reactions     map[string]reactionRecord
-	members       map[string]memberRecord
-	events        []p2pEvent
-	eventSeq      map[int64]struct{}
-	eventDedupe   map[string]int64
-	plugins       map[string]pluginInstance
-	pluginJobs    map[string]pluginJob
-	pluginSecrets map[string]map[string]pluginSecret
-	reports       map[string]reportRecord
-	operations    map[string]operations.Record
+	conversations        map[string]conversationRecord
+	channels             map[string]channel
+	inviteGrants         map[string]channelInviteGrant
+	posts                []channelPostRecord
+	postSettings         map[string]channelPostSettingsRecord
+	comments             []channelCommentRecord
+	contacts             map[string]contactRecord
+	blocks               map[string]blockRecord
+	groups               map[string]groupRecord
+	calls                map[string]callRecord
+	favorites            map[int64]favoriteRecord
+	follows              map[string]followRecord
+	reactions            map[string]reactionRecord
+	members              map[string]memberRecord
+	events               []p2pEvent
+	eventSeq             map[int64]struct{}
+	eventDedupe          map[string]int64
+	completionReceipts   map[string]agentExecutionCompletionReceipt
+	completionExecutions map[string]string
+	completionEventSeq   map[string]int64
+	plugins              map[string]pluginInstance
+	pluginJobs           map[string]pluginJob
+	pluginSecrets        map[string]map[string]pluginSecret
+	reports              map[string]reportRecord
+	operations           map[string]operations.Record
 }
 
 // NewMemoryStore returns an empty, concurrency-safe store. It deliberately has
 // no configuration hook so it cannot silently replace durable production state.
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
-		readMarks:     make(map[string]readMarker),
-		conversations: make(map[string]conversationRecord),
-		channels:      make(map[string]channel),
-		inviteGrants:  make(map[string]channelInviteGrant),
-		postSettings:  make(map[string]channelPostSettingsRecord),
-		contacts:      make(map[string]contactRecord),
-		blocks:        make(map[string]blockRecord),
-		groups:        make(map[string]groupRecord),
-		calls:         make(map[string]callRecord),
-		favorites:     make(map[int64]favoriteRecord),
-		follows:       make(map[string]followRecord),
-		reactions:     make(map[string]reactionRecord),
-		members:       make(map[string]memberRecord),
-		eventSeq:      make(map[int64]struct{}),
-		eventDedupe:   make(map[string]int64),
-		plugins:       make(map[string]pluginInstance),
-		pluginJobs:    make(map[string]pluginJob),
-		pluginSecrets: make(map[string]map[string]pluginSecret),
-		reports:       make(map[string]reportRecord),
-		operations:    make(map[string]operations.Record),
+		readMarks:            make(map[string]readMarker),
+		conversations:        make(map[string]conversationRecord),
+		channels:             make(map[string]channel),
+		inviteGrants:         make(map[string]channelInviteGrant),
+		postSettings:         make(map[string]channelPostSettingsRecord),
+		contacts:             make(map[string]contactRecord),
+		blocks:               make(map[string]blockRecord),
+		groups:               make(map[string]groupRecord),
+		calls:                make(map[string]callRecord),
+		favorites:            make(map[int64]favoriteRecord),
+		follows:              make(map[string]followRecord),
+		reactions:            make(map[string]reactionRecord),
+		members:              make(map[string]memberRecord),
+		eventSeq:             make(map[int64]struct{}),
+		eventDedupe:          make(map[string]int64),
+		completionReceipts:   make(map[string]agentExecutionCompletionReceipt),
+		completionExecutions: make(map[string]string),
+		completionEventSeq:   make(map[string]int64),
+		plugins:              make(map[string]pluginInstance),
+		pluginJobs:           make(map[string]pluginJob),
+		pluginSecrets:        make(map[string]map[string]pluginSecret),
+		reports:              make(map[string]reportRecord),
+		operations:           make(map[string]operations.Record),
 	}
 }
 

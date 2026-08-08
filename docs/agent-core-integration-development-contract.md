@@ -109,7 +109,7 @@ Both directions enforce:
 - server-derived owner identity and explicit granted scopes;
 - operation ID, canonical request digest, and bounded idempotency window;
 - call-chain ID, root operation ID, route, maximum depth, and loop rejection;
-- request/result schema digests and advertised readiness;
+- request/result schema digests, durable-stream event schema digests, and advertised readiness;
 - bounded deadlines, message sizes, concurrency, and sanitized errors.
 
 Product Capability handlers must never synchronously call Agent. When a
@@ -149,9 +149,10 @@ probe interval and timeout.
 
 For each required operation, the probe verifies that input and result schema
 JSON is present, each advertised schema digest matches its bytes, and pinned
-Agent Core schema identities match the current contract. Rehashing the catalog
-does not make an empty, incompatible, or stale schema acceptable; schema
-contents are never included in readiness errors or logs.
+Agent Core schema identities match the current contract. Durable streams also
+pin their event schema and digest. Rehashing the catalog does not make an
+empty, incompatible, or stale schema acceptable; schema contents are never
+included in readiness errors or logs.
 
 A failed proactive renewal may retain the previous proof only until that same
 account generation's lease expires. Initial failure, expired lease, peer or
@@ -166,15 +167,55 @@ and account replacement.
 
 ## 6. Execution V2 boundary
 
-Execution V2 state, plans, confirmations, receipts, artifacts, typed provider
-ports, reconciliation, and uncertainty handling are Agent-owned. Message Server
-authenticates and proxies the published ProductCore actions. It does not expose
-raw SSH, SSM, AWS SDK, arbitrary URL, shell, or Docker-socket passthrough.
+Execution V2 state, plans, runs, artifacts, typed provider ports,
+reconciliation, and uncertainty handling are Agent-owned. User authorization
+uses only the generic Agent CoreConfirmation actions; Execution V2 does not
+publish confirmation aliases. Message Server authenticates and proxies the
+published ProductCore actions. It does not expose raw SSH, SSM, AWS SDK,
+arbitrary URL, shell, or Docker-socket passthrough.
 
 Every mutation requires a UUID idempotency key. Mutations of an existing object
 also require the exact expected revision. After a WebSocket mutation may have
-been dispatched, Flutter does not replay it over HTTP; it queries the durable
-Agent state or invokes the typed reconciliation operation.
+been dispatched, Flutter does not replay it over HTTP; it reads the durable
+Agent state. Provider reconciliation is an Agent background-controller concern,
+not a public `runs.reconcile` operation.
+
+Cloud Worker plans are proposed inside an Agent-owned Native conversation, not
+created by an App action. Message Server forwards the complete server-authored
+`related_task_ids`, `related_plan_ids`, and strict Execution V2 references in
+unary and streaming history/results. A reference carries account generation
+and exact task/plan/run/confirmation revision/digest linkage; Message Server
+does not manufacture, weaken, or use it as authorization.
+
+Verified Cloud Worker deliverables are read only through
+`agent.execution.v2.artifacts.download`. The request is the closed
+`record_kind=cloud_worker`, `artifact_id`, `offset_bytes`, and
+`max_chunk_bytes` shape; every field is required and a chunk is limited to
+512 KiB. The offset is bounded by the Cloud Worker 8 MiB artifact hard limit;
+each successful response advances by a non-empty chunk, and the last chunk
+sets EOF. The direct response carries only owner/account-generation and
+artifact/execution identity, canonical base64 bytes, chunk and whole-artifact
+SHA-256, total/range metadata, and EOF. Message Server revalidates that closed
+shape, prepared owner authority, request identity, decoded chunk digest, and
+range continuity before returning it. S3 bucket/key/version, signed URLs,
+retention internals, Worker diagnostics, and provider errors are never part of
+the public contract.
+
+After Agent has frozen one terminal conversation result and independently
+verified AWS cleanup, it calls the private fixed
+`product.agent_execution.v1/record_completion` operation. This callback is
+not advertised in the Product Capability catalog and accepts no user/model
+Permission. The existing mTLS, direction token, Agent peer identity, fresh
+call-chain route, and positive account generation still apply; owner identity
+is injected from `Service.OwnerMXID()` rather than request JSON.
+
+Message Server atomically stores one minimal receipt and one
+`agent.execution.v2.completed` realtime invalidation. Exact event/execution and
+payload replay succeeds idempotently; a different payload conflicts. The
+receipt contains no result body, quote, artifact details, S3 address, AWS
+resource identity, secret, or Worker diagnostics. Flutter treats the realtime
+event only as an invalidation and reads authoritative history and Execution V2
+state back from Agent.
 
 ## 7. Required verification
 

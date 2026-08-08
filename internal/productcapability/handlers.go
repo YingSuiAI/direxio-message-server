@@ -206,6 +206,9 @@ func (s *Server) StartOperation(ctx context.Context, req *capv1.StartOperationRe
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "request is required")
 	}
+	if req.GetCapabilityId() == agentExecutionCompletionCapability {
+		return s.recordAgentExecutionCompletion(ctx, req), nil
+	}
 	provider, operation, err := s.resolveProvider(req.CapabilityId, req.Operation, capv1.OperationType_OPERATION_TYPE_MUTATION)
 	if err != nil {
 		return &capv1.StartOperationResponse{OperationId: req.OperationId, State: capv1.OperationState_OPERATION_STATE_FAILED, Error: err}, nil

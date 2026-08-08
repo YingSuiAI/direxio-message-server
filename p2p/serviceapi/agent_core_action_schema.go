@@ -97,13 +97,23 @@ func coreConfirmationMutationSchema() *ActionSchema {
 // credential or other secret values cross this wire boundary.
 func coreConfirmationResponseFields() map[string]ActionFieldSchema {
 	secretGrant := &ActionFieldSchema{Type: "object", Properties: map[string]ActionFieldSchema{
-		"reference_id":    {Type: "string", Required: true},
-		"purpose":         {Type: "string", Required: true},
-		"secret_revision": {Type: "integer", Presence: &ActionPresenceSchema{Present: "positive_integer", Empty: "omitted"}},
-		"binding_digest":  {Type: "string", Required: true},
+		"reference_id": {Type: "string", Presence: &ActionPresenceSchema{
+			Omitted: "cloud_worker.execute exposes purpose only", Present: "required_for_non_cloud_worker_confirmation",
+		}},
+		"purpose": {Type: "string", Required: true},
+		"binding_digest": {Type: "string", Presence: &ActionPresenceSchema{
+			Omitted: "cloud_worker.execute exposes purpose only", Present: "required_for_non_cloud_worker_confirmation",
+		}},
 	}}
+	cloudOnlyString := func(present string) ActionFieldSchema {
+		return ActionFieldSchema{Type: "string", Presence: &ActionPresenceSchema{Omitted: "non_cloud_worker_confirmation", Present: present}}
+	}
+	cloudOnlyInteger := func(present string) ActionFieldSchema {
+		return ActionFieldSchema{Type: "integer", Presence: &ActionPresenceSchema{Omitted: "non_cloud_worker_confirmation", Present: present}}
+	}
 	binding := map[string]ActionFieldSchema{
-		"owner_id":            {Type: "string"},
+		"owner_id":            {Type: "string", Required: true, Presence: &ActionPresenceSchema{Present: "authenticated_owner_id"}},
+		"account_generation":  cloudOnlyInteger("positive_integer_required_for_cloud_worker.execute"),
 		"operation_domain":    {Type: "string", Required: true},
 		"target_id":           {Type: "string", Required: true},
 		"target_revision":     {Type: "integer", Required: true, Presence: &ActionPresenceSchema{Present: "positive_integer"}},
@@ -121,9 +131,19 @@ func coreConfirmationResponseFields() map[string]ActionFieldSchema {
 		"selected_command":    {Type: "array", Items: &ActionFieldSchema{Type: "string"}},
 		"network_grants":      {Type: "array", Items: &ActionFieldSchema{Type: "string"}},
 		"secret_grants":       {Type: "array", Required: true, Items: secretGrant},
+		"execution_id":        cloudOnlyString("canonical_uuid_required_for_cloud_worker.execute"),
+		"plan_id":             cloudOnlyString("canonical_uuid_required_for_cloud_worker.execute"),
+		"plan_revision":       cloudOnlyInteger("positive_integer_required_for_cloud_worker.execute"),
+		"plan_digest":         cloudOnlyString("lowercase_sha256_required_for_cloud_worker.execute"),
+		"run_id":              cloudOnlyString("canonical_uuid_required_for_cloud_worker.execute"),
+		"run_revision":        cloudOnlyInteger("positive_integer_required_for_cloud_worker.execute"),
+		"run_digest":          cloudOnlyString("lowercase_sha256_required_for_cloud_worker.execute"),
+		"quote_digest":        cloudOnlyString("lowercase_sha256_required_for_cloud_worker.execute"),
+		"digest":              cloudOnlyString("lowercase_sha256_required_for_cloud_worker.execute"),
 	}
 	return map[string]ActionFieldSchema{
 		"confirmation_id": {Type: "string", Required: true, Presence: &ActionPresenceSchema{Present: "canonical_uuid"}},
+		"owner_id":        {Type: "string", Required: true, Presence: &ActionPresenceSchema{Present: "authenticated_owner_id"}},
 		"task_id":         {Type: "string", Required: true, Presence: &ActionPresenceSchema{Present: "canonical_uuid"}},
 		"state":           awsEnumField("pending|confirmed|consumed|rejected|expired", true),
 		"revision":        {Type: "integer", Required: true, Presence: &ActionPresenceSchema{Present: "positive_integer"}},
