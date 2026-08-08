@@ -80,6 +80,10 @@ type Dependencies struct {
 	Sessions SessionPort
 	Plugins  PluginStreamPort
 	Agent    AgentStreamPort
+	// NativeAgentReadiness controls both server.ready advertisement and stream
+	// admission. It is evaluated per connection/request so reconnects cannot
+	// inherit an expired proof.
+	NativeAgentReadiness func() error
 	// TicketActive fences a consumed ticket against root account lifecycle
 	// changes after the module releases its ticket lock.
 	TicketActive func(Ticket) bool
@@ -92,15 +96,16 @@ type Config struct {
 }
 
 type Module struct {
-	actions      ActionPort
-	events       EventPort
-	sessions     SessionPort
-	plugins      PluginStreamPort
-	agent        AgentStreamPort
-	ticketActive func(Ticket) bool
-	now          func() time.Time
-	newToken     func(string) string
-	heartbeat    time.Duration
+	actions              ActionPort
+	events               EventPort
+	sessions             SessionPort
+	plugins              PluginStreamPort
+	agent                AgentStreamPort
+	nativeAgentReadiness func() error
+	ticketActive         func(Ticket) bool
+	now                  func() time.Time
+	newToken             func(string) string
+	heartbeat            time.Duration
 
 	ticketMu sync.Mutex
 	tickets  map[string]Ticket
@@ -112,16 +117,17 @@ func New(deps Dependencies, cfg Config) *Module {
 		heartbeat = DefaultHeartbeatInterval
 	}
 	return &Module{
-		actions:      deps.Actions,
-		events:       deps.Events,
-		sessions:     deps.Sessions,
-		plugins:      deps.Plugins,
-		agent:        deps.Agent,
-		ticketActive: deps.TicketActive,
-		now:          cfg.Now,
-		newToken:     cfg.NewToken,
-		heartbeat:    heartbeat,
-		tickets:      map[string]Ticket{},
+		actions:              deps.Actions,
+		events:               deps.Events,
+		sessions:             deps.Sessions,
+		plugins:              deps.Plugins,
+		agent:                deps.Agent,
+		nativeAgentReadiness: deps.NativeAgentReadiness,
+		ticketActive:         deps.TicketActive,
+		now:                  cfg.Now,
+		newToken:             cfg.NewToken,
+		heartbeat:            heartbeat,
+		tickets:              map[string]Ticket{},
 	}
 }
 
@@ -178,9 +184,7 @@ func (m *Module) Handler() http.HandlerFunc {
 			"type":                  "server.ready",
 			"role":                  record.Role,
 			"heartbeat_interval_ms": int64(m.heartbeat / time.Millisecond),
-			"capabilities": map[string]any{
-				"native_agent_turns": 1,
-			},
+			"capabilities":          m.readyCapabilities(),
 		}); err != nil {
 			return
 		}
@@ -199,6 +203,14 @@ func (m *Module) Handler() http.HandlerFunc {
 		m.streamEvents(connectionCtx, conn, record.Role, since, readDone, client.outbound)
 		_ = conn.Close(websocket.StatusNormalClosure, "")
 	}
+}
+
+func (m *Module) readyCapabilities() map[string]any {
+	capabilities := map[string]any{}
+	if m != nil && m.agent != nil && (m.nativeAgentReadiness == nil || m.nativeAgentReadiness() == nil) {
+		capabilities["native_agent_turns"] = 1
+	}
+	return capabilities
 }
 
 func readHello(ctx context.Context, conn *websocket.Conn) (map[string]any, error) {

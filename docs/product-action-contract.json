@@ -8127,6 +8127,15 @@
           "embedding_profile_revision": {
             "type": "integer"
           },
+          "embedding_stale": {
+            "type": "boolean"
+          },
+          "embedding_status": {
+            "type": "string"
+          },
+          "error_code": {
+            "type": "string"
+          },
           "memory_id": {
             "type": "string"
           },
@@ -8201,6 +8210,18 @@
           "created_at": {
             "type": "string"
           },
+          "embedding_indexed": {
+            "type": "boolean"
+          },
+          "embedding_stale": {
+            "type": "boolean"
+          },
+          "embedding_status": {
+            "type": "string"
+          },
+          "error_code": {
+            "type": "string"
+          },
           "memory_id": {
             "type": "string"
           },
@@ -8246,6 +8267,18 @@
             "type": "string"
           },
           "created_at": {
+            "type": "string"
+          },
+          "embedding_indexed": {
+            "type": "boolean"
+          },
+          "embedding_stale": {
+            "type": "boolean"
+          },
+          "embedding_status": {
+            "type": "string"
+          },
+          "error_code": {
             "type": "string"
           },
           "memory_id": {

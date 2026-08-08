@@ -6,7 +6,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/YingSuiAI/dirextalk-message-server/internal/agentgateway"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/agentstream"
 	"github.com/YingSuiAI/dirextalk-message-server/setup/process"
 )
@@ -14,6 +16,9 @@ import (
 type externalDeprovisionRunner struct{ calls int }
 
 func (r *externalDeprovisionRunner) Apply(context.Context, string) error { return nil }
+func (r *externalDeprovisionRunner) ProbeCatalog(context.Context, []agentgateway.CatalogRequirement) error {
+	return nil
+}
 func (r *externalDeprovisionRunner) Invoke(_ context.Context, action string, params map[string]any) (map[string]any, error) {
 	if action != "agent.account.deprovision" {
 		return map[string]any{"ok": true}, nil
@@ -35,6 +40,10 @@ type externalNativeRunnerProbe struct {
 }
 
 func (p *externalNativeRunnerProbe) Apply(context.Context, string) error { return nil }
+
+func (p *externalNativeRunnerProbe) ProbeCatalog(context.Context, []agentgateway.CatalogRequirement) error {
+	return nil
+}
 
 func (p *externalNativeRunnerProbe) Invoke(_ context.Context, action string, _ map[string]any) (map[string]any, error) {
 	p.invoked = action
@@ -180,4 +189,39 @@ func TestExternalNativeAgentReadinessRequiresRunner(t *testing.T) {
 	if err := service.agentModule.ReadyError(); err == nil {
 		t.Fatal("missing external Agent runner must fail readiness")
 	}
+}
+
+func TestNativeAgentActionReadinessFailsClosedInitiallyAndAfterLeaseExpiry(t *testing.T) {
+	t.Run("initial probe failure", func(t *testing.T) {
+		probe := &externalNativeRunnerProbe{}
+		service := NewService(Config{
+			ServerName: "example.test", NativeAgentRunner: probe,
+			NativeAgentCatalogProbe: func(context.Context, []agentgateway.CatalogRequirement) error {
+				return context.DeadlineExceeded
+			},
+		})
+		defer service.StopNativeAgentCatalogProbe()
+		if _, actionErr := service.actions["agent.core.tasks.list"](context.Background(), map[string]any{}); actionErr == nil || actionErr.Status != http.StatusServiceUnavailable {
+			t.Fatalf("initially unready action error = %#v, want HTTP 503", actionErr)
+		}
+		if probe.invokeCalls != 0 {
+			t.Fatalf("initially unready action reached Agent %d time(s)", probe.invokeCalls)
+		}
+	})
+
+	t.Run("expired lease", func(t *testing.T) {
+		probe := &externalNativeRunnerProbe{}
+		service := NewService(Config{ServerName: "example.test", NativeAgentRunner: probe})
+		defer service.StopNativeAgentCatalogProbe()
+		service.nativeAgentCatalog.mu.RLock()
+		expiresAt := service.nativeAgentCatalog.expiresAt
+		service.nativeAgentCatalog.mu.RUnlock()
+		service.nativeAgentCatalog.now = func() time.Time { return expiresAt }
+		if _, actionErr := service.actions["agent.core.tasks.list"](context.Background(), map[string]any{}); actionErr == nil || actionErr.Status != http.StatusServiceUnavailable {
+			t.Fatalf("expired catalog action error = %#v, want HTTP 503", actionErr)
+		}
+		if probe.invokeCalls != 0 {
+			t.Fatalf("expired catalog action reached Agent %d time(s)", probe.invokeCalls)
+		}
+	})
 }

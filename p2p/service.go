@@ -921,17 +921,19 @@ func newService(cfg Config, store Store, transport Transport, state portalState,
 		Now:                   time.Now,
 	})
 	service.mcpCapabilities = service.mcpModule.Service()
-	service.agentModule = agentmodule.New(agentmodule.Config{
-		Runner:  cfg.NativeAgentRunner,
-		Account: serviceAgentAccountPort{service: service},
-		OwnerID: service.OwnerMXID,
-	})
 	service.configureNativeAgentCatalogReadiness(cfg)
+	service.agentModule = agentmodule.New(agentmodule.Config{
+		Runner:    cfg.NativeAgentRunner,
+		Account:   serviceAgentAccountPort{service: service},
+		OwnerID:   service.OwnerMXID,
+		Readiness: service.nativeAgentCatalogReadinessError,
+	})
 	service.actions = service.actionHandlers()
 	service.realtimeModule = realtimewsmodule.New(realtimewsmodule.Dependencies{
 		Actions: serviceRealtimeActionPort{service: service}, Events: service.eventsModule,
 		Sessions: realtimeSessions, Plugins: service.pluginsModule, Agent: service.agentModule,
-		TicketActive: service.realtimeWSTicketActive,
+		NativeAgentReadiness: service.nativeAgentCatalogReadinessError,
+		TicketActive:         service.realtimeWSTicketActive,
 	}, realtimewsmodule.Config{Now: time.Now, NewToken: randomToken, HeartbeatInterval: realtimewsmodule.DefaultHeartbeatInterval})
 	if memoryStore, ok := store.(*p2pstorage.MemoryStore); ok {
 		service.mu.Lock()

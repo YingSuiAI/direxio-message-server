@@ -43,7 +43,7 @@ func knowledgeSchema(action string) *ActionSchema {
 	}
 	switch action {
 	case "create":
-		s.Response = map[string]ActionFieldSchema{"memory_id": {Type: "string"}, "title": {Type: "string"}, "content": {Type: "string"}, "tags": {Type: "array"}, "created_at": {Type: "string"}, "replayed": {Type: "boolean"}, "embedding_indexed": {Type: "boolean"}, "embedding_profile_id": {Type: "string"}, "embedding_profile_revision": {Type: "integer"}, "embedding_model": {Type: "string"}}
+		s.Response = map[string]ActionFieldSchema{"memory_id": {Type: "string"}, "title": {Type: "string"}, "content": {Type: "string"}, "tags": {Type: "array"}, "created_at": {Type: "string"}, "replayed": {Type: "boolean"}, "embedding_indexed": {Type: "boolean"}, "embedding_stale": {Type: "boolean"}, "embedding_status": {Type: "string"}, "error_code": {Type: "string"}, "embedding_profile_id": {Type: "string"}, "embedding_profile_revision": {Type: "integer"}, "embedding_model": {Type: "string"}}
 	case "search":
 		s.Response = map[string]ActionFieldSchema{"items": {Type: "array", Required: true}, "next_cursor": {Type: "string", Required: true}, "search_mode": {Type: "string", Required: true}, "embedding_profile_id": {Type: "string"}, "embedding_profile_revision": {Type: "integer"}, "embedding_model": {Type: "string"}, "embedding_generation": {Type: "string"}, "collection_config_digest": {Type: "string"}}
 	case "status":
@@ -51,7 +51,7 @@ func knowledgeSchema(action string) *ActionSchema {
 	case "memories_list":
 		s.Response = map[string]ActionFieldSchema{"items": {Type: "array"}, "next_page_token": {Type: "string"}}
 	default:
-		s.Response = map[string]ActionFieldSchema{"memory_id": {Type: "string"}, "title": {Type: "string"}, "content": {Type: "string"}, "tags": {Type: "array"}, "revision": {Type: "integer"}, "created_at": {Type: "string"}, "updated_at": {Type: "string"}, "replayed": {Type: "boolean"}}
+		s.Response = map[string]ActionFieldSchema{"memory_id": {Type: "string"}, "title": {Type: "string"}, "content": {Type: "string"}, "tags": {Type: "array"}, "revision": {Type: "integer"}, "created_at": {Type: "string"}, "updated_at": {Type: "string"}, "replayed": {Type: "boolean"}, "embedding_indexed": {Type: "boolean"}, "embedding_stale": {Type: "boolean"}, "embedding_status": {Type: "string"}, "error_code": {Type: "string"}}
 	}
 	return s
 }

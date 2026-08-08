@@ -29,16 +29,20 @@ type Config struct {
 	Runner  Runner
 	Account AccountPort
 	OwnerID func() string
+	// Readiness is the short, generation-bound catalog lease owned by the
+	// message-server. It is checked immediately before every external call.
+	Readiness func() error
 }
 
 type Module struct {
-	runner  Runner
-	account AccountPort
-	ownerID func() string
+	runner    Runner
+	account   AccountPort
+	ownerID   func() string
+	readiness func() error
 }
 
 func New(cfg Config) *Module {
-	return &Module{runner: cfg.Runner, account: cfg.Account, ownerID: cfg.OwnerID}
+	return &Module{runner: cfg.Runner, account: cfg.Account, ownerID: cfg.OwnerID, readiness: cfg.Readiness}
 }
 
 func (m *Module) ReadyError() error {
@@ -60,6 +64,9 @@ func (m *Module) Stream(ctx context.Context, action string, params map[string]an
 	if m == nil || m.runner == nil {
 		return fmt.Errorf("external native agent gateway is not configured")
 	}
+	if err := m.readinessError(); err != nil {
+		return err
+	}
 	if err := agentgateway.ValidateActionRequest(action, params); err != nil {
 		return err
 	}
@@ -72,6 +79,9 @@ func (m *Module) Stream(ctx context.Context, action string, params map[string]an
 func (m *Module) DurableStream(ctx context.Context, ownerID, action string, params map[string]any, emit func(agentstream.StreamEvent) error) error {
 	if m == nil || m.runner == nil {
 		return fmt.Errorf("external native agent gateway is not configured")
+	}
+	if err := m.readinessError(); err != nil {
+		return err
 	}
 	if strings.TrimSpace(action) != "agent.chat.stream" {
 		return fmt.Errorf("%w: %q", agentgateway.ErrUnsupportedAction, action)
@@ -193,10 +203,20 @@ func (m *Module) Handlers() map[string]actionbase.Handler {
 	return handlers
 }
 
+func (m *Module) readinessError() error {
+	if m != nil && m.readiness != nil {
+		return m.readiness()
+	}
+	return nil
+}
+
 func (m *Module) invoke(action string) actionbase.Handler {
 	return func(ctx context.Context, params map[string]any) (any, *actionbase.Error) {
 		if m == nil || m.runner == nil {
 			return nil, actionbase.StatusError(http.StatusBadGateway, "external native agent gateway is not configured")
+		}
+		if err := m.readinessError(); err != nil {
+			return nil, actionbase.StatusError(http.StatusServiceUnavailable, "external native agent capability catalog is not ready")
 		}
 		if err := agentgateway.ValidateActionRequest(action, params); err != nil {
 			return nil, externalAgentActionError(err)

@@ -2,6 +2,7 @@ package realtimews
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -53,6 +54,36 @@ func (agentStreamPortStub) Stream(
 
 type sequencedDurableAgent struct {
 	params chan map[string]any
+}
+
+type terminalErrorDurableAgent struct{}
+
+func (terminalErrorDurableAgent) Stream(context.Context, string, map[string]any, func(agentstream.Event) error) error {
+	return nil
+}
+
+type terminalErrorAgent struct{}
+
+func (terminalErrorAgent) Stream(_ context.Context, _ string, _ map[string]any, emit func(agentstream.Event) error) error {
+	if err := emit(agentstream.Event{Event: "error", Data: map[string]any{"error": "gateway terminal error"}}); err != nil {
+		return err
+	}
+	return errors.New("gateway terminal error")
+}
+
+func (terminalErrorDurableAgent) DurableStream(_ context.Context, _ string, _ string, params map[string]any, emit func(agentstream.StreamEvent) error) error {
+	startID := actionbase.String(params["idempotency_key"])
+	conversationID := actionbase.String(params["conversation_id"])
+	turnID := "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	err := errors.New("gateway terminal error")
+	if emitErr := emit(agentstream.StreamEvent{
+		Kind: agentstream.EventError, TurnID: turnID, IdempotencyKey: startID,
+		ConversationID: conversationID, Revision: 1, Seq: 1, Event: "error",
+		Data: map[string]any{"error_summary": "gateway terminal error"},
+	}); emitErr != nil {
+		return emitErr
+	}
+	return err
 }
 
 func (sequencedDurableAgent) Stream(context.Context, string, map[string]any, func(agentstream.Event) error) error {
@@ -338,6 +369,65 @@ func TestNativeAgentDurableFramesExposeSequenceCursor(t *testing.T) {
 	done := nextOutbound(t, connection)
 	if done["type"] != "server.native_agent_stream.event" || done["event"] != "done" || done["seq"] != int64(42) {
 		t.Fatalf("done frame = %#v, want seq 42", done)
+	}
+}
+
+func TestNativeAgentDurableTerminalErrorIsSentOnce(t *testing.T) {
+	module := New(Dependencies{Agent: terminalErrorDurableAgent{}}, Config{})
+	connection := newConnection("session", Ticket{Role: "owner", UserID: "@owner:example.test"}, MaxInFlightRequests)
+	module.startNativeAgentStream(context.Background(), connection, map[string]any{
+		"id": "terminal", "action": "agent.chat", "params": map[string]any{
+			"idempotency_key": "11111111-1111-4111-8111-111111111111",
+			"conversation_id": "22222222-2222-4222-8222-222222222222",
+			"message":         "hello", "model_profile_id": "profile-id",
+			"model_profile_revision": int64(1), "credential_version": int64(1),
+		},
+	})
+	frame := nextOutbound(t, connection)
+	if frame["type"] != "server.native_agent_stream.error" || frame["event"] != "error" {
+		t.Fatalf("terminal error frame = %#v", frame)
+	}
+	select {
+	case duplicate := <-connection.outbound:
+		t.Fatalf("terminal gateway error was duplicated: %#v", duplicate)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestNativeAgentNonDurableTerminalErrorIsSentOnce(t *testing.T) {
+	module := New(Dependencies{Agent: terminalErrorAgent{}}, Config{})
+	connection := newConnection("session", Ticket{Role: "owner", UserID: "@owner:example.test"}, MaxInFlightRequests)
+	module.startNativeAgentStream(context.Background(), connection, map[string]any{
+		"id": "terminal-voice", "action": "agent.voice.session.stream", "params": map[string]any{},
+	})
+	frame := nextOutbound(t, connection)
+	if frame["type"] != "server.native_agent_stream.event" || frame["event"] != "error" {
+		t.Fatalf("non-durable terminal error frame = %#v", frame)
+	}
+	select {
+	case duplicate := <-connection.outbound:
+		t.Fatalf("non-durable terminal gateway error was duplicated: %#v", duplicate)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestNativeAgentStreamFailsClosedWhenCatalogLeaseExpires(t *testing.T) {
+	module := New(Dependencies{
+		Agent:                agentStreamPortStub{},
+		NativeAgentReadiness: func() error { return errors.New("lease expired") },
+	}, Config{})
+	connection := newConnection("session", Ticket{Role: "owner", UserID: "@owner:example.test"}, MaxInFlightRequests)
+	module.startNativeAgentStream(context.Background(), connection, map[string]any{
+		"id": "expired", "action": "agent.chat", "params": map[string]any{
+			"idempotency_key": "11111111-1111-4111-8111-111111111111",
+			"conversation_id": "22222222-2222-4222-8222-222222222222",
+			"message":         "hello", "model_profile_id": "profile-id",
+			"model_profile_revision": int64(1), "credential_version": int64(1),
+		},
+	})
+	frame := nextOutbound(t, connection)
+	if frame["type"] != "server.native_agent_stream.error" || frame["status"] != http.StatusServiceUnavailable {
+		t.Fatalf("expired catalog stream frame = %#v, want HTTP 503", frame)
 	}
 }
 

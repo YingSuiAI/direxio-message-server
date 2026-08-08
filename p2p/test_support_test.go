@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/YingSuiAI/dirextalk-message-server/internal/agentgateway"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/agentstream"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/dirextalkdomain"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/dirextalkplugin"
@@ -45,6 +46,10 @@ func newTestExternalNativeRunner() *testExternalNativeRunner {
 }
 
 func (r *testExternalNativeRunner) Apply(context.Context, string) error { return nil }
+
+func (r *testExternalNativeRunner) ProbeCatalog(context.Context, []agentgateway.CatalogRequirement) error {
+	return nil
+}
 
 func (r *testExternalNativeRunner) Invoke(_ context.Context, action string, params map[string]any) (map[string]any, error) {
 	r.mu.Lock()

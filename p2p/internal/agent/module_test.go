@@ -13,6 +13,8 @@ import (
 	"github.com/YingSuiAI/dirextalk-message-server/internal/agentstream"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/dirextalkdomain"
 	actionbase "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/action"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 )
 
 func TestExecutionV2ExternalAllowlistKeepsGenericRunMutationsOnly(t *testing.T) {
@@ -114,6 +116,37 @@ func TestExternalAgentActionErrorMapsInvalidRequestSentinel(t *testing.T) {
 	err := externalAgentActionError(fmt.Errorf("wrapped: %w", agentgateway.ErrInvalidActionRequest))
 	if err == nil || err.Status != http.StatusBadRequest {
 		t.Fatalf("invalid request status = %#v, want HTTP 400", err)
+	}
+}
+
+func TestExternalAgentActionErrorDistinguishesTimeoutAndUnavailable(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{name: "provider timeout", err: grpcstatus.Error(codes.DeadlineExceeded, "context deadline exceeded"), want: http.StatusGatewayTimeout},
+		{name: "provider unavailable", err: grpcstatus.Error(codes.Unavailable, "provider unavailable"), want: http.StatusServiceUnavailable},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := externalAgentActionError(test.err)
+			if got == nil || got.Status != test.want {
+				t.Fatalf("error = %#v, want HTTP %d", got, test.want)
+			}
+		})
+	}
+}
+
+func TestExternalAgentActionsFailClosedWhenCatalogLeaseIsNotReady(t *testing.T) {
+	runner := &requestValidationRunner{}
+	module := New(Config{
+		Runner:    runner,
+		Readiness: func() error { return errors.New("catalog lease expired") },
+	})
+	handler := module.Handlers()["agent.core.tasks.list"]
+	if _, actionErr := handler(context.Background(), map[string]any{}); actionErr == nil || actionErr.Status != http.StatusServiceUnavailable {
+		t.Fatalf("unready catalog action error = %#v, want HTTP 503", actionErr)
 	}
 }
 

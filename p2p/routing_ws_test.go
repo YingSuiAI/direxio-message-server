@@ -177,8 +177,8 @@ func TestRealtimeWSAcceptsTicketAndReplaysEvents(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected server.ready capabilities object, got %#v", ready["capabilities"])
 	}
-	if got, ok := capabilities["native_agent_turns"].(float64); !ok || got != 1 {
-		t.Fatalf("expected capabilities.native_agent_turns=1, got %#v", capabilities["native_agent_turns"])
+	if _, ok := capabilities["native_agent_turns"]; ok {
+		t.Fatalf("unconfigured Native Agent capability was advertised: %#v", capabilities)
 	}
 	if _, ok := ready["native_agent_turns"]; ok {
 		t.Fatalf("server.ready must not expose top-level native_agent_turns: %#v", ready)

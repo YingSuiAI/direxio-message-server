@@ -82,6 +82,9 @@ func (m *Module) getConfig(ctx context.Context, _ map[string]any) (any, *actionb
 	if m == nil || m.runner == nil {
 		return nil, actionbase.StatusError(http.StatusBadGateway, "external native agent runtime is not configured")
 	}
+	if err := m.readinessError(); err != nil {
+		return nil, actionbase.StatusError(http.StatusServiceUnavailable, "external native agent capability catalog is not ready")
+	}
 	remote, invokeErr := m.runner.Invoke(ctx, actionConfigGet, map[string]any{})
 	if invokeErr != nil {
 		return nil, configGatewayError(invokeErr)
@@ -105,6 +108,9 @@ func (m *Module) updateConfig(ctx context.Context, params map[string]any) (any, 
 func (m *Module) updateExternalConfig(ctx context.Context, account AccountPort, params map[string]any) (any, *actionbase.Error) {
 	if m == nil || m.runner == nil {
 		return nil, actionbase.StatusError(http.StatusBadGateway, "external native agent runtime is not configured")
+	}
+	if err := m.readinessError(); err != nil {
+		return nil, actionbase.StatusError(http.StatusServiceUnavailable, "external native agent capability catalog is not ready")
 	}
 	params = cloneMap(params)
 	nativeParams := nativeConfigUpdateParams(params)

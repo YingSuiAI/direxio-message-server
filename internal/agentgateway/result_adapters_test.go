@@ -93,9 +93,10 @@ func TestPublicResultAdaptersPreserveLegacyEnvelopes(t *testing.T) {
 				t.Fatalf("source list = %#v", got)
 			}
 		}},
-		{"memory list", "agent.knowledge.memories.list", map[string]any{"Sources": []any{map[string]any{"ID": "m1", "Content": "hello"}}, "NextPageToken": "p"}, func(t *testing.T, got map[string]any) {
+		{"memory list", "agent.knowledge.memories.list", map[string]any{"Sources": []any{map[string]any{"ID": "m1", "Content": "hello", "EmbeddingIndexed": false, "EmbeddingStale": true, "EmbeddingStatus": "indexing", "ErrorCode": "embedding_retry"}}, "NextPageToken": "p"}, func(t *testing.T, got map[string]any) {
 			items := got["items"].([]any)
-			if items[0].(map[string]any)["memory_id"] != "m1" || items[0].(map[string]any)["content"] != "hello" || got["next_page_token"] != "p" {
+			memory := items[0].(map[string]any)
+			if memory["memory_id"] != "m1" || memory["content"] != "hello" || memory["embedding_indexed"] != false || memory["embedding_stale"] != true || memory["embedding_status"] != "indexing" || memory["error_code"] != "embedding_retry" || got["next_page_token"] != "p" {
 				t.Fatalf("memory list = %#v", got)
 			}
 		}},
@@ -126,14 +127,19 @@ func TestPublicResultAdaptersPreserveLegacyEnvelopes(t *testing.T) {
 				t.Fatalf("knowledge status counters were inferred/changed: %#v", got)
 			}
 		}},
-		{"memory create exact projection", "agent.knowledge.memory.create", map[string]any{"memory_id": "m1", "title": "title", "content": "hello", "tags": []any{"a"}, "revision": float64(2), "created_at": "now", "updated_at": "later", "replayed": true, "embedding_indexed": false, "embedding_profile_id": "embed", "embedding_profile_revision": float64(4), "embedding_model": "model", "extra": "drop"}, func(t *testing.T, got map[string]any) {
-			if keys := sortedMapKeys(got); !reflect.DeepEqual(keys, []string{"content", "created_at", "embedding_indexed", "embedding_model", "embedding_profile_id", "embedding_profile_revision", "memory_id", "replayed", "tags", "title"}) {
+		{"memory create exact projection", "agent.knowledge.memory.create", map[string]any{"memory_id": "m1", "title": "title", "content": "hello", "tags": []any{"a"}, "revision": float64(2), "created_at": "now", "updated_at": "later", "replayed": true, "embedding_indexed": false, "embedding_stale": true, "embedding_status": "failed", "error_code": "embedding_provider_failed", "embedding_profile_id": "embed", "embedding_profile_revision": float64(4), "embedding_model": "model", "extra": "drop"}, func(t *testing.T, got map[string]any) {
+			if keys := sortedMapKeys(got); !reflect.DeepEqual(keys, []string{"content", "created_at", "embedding_indexed", "embedding_model", "embedding_profile_id", "embedding_profile_revision", "embedding_stale", "embedding_status", "error_code", "memory_id", "replayed", "tags", "title"}) {
 				t.Fatalf("memory create keys=%v value=%#v", keys, got)
 			}
 		}},
-		{"memory get exact projection", "agent.knowledge.memories.get", map[string]any{"memory_id": "m1", "title": "title", "content": "hello", "tags": []any{}, "revision": float64(2), "created_at": "now", "updated_at": "later", "replayed": true, "embedding_indexed": false}, func(t *testing.T, got map[string]any) {
-			if keys := sortedMapKeys(got); !reflect.DeepEqual(keys, []string{"content", "created_at", "memory_id", "revision", "tags", "title", "updated_at"}) {
+		{"memory get exact projection", "agent.knowledge.memories.get", map[string]any{"memory_id": "m1", "title": "title", "content": "hello", "tags": []any{}, "revision": float64(2), "created_at": "now", "updated_at": "later", "replayed": true, "embedding_indexed": false, "embedding_stale": true, "embedding_status": "ready"}, func(t *testing.T, got map[string]any) {
+			if keys := sortedMapKeys(got); !reflect.DeepEqual(keys, []string{"content", "created_at", "embedding_indexed", "embedding_stale", "embedding_status", "memory_id", "revision", "tags", "title", "updated_at"}) {
 				t.Fatalf("memory get keys=%v value=%#v", keys, got)
+			}
+		}},
+		{"memory update preserves embedding state", "agent.knowledge.memories.update", map[string]any{"memory_id": "m1", "title": "title", "content": "updated", "tags": []any{}, "revision": float64(3), "created_at": "now", "updated_at": "later", "replayed": false, "embedding_indexed": false, "embedding_stale": true, "embedding_status": "indexing", "error_code": "embedding_retry"}, func(t *testing.T, got map[string]any) {
+			if got["embedding_indexed"] != false || got["embedding_stale"] != true || got["embedding_status"] != "indexing" || got["error_code"] != "embedding_retry" {
+				t.Fatalf("memory update = %#v", got)
 			}
 		}},
 		{"task get", "agent.core.tasks.get", map[string]any{"ID": "t1", "State": "queued"}, func(t *testing.T, got map[string]any) {

@@ -352,6 +352,10 @@ func (m *Module) startNativeAgentStream(ctx context.Context, client *connection,
 		client.send(nativeAgentStreamError(id, action, http.StatusBadGateway, "native agent runtime is not configured"))
 		return
 	}
+	if m.nativeAgentReadiness != nil && m.nativeAgentReadiness() != nil {
+		client.send(nativeAgentStreamError(id, action, http.StatusServiceUnavailable, "native agent capability catalog is not ready"))
+		return
+	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	if !client.startStream(id, cancel) {
 		cancel()
@@ -369,6 +373,7 @@ func (m *Module) startNativeAgentStream(ctx context.Context, client *connection,
 		}
 		go func() {
 			defer client.finishStream(id)
+			terminalErrorSent := false
 			err := durable.DurableStream(streamCtx, client.record.UserID, runnerAction, params, func(event agentstream.StreamEvent) error {
 				wireAction := nativeAgentStreamAction(runnerAction)
 				switch event.Kind {
@@ -380,6 +385,7 @@ func (m *Module) startNativeAgentStream(ctx context.Context, client *connection,
 						"conversation_id": event.ConversationID, "state": string(event.Turn.State), "seq": event.Seq,
 					})
 				case agentstream.EventError:
+					terminalErrorSent = true
 					message := actionbase.String(event.Data["error_summary"])
 					if message == "" {
 						message = event.Event
@@ -407,7 +413,7 @@ func (m *Module) startNativeAgentStream(ctx context.Context, client *connection,
 					})
 				}
 			})
-			if err == nil || streamCtx.Err() != nil {
+			if err == nil || streamCtx.Err() != nil || terminalErrorSent {
 				return
 			}
 			status := http.StatusBadGateway
@@ -434,6 +440,7 @@ func (m *Module) startNativeAgentStream(ctx context.Context, client *connection,
 		defer client.finishStream(id)
 		wireAction := nativeAgentStreamAction(runnerAction)
 		doneSent := false
+		terminalErrorSent := false
 		err := m.agent.Stream(streamCtx, runnerAction, params, func(event agentstream.Event) error {
 			eventName := strings.TrimSpace(event.Event)
 			if eventName == "" {
@@ -441,6 +448,8 @@ func (m *Module) startNativeAgentStream(ctx context.Context, client *connection,
 			}
 			if eventName == "done" {
 				doneSent = true
+			} else if eventName == "error" || eventName == "cancelled" {
+				terminalErrorSent = true
 			}
 			data := event.Data
 			if data == nil {
@@ -455,7 +464,7 @@ func (m *Module) startNativeAgentStream(ctx context.Context, client *connection,
 			})
 		})
 		if err != nil {
-			if streamCtx.Err() != nil {
+			if streamCtx.Err() != nil || terminalErrorSent {
 				return
 			}
 			status := http.StatusBadGateway

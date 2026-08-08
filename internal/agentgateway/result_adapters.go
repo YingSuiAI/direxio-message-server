@@ -1934,16 +1934,19 @@ func normalizeMemory(value map[string]any, mode string) map[string]any {
 		if item := valueByKey(value, "replayed", "Replay"); item != nil {
 			result["replayed"] = item
 		}
-		aliases := map[string][]string{
-			"embedding_indexed":          {"embedding_indexed", "EmbeddingIndexed"},
-			"embedding_profile_id":       {"embedding_profile_id", "EmbeddingProfileID"},
-			"embedding_profile_revision": {"embedding_profile_revision", "EmbeddingProfileRevision"},
-			"embedding_model":            {"embedding_model", "EmbeddingModel"},
-		}
-		for key, names := range aliases {
-			if item := valueByKey(value, names...); item != nil {
-				result[key] = item
-			}
+	}
+	aliases := map[string][]string{
+		"embedding_indexed":          {"embedding_indexed", "EmbeddingIndexed"},
+		"embedding_stale":            {"embedding_stale", "EmbeddingStale"},
+		"embedding_status":           {"embedding_status", "EmbeddingStatus"},
+		"embedding_profile_id":       {"embedding_profile_id", "EmbeddingProfileID"},
+		"embedding_profile_revision": {"embedding_profile_revision", "EmbeddingProfileRevision"},
+		"embedding_model":            {"embedding_model", "EmbeddingModel"},
+		"error_code":                 {"error_code", "ErrorCode"},
+	}
+	for key, names := range aliases {
+		if item := valueByKey(value, names...); item != nil {
+			result[key] = item
 		}
 	}
 	return result

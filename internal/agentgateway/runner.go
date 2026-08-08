@@ -705,20 +705,15 @@ var actionBindings = map[string]actionBinding{
 	"agent.image_tools.extract_text":   {"agent.image_tools.v1", "extract_text"},
 	"agent.image_tools.translate_text": {"agent.image_tools.v1", "translate_text"},
 
-	// Model profiles. Sync is retained as a legacy alias while the typed Core
-	// create/update/test operations are also exposed to current clients.
+	// Model profiles use the current authoritative sync API. Only operations
+	// published by ProductCore are bound here.
 	"agent.core.model_profiles.sync":   {"agent.models.v1", "sync_models"},
 	"agent.core.model_profiles.list":   {"agent.models.v1", "list_models"},
 	"agent.core.model_profiles.get":    {"agent.models.v1", "get_model"},
-	"agent.core.model_profiles.create": {"agent.models.v1", "create_model"},
-	"agent.core.model_profiles.update": {"agent.models.v1", "update_model"},
-	"agent.core.model_profiles.test":   {"agent.models.v1", "test_model"},
 	"agent.core.model_profiles.delete": {"agent.models.v1", "delete_model"},
 	"agent.model_profiles.sync":        {"agent.models.v1", "sync_models"},
 	"agent.model_profiles.list":        {"agent.models.v1", "list_models"},
 	"agent.model_profiles.get":         {"agent.models.v1", "get_model"},
-	"agent.model_profiles.create":      {"agent.models.v1", "create_model"},
-	"agent.model_profiles.update":      {"agent.models.v1", "update_model"},
 	"agent.model_profiles.test":        {"agent.models.v1", "test_model"},
 	"agent.model_profiles.delete":      {"agent.models.v1", "delete_model"},
 
@@ -726,19 +721,15 @@ var actionBindings = map[string]actionBinding{
 	"agent.knowledge.config.get":      {"agent.knowledge.v1", "get_config"},
 	"agent.knowledge.config.update":   {"agent.knowledge.v1", "update_config"},
 	"agent.knowledge.sources.list":    {"agent.knowledge.v1", "list_sources"},
-	"agent.knowledge.sources.get":     {"agent.knowledge.v1", "get_source"},
 	"agent.knowledge.sources.delete":  {"agent.knowledge.v1", "delete_source"},
 	"agent.knowledge.upload.start":    {"agent.knowledge.v1", "start_upload"},
 	"agent.knowledge.upload.chunk":    {"agent.knowledge.v1", "append_upload_chunk"},
 	"agent.knowledge.upload.finish":   {"agent.knowledge.v1", "commit_upload"},
 	"agent.knowledge.memory.create":   {"agent.knowledge.v1", "create_memory"},
 	"agent.knowledge.memories.list":   {"agent.knowledge.v1", "list_memories"},
-	"agent.knowledge.memories.get":    {"agent.knowledge.v1", "get_memory"},
 	"agent.knowledge.memories.update": {"agent.knowledge.v1", "update_memory"},
 	"agent.knowledge.memories.delete": {"agent.knowledge.v1", "delete_memory"},
 	"agent.knowledge.search":          {"agent.knowledge.v1", "search_knowledge"},
-	"agent.knowledge.memory.search":   {"agent.knowledge.v1", "search_memory"},
-	"agent.knowledge.index":           {"agent.knowledge.v1", "index_sources"},
 	"agent.knowledge.status":          {"agent.knowledge.v1", "status"},
 
 	// Legacy Skill/MCP names alias the Core extension capability. Lifecycle

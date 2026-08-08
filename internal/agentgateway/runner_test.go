@@ -49,6 +49,22 @@ func TestActionBindingIsExplicit(t *testing.T) {
 	}
 }
 
+func TestActionBindingsExcludeUnpublishedModelAndKnowledgeActions(t *testing.T) {
+	for _, action := range []string{
+		"agent.core.model_profiles.create", "agent.core.model_profiles.update", "agent.core.model_profiles.test",
+		"agent.model_profiles.create", "agent.model_profiles.update",
+		"agent.knowledge.sources.get", "agent.knowledge.memories.get",
+		"agent.knowledge.memory.search", "agent.knowledge.index",
+	} {
+		if _, ok := actionBindingFor(action); ok {
+			t.Errorf("unpublished ProductCore action %q retains a gateway binding", action)
+		}
+		if _, ok := expectedCatalogSchemaDigests[action]; ok {
+			t.Errorf("unpublished ProductCore action %q retains a catalog schema pin", action)
+		}
+	}
+}
+
 func TestTransformArtifactDownloadRequestPassesExactTypedQuery(t *testing.T) {
 	binding, ok := actionBindingFor("agent.execution.v2.artifacts.download")
 	if !ok {
