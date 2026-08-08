@@ -186,7 +186,7 @@ P2P action 生命周期：
 5. 需要 Matrix 事实写入时调用 `p2p.Transport`。
 6. Dirextalk Message Server roomserver 产生 output event。
 7. `p2p.consumer` 调用 `ProjectRoomEvent` 更新 P2P read model。
-8. `/_p2p/ws` 发送产品投影事件和通用 `server.response`。Owner WS 通过 `client.request` 执行登录后 product 查询/命令，但不包含 MCP action；旧 `client.command` 兼容别名已移除，客户端必须发送 `client.request`。Agents room 消息、预览和回复走 Matrix Client-Server，不通过 P2P event 或 WS stream 转发。
+8. `/_p2p/ws` 发送产品投影事件和通用 `server.response`。Owner WS 通过 `client.request` 执行登录后 product 查询/命令，但不包含 MCP action；旧 `client.command` 兼容别名已移除，客户端必须发送 `client.request`。同一连接上的 request 以 `id` 独立关联响应并允许完成顺序不同于发送顺序，最多同时执行 8 个；超限 request 在 dispatch 前收到 `429`，仍在执行的重复 `id` 只收到不带关联 `id` 的 `duplicate_request_id` protocol error，原 request 不会重放或产生第二个关联响应。连接关闭会取消仍在执行的 request。Agents room 消息、预览和回复走 Matrix Client-Server，不通过 P2P event 或 WS stream 转发。
 9. 客户端普通消息、历史、搜索、redaction 继续通过 Matrix Client-Server API。
 
 同步策略：

@@ -27,6 +27,7 @@ const (
 	TicketTTL                = 120 * time.Second
 	BatchLimit               = 100
 	DefaultHeartbeatInterval = 25 * time.Second
+	MaxInFlightRequests      = 8
 )
 
 // Ticket is the authenticated owner snapshot bound to a one-use upgrade token.
@@ -184,14 +185,18 @@ func (m *Module) Handler() http.HandlerFunc {
 			return
 		}
 
-		client := newConnection(sessionID, record)
+		client := newConnection(sessionID, record, MaxInFlightRequests)
+		defer client.cancelAllRequests()
 		defer client.cancelAllStreams()
+		connectionCtx, cancelConnection := context.WithCancel(ctx)
+		defer cancelConnection()
 		readDone := make(chan struct{})
 		go func() {
 			defer close(readDone)
-			m.readFrames(ctx, conn, client)
+			defer cancelConnection()
+			m.readFrames(connectionCtx, conn, client)
 		}()
-		m.streamEvents(ctx, conn, record.Role, since, readDone, client.outbound)
+		m.streamEvents(connectionCtx, conn, record.Role, since, readDone, client.outbound)
 		_ = conn.Close(websocket.StatusNormalClosure, "")
 	}
 }

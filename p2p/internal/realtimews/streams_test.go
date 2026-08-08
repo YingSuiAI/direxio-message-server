@@ -152,7 +152,7 @@ func (r *validatingNativeAgentRunner) Stream(context.Context, string, map[string
 func TestPluginAndAgentStreamsPreserveFramesAndSharedIDNamespace(t *testing.T) {
 	pluginPort := &pluginStreamPortStub{started: make(chan struct{})}
 	module := New(Dependencies{Plugins: pluginPort, Agent: agentStreamPortStub{}}, Config{})
-	connection := newConnection("session", Ticket{Role: "owner"})
+	connection := newConnection("session", Ticket{Role: "owner"}, MaxInFlightRequests)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -231,7 +231,7 @@ func TestNativeAgentStreamRejectsSensitiveKeysBeforeForwardAndReplay(t *testing.
 	runner := &validatingNativeAgentRunner{}
 	agent := agentmodule.New(agentmodule.Config{Runner: runner})
 	module := New(Dependencies{Agent: agent}, Config{})
-	connection := newConnection("session", Ticket{Role: "owner", UserID: "@owner:example.test"})
+	connection := newConnection("session", Ticket{Role: "owner", UserID: "@owner:example.test"}, MaxInFlightRequests)
 	params := map[string]any{
 		"idempotency_key":        "11111111-1111-4111-8111-111111111111",
 		"conversation_id":        "22222222-2222-4222-8222-222222222222",
@@ -260,7 +260,7 @@ func TestNativeAgentStreamRejectsSensitiveKeysBeforeForwardAndReplay(t *testing.
 func TestNativeAgentStreamValidatesImmediatelyAndDetachesDurableTurn(t *testing.T) {
 	agent := &cancelTrackingAgent{started: make(chan struct{})}
 	module := New(Dependencies{Agent: agent}, Config{})
-	connection := newConnection("session", Ticket{Role: "owner", UserID: "@owner:example.test"})
+	connection := newConnection("session", Ticket{Role: "owner", UserID: "@owner:example.test"}, MaxInFlightRequests)
 	invalid := map[string]any{
 		"idempotency_key":        "11111111-1111-4111-8111-111111111111",
 		"conversation_id":        "22222222-2222-4222-8222-222222222222",
@@ -317,7 +317,7 @@ func TestNativeAgentStreamValidatesImmediatelyAndDetachesDurableTurn(t *testing.
 func TestNativeAgentDurableFramesExposeSequenceCursor(t *testing.T) {
 	receivedParams := make(chan map[string]any, 1)
 	module := New(Dependencies{Agent: sequencedDurableAgent{params: receivedParams}}, Config{})
-	connection := newConnection("session", Ticket{Role: "owner", UserID: "@owner:example.test"})
+	connection := newConnection("session", Ticket{Role: "owner", UserID: "@owner:example.test"}, MaxInFlightRequests)
 	module.startNativeAgentStream(context.Background(), connection, map[string]any{
 		"id": "sequenced", "action": "agent.chat", "params": map[string]any{
 			"idempotency_key": "11111111-1111-4111-8111-111111111111",

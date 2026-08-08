@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -321,6 +322,147 @@ func TestRealtimeWSClientRequestCallsOwnerProductActions(t *testing.T) {
 		TopologicalPosition: 17, StreamPosition: 23,
 	}) {
 		t.Fatalf("expected read marker to persist via WS command, got %#v", saved)
+	}
+}
+
+func TestRealtimeWSClientRequestsDoNotHeadOfLineBlock(t *testing.T) {
+	service := NewService(Config{ServerName: "example.com"})
+	longEntered := make(chan struct{})
+	releaseLong := make(chan struct{})
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(releaseLong) })
+	service.actions["test.long"] = func(ctx context.Context, _ map[string]any) (any, *apiError) {
+		close(longEntered)
+		select {
+		case <-releaseLong:
+			return map[string]any{"status": "completed"}, nil
+		case <-ctx.Done():
+			return nil, internalError(ctx.Err())
+		}
+	}
+	service.actions["test.fast"] = func(context.Context, map[string]any) (any, *apiError) {
+		return map[string]any{"status": "completed"}, nil
+	}
+
+	router := newP2PTestRouter(service)
+	server := httptest.NewServer(router)
+	defer server.Close()
+	conn := dialRealtimeWS(t, server.URL, mustCreateRealtimeWSTicket(t, router, service.AccessToken()))
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	writeRealtimeFrame(t, conn, map[string]any{"type": "client.hello"})
+	if got := readRealtimeFrame(t, conn); got["type"] != "server.ready" {
+		t.Fatalf("expected ready, got %#v", got)
+	}
+	writeRealtimeFrame(t, conn, map[string]any{
+		"type": "client.request", "id": "req-long", "action": "test.long", "params": map[string]any{},
+	})
+	select {
+	case <-longEntered:
+	case <-time.After(time.Second):
+		t.Fatal("long request did not reach the ProductCore handler")
+	}
+	writeRealtimeFrame(t, conn, map[string]any{
+		"type": "client.request", "id": "req-long", "action": "test.long", "params": map[string]any{},
+	})
+	duplicate := readRealtimeFrame(t, conn)
+	if duplicate["type"] != "server.error" || duplicate["code"] != "duplicate_request_id" {
+		t.Fatalf("expected uncorrelated duplicate request protocol error, got %#v", duplicate)
+	}
+	writeRealtimeFrame(t, conn, map[string]any{
+		"type": "client.request", "id": "req-fast", "action": "test.fast", "params": map[string]any{},
+	})
+	if fast := readRealtimeResponse(t, conn, "req-fast"); fast["ok"] != true {
+		t.Fatalf("fast request failed while long request was in flight: %#v", fast)
+	}
+
+	releaseOnce.Do(func() { close(releaseLong) })
+	if long := readRealtimeResponse(t, conn, "req-long"); long["ok"] != true {
+		t.Fatalf("long request failed after release: %#v", long)
+	}
+}
+
+func TestRealtimeWSClientRequestBackpressureIsBounded(t *testing.T) {
+	service := NewService(Config{ServerName: "example.com"})
+	entered := make(chan struct{}, realtimewsmodule.MaxInFlightRequests)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(release) })
+	service.actions["test.block"] = func(ctx context.Context, _ map[string]any) (any, *apiError) {
+		entered <- struct{}{}
+		select {
+		case <-release:
+			return map[string]any{"status": "completed"}, nil
+		case <-ctx.Done():
+			return nil, internalError(ctx.Err())
+		}
+	}
+
+	router := newP2PTestRouter(service)
+	server := httptest.NewServer(router)
+	defer server.Close()
+	conn := dialRealtimeWS(t, server.URL, mustCreateRealtimeWSTicket(t, router, service.AccessToken()))
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	writeRealtimeFrame(t, conn, map[string]any{"type": "client.hello"})
+	if got := readRealtimeFrame(t, conn); got["type"] != "server.ready" {
+		t.Fatalf("expected ready, got %#v", got)
+	}
+	for i := 0; i < realtimewsmodule.MaxInFlightRequests; i++ {
+		writeRealtimeFrame(t, conn, map[string]any{
+			"type": "client.request", "id": fmt.Sprintf("req-block-%d", i), "action": "test.block", "params": map[string]any{},
+		})
+	}
+	for i := 0; i < realtimewsmodule.MaxInFlightRequests; i++ {
+		select {
+		case <-entered:
+		case <-time.After(time.Second):
+			t.Fatalf("blocking request %d did not start", i)
+		}
+	}
+	writeRealtimeFrame(t, conn, map[string]any{
+		"type": "client.request", "id": "req-over-limit", "action": "test.block", "params": map[string]any{},
+	})
+	overLimit := readRealtimeResponse(t, conn, "req-over-limit")
+	if overLimit["ok"] != false || int(overLimit["status"].(float64)) != http.StatusTooManyRequests {
+		t.Fatalf("expected bounded request backpressure, got %#v", overLimit)
+	}
+}
+
+func TestRealtimeWSCloseCancelsInFlightClientRequest(t *testing.T) {
+	service := NewService(Config{ServerName: "example.com"})
+	entered := make(chan struct{})
+	cancelled := make(chan struct{})
+	service.actions["test.cancel"] = func(ctx context.Context, _ map[string]any) (any, *apiError) {
+		close(entered)
+		<-ctx.Done()
+		close(cancelled)
+		return nil, internalError(ctx.Err())
+	}
+
+	router := newP2PTestRouter(service)
+	server := httptest.NewServer(router)
+	defer server.Close()
+	conn := dialRealtimeWS(t, server.URL, mustCreateRealtimeWSTicket(t, router, service.AccessToken()))
+	writeRealtimeFrame(t, conn, map[string]any{"type": "client.hello"})
+	if got := readRealtimeFrame(t, conn); got["type"] != "server.ready" {
+		t.Fatalf("expected ready, got %#v", got)
+	}
+	writeRealtimeFrame(t, conn, map[string]any{
+		"type": "client.request", "id": "req-cancel", "action": "test.cancel", "params": map[string]any{},
+	})
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("request did not reach ProductCore handler")
+	}
+	if err := conn.Close(websocket.StatusNormalClosure, ""); err != nil {
+		t.Fatalf("close websocket: %v", err)
+	}
+	select {
+	case <-cancelled:
+	case <-time.After(time.Second):
+		t.Fatal("connection close did not cancel in-flight ProductCore request")
 	}
 }
 

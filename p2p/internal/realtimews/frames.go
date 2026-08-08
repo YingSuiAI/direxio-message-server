@@ -48,7 +48,7 @@ func (m *Module) readFrames(ctx context.Context, conn *websocket.Conn, client *c
 		case "client.ping":
 			m.touchSession(sessionID)
 		case "client.request":
-			client.send(m.HandleRequest(ctx, client.record, frame))
+			m.startRequest(ctx, client, frame)
 		case "client.command":
 			client.send(responseError(
 				actionbase.String(frame["id"]),
@@ -72,6 +72,36 @@ func (m *Module) readFrames(ctx context.Context, conn *websocket.Conn, client *c
 			m.touchSession(sessionID)
 		}
 	}
+}
+
+func (m *Module) startRequest(ctx context.Context, client *connection, frame map[string]any) {
+	id := actionbase.String(frame["id"])
+	action := actionbase.String(frame["action"])
+	if id == "" {
+		_ = client.sendBlocking(ctx, responseError(id, action, http.StatusBadRequest, "id is required"))
+		return
+	}
+	requestCtx, cancel := context.WithCancel(ctx)
+	started, duplicate := client.startRequest(id, cancel)
+	if !started {
+		cancel()
+		if duplicate {
+			// Do not emit a second correlated response for an active ID. The
+			// original request remains authoritative and is never replayed.
+			_ = client.sendBlocking(ctx, map[string]any{
+				"type": "server.error", "code": "duplicate_request_id",
+				"status": http.StatusConflict, "error": "request id is already active",
+			})
+			return
+		}
+		_ = client.sendBlocking(ctx, responseError(id, action, http.StatusTooManyRequests, "too many in-flight requests"))
+		return
+	}
+	go func() {
+		defer cancel()
+		defer client.finishRequest(id)
+		_ = client.sendBlocking(requestCtx, m.HandleRequest(requestCtx, client.record, frame))
+	}()
 }
 
 // HandleRequest validates and invokes a ProductCore client.request frame.

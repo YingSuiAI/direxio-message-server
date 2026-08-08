@@ -18,16 +18,65 @@ type connection struct {
 	sessionID      string
 	record         Ticket
 	outbound       chan map[string]any
+	requestMu      sync.Mutex
+	requestLimit   int
+	requestCancels map[string]context.CancelFunc
 	streamMu       sync.Mutex
 	streamCancels  map[string]context.CancelFunc
 	durableStreams map[string]bool
 }
 
-func newConnection(sessionID string, record Ticket) *connection {
+func newConnection(sessionID string, record Ticket, requestLimit int) *connection {
 	return &connection{
-		sessionID: sessionID,
-		record:    record,
-		outbound:  make(chan map[string]any, 32),
+		sessionID:    sessionID,
+		record:       record,
+		outbound:     make(chan map[string]any, 32),
+		requestLimit: requestLimit,
+	}
+}
+
+func (c *connection) startRequest(id string, cancel context.CancelFunc) (started, duplicate bool) {
+	id = strings.TrimSpace(id)
+	if c == nil || id == "" || cancel == nil {
+		return false, false
+	}
+	c.requestMu.Lock()
+	defer c.requestMu.Unlock()
+	if c.requestCancels == nil {
+		c.requestCancels = map[string]context.CancelFunc{}
+	}
+	if _, exists := c.requestCancels[id]; exists {
+		return false, true
+	}
+	if c.requestLimit <= 0 || len(c.requestCancels) >= c.requestLimit {
+		return false, false
+	}
+	c.requestCancels[id] = cancel
+	return true, false
+}
+
+func (c *connection) finishRequest(id string) {
+	if c == nil {
+		return
+	}
+	c.requestMu.Lock()
+	delete(c.requestCancels, strings.TrimSpace(id))
+	c.requestMu.Unlock()
+}
+
+func (c *connection) cancelAllRequests() {
+	if c == nil {
+		return
+	}
+	c.requestMu.Lock()
+	cancels := make([]context.CancelFunc, 0, len(c.requestCancels))
+	for _, cancel := range c.requestCancels {
+		cancels = append(cancels, cancel)
+	}
+	c.requestCancels = map[string]context.CancelFunc{}
+	c.requestMu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
 	}
 }
 
