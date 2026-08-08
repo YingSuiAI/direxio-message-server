@@ -183,9 +183,9 @@ capability live.
   injects owner, account generation, conversation, and pinned model profile
   authority from the fenced `TurnLease` and commits the schedule with the turn
   receipt.
-- ProductCore `agent.schedules.*` actions remain the owner-authenticated
-  CRUD/runtime surface. Native turns do not expose schedule update, enable,
-  disable, delete, or run-now mutations to the model. The read tools and Core
+- ProductCore `agent.core.schedules.*` actions are the only owner-authenticated
+  CRUD/runtime surface. Native turns do not expose schedule update, pause,
+  resume, delete, or trigger mutations to the model. The read tools and Core
   create intrinsic remain separate from the restricted scheduled-runner
   allowlist and from the Online Agent Matrix room/timeline; the scheduled
   runner cannot call mutation tools.

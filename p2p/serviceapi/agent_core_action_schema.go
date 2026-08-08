@@ -61,19 +61,30 @@ func coreScheduleListSchema() *ActionSchema {
 }
 func coreScheduleUpdateSchema() *ActionSchema {
 	req := coreMutationFields("schedule_id")
+	revision := req["expected_revision"]
+	revision.Required = true
+	req["expected_revision"] = revision
 	req["name"] = ActionFieldSchema{Type: "string"}
 	req["task_template"] = ActionFieldSchema{Type: "object"}
 	req["trigger"] = ActionFieldSchema{Type: "object"}
 	return coreActionSchema(req, coreObjectResponse("schedule"))
 }
 func coreScheduleMutationSchema() *ActionSchema {
-	return coreActionSchema(coreMutationFields("schedule_id"), coreObjectResponse("schedule"))
+	req := coreMutationFields("schedule_id")
+	revision := req["expected_revision"]
+	revision.Required = true
+	req["expected_revision"] = revision
+	return coreActionSchema(req, coreObjectResponse("schedule"))
 }
 func coreScheduleTriggerSchema() *ActionSchema {
 	return coreActionSchema(coreRequired("idempotency_key", "schedule_id"), map[string]ActionFieldSchema{"schedule": {Type: "object"}, "occurrence_id": {Type: "string"}, "task_id": {Type: "string"}})
 }
 func coreScheduleDeleteSchema() *ActionSchema {
-	return coreActionSchema(coreMutationFields("schedule_id"), map[string]ActionFieldSchema{"deleted": {Type: "boolean"}, "schedule_id": {Type: "string"}})
+	req := coreMutationFields("schedule_id")
+	revision := req["expected_revision"]
+	revision.Required = true
+	req["expected_revision"] = revision
+	return coreActionSchema(req, map[string]ActionFieldSchema{"deleted": {Type: "boolean"}, "schedule_id": {Type: "string"}})
 }
 func coreConfirmationGetSchema() *ActionSchema {
 	return coreActionSchema(coreRequired("confirmation_id"), map[string]ActionFieldSchema{"confirmation": {Type: "object", Required: true, Properties: coreConfirmationResponseFields()}})

@@ -97,23 +97,11 @@ func projectActionResult(action string, output map[string]any) map[string]any {
 	case "agent.core.schedules.create", "agent.core.schedules.get", "agent.core.schedules.update", "agent.core.schedules.pause", "agent.core.schedules.resume":
 		return objectWrapper(result, "schedule")
 	case "agent.core.schedules.delete":
-		return scheduleDeleteResult(result, true)
+		return scheduleDeleteResult(result)
 	case "agent.core.schedules.list":
-		return scheduleListResult(result, false)
+		return scheduleListResult(result)
 	case "agent.core.schedules.trigger":
 		return scheduleTriggerResult(result)
-	case "agent.schedules.create", "agent.schedules.get", "agent.schedules.update", "agent.schedules.enable", "agent.schedules.disable":
-		return objectWrapper(result, "schedule")
-	case "agent.schedules.delete":
-		return scheduleDeleteResult(result, false)
-	case "agent.schedules.list":
-		return scheduleListResult(result, true)
-	case "agent.schedule_runs.list":
-		return scheduleRunsListResult(result)
-	case "agent.schedule_runs.get":
-		return objectWrapper(result, "run")
-	case "agent.schedules.run_now":
-		return scheduleRunNowResult(result)
 	case "agent.core.mcp.list", "agent.core.skills.list", "agent.mcp.servers.list", "agent.skills.list":
 		return installationListResult(result)
 	case "agent.core.mcp.get", "agent.core.skills.get":
@@ -1822,28 +1810,15 @@ func taskListResult(value map[string]any) map[string]any {
 	return map[string]any{"tasks": items, "next_page_token": stringValue(valueByKey(value, "next_page_token", "NextPageToken"))}
 }
 
-func scheduleListResult(value map[string]any, legacy bool) map[string]any {
+func scheduleListResult(value map[string]any) map[string]any {
 	result := map[string]any{"schedules": anySlice(valueByKey(value, "schedules", "Schedules"))}
 	cursor := stringValue(valueByKey(value, "next_cursor", "next_page_token", "NextPageToken"))
-	if legacy {
-		result["next_cursor"] = cursor
-	} else {
-		result["next_page_token"] = cursor
-	}
+	result["next_page_token"] = cursor
 	return result
 }
 
-func scheduleDeleteResult(value map[string]any, core bool) map[string]any {
-	if core {
-		return map[string]any{"deleted": true, "schedule_id": stringValue(valueByKey(value, "schedule_id", "id", "ID"))}
-	}
-	result := map[string]any{"deleted": boolValue(valueByKey(value, "deleted", "Deleted"))}
-	if schedule, ok := valueByKey(value, "schedule", "Schedule").(map[string]any); ok {
-		result["schedule"] = schedule
-	} else {
-		result["schedule"] = value
-	}
-	return result
+func scheduleDeleteResult(value map[string]any) map[string]any {
+	return map[string]any{"deleted": true, "schedule_id": stringValue(valueByKey(value, "schedule_id", "id", "ID"))}
 }
 
 func scheduleTriggerResult(value map[string]any) map[string]any {
@@ -1866,17 +1841,6 @@ func scheduleTriggerResult(value map[string]any) map[string]any {
 		}
 	}
 	return result
-}
-
-func scheduleRunNowResult(value map[string]any) map[string]any {
-	if run, ok := valueByKey(value, "run", "occurrence", "Occurrence").(map[string]any); ok {
-		return map[string]any{"run": run}
-	}
-	return map[string]any{"run": value}
-}
-
-func scheduleRunsListResult(value map[string]any) map[string]any {
-	return map[string]any{"runs": anySlice(valueByKey(value, "runs", "Runs")), "next_cursor": stringValue(valueByKey(value, "next_cursor", "next_page_token", "NextPageToken"))}
 }
 
 func installationListResult(value map[string]any) map[string]any {
@@ -2095,7 +2059,7 @@ func applyLegacyInputAliases(action string, input map[string]any) {
 			}
 		}
 	}
-	for _, name := range []string{"agent.chat.conversations.list", "agent.core.model_profiles.list", "agent.model_profiles.list", "agent.knowledge.sources.list", "agent.knowledge.memories.list", "agent.knowledge.search", "agent.core.tasks.list", "agent.core.schedules.list", "agent.schedules.list", "agent.schedule_runs.list"} {
+	for _, name := range []string{"agent.chat.conversations.list", "agent.core.model_profiles.list", "agent.model_profiles.list", "agent.knowledge.sources.list", "agent.knowledge.memories.list", "agent.knowledge.search", "agent.core.tasks.list"} {
 		if action == name {
 			alias("page_size", "limit")
 		}
@@ -2116,32 +2080,5 @@ func applyLegacyInputAliases(action string, input map[string]any) {
 		alias("size", "declared_size")
 	case "agent.knowledge.upload.chunk":
 		alias("offset", "offset_bytes")
-	case "agent.schedules.create", "agent.schedules.update":
-		if _, ok := input["task_template"]; !ok {
-			template := map[string]any{}
-			if value, exists := input["prompt"]; exists {
-				template["goal"] = value
-			}
-			if value, exists := input["model_profile_id"]; exists {
-				template["model_profile_id"] = value
-			}
-			if len(template) > 0 {
-				input["task_template"] = template
-			}
-		}
-	}
-	if action == "agent.schedules.create" || action == "agent.schedules.update" || action == "agent.core.schedules.create" || action == "agent.core.schedules.update" {
-		if spec, ok := input["task_template"]; ok {
-			input["spec"] = spec
-			delete(input, "task_template")
-		}
-		if trigger, ok := input["trigger"].(map[string]any); ok {
-			for _, key := range []string{"run_at", "cron", "timezone"} {
-				if value, exists := trigger[key]; exists {
-					input[key] = value
-				}
-			}
-			delete(input, "trigger")
-		}
 	}
 }

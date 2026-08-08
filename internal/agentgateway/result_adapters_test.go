@@ -141,8 +141,8 @@ func TestPublicResultAdaptersPreserveLegacyEnvelopes(t *testing.T) {
 				t.Fatalf("task get = %#v", got)
 			}
 		}},
-		{"schedule list", "agent.schedules.list", map[string]any{"schedules": []any{}, "next_page_token": "p"}, func(t *testing.T, got map[string]any) {
-			if got["next_cursor"] != "p" {
+		{"schedule list", "agent.core.schedules.list", map[string]any{"schedules": []any{}, "next_page_token": "p"}, func(t *testing.T, got map[string]any) {
+			if got["next_page_token"] != "p" {
 				t.Fatalf("schedule list = %#v", got)
 			}
 		}},
@@ -614,13 +614,5 @@ func TestLegacyInputAliasesAreCanonicalizedBeforeAgentDigest(t *testing.T) {
 	applyLegacyInputAliases("agent.chat.conversations.get", input)
 	if input["limit"] != float64(20) || input["page_token"] != "cursor" {
 		t.Fatalf("conversation aliases = %#v", input)
-	}
-	input = map[string]any{"name": "daily", "prompt": "summarize", "model_profile_id": "profile", "trigger": map[string]any{"cron": "* * * * *"}}
-	applyLegacyInputAliases("agent.schedules.create", input)
-	if _, ok := input["spec"]; !ok {
-		t.Fatalf("schedule spec alias missing: %#v", input)
-	}
-	if _, ok := input["trigger"]; ok || input["cron"] != "* * * * *" {
-		t.Fatalf("schedule trigger projection = %#v", input)
 	}
 }

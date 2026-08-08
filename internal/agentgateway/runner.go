@@ -787,16 +787,6 @@ var actionBindings = map[string]actionBinding{
 	"agent.core.schedules.resume":  {"agent.schedules.v1", "resume_schedule"},
 	"agent.core.schedules.trigger": {"agent.schedules.v1", "trigger_schedule"},
 	"agent.core.schedules.delete":  {"agent.schedules.v1", "delete_schedule"},
-	"agent.schedules.create":       {"agent.schedules.v1", "create_schedule"},
-	"agent.schedules.get":          {"agent.schedules.v1", "get_schedule"},
-	"agent.schedules.list":         {"agent.schedules.v1", "list_schedules"},
-	"agent.schedules.update":       {"agent.schedules.v1", "update_schedule"},
-	"agent.schedules.enable":       {"agent.schedules.v1", "resume_schedule"},
-	"agent.schedules.disable":      {"agent.schedules.v1", "pause_schedule"},
-	"agent.schedules.delete":       {"agent.schedules.v1", "delete_schedule"},
-	"agent.schedules.run_now":      {"agent.schedules.v1", "trigger_schedule"},
-	"agent.schedule_runs.list":     {"agent.schedules.v1", "list_runs"},
-	"agent.schedule_runs.get":      {"agent.schedules.v1", "get_run"},
 
 	// Confirmation and cloud/workload operations are distinct typed domains;
 	// the message-server only forwards them and never opens local stores.

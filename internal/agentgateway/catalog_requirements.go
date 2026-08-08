@@ -436,76 +436,36 @@ var expectedCatalogSchemaDigests = map[string]catalogSchemaDigest{
 		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
 	},
 	"agent.core.schedules.create": {
-		inputHex:  "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
-		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+		inputHex:  "18091849c7221af30b25417c427eb76a024030347c7f4cae2e583941f03dd7db",
+		resultHex: "b83f7386064825b5fea88825f74fa523e6183ef1e4a6b6798e7fe2ba106d5916",
 	},
 	"agent.core.schedules.get": {
-		inputHex:  "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
-		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+		inputHex:  "20b67d6d5b3e896a7693aa2a7ea9612e60fea362875bc58b8e1289b165dec142",
+		resultHex: "b83f7386064825b5fea88825f74fa523e6183ef1e4a6b6798e7fe2ba106d5916",
 	},
 	"agent.core.schedules.list": {
-		inputHex:  "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
-		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+		inputHex:  "bb2f93e43dd9903fb383aa36e6948959af0585995f50debfd63ca793bf9c92b6",
+		resultHex: "ac874bcbc2e89c6d9ffa64e0bcfb0eb1d2280417b10cfef5b318fb3f39e55b56",
 	},
 	"agent.core.schedules.update": {
-		inputHex:  "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
-		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+		inputHex:  "0770d5814e399ca496440fb85d1a53e3544bdd8eac7d80b1f0b63c0d0b151bad",
+		resultHex: "b83f7386064825b5fea88825f74fa523e6183ef1e4a6b6798e7fe2ba106d5916",
 	},
 	"agent.core.schedules.pause": {
-		inputHex:  "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
-		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+		inputHex:  "7fc2bc9cfa33d71ae2d24e23afc70f94078edfbb6199a1db5f66994ab9d1c8cf",
+		resultHex: "b83f7386064825b5fea88825f74fa523e6183ef1e4a6b6798e7fe2ba106d5916",
 	},
 	"agent.core.schedules.resume": {
-		inputHex:  "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
-		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+		inputHex:  "7fc2bc9cfa33d71ae2d24e23afc70f94078edfbb6199a1db5f66994ab9d1c8cf",
+		resultHex: "b83f7386064825b5fea88825f74fa523e6183ef1e4a6b6798e7fe2ba106d5916",
 	},
 	"agent.core.schedules.trigger": {
-		inputHex:  "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
-		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+		inputHex:  "2e61f36e3bf5b2e76a20783a6225bbc42f9a04a2d55873efc8e3ccbd3f00d2ec",
+		resultHex: "fdce1e4467f447010e3598d7ea8697ae1ae6abff58b201eba0e01d49e0849788",
 	},
 	"agent.core.schedules.delete": {
-		inputHex:  "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
-		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-	},
-	"agent.schedules.create": {
-		inputHex:  "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
-		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-	},
-	"agent.schedules.get": {
-		inputHex:  "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
-		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-	},
-	"agent.schedules.list": {
-		inputHex:  "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
-		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-	},
-	"agent.schedules.update": {
-		inputHex:  "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
-		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-	},
-	"agent.schedules.enable": {
-		inputHex:  "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
-		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-	},
-	"agent.schedules.disable": {
-		inputHex:  "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
-		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-	},
-	"agent.schedules.delete": {
-		inputHex:  "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
-		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-	},
-	"agent.schedules.run_now": {
-		inputHex:  "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
-		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-	},
-	"agent.schedule_runs.list": {
-		inputHex:  "328f36eb6f59e0290983875ec950b953354b4187b22f1527a44487adabbee48f",
-		resultHex: "18cbcd8c46e736dbbc68921593ffa1d3ca1453bc4ee124b791d50ccb4855d62f",
-	},
-	"agent.schedule_runs.get": {
-		inputHex:  "9f0f291518da545a8f68dc295aa0f3d31ad1b8477bf4e8fc1b4dad2010e0c1c6",
-		resultHex: "c7a5b787fd799b6087775da09e71d7979109fb368fc1888d16a4ec6999efc379",
+		inputHex:  "7fc2bc9cfa33d71ae2d24e23afc70f94078edfbb6199a1db5f66994ab9d1c8cf",
+		resultHex: "87be66ec1c340a83fc6036b5e7c25ccbbd7e379f9725f76a980f57af609ad5cf",
 	},
 	"agent.core.confirmations.get": {
 		inputHex:  "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
