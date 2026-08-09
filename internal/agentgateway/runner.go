@@ -685,6 +685,7 @@ var actionBindings = map[string]actionBinding{
 	"agent.chat.conversations.rename":  {"agent.chat.v1", "rename_conversation"},
 	"agent.chat.conversations.delete":  {"agent.chat.v1", "delete_conversation"},
 	"agent.chat.turn.stop":             {"agent.chat.v1", "stop_turn"},
+	"agent.chat.turn.steer":            {"agent.chat.v1", "steer_turn"},
 	"agent.chat.turns.list":            {"agent.chat.v1", "list_turns"},
 	"agent.context.compress":           {"agent.chat.v1", "compress_context"},
 	"agent.summarize":                  {"agent.chat.v1", "summarize"},

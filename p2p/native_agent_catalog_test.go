@@ -139,6 +139,7 @@ func TestNativeAgentCatalogRequirementsKeepOptionalCapabilitiesExplicit(t *testi
 	requirements := nativeAgentCatalogRequirements(nil)
 	requiredActions := map[string]bool{
 		"agent.chat.turn.stop":            false,
+		"agent.chat.turn.steer":           false,
 		"agent.chat.turns.list":           false,
 		"agent.models.list":               false,
 		"agent.web_search.config.get":     false,

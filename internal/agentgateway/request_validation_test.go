@@ -413,6 +413,12 @@ func TestTurnControlRequestsRequireCanonicalClosedShapes(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("canonical stop rejected: %v", err)
 	}
+	if err := ValidateActionRequest("agent.chat.turn.steer", map[string]any{
+		"idempotency_key": mutationID, "turn_id": turnID,
+		"expected_revision": json.Number("2"), "instruction": "answer the newest constraint first",
+	}); err != nil {
+		t.Fatalf("canonical steer rejected: %v", err)
+	}
 	if err := ValidateActionRequest("agent.chat.turns.list", map[string]any{"conversation_id": conversationID, "page_token": "", "limit": json.Number("20")}); err != nil {
 		t.Fatalf("canonical list rejected: %v", err)
 	}
@@ -428,6 +434,9 @@ func TestTurnControlRequestsRequireCanonicalClosedShapes(t *testing.T) {
 		{"agent.chat.turn.stop", map[string]any{"idempotency_key": mutationID, "turn_id": "00000000-0000-0000-0000-000000000000", "expected_revision": 2}},
 		{"agent.chat.turn.stop", map[string]any{"idempotency_key": mutationID, "turn_id": turnID, "expected_revision": 0}},
 		{"agent.chat.turn.stop", map[string]any{"idempotency_key": mutationID, "turn_id": turnID, "expected_revision": 2, "conversation_id": conversationID}},
+		{"agent.chat.turn.steer", map[string]any{"idempotency_key": mutationID, "turn_id": turnID, "expected_revision": 2}},
+		{"agent.chat.turn.steer", map[string]any{"idempotency_key": mutationID, "turn_id": turnID, "expected_revision": 2, "instruction": "   "}},
+		{"agent.chat.turn.steer", map[string]any{"idempotency_key": mutationID, "turn_id": turnID, "expected_revision": 2, "instruction": "guide", "message": "alias"}},
 		{"agent.chat.turns.list", map[string]any{"conversation_id": "conversation-1"}},
 		{"agent.chat.turns.list", map[string]any{"conversation_id": conversationID, "next_cursor": "legacy"}},
 		{"agent.chat.turns.list", map[string]any{"conversation_id": conversationID, "limit": 0}},

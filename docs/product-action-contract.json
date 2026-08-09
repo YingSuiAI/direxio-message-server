@@ -7168,6 +7168,116 @@
       }
     },
     {
+      "name": "agent.chat.turn.steer",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "expected_revision": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "positive_integer"
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid;steer_mutation_identity"
+            }
+          },
+          "instruction": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "utf8_bytes_1_to_1048576;same_turn_guidance"
+            }
+          },
+          "turn_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid;agent_authored_internal_turn_identity"
+            }
+          }
+        },
+        "response": {
+          "conversation_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid"
+            }
+          },
+          "created_at": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "rfc3339_nano"
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid;original_start_idempotency_key"
+            }
+          },
+          "last_sequence": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "nonnegative_integer"
+            }
+          },
+          "revision": {
+            "type": "integer",
+            "required": true,
+            "presence": {
+              "present": "positive_integer"
+            }
+          },
+          "state": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "one_of:accepted|running|waiting_confirmation|completed|canceled|failed"
+            }
+          },
+          "steer_idempotency_key": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid;steer_mutation_receipt"
+            }
+          },
+          "terminal_code": {
+            "type": "string",
+            "required": true
+          },
+          "terminal_summary": {
+            "type": "string",
+            "required": true
+          },
+          "turn_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid;agent_authored_internal_turn_identity"
+            }
+          },
+          "updated_at": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "rfc3339_nano_not_before_created_at"
+            }
+          }
+        }
+      }
+    },
+    {
       "name": "agent.chat.turns.list",
       "auth": "owner",
       "transport": "http_and_ws_request",

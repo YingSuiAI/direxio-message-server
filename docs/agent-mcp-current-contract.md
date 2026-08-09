@@ -108,6 +108,14 @@ capability live.
   internal `turn_id`, and `expected_revision`; it returns the same exact
   ten-field authoritative metadata. It never calls the generic capability
   `CancelOperation` RPC.
+- Generating Native turns accept same-turn guidance only through
+  `agent.chat.turn.steer`, bound to `agent.chat.v1/steer_turn`. The mutation
+  sends exactly a new UUID `idempotency_key`, the authoritative `turn_id`, its
+  positive `expected_revision`, and one bounded non-empty `instruction`.
+  Agent Core persists the instruction, invalidates the current provider lease,
+  and regenerates the same turn immediately. The result retains the original
+  start idempotency identity and adds the exact `steer_idempotency_key`
+  receipt. Message Server never creates, queues, or starts a successor turn.
 - Native Agent deployment planning treats an empty target inventory as a signal
   to compare and reserve a new AWS target, not as a terminal error. The bounded
   target-reservation tool creates only a logical revision-1 reservation; EC2

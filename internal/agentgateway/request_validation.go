@@ -102,6 +102,8 @@ func ValidateActionRequest(action string, params map[string]any) error {
 		return validateModelProfileSyncRequest(action, params)
 	case "agent.chat.turn.stop":
 		return validateTurnStopRequest(action, params)
+	case "agent.chat.turn.steer":
+		return validateTurnSteerRequest(action, params)
 	case "agent.chat.turns.list":
 		return validateTurnsListRequest(action, params)
 	case "agent.execution.v2.artifacts.download":
@@ -372,6 +374,28 @@ func validateTurnStopRequest(action string, params map[string]any) error {
 	}
 	if !positiveInteger(params["expected_revision"]) {
 		return invalidActionRequest(action, "expected_revision", "must be a positive integer")
+	}
+	return nil
+}
+
+func validateTurnSteerRequest(action string, params map[string]any) error {
+	if err := rejectUnknownActionFields(action, params, "idempotency_key", "turn_id", "expected_revision", "instruction"); err != nil {
+		return err
+	}
+	if params == nil {
+		return invalidActionRequest(action, "idempotency_key", "is required")
+	}
+	for _, field := range []string{"idempotency_key", "turn_id"} {
+		if !canonicalActionUUID(params[field]) {
+			return invalidActionRequest(action, field, "must be a canonical UUID")
+		}
+	}
+	if !positiveInteger(params["expected_revision"]) {
+		return invalidActionRequest(action, "expected_revision", "must be a positive integer")
+	}
+	instruction, ok := params["instruction"].(string)
+	if !ok || strings.TrimSpace(instruction) == "" || len(instruction) > maxChatMessageBytes || !utf8.ValidString(instruction) {
+		return invalidActionRequest(action, "instruction", "must be non-empty UTF-8 of at most 1048576 bytes")
 	}
 	return nil
 }

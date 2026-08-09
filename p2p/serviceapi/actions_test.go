@@ -399,6 +399,18 @@ func TestNativeAgentTurnControlPublishesDistinctStartAndInternalIdentities(t *te
 			t.Errorf("turn stop request field %s must be required", field)
 		}
 	}
+	steer, ok := ActionSpecFor("agent.chat.turn.steer")
+	if !ok || steer.Schema == nil || len(steer.Schema.Request) != 4 || len(steer.Schema.Response) != 11 {
+		t.Fatalf("agent.chat.turn.steer schema = %#v", steer.Schema)
+	}
+	for _, field := range []string{"idempotency_key", "turn_id", "expected_revision", "instruction"} {
+		if !steer.Schema.Request[field].Required {
+			t.Errorf("turn steer request field %s must be required", field)
+		}
+	}
+	if !steer.Schema.Response["steer_idempotency_key"].Required {
+		t.Fatal("turn steer response must publish its mutation receipt")
+	}
 	for _, action := range []string{"agent.chat.turn.stop", "agent.chat.turns.list"} {
 		spec, _ := ActionSpecFor(action)
 		fields := spec.Schema.Response

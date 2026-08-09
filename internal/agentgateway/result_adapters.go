@@ -211,6 +211,8 @@ func validateActionResult(action string, request, output map[string]any, authori
 		return validateToolModelDefaultResult(output)
 	case "agent.chat.turn.stop":
 		return validateTurnStopResult(request, output)
+	case "agent.chat.turn.steer":
+		return validateTurnSteerResult(request, output)
 	case "agent.chat.turns.list":
 		return validateTurnsListResult(output)
 	case "agent.knowledge.status":
@@ -681,6 +683,25 @@ func validateTurnStopResult(request, value map[string]any) error {
 	}
 	if request == nil || value["turn_id"] != request["turn_id"] {
 		return fmt.Errorf("%w: stopped turn identity does not match the request", ErrInvalidActionResult)
+	}
+	return nil
+}
+
+func validateTurnSteerResult(request, value map[string]any) error {
+	if value == nil || len(value) != 11 {
+		return fmt.Errorf("%w: steered turn metadata is malformed", ErrInvalidActionResult)
+	}
+	turn := cloneParams(value)
+	delete(turn, "steer_idempotency_key")
+	if !validCanonicalTurn(turn) {
+		return fmt.Errorf("%w: steered turn metadata is malformed", ErrInvalidActionResult)
+	}
+	if request == nil || value["turn_id"] != request["turn_id"] || value["steer_idempotency_key"] != request["idempotency_key"] || !canonicalTurnUUID(value["steer_idempotency_key"]) {
+		return fmt.Errorf("%w: steer receipt does not match the request", ErrInvalidActionResult)
+	}
+	state, _ := value["state"].(string)
+	if state != "accepted" && state != "running" {
+		return fmt.Errorf("%w: steered turn is not active", ErrInvalidActionResult)
 	}
 	return nil
 }

@@ -283,6 +283,28 @@ func TestTurnStopUsesTypedMutationWithExactConcurrencyFields(t *testing.T) {
 	}
 }
 
+func TestTurnSteerUsesTypedMutationWithExactSameTurnFields(t *testing.T) {
+	runner := &requestValidationRunner{}
+	module := New(Config{Runner: runner})
+	params := map[string]any{
+		"idempotency_key":   "11111111-1111-4111-8111-111111111111",
+		"turn_id":           "22222222-2222-4222-8222-222222222222",
+		"expected_revision": int64(3),
+		"instruction":       "use the added constraint immediately",
+	}
+	if _, actionErr := module.Handlers()["agent.chat.turn.steer"](context.Background(), params); actionErr != nil {
+		t.Fatalf("typed turn steer failed: %v", actionErr)
+	}
+	if runner.invokeCalls != 1 || runner.lastAction != "agent.chat.turn.steer" || len(runner.lastParams) != 4 {
+		t.Fatalf("typed turn steer dispatch = calls %d action %q params %#v", runner.invokeCalls, runner.lastAction, runner.lastParams)
+	}
+	for field, want := range params {
+		if runner.lastParams[field] != want {
+			t.Errorf("typed turn steer %s = %#v, want %#v", field, runner.lastParams[field], want)
+		}
+	}
+}
+
 func TestArtifactDownloadUsesStrictExternalQueryFields(t *testing.T) {
 	runner := &requestValidationRunner{}
 	module := New(Config{Runner: runner})

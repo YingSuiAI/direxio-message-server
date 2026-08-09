@@ -165,6 +165,20 @@ func nativeAgentTurnStopSchema() *ActionSchema {
 	}
 }
 
+func nativeAgentTurnSteerSchema() *ActionSchema {
+	response := nativeAgentTurnMetadataSchema()
+	response["steer_idempotency_key"] = ActionFieldSchema{Type: "string", Required: true, Presence: &ActionPresenceSchema{Present: "canonical_uuid;steer_mutation_receipt"}}
+	return &ActionSchema{
+		Request: map[string]ActionFieldSchema{
+			"idempotency_key":   {Type: "string", Required: true, Presence: &ActionPresenceSchema{Present: "canonical_uuid;steer_mutation_identity"}},
+			"turn_id":           {Type: "string", Required: true, Presence: &ActionPresenceSchema{Present: "canonical_uuid;agent_authored_internal_turn_identity"}},
+			"expected_revision": {Type: "integer", Required: true, Presence: &ActionPresenceSchema{Present: "positive_integer"}},
+			"instruction":       {Type: "string", Required: true, Presence: &ActionPresenceSchema{Present: "utf8_bytes_1_to_1048576;same_turn_guidance"}},
+		},
+		Response: response,
+	}
+}
+
 func nativeAgentTurnsListSchema() *ActionSchema {
 	turn := &ActionFieldSchema{Type: "object", Properties: nativeAgentTurnMetadataSchema()}
 	return &ActionSchema{

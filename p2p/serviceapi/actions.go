@@ -123,6 +123,7 @@ var actionSpecs = []ActionSpec{
 	{Name: "agent.image_tools.extract_text", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: imageToolExecuteSchema(false)},
 	{Name: "agent.image_tools.translate_text", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: imageToolExecuteSchema(true)},
 	{Name: "agent.chat.turn.stop", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: nativeAgentTurnStopSchema()},
+	{Name: "agent.chat.turn.steer", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: nativeAgentTurnSteerSchema()},
 	{Name: "agent.chat.turns.list", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: nativeAgentTurnsListSchema()},
 	{Name: "agent.voice.session.create", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: voiceSessionCreateSchema()},
 	{Name: "agent.voice.session.start", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: voiceSessionMutationSchema()},

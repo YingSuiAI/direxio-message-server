@@ -22,6 +22,9 @@ func TestActionBindingIsExplicit(t *testing.T) {
 	if binding, ok := actionBindingFor("agent.chat.turn.stop"); !ok || binding.capabilityID != "agent.chat.v1" || binding.operation != "stop_turn" {
 		t.Fatalf("turn stop binding = %#v, want agent.chat.v1/stop_turn", binding)
 	}
+	if binding, ok := actionBindingFor("agent.chat.turn.steer"); !ok || binding.capabilityID != "agent.chat.v1" || binding.operation != "steer_turn" {
+		t.Fatalf("turn steer binding = %#v, want agent.chat.v1/steer_turn", binding)
+	}
 	if _, ok := actionBindingFor("agent.chat.conversations.list.stream"); ok {
 		t.Fatal("unknown stream suffix must not use heuristic fallback")
 	}
@@ -190,6 +193,26 @@ func TestTransformTurnStopRequestPassesExactTypedMutation(t *testing.T) {
 	want := []byte(`{"expected_revision":3,"idempotency_key":"11111111-1111-4111-8111-111111111111","turn_id":"22222222-2222-4222-8222-222222222222"}`)
 	if !bytes.Equal(raw, want) {
 		t.Fatalf("typed turn stop input = %s, want %s", raw, want)
+	}
+}
+
+func TestTransformTurnSteerRequestPassesExactTypedMutation(t *testing.T) {
+	binding, ok := actionBindingFor("agent.chat.turn.steer")
+	if !ok {
+		t.Fatal("agent.chat.turn.steer binding is missing")
+	}
+	raw, err := transformCapabilityRequest("agent.chat.turn.steer", "transport-operation", map[string]any{
+		"idempotency_key":   "11111111-1111-4111-8111-111111111111",
+		"turn_id":           "22222222-2222-4222-8222-222222222222",
+		"expected_revision": int64(3),
+		"instruction":       "focus on the latest guidance",
+	}, binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []byte(`{"expected_revision":3,"idempotency_key":"11111111-1111-4111-8111-111111111111","instruction":"focus on the latest guidance","turn_id":"22222222-2222-4222-8222-222222222222"}`)
+	if !bytes.Equal(raw, want) {
+		t.Fatalf("typed turn steer input = %s, want %s", raw, want)
 	}
 }
 

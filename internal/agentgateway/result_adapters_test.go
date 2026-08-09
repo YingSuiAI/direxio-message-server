@@ -519,6 +519,44 @@ func TestTurnStopResultPublishesExactAuthoritativeMetadata(t *testing.T) {
 	}
 }
 
+func TestTurnSteerResultPublishesAuthoritativeTurnAndMutationReceipt(t *testing.T) {
+	const turnID = "11111111-1111-4111-8111-111111111111"
+	const startID = "22222222-2222-4222-8222-222222222222"
+	const steerID = "44444444-4444-4444-8444-444444444444"
+	result := map[string]any{
+		"turn_id": turnID, "idempotency_key": startID,
+		"steer_idempotency_key": steerID,
+		"conversation_id":       "33333333-3333-4333-8333-333333333333",
+		"state":                 "accepted", "revision": float64(3), "last_sequence": float64(5),
+		"terminal_code": "", "terminal_summary": "",
+		"created_at": "2026-08-06T01:02:03Z", "updated_at": "2026-08-06T01:02:04Z",
+	}
+	request := map[string]any{
+		"idempotency_key": steerID, "turn_id": turnID,
+		"expected_revision": float64(2), "instruction": "guide now",
+	}
+	got, err := adaptActionResultForRequest("agent.chat.turn.steer", request, result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, result) {
+		t.Fatalf("steer result = %#v, want %#v", got, result)
+	}
+	for name, mutate := range map[string]func(map[string]any){
+		"wrong receipt": func(value map[string]any) { value["steer_idempotency_key"] = "55555555-5555-4555-8555-555555555555" },
+		"terminal":      func(value map[string]any) { value["state"] = "completed" },
+		"leak":          func(value map[string]any) { value["instruction"] = "must not cross" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := cloneParams(result)
+			mutate(candidate)
+			if _, err := adaptActionResultForRequest("agent.chat.turn.steer", request, candidate); !errors.Is(err, ErrInvalidActionResult) {
+				t.Fatalf("error=%v, want ErrInvalidActionResult", err)
+			}
+		})
+	}
+}
+
 func TestModelCatalogResultAdapterRejectsEntriesThatViolatePublishedSchema(t *testing.T) {
 	_, err := adaptActionResult("agent.models.list", map[string]any{
 		"models": []any{
