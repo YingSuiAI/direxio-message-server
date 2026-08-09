@@ -84,6 +84,26 @@ func TestDedicatedChatRunnerDoesNotTakeOverOtherRuntimeActions(t *testing.T) {
 	}
 }
 
+func TestMaxConversationRevisionUsesEveryAuthority(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name                 string
+		client, local, agent int64
+		want                 int64
+	}{
+		{name: "client", client: 31, local: 24, agent: 29, want: 31},
+		{name: "local", client: 23, local: 32, agent: 29, want: 32},
+		{name: "agent", client: 23, local: 24, agent: 33, want: 33},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if got := maxConversationRevision(test.client, test.local, test.agent); got != test.want {
+				t.Fatalf("max conversation revision=%d, want %d", got, test.want)
+			}
+		})
+	}
+}
+
 func TestRunnerErrorCodeReachesProductActionBoundary(t *testing.T) {
 	module := New(Config{ChatRunner: &failingRunner{
 		err: testCodedRunnerError{

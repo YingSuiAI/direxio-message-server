@@ -79,7 +79,14 @@ func TestNativeAgentDurableTurnDeduplicatesAndReplays(t *testing.T) {
 
 func TestNativeAgentDurableTurnRepairsStaleClientConversationRevision(t *testing.T) {
 	runner := &durableTurnRunner{params: make(chan map[string]any, 1)}
-	service := NewService(Config{ServerName: "example.com", NativeAgentRunner: runner})
+	authority := &durableConversationStateReader{
+		revision: 29,
+		requests: make(chan string, 1),
+	}
+	service := NewService(Config{
+		ServerName: "example.com", NativeAgentRunner: runner,
+		AgentConversationStateReader: authority,
+	})
 	previousDigest, err := agentturns.RequestDigest("agent.chat.stream", map[string]any{"prompt": "previous"})
 	if err != nil {
 		t.Fatal(err)
@@ -118,8 +125,11 @@ func TestNativeAgentDurableTurnRepairsStaleClientConversationRevision(t *testing
 	_ = readRealtimeFrame(t, conn)
 	_ = readRealtimeFrame(t, conn)
 	runtimeParams := <-runner.params
-	if runtimeParams["expected_conversation_revision"] != int64(24) {
-		t.Fatalf("runtime revision = %#v, want 24", runtimeParams["expected_conversation_revision"])
+	if runtimeParams["expected_conversation_revision"] != int64(29) {
+		t.Fatalf("runtime revision = %#v, want 29", runtimeParams["expected_conversation_revision"])
+	}
+	if conversationID := <-authority.requests; conversationID != "conversation-revision" {
+		t.Fatalf("authoritative conversation request=%q", conversationID)
 	}
 }
 
@@ -293,6 +303,19 @@ type durableTurnRunner struct {
 	params        chan map[string]any
 	waitForCancel bool
 	startOnce     sync.Once
+}
+
+type durableConversationStateReader struct {
+	revision int64
+	requests chan string
+}
+
+func (reader *durableConversationStateReader) GetConversationState(
+	_ context.Context,
+	conversationID string,
+) (int64, bool, error) {
+	reader.requests <- conversationID
+	return reader.revision, true, nil
 }
 
 type disconnectTurnRunner struct {

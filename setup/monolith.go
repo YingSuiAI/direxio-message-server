@@ -144,6 +144,26 @@ func (m *Monolith) AddAllPublicRoutes(
 		}
 		logrus.Fatal("P2P Agent gRPC completion backend is unavailable")
 	}
+	agentCompletionSynthesizer, err := p2pAgentCompletionSynthesizer(
+		agentBackend,
+		agentChatRunner,
+	)
+	if err != nil {
+		if agentChatRunner != nil {
+			_ = agentChatRunner.Close()
+		}
+		logrus.Fatal("P2P Agent gRPC completion synthesis backend is unavailable")
+	}
+	agentConversationStateReader, err := p2pAgentConversationStateReader(
+		agentBackend,
+		agentChatRunner,
+	)
+	if err != nil {
+		if agentChatRunner != nil {
+			_ = agentChatRunner.Close()
+		}
+		logrus.Fatal("P2P Agent gRPC conversation state backend is unavailable")
+	}
 	if agentChatRunner != nil {
 		startAgentGRPCRunnerLifecycle(processCtx, agentChatRunner)
 	}
@@ -158,6 +178,8 @@ func (m *Monolith) AddAllPublicRoutes(
 		AgentRuntimeProfileClient:       agentRuntimeProfileClient,
 		AgentSearchProfileClient:        agentSearchProfileClient,
 		AgentCompletionSource:           agentCompletionSource,
+		AgentCompletionSynthesizer:      agentCompletionSynthesizer,
+		AgentConversationStateReader:    agentConversationStateReader,
 		PushRules:                       m.UserAPI,
 		ReleaseController:               releasecontrol.NewUnixController(releasecontrol.UnixControllerConfig{}),
 	}
@@ -372,6 +394,38 @@ func p2pAgentCompletionSource(
 		)
 	}
 	return source, nil
+}
+
+func p2pAgentCompletionSynthesizer(
+	config p2pAgentGRPCBackendConfig,
+	runner AgentGRPCRunner,
+) (p2p.AgentCompletionSynthesizer, error) {
+	if !config.Enabled {
+		return nil, nil
+	}
+	synthesizer, ok := runner.(p2p.AgentCompletionSynthesizer)
+	if !ok || synthesizer == nil {
+		return nil, errors.New(
+			"enabled Agent gRPC backend does not support completion synthesis",
+		)
+	}
+	return synthesizer, nil
+}
+
+func p2pAgentConversationStateReader(
+	config p2pAgentGRPCBackendConfig,
+	runner AgentGRPCRunner,
+) (p2p.AgentConversationStateReader, error) {
+	if !config.Enabled {
+		return nil, nil
+	}
+	reader, ok := runner.(p2p.AgentConversationStateReader)
+	if !ok || reader == nil {
+		return nil, errors.New(
+			"enabled Agent gRPC backend does not support conversation state",
+		)
+	}
+	return reader, nil
 }
 
 func startAgentCompletionRelayLifecycle(

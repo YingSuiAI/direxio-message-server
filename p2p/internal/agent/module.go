@@ -23,33 +23,39 @@ type Runner interface {
 	Stream(context.Context, string, map[string]any, func(nativeagent.Event) error) error
 }
 
+type ConversationStateReader interface {
+	GetConversationState(context.Context, string) (int64, bool, error)
+}
+
 // Config contains the runtime dependencies owned outside the Agent module.
 type Config struct {
 	Runner Runner
 	// ChatRunner optionally moves only Chat/StreamChat to an isolated Agent
 	// service while the remaining runtime/config/Skill/Knowledge actions stay
 	// on Runner until their public contracts are migrated.
-	ChatRunner      Runner
-	RuntimeProfiles RuntimeProfileClient
-	SearchProfiles  SearchProfileClient
-	DataDir         string
-	Store           nativeagent.ConfigStore
-	MCP             *dirextalkmcp.Service
-	Account         AccountPort
-	Turns           agentturns.Store
-	OwnerID         func() string
+	ChatRunner        Runner
+	RuntimeProfiles   RuntimeProfileClient
+	SearchProfiles    SearchProfileClient
+	ConversationState ConversationStateReader
+	DataDir           string
+	Store             nativeagent.ConfigStore
+	MCP               *dirextalkmcp.Service
+	Account           AccountPort
+	Turns             agentturns.Store
+	OwnerID           func() string
 }
 
 // Module owns runtime-backed ProductCore actions and streaming invocation.
 type Module struct {
-	runner          Runner
-	chatRunner      Runner
-	runtimeProfiles RuntimeProfileClient
-	searchProfiles  SearchProfileClient
-	account         AccountPort
-	turns           *agentturns.Coordinator
-	turnErr         error
-	ownerID         func() string
+	runner            Runner
+	chatRunner        Runner
+	runtimeProfiles   RuntimeProfileClient
+	searchProfiles    SearchProfileClient
+	conversationState ConversationStateReader
+	account           AccountPort
+	turns             *agentturns.Coordinator
+	turnErr           error
+	ownerID           func() string
 }
 
 func New(cfg Config) *Module {
@@ -67,7 +73,8 @@ func New(cfg Config) *Module {
 	}
 	turns, turnErr := agentturns.NewCoordinator(context.Background(), cfg.Turns)
 	return &Module{
-		runner: runner, chatRunner: chatRunner, runtimeProfiles: cfg.RuntimeProfiles, searchProfiles: cfg.SearchProfiles, account: cfg.Account,
+		runner: runner, chatRunner: chatRunner, runtimeProfiles: cfg.RuntimeProfiles, searchProfiles: cfg.SearchProfiles,
+		conversationState: cfg.ConversationState, account: cfg.Account,
 		turns: turns, turnErr: turnErr, ownerID: cfg.OwnerID,
 	}
 }
@@ -129,18 +136,48 @@ func (m *Module) DurableStream(ctx context.Context, ownerID, action string, para
 	delete(runParams, "turn_id")
 	delete(runParams, "after_seq")
 	return m.turns.Stream(ctx, request, func(runCtx context.Context, runtimeEmit func(agentturns.RuntimeEvent) error) error {
+		authoritativeRevision := int64(0)
+		if m.conversationState != nil {
+			revision, found, stateErr := m.conversationState.GetConversationState(
+				runCtx,
+				request.ConversationID,
+			)
+			if stateErr != nil {
+				return fmt.Errorf("read authoritative agent conversation revision: %w", stateErr)
+			}
+			if found {
+				authoritativeRevision = revision
+			}
+		}
 		latestRevision, revisionErr := m.turns.LatestConversationRevision(runCtx, request.OwnerID, request.ConversationID)
 		if revisionErr != nil {
 			return fmt.Errorf("reconcile agent conversation revision: %w", revisionErr)
 		}
 		requestedRevision := actionbase.Int64(runParams["expected_conversation_revision"])
-		if requestedRevision >= 0 && latestRevision > requestedRevision {
-			runParams["expected_conversation_revision"] = latestRevision
+		if requestedRevision >= 0 {
+			reconciledRevision := maxConversationRevision(
+				requestedRevision,
+				latestRevision,
+				authoritativeRevision,
+			)
+			if reconciledRevision != requestedRevision {
+				runParams["expected_conversation_revision"] = reconciledRevision
+			}
 		}
 		return m.chatRunner.Stream(runCtx, request.Action, runParams, func(event nativeagent.Event) error {
 			return runtimeEmit(agentturns.RuntimeEvent{Event: event.Event, Data: event.Data})
 		})
 	}, emit)
+}
+
+func maxConversationRevision(values ...int64) int64 {
+	maximum := int64(0)
+	for _, value := range values {
+		if value > maximum {
+			maximum = value
+		}
+	}
+	return maximum
 }
 
 func (m *Module) stopTurn(ctx context.Context, params map[string]any) (any, *actionbase.Error) {

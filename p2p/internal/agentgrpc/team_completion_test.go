@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -53,7 +54,7 @@ func TestRunnerStreamsReportBoundTeamCompletion(t *testing.T) {
 		},
 		{
 			Seq:           41,
-			EventId:       "completion-event",
+			EventId:       "abcdefab-cdef-4abc-8def-abcdefabcdef",
 			EventType:     "team.execution.completed",
 			AggregateType: "team_execution",
 			AggregateId:   execution.GetExecutionId(),
@@ -94,6 +95,9 @@ func TestRunnerStreamsReportBoundTeamCompletion(t *testing.T) {
 		completion.Execution["cleanup_verified"] != true {
 		t.Fatalf("completion=%#v", completion)
 	}
+	if completion.SourceEventID != "abcdefab-cdef-4abc-8def-abcdefabcdef" {
+		t.Fatalf("source event ID=%q", completion.SourceEventID)
+	}
 	encodedExecution, err := json.Marshal(completion.Execution)
 	if err != nil || !bytes.Contains(encodedExecution, []byte(`"risks":[]`)) ||
 		bytes.Contains(encodedExecution, []byte(`"risks":null`)) {
@@ -132,7 +136,7 @@ func TestRunnerRejectsCompletionWithMismatchedReportTimestamp(t *testing.T) {
 		context.Background(),
 		&agentv1.Event{
 			Seq:           41,
-			EventId:       "completion-event",
+			EventId:       "abcdefab-cdef-4abc-8def-abcdefabcdef",
 			EventType:     "team.execution.completed",
 			AggregateType: "team_execution",
 			AggregateId:   execution.GetExecutionId(),
@@ -143,5 +147,89 @@ func TestRunnerRejectsCompletionWithMismatchedReportTimestamp(t *testing.T) {
 	)
 	if err == nil || completion != nil {
 		t.Fatalf("completion=%#v err=%v", completion, err)
+	}
+}
+
+func TestRunnerSynthesizesCompletionAndReadsAuthoritativeConversationRevision(t *testing.T) {
+	t.Parallel()
+	server := startRuntimeServer(t)
+	runner := newTestRunner(t, server, Config{UnaryTimeout: time.Second})
+	sourceEventID := "abcdefab-cdef-4abc-8def-abcdefabcdef"
+
+	synthesis, err := runner.SynthesizeTeamCompletion(
+		context.Background(),
+		"owner-from-config",
+		sourceEventID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if synthesis.SourceEventID != sourceEventID ||
+		synthesis.ConversationID != "agent-chat-11111111-2222-4333-8444-555555555555" ||
+		synthesis.Message.MessageID != "abcdefab-cdef-4abc-8def-abcdefabcdef" ||
+		synthesis.Message.Content != "The Team completed the requested work." ||
+		synthesis.ConversationRevision != 31 {
+		t.Fatalf("synthesis=%#v", synthesis)
+	}
+
+	revision, found, err := runner.GetConversationState(
+		context.Background(),
+		synthesis.ConversationID,
+	)
+	if err != nil || !found || revision != 29 {
+		t.Fatalf("conversation state=(%d, %v, %v)", revision, found, err)
+	}
+	server.service.mu.Lock()
+	defer server.service.mu.Unlock()
+	if server.service.synthesisOwnerID != "owner-from-config" ||
+		server.service.synthesisSourceID != sourceEventID ||
+		server.service.conversationOwnerID != "owner-from-config" ||
+		server.service.conversationID != synthesis.ConversationID {
+		t.Fatalf("trusted requests=%#v", server.service)
+	}
+}
+
+func TestRunnerRejectsNonCanonicalCompletionSourceEventID(t *testing.T) {
+	t.Parallel()
+	server := startRuntimeServer(t)
+	runner := newTestRunner(t, server, Config{UnaryTimeout: time.Second})
+	if _, err := runner.SynthesizeTeamCompletion(
+		context.Background(),
+		"owner-from-config",
+		"ABCDEFAB-CDEF-4ABC-8DEF-ABCDEFABCDEF",
+	); err == nil {
+		t.Fatal("non-canonical source event ID was accepted")
+	}
+}
+
+func TestRunnerRejectsUnsafeCompletionAssistantContent(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		content string
+	}{
+		{name: "blank", content: " \t\n"},
+		{name: "nul", content: "completed\x00hidden"},
+		{name: "oversized", content: strings.Repeat("x", agentcompletion.MaximumAssistantContentBytes+1)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := startRuntimeServer(t)
+			server.service.synthesisResponse = &agentv1.SynthesizeTeamCompletionResponse{
+				SourceEventId:  "abcdefab-cdef-4abc-8def-abcdefabcdef",
+				ConversationId: "agent-chat-11111111-2222-4333-8444-555555555555",
+				Message: &agentv1.RuntimeAssistantMessage{
+					MessageId: "abcdefab-cdef-4abc-8def-abcdefabcdef",
+					Content:   test.content,
+				},
+				ConversationRevision: 31,
+			}
+			runner := newTestRunner(t, server, Config{UnaryTimeout: time.Second})
+			if _, err := runner.SynthesizeTeamCompletion(
+				context.Background(),
+				"owner-from-config",
+				"abcdefab-cdef-4abc-8def-abcdefabcdef",
+			); err == nil {
+				t.Fatalf("unsafe assistant content was accepted: %q", test.name)
+			}
+		})
 	}
 }

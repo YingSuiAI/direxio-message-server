@@ -97,6 +97,7 @@ func (runner *Runner) teamCompletionFromEvent(
 ) (*agentcompletion.Completion, error) {
 	if remote == nil || remote.GetEventType() != "team.execution.completed" ||
 		remote.GetAggregateType() != "team_execution" ||
+		!canonicalUUID(remote.GetEventId()) ||
 		!canonicalUUID(remote.GetAggregateId()) ||
 		remote.GetRevision() < 1 ||
 		remote.GetOccurredAt() == nil ||

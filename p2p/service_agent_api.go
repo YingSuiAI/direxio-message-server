@@ -35,8 +35,11 @@ type AgentSearchProfileState = agentmodule.SearchProfileState
 type AgentSearchProfile = agentmodule.SearchProfile
 type AgentSearchProfileUpdate = agentmodule.SearchProfileUpdate
 type AgentCompletionSource = agentcompletion.Source
+type AgentCompletionSynthesizer = agentcompletion.Synthesizer
 type AgentCompletionSourceEvent = agentcompletion.SourceEvent
 type AgentCompletion = agentcompletion.Completion
+type AgentCompletionSynthesis = agentcompletion.Synthesis
+type AgentConversationStateReader = agentmodule.ConversationStateReader
 type AgentGRPCConfig struct {
 	Target         string
 	CAFile         string

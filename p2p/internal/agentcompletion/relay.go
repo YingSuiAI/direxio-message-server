@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/YingSuiAI/dirextalk-message-server/internal/dirextalkdomain"
 	"github.com/sirupsen/logrus"
@@ -19,7 +20,9 @@ import (
 const (
 	CursorSource  = "native-agent-task-events/v1"
 	EventType     = "agent.team.execution.completed"
-	SchemaVersion = "dirextalk.product.agent-team-execution-completed/v1"
+	SchemaVersion = "dirextalk.product.agent-team-execution-completed/v2"
+	// MaximumAssistantContentBytes matches the ProductCore client payload bound.
+	MaximumAssistantContentBytes = 128 << 10
 )
 
 var (
@@ -62,6 +65,28 @@ type Source interface {
 	) error
 }
 
+type AssistantMessage struct {
+	MessageID string
+	Content   string
+}
+
+type Synthesis struct {
+	SourceEventID        string
+	ConversationID       string
+	Message              AssistantMessage
+	ConversationRevision int64
+}
+
+// Synthesizer delegates all user-visible completion authorship to Central.
+// The relay supplies only the trusted owner and immutable Agent event ID.
+type Synthesizer interface {
+	SynthesizeTeamCompletion(
+		context.Context,
+		string,
+		string,
+	) (Synthesis, error)
+}
+
 type CursorStore interface {
 	LoadAgentEventCursor(context.Context, string) (int64, error)
 	SaveAgentEventCursor(context.Context, string, int64) error
@@ -73,6 +98,7 @@ type EventAppender interface {
 
 type Relay struct {
 	source           Source
+	synthesizer      Synthesizer
 	store            CursorStore
 	events           EventAppender
 	retryDelay       time.Duration
@@ -97,6 +123,7 @@ type Config struct {
 
 func New(
 	source Source,
+	synthesizer Synthesizer,
 	store CursorStore,
 	events EventAppender,
 	config Config,
@@ -125,6 +152,7 @@ func New(
 	}
 	return &Relay{
 		source:           source,
+		synthesizer:      synthesizer,
 		store:            store,
 		events:           events,
 		retryDelay:       retryDelay,
@@ -137,7 +165,7 @@ func New(
 
 func (relay *Relay) Run(ctx context.Context) error {
 	if relay == nil || relay.source == nil || relay.store == nil ||
-		relay.events == nil {
+		relay.events == nil || relay.synthesizer == nil {
 		return errors.New("Agent completion relay is unavailable")
 	}
 	cursor, err := relay.store.LoadAgentEventCursor(
@@ -165,11 +193,29 @@ func (relay *Relay) Run(ctx context.Context) error {
 					if err := validateCompletion(*event.Completion); err != nil {
 						return err
 					}
+					synthesis, err := relay.synthesizer.SynthesizeTeamCompletion(
+						ctx,
+						event.Completion.OwnerID,
+						event.Completion.SourceEventID,
+					)
+					if err != nil {
+						return fmt.Errorf(
+							"synthesize Agent completion: %w",
+							err,
+						)
+					}
+					if err = validateSynthesis(
+						*event.Completion,
+						synthesis,
+					); err != nil {
+						return err
+					}
 					if err := relay.events.Append(
 						ctx,
 						completionProductEvent(
 							event.Seq,
 							*event.Completion,
+							synthesis,
 							relay.now().UTC(),
 						),
 					); err != nil {
@@ -240,7 +286,8 @@ func retryFailureCode(err error) string {
 }
 
 func validateCompletion(value Completion) error {
-	if !uuidPattern.MatchString(value.ExecutionID) ||
+	if !uuidPattern.MatchString(value.SourceEventID) ||
+		!uuidPattern.MatchString(value.ExecutionID) ||
 		!uuidPattern.MatchString(value.TaskID) ||
 		!uuidPattern.MatchString(value.PlanID) ||
 		strings.TrimSpace(value.OwnerID) == "" ||
@@ -276,6 +323,25 @@ func validateCompletion(value Completion) error {
 		return errors.New("Agent completion report is unbound")
 	}
 	return nil
+}
+
+func validateSynthesis(completion Completion, value Synthesis) error {
+	if value.SourceEventID != completion.SourceEventID ||
+		value.ConversationID != completion.ConversationID ||
+		!uuidPattern.MatchString(value.Message.MessageID) ||
+		!ValidAssistantContent(value.Message.Content) ||
+		value.ConversationRevision < 1 {
+		return errors.New("Agent completion synthesis is unbound")
+	}
+	return nil
+}
+
+// ValidAssistantContent is the shared Agent and ProductCore publication gate.
+func ValidAssistantContent(value string) bool {
+	return utf8.ValidString(value) &&
+		len(value) <= MaximumAssistantContentBytes &&
+		!strings.ContainsRune(value, '\x00') &&
+		strings.TrimSpace(value) != ""
 }
 
 func validateCompletionArtifacts(raw any) error {
@@ -346,6 +412,7 @@ func validCompletionArtifactMediaType(value string) bool {
 func completionProductEvent(
 	sourceSeq int64,
 	completion Completion,
+	synthesis Synthesis,
 	createdAt time.Time,
 ) dirextalkdomain.Event {
 	return dirextalkdomain.Event{
@@ -357,16 +424,22 @@ func completionProductEvent(
 			completion.ReportDigest,
 		),
 		Payload: map[string]any{
-			"schema_version":   SchemaVersion,
-			"source_event_seq": sourceSeq,
-			"conversation_id":  completion.ConversationID,
-			"execution_id":     completion.ExecutionID,
-			"task_id":          completion.TaskID,
-			"plan_id":          completion.PlanID,
-			"plan_revision":    completion.PlanRevision,
-			"report_digest":    completion.ReportDigest,
-			"generated_at":     completion.GeneratedAt.UTC().Format(time.RFC3339Nano),
-			"execution":        completion.Execution,
+			"schema_version":        SchemaVersion,
+			"source_event_seq":      sourceSeq,
+			"source_event_id":       completion.SourceEventID,
+			"conversation_id":       completion.ConversationID,
+			"conversation_revision": synthesis.ConversationRevision,
+			"assistant_message": map[string]any{
+				"message_id": synthesis.Message.MessageID,
+				"content":    synthesis.Message.Content,
+			},
+			"execution_id":  completion.ExecutionID,
+			"task_id":       completion.TaskID,
+			"plan_id":       completion.PlanID,
+			"plan_revision": completion.PlanRevision,
+			"report_digest": completion.ReportDigest,
+			"generated_at":  completion.GeneratedAt.UTC().Format(time.RFC3339Nano),
+			"execution":     completion.Execution,
 		},
 		CreatedAt: createdAt.Format(time.RFC3339Nano),
 	}

@@ -20,7 +20,7 @@ func TestRelayPersistsCursorAndPublishesCompletionExactlyOnce(t *testing.T) {
 	digest := "sha256:" + strings.Repeat("a", 64)
 	executionID := "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
 	completion := Completion{
-		SourceEventID:  "event-2",
+		SourceEventID:  "abcdefab-cdef-4abc-8def-abcdefabcdef",
 		ConversationID: "agent-chat-11111111-2222-4333-8444-555555555555",
 		ExecutionID:    executionID,
 		OwnerID:        "dirextalk-project:demo.example",
@@ -58,11 +58,20 @@ func TestRelayPersistsCursorAndPublishesCompletionExactlyOnce(t *testing.T) {
 	}
 	store := &relayTestCursorStore{cancelAt: 2, cancel: cancel}
 	sink := &relayTestEventSink{dedupe: make(map[string]struct{})}
+	synthesizer := &relayTestSynthesizer{result: Synthesis{
+		SourceEventID:  completion.SourceEventID,
+		ConversationID: completion.ConversationID,
+		Message: AssistantMessage{
+			MessageID: "22222222-3333-4444-8555-666666666666",
+			Content:   "The Team completed the requested work.",
+		},
+		ConversationRevision: 8,
+	}}
 	source := &relayTestSource{events: []SourceEvent{
 		{Seq: 1},
 		{Seq: 2, Completion: &completion},
 	}}
-	relay := New(source, store, sink, Config{
+	relay := New(source, synthesizer, store, sink, Config{
 		RetryDelay: time.Millisecond,
 		Now: func() time.Time {
 			return time.Date(2026, 8, 3, 1, 2, 4, 0, time.UTC)
@@ -79,11 +88,95 @@ func TestRelayPersistsCursorAndPublishesCompletionExactlyOnce(t *testing.T) {
 	}
 	event := sink.events[0]
 	if event.Type != EventType ||
+		event.Payload["schema_version"] != SchemaVersion ||
 		event.Payload["source_event_seq"] != int64(2) ||
+		event.Payload["source_event_id"] != completion.SourceEventID ||
 		event.Payload["conversation_id"] != completion.ConversationID ||
+		event.Payload["conversation_revision"] != int64(8) ||
 		event.Payload["report_digest"] != digest ||
 		event.DedupeKey == "" {
 		t.Fatalf("completion event=%#v", event)
+	}
+	message, ok := event.Payload["assistant_message"].(map[string]any)
+	if !ok || message["message_id"] != synthesizer.result.Message.MessageID ||
+		message["content"] != synthesizer.result.Message.Content {
+		t.Fatalf("assistant message=%#v", event.Payload["assistant_message"])
+	}
+	execution, ok := event.Payload["execution"].(map[string]any)
+	if !ok || execution["execution_id"] != completion.ExecutionID ||
+		len(execution["artifacts"].([]map[string]any)) != 1 {
+		t.Fatalf("execution payload=%#v", event.Payload["execution"])
+	}
+	if synthesizer.calls != 1 || synthesizer.ownerID != completion.OwnerID ||
+		synthesizer.sourceEventID != completion.SourceEventID {
+		t.Fatalf("synthesis calls=%d owner=%q event=%q", synthesizer.calls, synthesizer.ownerID, synthesizer.sourceEventID)
+	}
+}
+
+func TestRelayDoesNotAdvanceCursorWhenCompletionSynthesisFails(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	completion := validRelayTestCompletion()
+	source := &relayTestSource{
+		events:   []SourceEvent{{Seq: 7, Completion: &completion}},
+		cancel:   cancel,
+		cancelAt: 1,
+	}
+	store := &relayTestCursorStore{cursor: 6}
+	sink := &relayTestEventSink{dedupe: make(map[string]struct{})}
+	synthesizer := &relayTestSynthesizer{err: errors.New("model unavailable")}
+	relay := New(source, synthesizer, store, sink, Config{
+		RetryDelay: time.Nanosecond,
+		LogRetry:   func(RetryNotice) {},
+	})
+	if err := relay.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if store.cursor != 6 || len(sink.events) != 0 || synthesizer.calls != 1 {
+		t.Fatalf("cursor=%d events=%d synthesis_calls=%d", store.cursor, len(sink.events), synthesizer.calls)
+	}
+}
+
+func TestCompletionRequiresCanonicalSourceEventUUID(t *testing.T) {
+	t.Parallel()
+	completion := validRelayTestCompletion()
+	completion.SourceEventID = strings.ToUpper(completion.SourceEventID)
+	if err := validateCompletion(completion); err == nil {
+		t.Fatal("uppercase source_event_id was accepted")
+	}
+}
+
+func TestRelayRejectsUnsafeAssistantContent(t *testing.T) {
+	t.Parallel()
+	completion := validRelayTestCompletion()
+	base := Synthesis{
+		SourceEventID:  completion.SourceEventID,
+		ConversationID: completion.ConversationID,
+		Message: AssistantMessage{
+			MessageID: "22222222-3333-4444-8555-666666666666",
+			Content:   "completed",
+		},
+		ConversationRevision: 8,
+	}
+	if !ValidAssistantContent(strings.Repeat("x", MaximumAssistantContentBytes)) {
+		t.Fatal("assistant content at the byte limit was rejected")
+	}
+	for _, test := range []struct {
+		name    string
+		content string
+	}{
+		{name: "blank", content: " \t\n"},
+		{name: "nul", content: "completed\x00hidden"},
+		{name: "invalid utf8", content: string([]byte{0xff})},
+		{name: "oversized", content: strings.Repeat("x", MaximumAssistantContentBytes+1)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			value := base
+			value.Message.Content = test.content
+			if err := validateSynthesis(completion, value); err == nil {
+				t.Fatalf("unsafe assistant content was accepted: %q", test.name)
+			}
+		})
 	}
 }
 
@@ -99,7 +192,7 @@ func TestRelayReportsSanitizedWatchFailureAtBoundedRate(t *testing.T) {
 	store := &relayTestCursorStore{cursor: 2607}
 	sink := &relayTestEventSink{dedupe: make(map[string]struct{})}
 	var notices []RetryNotice
-	relay := New(source, store, sink, Config{
+	relay := New(source, &relayTestSynthesizer{}, store, sink, Config{
 		RetryDelay:       time.Nanosecond,
 		RetryLogInterval: time.Hour,
 		LogRetry: func(notice RetryNotice) {
@@ -143,7 +236,10 @@ func TestRetryFailureCodeIsClosedAndStable(t *testing.T) {
 }
 
 type relayTestSource struct {
-	events []SourceEvent
+	events   []SourceEvent
+	cancel   context.CancelFunc
+	calls    int
+	cancelAt int
 }
 
 type relayTestFailingSource struct {
@@ -170,16 +266,80 @@ func (source *relayTestSource) WatchTeamCompletionEvents(
 	afterSeq int64,
 	emit func(SourceEvent) error,
 ) error {
+	source.calls++
 	for _, event := range source.events {
 		if event.Seq <= afterSeq {
 			continue
 		}
 		if err := emit(event); err != nil {
+			if source.cancel != nil && source.calls >= source.cancelAt {
+				source.cancel()
+			}
 			return err
 		}
 	}
 	<-ctx.Done()
 	return ctx.Err()
+}
+
+type relayTestSynthesizer struct {
+	result        Synthesis
+	err           error
+	calls         int
+	ownerID       string
+	sourceEventID string
+}
+
+func (synthesizer *relayTestSynthesizer) SynthesizeTeamCompletion(
+	_ context.Context,
+	ownerID string,
+	sourceEventID string,
+) (Synthesis, error) {
+	synthesizer.calls++
+	synthesizer.ownerID = ownerID
+	synthesizer.sourceEventID = sourceEventID
+	return synthesizer.result, synthesizer.err
+}
+
+func validRelayTestCompletion() Completion {
+	digest := "sha256:" + strings.Repeat("a", 64)
+	return Completion{
+		SourceEventID:  "abcdefab-cdef-4abc-8def-abcdefabcdef",
+		ConversationID: "agent-chat-11111111-2222-4333-8444-555555555555",
+		ExecutionID:    "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+		OwnerID:        "dirextalk-project:demo.example",
+		TaskID:         "88888888-8888-4888-8888-888888888888",
+		PlanID:         "99999999-9999-4999-8999-999999999999",
+		PlanRevision:   1,
+		ReportDigest:   digest,
+		GeneratedAt:    time.Date(2026, 8, 3, 1, 2, 3, 0, time.UTC),
+		Execution: map[string]any{
+			"execution_id":     "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+			"task_id":          "88888888-8888-4888-8888-888888888888",
+			"plan_id":          "99999999-9999-4999-8999-999999999999",
+			"plan_revision":    int64(1),
+			"status":           "completed",
+			"cleanup_verified": true,
+			"report": map[string]any{
+				"report_digest": digest,
+				"generated_at":  "2026-08-03T01:02:03Z",
+			},
+			"artifacts": []map[string]any{{
+				"schema_version":       "dirextalk.agent.team-artifact/v1",
+				"artifact_id":          "cccccccc-dddd-4eee-8fff-000000000001",
+				"role_id":              "implementer",
+				"action_id":            "implement",
+				"name":                 "final.json",
+				"kind":                 "result",
+				"media_type":           "application/json",
+				"size_bytes":           int64(256),
+				"sha256":               "sha256:" + strings.Repeat("b", 64),
+				"verification":         "passed",
+				"created_at":           "2026-08-03T01:02:02Z",
+				"retention_expires_at": "2026-11-01T01:02:02Z",
+			}},
+		},
+	}
 }
 
 type relayTestCursorStore struct {

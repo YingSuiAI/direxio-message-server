@@ -1,6 +1,27 @@
 # API Interface Change Record
 
-Last updated: 2026-08-02
+Last updated: 2026-08-09
+
+## 2026-08-09 Team Completion Product Event v2
+
+`agent.team.execution.completed` now uses
+`dirextalk.product.agent-team-execution-completed/v2`. Before ProductCore
+publishes the event, Message Server calls Central Agent
+`SynthesizeTeamCompletion` with the trusted owner and canonical
+`source_event_id`. Central Agent is the sole author and durable owner of the
+assistant reply; Message Server does not generate or rewrite assistant text.
+
+The v2 payload adds `source_event_id`,
+`assistant_message {message_id, content}`, and `conversation_revision`, while
+preserving the complete verified `execution` object and its artifact manifest.
+Assistant content must be valid UTF-8, contain no NUL byte, remain non-empty
+after trimming, and contain no more than 128 KiB of UTF-8 bytes.
+If synthesis or payload binding fails, ProductCore publishes no event and does
+not advance the Agent event cursor, so the same source event is retried.
+
+Before a durable remote chat turn, Message Server reads Central Agent's
+authoritative conversation revision and sends the maximum of that revision,
+the local durable-turn revision, and the client-provided revision.
 
 ## 2026-08-02 Native Agent Task Overview And Search Profile
 

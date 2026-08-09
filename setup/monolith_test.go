@@ -30,6 +30,19 @@ func (*testAgentGRPCRunner) WatchTeamCompletionEvents(
 ) error {
 	return nil
 }
+func (*testAgentGRPCRunner) SynthesizeTeamCompletion(
+	context.Context,
+	string,
+	string,
+) (p2p.AgentCompletionSynthesis, error) {
+	return p2p.AgentCompletionSynthesis{}, nil
+}
+func (*testAgentGRPCRunner) GetConversationState(
+	context.Context,
+	string,
+) (int64, bool, error) {
+	return 0, false, nil
+}
 func (*testAgentGRPCRunner) GetRuntimeProfile(context.Context) (p2p.AgentRuntimeProfileState, error) {
 	return p2p.AgentRuntimeProfileState{}, nil
 }
@@ -188,6 +201,14 @@ func TestP2PAgentGRPCBackendBuildsChatOnlyRunnerWithTrustedOwner(t *testing.T) {
 	if err != nil || completionSource != wantRunner {
 		t.Fatalf("remote completion source=%v err=%v", completionSource, err)
 	}
+	completionSynthesizer, err := p2pAgentCompletionSynthesizer(config, runner)
+	if err != nil || completionSynthesizer != wantRunner {
+		t.Fatalf("remote completion synthesizer=%v err=%v", completionSynthesizer, err)
+	}
+	conversationStateReader, err := p2pAgentConversationStateReader(config, runner)
+	if err != nil || conversationStateReader != wantRunner {
+		t.Fatalf("remote conversation state reader=%v err=%v", conversationStateReader, err)
+	}
 	if received.Target != "dns:///agent.internal:7443" || received.CAFile != caFile || received.ServerName != "agent.internal" ||
 		received.ServiceKeyFile != serviceKeyFile || received.OwnerID != "dirextalk-project:example.com" {
 		t.Fatalf("Agent dial config=%#v", received)
@@ -208,6 +229,12 @@ func TestP2PAgentGRPCBackendBuildsChatOnlyRunnerWithTrustedOwner(t *testing.T) {
 	}
 	if _, err = p2pAgentCompletionSource(config, &chatOnlyAgentGRPCRunner{}); err == nil {
 		t.Fatal("enabled Agent backend accepted a Runner without completion events")
+	}
+	if _, err = p2pAgentCompletionSynthesizer(config, &chatOnlyAgentGRPCRunner{}); err == nil {
+		t.Fatal("enabled Agent backend accepted a Runner without completion synthesis")
+	}
+	if _, err = p2pAgentConversationStateReader(config, &chatOnlyAgentGRPCRunner{}); err == nil {
+		t.Fatal("enabled Agent backend accepted a Runner without conversation state")
 	}
 }
 

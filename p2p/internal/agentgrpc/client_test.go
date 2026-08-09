@@ -1077,6 +1077,11 @@ type runtimeTestService struct {
 	listModelsRequest    *agentv1.ListModelsRequest
 	runtimeConfigRequest *agentv1.GetRuntimeConfigRequest
 	putRuntimeRequest    *agentv1.PutRuntimeConfigRequest
+	synthesisOwnerID     string
+	synthesisSourceID    string
+	conversationOwnerID  string
+	conversationID       string
+	synthesisResponse    *agentv1.SynthesizeTeamCompletionResponse
 	getCapabilities      func(*agentv1.RuntimeServiceGetCapabilitiesRequest) (*agentv1.RuntimeServiceGetCapabilitiesResponse, error)
 	getRuntimeConfig     func(*agentv1.GetRuntimeConfigRequest) (*agentv1.GetRuntimeConfigResponse, error)
 	putRuntimeConfig     func(*agentv1.PutRuntimeConfigRequest) (*agentv1.PutRuntimeConfigResponse, error)
@@ -1098,6 +1103,42 @@ func (service *runtimeTestService) Chat(ctx context.Context, request *agentv1.Ch
 	}
 	service.capture(ctx, request)
 	return chatResponse(), nil
+}
+
+func (service *runtimeTestService) SynthesizeTeamCompletion(
+	_ context.Context,
+	request *agentv1.SynthesizeTeamCompletionRequest,
+) (*agentv1.SynthesizeTeamCompletionResponse, error) {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	service.synthesisOwnerID = request.GetOwnerId()
+	service.synthesisSourceID = request.GetSourceEventId()
+	if service.synthesisResponse != nil {
+		return proto.Clone(service.synthesisResponse).(*agentv1.SynthesizeTeamCompletionResponse), nil
+	}
+	return &agentv1.SynthesizeTeamCompletionResponse{
+		SourceEventId:  request.GetSourceEventId(),
+		ConversationId: "agent-chat-11111111-2222-4333-8444-555555555555",
+		Message: &agentv1.RuntimeAssistantMessage{
+			MessageId: "abcdefab-cdef-4abc-8def-abcdefabcdef",
+			Content:   "The Team completed the requested work.",
+		},
+		ConversationRevision: 31,
+	}, nil
+}
+
+func (service *runtimeTestService) GetConversationState(
+	_ context.Context,
+	request *agentv1.GetConversationStateRequest,
+) (*agentv1.GetConversationStateResponse, error) {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	service.conversationOwnerID = request.GetOwnerId()
+	service.conversationID = request.GetConversationId()
+	return &agentv1.GetConversationStateResponse{
+		Found:                true,
+		ConversationRevision: 29,
+	}, nil
 }
 
 func (service *runtimeTestService) ListModels(_ context.Context, request *agentv1.ListModelsRequest) (*agentv1.ListModelsResponse, error) {

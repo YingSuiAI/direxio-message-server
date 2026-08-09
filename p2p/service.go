@@ -66,10 +66,14 @@ type Config struct {
 	// AgentCompletionSource streams durable, report-bound Team completion
 	// events from the independent Agent. ProductCore stores its own cursor and
 	// publishes the result through the existing realtime event stream.
-	AgentCompletionSource agentcompletion.Source
-	NativeAgentDataDir    string
-	ReleaseController     releasecontrol.Controller
-	CentralVersionSource  releasecontrol.CentralVersionSource
+	AgentCompletionSource      agentcompletion.Source
+	AgentCompletionSynthesizer agentcompletion.Synthesizer
+	// AgentConversationStateReader exposes Central's authoritative durable
+	// conversation revision before each remote chat turn.
+	AgentConversationStateReader agentmodule.ConversationStateReader
+	NativeAgentDataDir           string
+	ReleaseController            releasecontrol.Controller
+	CentralVersionSource         releasecontrol.CentralVersionSource
 }
 
 const (
@@ -604,6 +608,7 @@ func newService(cfg Config, store Store, transport Transport, state portalState,
 	if cfg.AgentCompletionSource != nil {
 		service.agentCompletionRelay = agentcompletion.New(
 			cfg.AgentCompletionSource,
+			cfg.AgentCompletionSynthesizer,
 			service.store,
 			service.eventsModule,
 			agentcompletion.Config{Now: time.Now},
@@ -840,16 +845,17 @@ func newService(cfg Config, store Store, transport Transport, state portalState,
 	})
 	service.mcpCapabilities = service.mcpModule.Service()
 	service.agentModule = agentmodule.New(agentmodule.Config{
-		Runner:          cfg.NativeAgentRunner,
-		ChatRunner:      cfg.NativeAgentChatRunner,
-		RuntimeProfiles: cfg.AgentRuntimeProfileClient,
-		SearchProfiles:  cfg.AgentSearchProfileClient,
-		DataDir:         cfg.NativeAgentDataDir,
-		Store:           nativeAgentConfigStore{service: service},
-		MCP:             service.mcpCapabilities,
-		Account:         serviceAgentAccountPort{service: service},
-		Turns:           service.store,
-		OwnerID:         service.OwnerMXID,
+		Runner:            cfg.NativeAgentRunner,
+		ChatRunner:        cfg.NativeAgentChatRunner,
+		RuntimeProfiles:   cfg.AgentRuntimeProfileClient,
+		SearchProfiles:    cfg.AgentSearchProfileClient,
+		ConversationState: cfg.AgentConversationStateReader,
+		DataDir:           cfg.NativeAgentDataDir,
+		Store:             nativeAgentConfigStore{service: service},
+		MCP:               service.mcpCapabilities,
+		Account:           serviceAgentAccountPort{service: service},
+		Turns:             service.store,
+		OwnerID:           service.OwnerMXID,
 	})
 	service.actions = service.actionHandlers()
 	service.realtimeModule = realtimewsmodule.New(realtimewsmodule.Dependencies{
