@@ -89,7 +89,7 @@ umask 077
 {
 printf '%s\n' 'core_aws_enabled: true' 'core_execution_v2_enabled: true' 'core_cloud_worker:' '  enabled: true'
 for pair in \
-  account_id:ACCOUNT_ID region:REGION credential_id:CREDENTIAL_ID credential_revision:CREDENTIAL_REVISION \
+  region:REGION credential_id:CREDENTIAL_ID credential_revision:CREDENTIAL_REVISION \
   instance_type:INSTANCE_TYPE architecture:ARCHITECTURE root_device_name:ROOT_DEVICE_NAME volume_gib:VOLUME_GIB volume_type:VOLUME_TYPE volume_iops:VOLUME_IOPS volume_throughput_mib:VOLUME_THROUGHPUT_MIB \
   ami_id:AMI_ID ami_digest:AMI_DIGEST worker_release_digest:WORKER_RELEASE_DIGEST pi_runtime_digest:PI_RUNTIME_DIGEST host_network_policy_sha256:HOST_NETWORK_POLICY_SHA256 \
   vpc_id:VPC_ID subnet_id:SUBNET_ID outbound_proxy_trust_bundle_sha256:OUTBOUND_PROXY_TRUST_SHA256 artifact_bucket:ARTIFACT_BUCKET artifact_base_prefix:ARTIFACT_BASE_PREFIX artifact_kms_key_arn:ARTIFACT_KMS_KEY_ARN artifact_retention:ARTIFACT_RETENTION \
@@ -97,6 +97,7 @@ for pair in \
   quote_ttl:QUOTE_TTL maximum_catalog_age:MAXIMUM_CATALOG_AGE contingency_basis_points:CONTINGENCY_BASIS_POINTS absolute_hard_limit_micros:ABSOLUTE_HARD_LIMIT_MICROS max_runtime:MAX_RUNTIME max_tokens:MAX_TOKENS max_output_bytes:MAX_OUTPUT_BYTES controller_poll_interval:CONTROLLER_POLL_INTERVAL worker_heartbeat_interval:WORKER_HEARTBEAT_INTERVAL reaper_interval:REAPER_INTERVAL completion_outbox_interval:COMPLETION_OUTBOX_INTERVAL; do
   key=${pair%%:*}; suffix=${pair#*:}; eval "value=\${DIREXTALK_CLOUD_WORKER_$suffix}"; printf '  %s: %s\n' "$key" "$value"
 done
+printf '  account_id: "%s"\n' "$DIREXTALK_CLOUD_WORKER_ACCOUNT_ID"
 printf '%s\n' '  dns_resolver_cidrs:'
 list_yaml dns "$DIREXTALK_CLOUD_WORKER_DNS_RESOLVER_CIDRS"
 printf '%s\n' '  tls_proxy_cidrs:'

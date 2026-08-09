@@ -75,6 +75,7 @@ export DIREXTALK_CLOUD_WORKER_RUNTIME_QUALIFICATION_FILE=$tmp/qualification
 PATH="$tmp/bin:$PATH" "$script_dir/render-cloud-worker-agent-config.sh" "$tmp/config.yaml"
 grep -Fqx 'core_aws_enabled: true' "$tmp/config.yaml"
 grep -Fqx 'core_execution_v2_enabled: true' "$tmp/config.yaml"
+grep -Fqx '  account_id: "066107820442"' "$tmp/config.yaml"
 grep -Fqx '  absolute_hard_limit_micros: 20000000' "$tmp/config.yaml"
 grep -Fqx '  worker_control_endpoint: https://worker.example.test:443' "$tmp/config.yaml"
 grep -Fqx '  model_relay_endpoint: https://relay.example.test:443' "$tmp/config.yaml"
