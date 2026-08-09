@@ -136,7 +136,7 @@
       "parameter_digest": "40c92f69dc8cbe63f25a8c0b0ba1edb7a7fc565b6c28ae438ea3f4ddbfdd7dfb",
       "network_digest": "40b2b29340fd4c81d47d8be2a509aed9a6dd6400ed889ffc61fcc4aa4bf64e41",
       "secret_grant_digest": "e735243a33fd217d929b201d8a2a8154f248f3121b62c1924cf4312bfc4a2db1",
-      "selected_tool": "cloud_worker.propose",
+      "selected_tool": "cloud_worker_propose",
       "selected_command": [],
       "network_grants": [
         "controlled_https_egress"
@@ -154,7 +154,7 @@
       "run_revision": 1,
       "run_digest": "34a50999a701f416156008302655b98a8c264076f2dc2f4cef25b82ffeb2a038",
       "quote_digest": "72b77ced853e8fe2eba98ccc70e19ec0281507818226c864057193a23a38b4c2",
-      "digest": "29305d4d912450f4f0a0fb780e66db81e6ec8db2a7d995e15010edf12ad60c45"
+      "digest": "c5d896274efdc6b7c046ada7a21c4dbb7dfb01e05f5915fe8a73d93bb907bd2c"
     },
     "task_id": "f5d12ab5-e444-57f9-ab53-46214dc70fea",
     "state": "consumed",

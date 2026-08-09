@@ -146,7 +146,7 @@ func looksLikeCloudWorkerConfirmation(confirmation map[string]any) bool {
 	if !ok {
 		return false
 	}
-	if binding["operation_domain"] == "cloud_worker.execute" || binding["target_kind"] == "ephemeral_pi_worker" || binding["selected_tool"] == "cloud_worker.propose" {
+	if binding["operation_domain"] == "cloud_worker.execute" || binding["target_kind"] == "ephemeral_pi_worker" || binding["selected_tool"] == "cloud_worker_propose" {
 		return true
 	}
 	for _, field := range []string{"account_generation", "execution_id", "plan_id", "plan_revision", "plan_digest", "run_id", "run_revision", "run_digest", "quote_digest", "digest"} {
@@ -220,7 +220,7 @@ func validateCloudWorkerConfirmation(confirmation map[string]any, authority acti
 		}
 	}
 	if binding["target_kind"] != "ephemeral_pi_worker" || binding["source_version"] != "ephemeral-pi-task" ||
-		binding["selected_tool"] != "cloud_worker.propose" {
+		binding["selected_tool"] != "cloud_worker_propose" {
 		return cloudWorkerResultError("confirmation worker recipe binding is invalid")
 	}
 	if !cloudWorkerConfirmationStates[cloudString(confirmation["state"])] {
