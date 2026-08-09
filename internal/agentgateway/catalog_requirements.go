@@ -536,11 +536,11 @@ var expectedCatalogSchemaDigests = map[string]catalogSchemaDigest{
 		resultHex: "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
 	},
 	"agent.execution.v2.plans.get": {
-		inputHex:  "7f4499484879008f854fe583f1b802ee0b194fc603527f0b65e27092e746c15d",
+		inputHex:  "16a2421bc9fe203599cd6ac7041af4418c1eb91ee763e67f60cc026a187275d2",
 		resultHex: "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
 	},
 	"agent.execution.v2.plans.list": {
-		inputHex:  "d8b031142e91a514ecb1652dbaef1ae99756493d92c79636ac46e81645ca8319",
+		inputHex:  "e51cedcd24b3fd93987a55942194f24f3e9a6d567a6d69467152ae63e1e6517c",
 		resultHex: "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
 	},
 	"agent.execution.v2.deployments.list": {
@@ -560,15 +560,15 @@ var expectedCatalogSchemaDigests = map[string]catalogSchemaDigest{
 		resultHex: "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
 	},
 	"agent.execution.v2.runs.get": {
-		inputHex:  "f395e386f7c06ce663b40b91e5ea7c6065d0e6e200d9228ff145903b91ace68b",
+		inputHex:  "731ab9f17fc407152f12821c1d12fd2f04e7ebb27217da3e46b0caaa7be310b7",
 		resultHex: "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
 	},
 	"agent.execution.v2.runs.list": {
-		inputHex:  "7f21aa912df70a09b292d9ad618c84e90dc82ddef916b60f1c5ee45e038fa7f2",
+		inputHex:  "ca52b0972160b4d4f59cc89e79c7cfdc475ce345dc38af338942c02c0efa63c1",
 		resultHex: "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
 	},
 	"agent.execution.v2.runs.cancel": {
-		inputHex:  "7e180c570ec547e4984ba496e33c79014ebf52395a0ed4bd5ce415a8e807b030",
+		inputHex:  "8d9994a07f21125d3b6e1fd314244ff8b8bab060fa4b7a9adb7c22138cb30ee2",
 		resultHex: "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
 	},
 	"agent.execution.v2.runs.retry": {
@@ -576,11 +576,11 @@ var expectedCatalogSchemaDigests = map[string]catalogSchemaDigest{
 		resultHex: "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
 	},
 	"agent.execution.v2.runs.events": {
-		inputHex:  "bc7e7a4725673026a5975e3797ee090706d46ddf87aa4361b24f10a7e9bcf3c0",
+		inputHex:  "b449e03d00d680a77a0119ac7120ca862409f3c4eaf8e53ebf723585af1ca637",
 		resultHex: "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
 	},
 	"agent.execution.v2.artifacts.get": {
-		inputHex:  "b02d218487a7506ca82213915a7670ada2b470e9aaa6012d825030a3ec7fc6bc",
+		inputHex:  "203e2e90b8b8e13a18f62b919c4ab4227625fffd8e78ec23e7121d1f444297a5",
 		resultHex: "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
 	},
 	"agent.execution.v2.artifacts.download": {

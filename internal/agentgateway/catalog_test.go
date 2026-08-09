@@ -97,6 +97,29 @@ func TestArtifactDownloadCatalogPinsExactAgentSchemas(t *testing.T) {
 	}
 }
 
+func TestCloudWorkerExecutionCatalogPinsRecordKindSchemas(t *testing.T) {
+	tests := []struct {
+		action, operation, input string
+	}{
+		{"agent.execution.v2.plans.get", "plans_get", `{"additionalProperties":false,"properties":{"plan_id":{"type":"string"},"record_kind":{"enum":["cloud_worker"],"type":"string"},"revision":{"type":"integer"}},"required":["plan_id"],"type":"object"}`},
+		{"agent.execution.v2.plans.list", "plans_list", `{"additionalProperties":false,"properties":{"page_size":{"type":"integer"},"page_token":{"type":"string"},"record_kind":{"enum":["cloud_worker"],"type":"string"}},"type":"object"}`},
+		{"agent.execution.v2.runs.get", "runs_get", `{"additionalProperties":false,"properties":{"record_kind":{"enum":["cloud_worker"],"type":"string"},"run_id":{"type":"string"}},"required":["run_id"],"type":"object"}`},
+		{"agent.execution.v2.runs.list", "runs_list", `{"additionalProperties":false,"properties":{"deployment_id":{"type":"string"},"page_size":{"type":"integer"},"page_token":{"type":"string"},"project_id":{"type":"string"},"record_kind":{"enum":["cloud_worker"],"type":"string"}},"type":"object"}`},
+		{"agent.execution.v2.runs.cancel", "runs_cancel", `{"additionalProperties":false,"properties":{"expected_revision":{"type":"integer"},"idempotency_key":{"type":"string"},"record_kind":{"enum":["cloud_worker"],"type":"string"},"run_id":{"type":"string"}},"required":["run_id","idempotency_key","expected_revision"],"type":"object"}`},
+		{"agent.execution.v2.runs.events", "runs_events", `{"additionalProperties":false,"properties":{"after_sequence":{"type":"integer"},"limit":{"type":"integer"},"record_kind":{"enum":["cloud_worker"],"type":"string"},"run_id":{"type":"string"}},"required":["run_id"],"type":"object"}`},
+		{"agent.execution.v2.artifacts.get", "artifacts_get", `{"additionalProperties":false,"properties":{"artifact_id":{"type":"string"},"record_kind":{"enum":["cloud_worker"],"type":"string"}},"required":["artifact_id"],"type":"object"}`},
+	}
+	for _, test := range tests {
+		t.Run(test.action, func(t *testing.T) {
+			descriptor := catalogTestDescriptor("agent.execution.v2", test.operation, test.input, `{"type":"object","additionalProperties":true}`)
+			catalog := catalogTestWithDigest(t, descriptor)
+			if err := ValidateCatalog(catalog, []CatalogRequirement{NewCatalogRequirement(test.action)}); err != nil {
+				t.Fatalf("current Agent Cloud Worker schema rejected: %v", err)
+			}
+		})
+	}
+}
+
 func TestValidateCatalogAcceptsCurrentAgentInfoSchemas(t *testing.T) {
 	const input = `{"additionalProperties":false,"properties":{},"type":"object"}`
 	const backend = `{"additionalProperties":false,"properties":{"api_version":{"type":"string"},"available":{"type":"boolean"},"capabilities":{"items":{"type":"string"},"type":"array"},"configured":{"type":"boolean"},"instance_id":{"type":"string"},"release_version":{"type":"string"},"status":{"type":"string"},"supported_model_providers":{"items":{"type":"string"},"type":"array"}},"required":["available","configured","status","capabilities","supported_model_providers"],"type":"object"}`
