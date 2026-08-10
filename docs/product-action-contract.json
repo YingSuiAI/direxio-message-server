@@ -5639,6 +5639,56 @@
               "present": "positive_integer"
             }
           },
+          "extensions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "allowed_tools": {
+                  "type": "array",
+                  "required": true,
+                  "items": {
+                    "type": "string"
+                  },
+                  "presence": {
+                    "present": "unique;1_to_64;each_utf8_bytes_1_to_256;exactly_present_in_pinned_tool_catalog;no_core_intrinsics"
+                  }
+                },
+                "digest": {
+                  "type": "string",
+                  "required": true,
+                  "presence": {
+                    "present": "lowercase_sha256_equal_to_active_content_digest"
+                  }
+                },
+                "id": {
+                  "type": "string",
+                  "required": true,
+                  "presence": {
+                    "present": "canonical_uuid;installed_and_enabled"
+                  }
+                },
+                "kind": {
+                  "type": "string",
+                  "required": true,
+                  "presence": {
+                    "present": "exactly:mcp"
+                  }
+                },
+                "pinned_version": {
+                  "type": "string",
+                  "required": true,
+                  "presence": {
+                    "present": "exact_source_version_or_commit;utf8_bytes_1_to_256"
+                  }
+                }
+              }
+            },
+            "presence": {
+              "omitted": "no_local_extension_tools_exposed_to_the_model",
+              "present": "unique_installation_ids;1_to_64;immutable_exact_selections_only"
+            }
+          },
           "idempotency_key": {
             "type": "string",
             "required": true,

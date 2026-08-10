@@ -38,6 +38,9 @@ const (
 	maxChatMessageBytes              = 1 << 20
 	maxChatAttachmentBytes           = int64(8 << 20)
 	maxChatAttachmentChunkBytes      = int64(1 << 20)
+	maxChatExtensions                = 64
+	maxChatExtensionVersionBytes     = 256
+	maxChatExtensionToolNameBytes    = 256
 	maxChatAttachmentNameBytes       = 255
 	maxChatAttachments               = 4
 	maxCloudWorkerArtifactBytes      = int64(8 << 20)
@@ -455,7 +458,7 @@ func validateChatRequest(action string, params map[string]any) error {
 		"model_profile_revision", "credential_version",
 	}
 	if action == "agent.chat.stream" {
-		allowed = append(allowed, "after_seq", "accepted_attachment_ids")
+		allowed = append(allowed, "after_seq", "accepted_attachment_ids", "extensions")
 	}
 	if err := rejectUnknownActionFields(action, params, allowed...); err != nil {
 		return err
@@ -518,6 +521,58 @@ func validateChatRequest(action string, params map[string]any) error {
 				return invalidActionRequest(action, "accepted_attachment_ids", "must not contain duplicates")
 			}
 			seen[id] = struct{}{}
+		}
+	}
+	if value, present := params["extensions"]; present {
+		if action != "agent.chat.stream" {
+			return invalidActionRequest(action, "extensions", "is supported only by agent.chat.stream")
+		}
+		if err := validateChatExtensions(action, value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateChatExtensions(action string, value any) error {
+	extensions, ok := value.([]any)
+	if !ok || len(extensions) == 0 || len(extensions) > maxChatExtensions {
+		return invalidActionRequest(action, "extensions", "must contain 1 to 64 exact local extension selections")
+	}
+	seenInstallations := make(map[string]struct{}, len(extensions))
+	for _, raw := range extensions {
+		extension, ok := raw.(map[string]any)
+		if !ok {
+			return invalidActionRequest(action, "extensions", "must contain exact local extension selection objects")
+		}
+		if err := rejectUnknownActionFields(action, extension, "kind", "id", "pinned_version", "digest", "allowed_tools"); err != nil {
+			return invalidActionRequest(action, "extensions", "contains an unsupported selection field")
+		}
+		kind, kindOK := extension["kind"].(string)
+		id, idOK := extension["id"].(string)
+		version, versionOK := extension["pinned_version"].(string)
+		if !kindOK || kind != "mcp" ||
+			!idOK || !canonicalActionUUID(id) || !versionOK || version == "" || version != strings.TrimSpace(version) ||
+			len(version) > maxChatExtensionVersionBytes || !utf8.ValidString(version) || !canonicalActionSHA256(extension["digest"]) {
+			return invalidActionRequest(action, "extensions", "contains an invalid immutable extension binding")
+		}
+		if _, duplicate := seenInstallations[id]; duplicate {
+			return invalidActionRequest(action, "extensions", "must not contain duplicate installation IDs")
+		}
+		seenInstallations[id] = struct{}{}
+		tools, ok := actionStringSlice(extension["allowed_tools"])
+		if !ok || len(tools) == 0 || len(tools) > maxChatExtensions {
+			return invalidActionRequest(action, "extensions", "allowed_tools must contain 1 to 64 exact tool names")
+		}
+		seenTools := make(map[string]struct{}, len(tools))
+		for _, tool := range tools {
+			if tool == "" || tool != strings.TrimSpace(tool) || len(tool) > maxChatExtensionToolNameBytes || !utf8.ValidString(tool) || tool == "cloud_worker_propose" {
+				return invalidActionRequest(action, "extensions", "contains an invalid local tool name")
+			}
+			if _, duplicate := seenTools[tool]; duplicate {
+				return invalidActionRequest(action, "extensions", "must not contain duplicate tool names")
+			}
+			seenTools[tool] = struct{}{}
 		}
 	}
 	return nil

@@ -66,6 +66,19 @@ func nativeAgentChatSchema(acceptsAttachments bool) *ActionSchema {
 				Present: "unique;at_most_4;all_owned_committed_unexpired_and_bound_to_turn_request_id;combined_size_at_most_8388608",
 			},
 		}
+		extensionSelection := &ActionFieldSchema{Type: "object", Properties: map[string]ActionFieldSchema{
+			"kind":           {Type: "string", Required: true, Presence: &ActionPresenceSchema{Present: "exactly:mcp"}},
+			"id":             {Type: "string", Required: true, Presence: &ActionPresenceSchema{Present: "canonical_uuid;installed_and_enabled"}},
+			"pinned_version": {Type: "string", Required: true, Presence: &ActionPresenceSchema{Present: "exact_source_version_or_commit;utf8_bytes_1_to_256"}},
+			"digest":         {Type: "string", Required: true, Presence: &ActionPresenceSchema{Present: "lowercase_sha256_equal_to_active_content_digest"}},
+			"allowed_tools": {Type: "array", Required: true, Items: &ActionFieldSchema{Type: "string"}, Presence: &ActionPresenceSchema{
+				Present: "unique;1_to_64;each_utf8_bytes_1_to_256;exactly_present_in_pinned_tool_catalog;no_core_intrinsics",
+			}},
+		}}
+		request["extensions"] = ActionFieldSchema{Type: "array", Items: extensionSelection, Presence: &ActionPresenceSchema{
+			Omitted: "no_local_extension_tools_exposed_to_the_model",
+			Present: "unique_installation_ids;1_to_64;immutable_exact_selections_only",
+		}}
 	}
 	return &ActionSchema{Request: request, Response: map[string]ActionFieldSchema{
 		"text": {Type: "string"}, "tool_calls": {Type: "array"},

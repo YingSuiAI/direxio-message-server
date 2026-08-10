@@ -877,11 +877,11 @@ func transformCapabilityRequest(action, operationID string, params map[string]an
 		// ProductCore and the Agent capability share one closed request shape.
 		// Reconnect cursors and websocket correlation metadata are consumed by
 		// the gateway and must never cross the capability boundary.
-		canonical := make(map[string]any, 7)
+		canonical := make(map[string]any, 8)
 		for _, key := range []string{
 			"idempotency_key", "conversation_id", "message",
 			"model_profile_id", "model_profile_revision", "credential_version",
-			"accepted_attachment_ids",
+			"accepted_attachment_ids", "extensions",
 		} {
 			if value, present := input[key]; present {
 				canonical[key] = value

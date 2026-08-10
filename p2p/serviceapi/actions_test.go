@@ -317,6 +317,11 @@ func TestNativeAgentAttachmentsAreStreamOnlyAndUseClosedUploadSchemas(t *testing
 	if !present || accepted.Type != "array" || accepted.Items == nil || accepted.Items.Presence == nil || accepted.Items.Presence.Present != "canonical_uuid" {
 		t.Fatalf("stream attachment IDs schema = %#v", accepted)
 	}
+	extensions, present := stream.Schema.Request["extensions"]
+	if !present || extensions.Type != "array" || extensions.Items == nil || extensions.Items.Type != "object" ||
+		extensions.Items.Properties["id"].Presence == nil || extensions.Items.Properties["allowed_tools"].Items == nil {
+		t.Fatalf("stream extension selection schema = %#v", extensions)
+	}
 	for _, action := range []string{
 		"agent.chat.attachment.begin",
 		"agent.chat.attachment.append",

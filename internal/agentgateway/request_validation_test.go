@@ -116,6 +116,71 @@ func TestValidateChatAttachmentsUseCommittedIDsOnlyOnDurableStream(t *testing.T)
 	}
 }
 
+func TestValidateChatStreamExtensionsRequireExactLocalBindings(t *testing.T) {
+	base := map[string]any{
+		"idempotency_key":        "11111111-1111-4111-8111-111111111111",
+		"conversation_id":        "22222222-2222-4222-8222-222222222222",
+		"message":                "run the light task locally",
+		"model_profile_id":       "profile-id",
+		"model_profile_revision": int64(2),
+		"credential_version":     int64(3),
+	}
+	valid := func() map[string]any {
+		return map[string]any{
+			"kind": "mcp", "id": "33333333-3333-4333-8333-333333333333", "pinned_version": "1.2.3",
+			"digest": strings.Repeat("a", 64), "allowed_tools": []any{"write_html"},
+		}
+	}
+	stream := cloneParams(base)
+	stream["extensions"] = []any{valid()}
+	if err := ValidateActionRequest("agent.chat.stream", stream); err != nil {
+		t.Fatalf("exact local extension rejected: %v", err)
+	}
+	if err := ValidateActionRequest("agent.chat", stream); !errors.Is(err, ErrInvalidActionRequest) {
+		t.Fatalf("unary chat accepted extensions: %v", err)
+	}
+
+	tests := map[string]any{
+		"empty selections": []any{},
+		"non object":       []any{"mcp"},
+		"duplicate install": []any{
+			valid(), valid(),
+		},
+	}
+	for name, extensions := range tests {
+		t.Run(name, func(t *testing.T) {
+			params := cloneParams(base)
+			params["extensions"] = extensions
+			if err := ValidateActionRequest("agent.chat.stream", params); !errors.Is(err, ErrInvalidActionRequest) {
+				t.Fatalf("invalid extensions accepted: %v", err)
+			}
+		})
+	}
+	mutations := map[string]func(map[string]any){
+		"unknown field":  func(v map[string]any) { v["extra"] = true },
+		"invalid kind":   func(v map[string]any) { v["kind"] = "cloud_worker" },
+		"invalid id":     func(v map[string]any) { v["id"] = "installation" },
+		"unpinned":       func(v map[string]any) { v["pinned_version"] = " " },
+		"invalid digest": func(v map[string]any) { v["digest"] = "sha256:x" },
+		"empty tools":    func(v map[string]any) { v["allowed_tools"] = []any{} },
+		"duplicate tool": func(v map[string]any) { v["allowed_tools"] = []any{"write_html", "write_html"} },
+		"cloud intrinsic": func(v map[string]any) {
+			v["allowed_tools"] = []any{"cloud_worker_propose"}
+		},
+	}
+	for name, mutate := range mutations {
+		t.Run(name, func(t *testing.T) {
+			selection := valid()
+			mutate(selection)
+			params := cloneParams(base)
+			params["extensions"] = []any{selection}
+			if err := ValidateActionRequest("agent.chat.stream", params); !errors.Is(err, ErrInvalidActionRequest) {
+				t.Fatalf("invalid selection accepted: %v", err)
+			}
+		})
+	}
+}
+
 func TestValidateChatAttachmentUploadRequests(t *testing.T) {
 	const (
 		idempotencyID = "11111111-1111-4111-8111-111111111111"

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -162,6 +163,10 @@ func TestTransformChatRequestEmitsExactAgentInput(t *testing.T) {
 		"accepted_attachment_ids": []any{
 			"44444444-4444-4444-8444-444444444444",
 		},
+		"extensions": []any{map[string]any{
+			"kind": "mcp", "id": "55555555-5555-4555-8555-555555555555", "pinned_version": "1.2.3",
+			"digest": strings.Repeat("a", 64), "allowed_tools": []any{"write_html"},
+		}},
 		"after_seq":         int64(7),
 		"turn_id":           "must-not-cross",
 		"client_message_id": "must-not-cross",
@@ -171,7 +176,7 @@ func TestTransformChatRequestEmitsExactAgentInput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []byte(`{"accepted_attachment_ids":["44444444-4444-4444-8444-444444444444"],"conversation_id":"22222222-2222-4222-8222-222222222222","credential_version":4,"idempotency_key":"11111111-1111-4111-8111-111111111111","message":"run this","model_profile_id":"33333333-3333-4333-8333-333333333333","model_profile_revision":3}`)
+	want := []byte(`{"accepted_attachment_ids":["44444444-4444-4444-8444-444444444444"],"conversation_id":"22222222-2222-4222-8222-222222222222","credential_version":4,"extensions":[{"allowed_tools":["write_html"],"digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","id":"55555555-5555-4555-8555-555555555555","kind":"mcp","pinned_version":"1.2.3"}],"idempotency_key":"11111111-1111-4111-8111-111111111111","message":"run this","model_profile_id":"33333333-3333-4333-8333-333333333333","model_profile_revision":3}`)
 	if !bytes.Equal(raw, want) {
 		t.Fatalf("canonical Agent chat input = %s, want %s", raw, want)
 	}
