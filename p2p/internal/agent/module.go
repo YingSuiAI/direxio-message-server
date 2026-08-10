@@ -242,6 +242,9 @@ func externalAgentActionError(err error) *actionbase.Error {
 	if errors.Is(err, agentgateway.ErrInvalidActionResult) {
 		return actionbase.StatusError(http.StatusBadGateway, "external native agent returned an invalid response")
 	}
+	if errors.Is(err, agentgateway.ErrCatalogInvalid) {
+		return actionbase.StatusError(http.StatusServiceUnavailable, "external native agent capability contract is unavailable")
+	}
 	var capabilityErr *agentgateway.CapabilityError
 	if errors.As(err, &capabilityErr) {
 		if capabilityErr.Code == capv1.ErrorCode_ERROR_CODE_RESOURCE_EXHAUSTED && capabilityErr.ClientCode == agentgateway.KnowledgeQuotaExceededCode {

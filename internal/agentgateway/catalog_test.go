@@ -17,6 +17,23 @@ const agentMemoryListItemSchema = `{"additionalProperties":false,"properties":{"
 
 const agentMemoryListResultSchema = `{"additionalProperties":false,"properties":{"items":{"items":` + agentMemoryListItemSchema + `,"type":"array"},"next_page_token":{"type":"string"}},"required":["items","next_page_token"],"type":"object"}`
 
+func TestExtensionMutationCatalogPinsCurrentStrictAgentSchemas(t *testing.T) {
+	want := map[string]string{
+		"agent.skills.install":      "9acc5baf60e119e1870f8521f9a5dc7686bd7e7cc3f86a88db232efc095b3296",
+		"agent.mcp.servers.install": "d298a2044537c6fe426468db657e114784169bc3404008073ac37e6b29a62d83",
+		"agent.core.mcp.install":    "d298a2044537c6fe426468db657e114784169bc3404008073ac37e6b29a62d83",
+		"agent.core.mcp.update":     "38e0d16c5ba8fb0ee20323ddb997840cdbaae6aa9b16dfe6e20f992ca2ee735c",
+		"agent.core.skills.install": "9acc5baf60e119e1870f8521f9a5dc7686bd7e7cc3f86a88db232efc095b3296",
+		"agent.core.skills.update":  "21a4aae561dcc8d6078c6f1637402e62711f7170b1da205e5ecc246b9ac8ae20",
+	}
+	for action, expected := range want {
+		requirement := NewCatalogRequirement(action)
+		if got := hex.EncodeToString(requirement.InputSchemaDigest); got != expected {
+			t.Errorf("%s input schema digest = %s, want %s", action, got, expected)
+		}
+	}
+}
+
 func TestKnowledgeCatalogPinsCurrentAgentSchemaResults(t *testing.T) {
 	want := map[string]string{
 		"agent.knowledge.config.get":      "87c332e9185a0436d6488041bbfc11cd66c9f40e345af02d9f97a76676cd65ae",

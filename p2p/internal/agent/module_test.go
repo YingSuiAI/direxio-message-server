@@ -81,6 +81,16 @@ func TestExternalAgentActionErrorSanitizesInvalidAgentResult(t *testing.T) {
 	}
 }
 
+func TestExternalAgentActionErrorClassifiesCapabilityCatalogDrift(t *testing.T) {
+	err := externalAgentActionError(fmt.Errorf("validate catalog: %w: private detail", agentgateway.ErrCatalogInvalid))
+	if err == nil || err.Status != http.StatusServiceUnavailable {
+		t.Fatalf("catalog drift status = %#v, want HTTP 503", err)
+	}
+	if err.Error != "external native agent capability contract is unavailable" || strings.Contains(err.Error, "private detail") {
+		t.Fatalf("catalog drift response is not stable and sanitized: %#v", err)
+	}
+}
+
 func TestExternalAgentActionErrorUsesStructuredCapabilityCode(t *testing.T) {
 	secret := "provider-secret-canary"
 	cases := map[capv1.ErrorCode]int{
