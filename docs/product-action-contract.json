@@ -1887,8 +1887,8 @@
                   "account_generation": {
                     "type": "integer",
                     "presence": {
-                      "omitted": "non_cloud_worker_confirmation",
-                      "present": "positive_integer_required_for_cloud_worker.execute"
+                      "omitted": "confirmation_domain_without_owner_generation_fence",
+                      "present": "positive_integer_required_for_cloud_worker.execute|execution_v2.run|extension.execute"
                     }
                   },
                   "content_digest": {
@@ -2160,8 +2160,8 @@
                     "account_generation": {
                       "type": "integer",
                       "presence": {
-                        "omitted": "non_cloud_worker_confirmation",
-                        "present": "positive_integer_required_for_cloud_worker.execute"
+                        "omitted": "confirmation_domain_without_owner_generation_fence",
+                        "present": "positive_integer_required_for_cloud_worker.execute|execution_v2.run|extension.execute"
                       }
                     },
                     "content_digest": {
@@ -2424,8 +2424,8 @@
                   "account_generation": {
                     "type": "integer",
                     "presence": {
-                      "omitted": "non_cloud_worker_confirmation",
-                      "present": "positive_integer_required_for_cloud_worker.execute"
+                      "omitted": "confirmation_domain_without_owner_generation_fence",
+                      "present": "positive_integer_required_for_cloud_worker.execute|execution_v2.run|extension.execute"
                     }
                   },
                   "content_digest": {
@@ -2684,8 +2684,8 @@
                   "account_generation": {
                     "type": "integer",
                     "presence": {
-                      "omitted": "non_cloud_worker_confirmation",
-                      "present": "positive_integer_required_for_cloud_worker.execute"
+                      "omitted": "confirmation_domain_without_owner_generation_fence",
+                      "present": "positive_integer_required_for_cloud_worker.execute|execution_v2.run|extension.execute"
                     }
                   },
                   "content_digest": {

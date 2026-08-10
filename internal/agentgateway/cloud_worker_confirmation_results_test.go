@@ -212,6 +212,63 @@ func TestGenericConfirmationSecretDescriptorsRemainUnchanged(t *testing.T) {
 	}
 }
 
+func TestExtensionExecutionConfirmationUsesOwnerAuthorityWithoutCloudProjection(t *testing.T) {
+	confirmation := map[string]any{
+		"confirmation_id": "11111111-1111-4111-8111-111111111111",
+		"owner_id":        "@owner:example.test",
+		"task_id":         "22222222-2222-4222-8222-222222222222",
+		"state":           "pending",
+		"revision":        float64(1),
+		"created_at":      "2026-08-10T23:40:27Z",
+		"updated_at":      "2026-08-10T23:40:27Z",
+		"expires_at":      "2026-08-11T00:40:27Z",
+		"terminal_code":   "",
+		"terminal_note":   "",
+		"terminal_reason": "",
+		"binding": map[string]any{
+			"owner_id": "@owner:example.test", "account_generation": float64(9),
+			"operation_domain": "extension.execute", "target_id": "33333333-3333-4333-8333-333333333333",
+			"target_revision": float64(4), "target_kind": "mcp", "source_version": "v1",
+			"source_commit": strings.Repeat("a", 40), "content_digest": strings.Repeat("b", 64),
+			"manifest_digest": strings.Repeat("c", 64), "execution_digest": strings.Repeat("d", 64),
+			"permission_digest": strings.Repeat("e", 64), "parameter_digest": strings.Repeat("f", 64),
+			"network_digest": strings.Repeat("1", 64), "secret_grant_digest": strings.Repeat("2", 64),
+			"selected_tool": "write_html", "selected_command": []any{}, "network_grants": []any{},
+			"secret_grants": []any{},
+		},
+	}
+	request := map[string]any{"confirmation_id": confirmation["confirmation_id"]}
+	authority := actionResultAuthority{ownerID: "@owner:example.test", accountGeneration: 9}
+	got, err := adaptActionResultForRequestWithAuthority("agent.core.confirmations.get", request, map[string]any{"confirmation": confirmation}, authority)
+	if err != nil {
+		t.Fatalf("extension confirmation rejected: %v", err)
+	}
+	if !reflect.DeepEqual(got["confirmation"], confirmation) {
+		t.Fatalf("extension confirmation projection changed: %#v", got)
+	}
+	if _, err := adaptActionResultForRequestWithAuthority("agent.core.confirmations.get", request, map[string]any{"confirmation": confirmation}, actionResultAuthority{}); !errors.Is(err, ErrInvalidActionResult) {
+		t.Fatalf("extension confirmation accepted missing prepared authority: %v", err)
+	}
+
+	for _, drift := range []struct {
+		name   string
+		mutate func(map[string]any)
+	}{
+		{"foreign owner", func(value map[string]any) { value["owner_id"] = "@foreign:example.test" }},
+		{"foreign binding owner", func(value map[string]any) { value["binding"].(map[string]any)["owner_id"] = "@foreign:example.test" }},
+		{"stale generation", func(value map[string]any) { value["binding"].(map[string]any)["account_generation"] = float64(8) }},
+	} {
+		t.Run(drift.name, func(t *testing.T) {
+			cloned := cloneCloudWorkerConfirmation(t, confirmation)
+			drift.mutate(cloned)
+			_, err := adaptActionResultForRequestWithAuthority("agent.core.confirmations.get", request, map[string]any{"confirmation": cloned}, authority)
+			if !errors.Is(err, ErrInvalidActionResult) {
+				t.Fatalf("authority drift accepted: %v", err)
+			}
+		})
+	}
+}
+
 func cloudWorkerConfirmationActionOutput(action string, confirmation map[string]any) map[string]any {
 	if action == "agent.core.confirmations.list" {
 		return map[string]any{"confirmations": []any{confirmation}, "next_page_token": ""}

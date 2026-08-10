@@ -123,8 +123,11 @@ func coreConfirmationResponseFields() map[string]ActionFieldSchema {
 		return ActionFieldSchema{Type: "integer", Presence: &ActionPresenceSchema{Omitted: "non_cloud_worker_confirmation", Present: present}}
 	}
 	binding := map[string]ActionFieldSchema{
-		"owner_id":            {Type: "string", Required: true, Presence: &ActionPresenceSchema{Present: "authenticated_owner_id"}},
-		"account_generation":  cloudOnlyInteger("positive_integer_required_for_cloud_worker.execute"),
+		"owner_id": {Type: "string", Required: true, Presence: &ActionPresenceSchema{Present: "authenticated_owner_id"}},
+		"account_generation": {Type: "integer", Presence: &ActionPresenceSchema{
+			Omitted: "confirmation_domain_without_owner_generation_fence",
+			Present: "positive_integer_required_for_cloud_worker.execute|execution_v2.run|extension.execute",
+		}},
 		"operation_domain":    {Type: "string", Required: true},
 		"target_id":           {Type: "string", Required: true},
 		"target_revision":     {Type: "integer", Required: true, Presence: &ActionPresenceSchema{Present: "positive_integer"}},

@@ -32,6 +32,9 @@ func validateCloudWorkerConfirmationActionResult(action string, request, output 
 		if !requested || !returnedOK || returned["confirmation_id"] != requestedID {
 			return cloudWorkerResultError("confirmation_id does not match the request")
 		}
+		if err := validateAuthorityBoundConfirmation(returned, authority); err != nil {
+			return err
+		}
 		confirmation, cloud, err := cloudWorkerConfirmationFromResult(output)
 		if err != nil || !cloud {
 			return err
@@ -55,7 +58,13 @@ func validateCloudWorkerConfirmationActionResult(action string, request, output 
 		containsCloudWorker := false
 		for _, item := range raw {
 			confirmation, ok := item.(map[string]any)
-			if !ok || !looksLikeCloudWorkerConfirmation(confirmation) {
+			if !ok {
+				continue
+			}
+			if err := validateAuthorityBoundConfirmation(confirmation, authority); err != nil {
+				return err
+			}
+			if !looksLikeCloudWorkerConfirmation(confirmation) {
 				continue
 			}
 			containsCloudWorker = true
@@ -149,12 +158,37 @@ func looksLikeCloudWorkerConfirmation(confirmation map[string]any) bool {
 	if binding["operation_domain"] == "cloud_worker.execute" || binding["target_kind"] == "ephemeral_pi_worker" || binding["selected_tool"] == "cloud_worker_propose" {
 		return true
 	}
-	for _, field := range []string{"account_generation", "execution_id", "plan_id", "plan_revision", "plan_digest", "run_id", "run_revision", "run_digest", "quote_digest", "digest"} {
+	for _, field := range []string{"execution_id", "plan_id", "plan_revision", "plan_digest", "run_id", "run_revision", "run_digest", "quote_digest", "digest"} {
 		if _, present := binding[field]; present {
 			return true
 		}
 	}
 	return false
+}
+
+func validateAuthorityBoundConfirmation(confirmation map[string]any, authority actionResultAuthority) error {
+	binding, ok := confirmation["binding"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	domain, _ := binding["operation_domain"].(string)
+	switch domain {
+	case "cloud_worker.execute", "execution_v2.run", "extension.execute":
+	default:
+		return nil
+	}
+	if !authority.valid() {
+		return cloudWorkerResultError("prepared owner authority is missing")
+	}
+	owner, ownerOK := confirmation["owner_id"].(string)
+	bindingOwner, bindingOwnerOK := binding["owner_id"].(string)
+	generation, generationOK := cloudInteger(binding["account_generation"])
+	if !ownerOK || !bindingOwnerOK || owner != authority.ownerID || bindingOwner != authority.ownerID ||
+		owner != strings.TrimSpace(owner) || bindingOwner != strings.TrimSpace(bindingOwner) ||
+		!generationOK || generation != authority.accountGeneration {
+		return cloudWorkerResultError("confirmation owner authority does not match the prepared request")
+	}
+	return nil
 }
 
 func validateCloudWorkerConfirmation(confirmation map[string]any, authority actionResultAuthority) error {

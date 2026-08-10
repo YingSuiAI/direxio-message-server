@@ -36,8 +36,14 @@ func TestCoreConfirmationSchemasPinCloudWorkerAuthorityAndPurposeOnlyGrants(t *t
 			if !binding["owner_id"].Required || binding["owner_id"].Presence == nil {
 				t.Fatalf("binding owner authority=%#v", binding["owner_id"])
 			}
+			accountGeneration := binding["account_generation"]
+			if accountGeneration.Required || accountGeneration.Presence == nil ||
+				accountGeneration.Presence.Omitted != "confirmation_domain_without_owner_generation_fence" ||
+				accountGeneration.Presence.Present != "positive_integer_required_for_cloud_worker.execute|execution_v2.run|extension.execute" {
+				t.Errorf("conditional authority binding.account_generation=%#v", accountGeneration)
+			}
 			for _, field := range []string{
-				"account_generation", "execution_id", "plan_id", "plan_revision", "plan_digest",
+				"execution_id", "plan_id", "plan_revision", "plan_digest",
 				"run_id", "run_revision", "run_digest", "quote_digest", "digest",
 			} {
 				value := binding[field]
