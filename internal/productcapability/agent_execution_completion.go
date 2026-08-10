@@ -68,6 +68,9 @@ func (s *Server) recordAgentExecutionCompletion(ctx context.Context, req *capv1.
 	if err != nil {
 		return fail(capv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT, err.Error())
 	}
+	if req.GetOperationId() != receipt.EventID {
+		return fail(capv1.ErrorCode_ERROR_CODE_CONFLICT, "operation_id must equal completion event_id")
+	}
 	receipt.OwnerID = s.config.ServiceOwnerID
 	receipt.AccountGeneration = s.config.ExpectedAccountGeneration
 	if err := receipt.Validate(); err != nil {

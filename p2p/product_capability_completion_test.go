@@ -10,6 +10,24 @@ import (
 	"github.com/YingSuiAI/dirextalk-message-server/internal/dirextalkdomain"
 )
 
+type failOnceAgentExecutionCompletionStore struct {
+	Store
+	delegate agentExecutionCompletionStore
+	calls    int
+}
+
+func (store *failOnceAgentExecutionCompletionStore) RecordAgentExecutionCompletion(
+	ctx context.Context,
+	receipt dirextalkdomain.AgentExecutionCompletionReceipt,
+	event dirextalkdomain.Event,
+) (bool, int64, error) {
+	store.calls++
+	if store.calls == 1 {
+		return false, 0, errors.New("temporary completion store failure")
+	}
+	return store.delegate.RecordAgentExecutionCompletion(ctx, receipt, event)
+}
+
 func serviceCompletionReceipt(t *testing.T, service *Service) dirextalkdomain.AgentExecutionCompletionReceipt {
 	t.Helper()
 	raw, err := os.ReadFile("../internal/agentgateway/testdata/cloud_worker_public_v1.json")
@@ -51,6 +69,17 @@ func TestRecordAgentExecutionCompletionPublishesOneDurableInvalidation(t *testin
 	event := events[0]
 	if event.Seq <= 0 || event.Type != "agent.execution.v2.completed" || event.EventID != receipt.EventID || event.Payload["execution_id"] != receipt.ExecutionID || event.Payload["payload_digest"] != receipt.PayloadDigest {
 		t.Fatalf("completion invalidation=%#v", event)
+	}
+	if len(event.Payload) != 9 {
+		t.Fatalf("completion invalidation payload keys=%#v", event.Payload)
+	}
+	for _, key := range []string{
+		"event_id", "execution_id", "run_id", "conversation_id", "turn_id",
+		"result_message_id", "terminal_state", "completed_at", "payload_digest",
+	} {
+		if _, ok := event.Payload[key]; !ok {
+			t.Fatalf("completion invalidation is missing %q: %#v", key, event.Payload)
+		}
 	}
 	if after, err := service.listP2PEvents(context.Background(), event.Seq, 10); err != nil || len(after) != 0 {
 		t.Fatalf("completion realtime cursor replayed acknowledged event: %#v err=%v", after, err)
@@ -99,6 +128,32 @@ func TestRecordAgentExecutionCompletionFencesIdentityAndConflicts(t *testing.T) 
 	stale.AccountGeneration--
 	if _, err := service.RecordAgentExecutionCompletion(context.Background(), stale); !errors.Is(err, dirextalkdomain.ErrAgentExecutionCompletionConflict) {
 		t.Fatalf("stale generation error=%v", err)
+	}
+}
+
+func TestRecordAgentExecutionCompletionFailureDoesNotPublishAndExactRetrySucceeds(t *testing.T) {
+	service := NewService(withTestExternalAgent(Config{ServerName: "example.test", AccountGeneration: 7}))
+	receipt := serviceCompletionReceipt(t, service)
+	delegate, ok := service.store.(agentExecutionCompletionStore)
+	if !ok {
+		t.Fatal("test service completion store is unavailable")
+	}
+	store := &failOnceAgentExecutionCompletionStore{Store: service.store, delegate: delegate}
+	service.store = store
+
+	if replayed, err := service.RecordAgentExecutionCompletion(context.Background(), receipt); err == nil || replayed {
+		t.Fatalf("failed completion replayed=%t err=%v", replayed, err)
+	}
+	if events, err := service.listP2PEvents(context.Background(), 0, 10); err != nil || len(events) != 0 {
+		t.Fatalf("failed completion invalidations=%#v err=%v", events, err)
+	}
+
+	if replayed, err := service.RecordAgentExecutionCompletion(context.Background(), receipt); err != nil || replayed {
+		t.Fatalf("retried completion replayed=%t err=%v", replayed, err)
+	}
+	events, err := service.listP2PEvents(context.Background(), 0, 10)
+	if err != nil || len(events) != 1 || events[0].EventID != receipt.EventID {
+		t.Fatalf("retried completion invalidations=%#v err=%v", events, err)
 	}
 }
 

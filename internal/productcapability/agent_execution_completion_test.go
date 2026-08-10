@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -47,7 +48,11 @@ func completionRequest(t *testing.T) ([]byte, dirextalkdomain.AgentExecutionComp
 
 func completionStartRequest(t *testing.T, raw []byte) *capv1.StartOperationRequest {
 	t.Helper()
-	operationID := uuid.NewString()
+	var receipt dirextalkdomain.AgentExecutionCompletionReceipt
+	if err := json.Unmarshal(raw, &receipt); err != nil {
+		t.Fatal(err)
+	}
+	operationID := receipt.EventID
 	digest := sha256.Sum256(raw)
 	return &capv1.StartOperationRequest{
 		CallContext: &capv1.CallContext{
@@ -157,6 +162,63 @@ func TestPrivateCompletionRejectsNonCanonicalDigestRouteAndFields(t *testing.T) 
 				t.Fatalf("invalid private completion response=%#v called=%t", response, called)
 			}
 		})
+	}
+}
+
+func TestPrivateCompletionRejectsOperationEventIdentityMismatch(t *testing.T) {
+	raw, _ := completionRequest(t)
+	request := completionStartRequest(t, raw)
+	request.OperationId = uuid.NewString()
+	request.CallContext.RootOperationId = request.OperationId
+	called := false
+
+	response, err := completionServer(func(context.Context, dirextalkdomain.AgentExecutionCompletionReceipt) (bool, error) {
+		called = true
+		return false, nil
+	}).StartOperation(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if called || response.GetOperationId() != request.GetOperationId() ||
+		response.GetState() != capv1.OperationState_OPERATION_STATE_FAILED ||
+		response.GetError().GetCode() != capv1.ErrorCode_ERROR_CODE_CONFLICT {
+		t.Fatalf("operation/event mismatch response=%#v called=%t", response, called)
+	}
+}
+
+func TestPrivateCompletionRecorderFailureDoesNotAcknowledgeAndExactRetrySucceeds(t *testing.T) {
+	raw, _ := completionRequest(t)
+	request := completionStartRequest(t, raw)
+	attempts := 0
+	published := 0
+	server := completionServer(func(context.Context, dirextalkdomain.AgentExecutionCompletionReceipt) (bool, error) {
+		attempts++
+		if attempts == 1 {
+			return false, errors.New("temporary store failure")
+		}
+		published++
+		return false, nil
+	})
+
+	failed, err := server.StartOperation(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.GetState() != capv1.OperationState_OPERATION_STATE_FAILED ||
+		failed.GetError().GetCode() != capv1.ErrorCode_ERROR_CODE_UPSTREAM_FAILED ||
+		published != 0 {
+		t.Fatalf("failed completion response=%#v published=%d", failed, published)
+	}
+
+	retried, err := server.StartOperation(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 2 || published != 1 ||
+		retried.GetOperationId() != request.GetOperationId() ||
+		retried.GetState() != capv1.OperationState_OPERATION_STATE_COMPLETED ||
+		retried.GetError() != nil {
+		t.Fatalf("retried completion response=%#v attempts=%d published=%d", retried, attempts, published)
 	}
 }
 
