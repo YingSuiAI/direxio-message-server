@@ -60,8 +60,18 @@ type waitingConfirmationDurableAgent struct{}
 
 type terminalErrorDurableAgent struct{}
 
+type identityFreeCapabilityErrorDurableAgent struct{}
+
 func (terminalErrorDurableAgent) Stream(context.Context, string, map[string]any, func(agentstream.Event) error) error {
 	return nil
+}
+
+func (identityFreeCapabilityErrorDurableAgent) Stream(context.Context, string, map[string]any, func(agentstream.Event) error) error {
+	return nil
+}
+
+func (identityFreeCapabilityErrorDurableAgent) DurableStream(context.Context, string, string, map[string]any, func(agentstream.StreamEvent) error) error {
+	return errors.New("external native agent operation outcome is uncertain")
 }
 
 type terminalErrorAgent struct{}
@@ -81,7 +91,7 @@ func (terminalErrorDurableAgent) DurableStream(_ context.Context, _ string, _ st
 	if emitErr := emit(agentstream.StreamEvent{
 		Kind: agentstream.EventError, TurnID: turnID, IdempotencyKey: startID,
 		ConversationID: conversationID, Revision: 1, Seq: 1, Event: "error",
-		Data: map[string]any{"error_summary": "gateway terminal error"},
+		Data: map[string]any{"error_code": "provider_uncertain", "error_summary": "model dispatch outcome is unknown"},
 	}); emitErr != nil {
 		return emitErr
 	}
@@ -435,13 +445,36 @@ func TestNativeAgentDurableTerminalErrorIsSentOnce(t *testing.T) {
 		},
 	})
 	frame := nextOutbound(t, connection)
-	if frame["type"] != "server.native_agent_stream.error" || frame["event"] != "error" {
+	if frame["type"] != "server.native_agent_stream.error" || frame["event"] != "error" || frame["status"] != http.StatusBadGateway {
 		t.Fatalf("terminal error frame = %#v", frame)
+	}
+	if frame["code"] != "provider_uncertain" || frame["error_code"] != "provider_uncertain" || frame["error"] != "model dispatch outcome is unknown" {
+		t.Fatalf("terminal failure authority = %#v", frame)
 	}
 	select {
 	case duplicate := <-connection.outbound:
 		t.Fatalf("terminal gateway error was duplicated: %#v", duplicate)
 	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestNativeAgentIdentityFreeCapabilityErrorDoesNotBecomeBadRequest(t *testing.T) {
+	module := New(Dependencies{Agent: identityFreeCapabilityErrorDurableAgent{}}, Config{})
+	connection := newConnection("session", Ticket{Role: "owner", UserID: "@owner:example.test"}, MaxInFlightRequests)
+	module.startNativeAgentStream(context.Background(), connection, map[string]any{
+		"id": "capability-terminal", "action": "agent.chat", "params": map[string]any{
+			"idempotency_key": "11111111-1111-4111-8111-111111111111",
+			"conversation_id": "22222222-2222-4222-8222-222222222222",
+			"message":         "hello", "model_profile_id": "profile-id",
+			"model_profile_revision": int64(1), "credential_version": int64(1), "after_seq": int64(16),
+		},
+	})
+	frame := nextOutbound(t, connection)
+	if frame["type"] != "server.native_agent_stream.error" || frame["status"] != http.StatusBadGateway {
+		t.Fatalf("identity-free capability terminal = %#v", frame)
+	}
+	if message := actionbase.String(frame["error"]); message != "external native agent operation outcome is uncertain" || strings.Contains(message, "identity is invalid") {
+		t.Fatalf("identity-free capability failure was misclassified: %#v", frame)
 	}
 }
 

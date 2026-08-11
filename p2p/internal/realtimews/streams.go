@@ -396,13 +396,18 @@ func (m *Module) startNativeAgentStream(ctx context.Context, client *connection,
 					} else if event.Event == "interrupted" {
 						status = http.StatusServiceUnavailable
 					}
-					return client.sendBlocking(streamCtx, map[string]any{
+					frame := map[string]any{
 						"type": "server.native_agent_stream.error", "id": id,
 						"action": wireAction, "ok": false, "status": status,
 						"error": message, "event": event.Event, "turn_id": event.TurnID,
 						"idempotency_key": event.IdempotencyKey, "revision": event.Revision,
 						"conversation_id": event.ConversationID, "seq": event.Seq, "data": event.Data,
-					})
+					}
+					if code := actionbase.String(event.Data["error_code"]); code != "" {
+						frame["code"] = code
+						frame["error_code"] = code
+					}
+					return client.sendBlocking(streamCtx, frame)
 				default:
 					return client.sendBlocking(streamCtx, map[string]any{
 						"type": "server.native_agent_stream.event", "id": id,

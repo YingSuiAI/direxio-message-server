@@ -103,6 +103,15 @@ capability live.
   durable event. Non-waiting events cannot carry confirmation, execution, or
   waiting status authority, and waiting events cannot mix text, tool call,
   tool result, response, or error fields.
+- A terminal capability `ErrorEvent` has no business turn identity and is
+  never projected directly. Message Server resolves the current
+  `agent.chat.turns.list` ledger, matches the exact conversation and original
+  start idempotency key, and publishes the failed turn's authoritative
+  `turn_id`, `revision`, `terminal_code`, and `terminal_summary`. This also
+  closes an `after_seq` reconnect that observes only the capability terminal.
+  If no exact failed turn exists, Message Server returns only the sanitized
+  capability failure and does not fabricate a turn identity or infer a code
+  from error text.
 - Durable turn reconciliation uses `agent.chat.turns.list` with one canonical
   conversation UUID, an optional opaque page token of at most 4,096 bytes, and
   an optional limit from 1 through 1,000. Each returned turn is the exact

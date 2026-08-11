@@ -85,6 +85,7 @@ func (r *Runner) Stream(ctx context.Context, action string, params map[string]an
 	if err := ValidateActionRequest(action, params); err != nil {
 		return err
 	}
+	conversationID, _ := params["conversation_id"].(string)
 	operationID, requestJSON, permission, err := r.prepare(action, params)
 	if err != nil {
 		return err
@@ -157,6 +158,11 @@ func (r *Runner) Stream(ctx context.Context, action string, params map[string]an
 			return nil
 		}
 		nativeEvent, terminal, terminalErr := nativeEventFromProto(event, authority)
+		if nativeEvent == nil && terminal {
+			if _, isCapabilityError := event.Event.(*capv1.WatchOperationEvent_Error); isCapabilityError {
+				nativeEvent = r.reconcileDurableChatTerminalError(ctx, operationID, conversationID, event.Sequence)
+			}
+		}
 		if nativeEvent != nil {
 			if err := emit(*nativeEvent); err != nil {
 				return err
@@ -639,13 +645,12 @@ func nativeEventFromProto(event *capv1.WatchOperationEvent, authority actionResu
 		if value.Error != nil {
 			capabilityErr = capabilityErrorFromProto(value.Error.Error)
 		}
-		var typedErr *CapabilityError
-		if errors.As(capabilityErr, &typedErr) && typedErr.ClientCode != "" {
-			base["code"] = typedErr.ClientCode
-			base["error_code"] = typedErr.ClientCode
-		}
-		base["error"] = capabilityErr.Error()
-		return &agentstream.Event{Event: "error", Seq: sequence, Data: base}, true, capabilityErr
+		// A capability error is transport terminal state and carries no durable
+		// turn identity. Projecting it directly would make the ProductCore
+		// boundary reject the event as an invalid business turn. Runner.Stream
+		// reconciles an exact failed turn from the authoritative Agent ledger;
+		// when that is unavailable, only this sanitized capability error escapes.
+		return nil, true, capabilityErr
 	case *capv1.WatchOperationEvent_Cancelled:
 		return nil, true, capabilityError(capv1.ErrorCode_ERROR_CODE_CONFLICT)
 	case *capv1.WatchOperationEvent_Gap:
@@ -655,6 +660,72 @@ func nativeEventFromProto(event *capv1.WatchOperationEvent, authority actionResu
 	default:
 		return nil, false, nil
 	}
+}
+
+// reconcileDurableChatTerminalError reconstructs only an exact, authoritative
+// failed-turn event. A capability ErrorEvent does not carry the complete
+// business identity, revision, or terminal details, so the operation id alone
+// cannot authorize a synthesized event. Reading one bounded page from the
+// existing turn ledger keeps reconnects that receive only the terminal event
+// safe without inferring identity or failure details from error text.
+func (r *Runner) reconcileDurableChatTerminalError(ctx context.Context, operationID, conversationID string, sequence int64) *agentstream.Event {
+	if r == nil || !canonicalTurnUUID(operationID) || !canonicalTurnUUID(conversationID) {
+		return nil
+	}
+	result, err := r.Invoke(ctx, "agent.chat.turns.list", map[string]any{
+		"conversation_id": conversationID,
+		"limit":           int64(1000),
+	})
+	if err != nil {
+		return nil
+	}
+	turns, ok := result["turns"].([]any)
+	if !ok {
+		return nil
+	}
+	for _, raw := range turns {
+		turn, ok := raw.(map[string]any)
+		if !ok || turn["idempotency_key"] != operationID || turn["conversation_id"] != conversationID || turn["state"] != "failed" {
+			continue
+		}
+		event, err := terminalChatErrorFromTurn(turn, sequence)
+		if err != nil {
+			return nil
+		}
+		return event
+	}
+	return nil
+}
+
+func terminalChatErrorFromTurn(turn map[string]any, sequence int64) (*agentstream.Event, error) {
+	if !validCanonicalTurn(turn) || turn["state"] != "failed" {
+		return nil, fmt.Errorf("%w: terminal chat turn is not an authoritative failure", ErrInvalidActionResult)
+	}
+	revision, ok := turnInt64(turn["revision"])
+	if !ok || revision <= 0 {
+		return nil, fmt.Errorf("%w: terminal chat turn revision is invalid", ErrInvalidActionResult)
+	}
+	errorCode, codeOK := turn["terminal_code"].(string)
+	errorSummary, summaryOK := turn["terminal_summary"].(string)
+	errorCode = strings.TrimSpace(errorCode)
+	errorSummary = strings.TrimSpace(errorSummary)
+	if !codeOK || !summaryOK || errorCode == "" || errorSummary == "" {
+		return nil, fmt.Errorf("%w: terminal chat failure details are missing", ErrInvalidActionResult)
+	}
+	data := map[string]any{
+		"kind":            "error",
+		"idempotency_key": turn["idempotency_key"],
+		"conversation_id": turn["conversation_id"],
+		"turn_id":         turn["turn_id"],
+		"revision":        revision,
+		"error_code":      errorCode,
+		"error_summary":   errorSummary,
+		"sequence":        positiveSequence(sequence),
+	}
+	if err := validateChatStreamEvent(data, actionResultAuthority{}); err != nil {
+		return nil, err
+	}
+	return &agentstream.Event{Event: "error", Seq: positiveSequence(sequence), Data: data}, nil
 }
 
 func positiveSequence(sequence int64) int64 {

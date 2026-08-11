@@ -169,6 +169,8 @@ type requestValidationRunner struct {
 
 type sequenceRunner struct{}
 
+type terminalSequenceRunner struct{}
+
 func (sequenceRunner) Apply(context.Context, string) error { return nil }
 func (sequenceRunner) Invoke(context.Context, string, map[string]any) (map[string]any, error) {
 	return nil, nil
@@ -181,6 +183,30 @@ func (sequenceRunner) Stream(_ context.Context, _ string, params map[string]any,
 		"revision":        float64(1),
 		"sequence":        int64(31),
 	}})
+}
+
+func (terminalSequenceRunner) Apply(context.Context, string) error { return nil }
+func (terminalSequenceRunner) Invoke(context.Context, string, map[string]any) (map[string]any, error) {
+	return nil, nil
+}
+func (terminalSequenceRunner) Stream(_ context.Context, _ string, params map[string]any, emit func(agentstream.Event) error) error {
+	const turnID = "33333333-3333-4333-8333-333333333333"
+	if err := emit(agentstream.Event{Event: "accepted", Seq: 15, Data: map[string]any{
+		"kind": "accepted", "idempotency_key": params["idempotency_key"],
+		"conversation_id": params["conversation_id"], "turn_id": turnID,
+		"revision": int64(4), "sequence": int64(15),
+	}}); err != nil {
+		return err
+	}
+	if err := emit(agentstream.Event{Event: "error", Seq: 17, Data: map[string]any{
+		"kind": "error", "idempotency_key": params["idempotency_key"],
+		"conversation_id": params["conversation_id"], "turn_id": turnID,
+		"revision": int64(5), "sequence": int64(17),
+		"error_code": "provider_uncertain", "error_summary": "model dispatch outcome is unknown",
+	}}); err != nil {
+		return err
+	}
+	return &agentgateway.CapabilityError{Code: capv1.ErrorCode_ERROR_CODE_UNCERTAIN}
 }
 
 func TestDurableStreamProjectsRunnerSequence(t *testing.T) {
@@ -202,6 +228,36 @@ func TestDurableStreamProjectsRunnerSequence(t *testing.T) {
 	}
 	if received.Seq != 31 || received.Event != "done" || received.Turn.State != agentstream.StateSucceeded {
 		t.Fatalf("durable stream event = %#v, want done seq 31", received)
+	}
+}
+
+func TestDurableStreamProjectsAuthoritativeTerminalFailureBeforeCapabilityError(t *testing.T) {
+	const startID = "11111111-1111-4111-8111-111111111111"
+	const conversationID = "22222222-2222-4222-8222-222222222222"
+	module := New(Config{Runner: terminalSequenceRunner{}})
+	params := map[string]any{
+		"idempotency_key": startID, "conversation_id": conversationID,
+		"message": "hello", "model_profile_id": "44444444-4444-4444-8444-444444444444",
+		"model_profile_revision": int64(1), "credential_version": int64(1), "after_seq": int64(15),
+	}
+	var events []agentstream.StreamEvent
+	err := module.DurableStream(context.Background(), "@owner:example.test", "agent.chat.stream", params, func(event agentstream.StreamEvent) error {
+		events = append(events, event)
+		return nil
+	})
+	var capabilityErr *agentgateway.CapabilityError
+	if !errors.As(err, &capabilityErr) || capabilityErr.Code != capv1.ErrorCode_ERROR_CODE_UNCERTAIN {
+		t.Fatalf("terminal runner error = %#v", err)
+	}
+	if len(events) != 2 || events[0].Seq != 15 || events[1].Seq != 17 {
+		t.Fatalf("terminal sequence = %#v", events)
+	}
+	terminal := events[1]
+	if terminal.Kind != agentstream.EventError || terminal.Turn.State != agentstream.StateFailed || terminal.TurnID != "33333333-3333-4333-8333-333333333333" || terminal.Revision != 5 {
+		t.Fatalf("terminal projection = %#v", terminal)
+	}
+	if terminal.Data["error_code"] != "provider_uncertain" || terminal.Data["error_summary"] != "model dispatch outcome is unknown" {
+		t.Fatalf("terminal failure data = %#v", terminal.Data)
 	}
 }
 

@@ -438,7 +438,7 @@ func durableChatResponseForTest(content string, references, taskIDs, planIDs []a
 	return response
 }
 
-func TestNativeEventFromProtoProjectsKnowledgeQuotaCode(t *testing.T) {
+func TestNativeEventFromProtoDoesNotForgeIdentityForCapabilityError(t *testing.T) {
 	event, terminal, err := nativeEventFromProto(&capv1.WatchOperationEvent{
 		OperationId: "operation-1",
 		Sequence:    24,
@@ -453,8 +453,54 @@ func TestNativeEventFromProtoProjectsKnowledgeQuotaCode(t *testing.T) {
 	if !terminal || !errors.As(err, &capabilityErr) || capabilityErr.ClientCode != KnowledgeQuotaExceededCode {
 		t.Fatalf("knowledge quota event terminal=%v err=%#v", terminal, err)
 	}
-	if event == nil || event.Data["code"] != KnowledgeQuotaExceededCode || event.Data["error_code"] != KnowledgeQuotaExceededCode || event.Data["error"] != "knowledge quota exceeded" {
-		t.Fatalf("knowledge quota event = %#v", event)
+	if event != nil {
+		t.Fatalf("identity-free capability error was projected as a business event: %#v", event)
+	}
+}
+
+func TestTerminalChatErrorFromAuthoritativeFailedTurn(t *testing.T) {
+	turn := map[string]any{
+		"turn_id":          durableTestTurnID,
+		"idempotency_key":  durableTestStartID,
+		"conversation_id":  durableTestConversationID,
+		"state":            "failed",
+		"revision":         float64(5),
+		"last_sequence":    float64(16),
+		"terminal_code":    "provider_uncertain",
+		"terminal_summary": "model dispatch outcome is unknown",
+		"created_at":       "2026-08-11T10:24:42.331Z",
+		"updated_at":       "2026-08-11T10:26:44.558Z",
+	}
+	event, err := terminalChatErrorFromTurn(turn, 17)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event == nil || event.Event != "error" || event.Seq != 17 {
+		t.Fatalf("terminal event = %#v", event)
+	}
+	if event.Data["idempotency_key"] != durableTestStartID || event.Data["conversation_id"] != durableTestConversationID || event.Data["turn_id"] != durableTestTurnID || event.Data["revision"] != int64(5) {
+		t.Fatalf("terminal identity = %#v", event.Data)
+	}
+	if event.Data["error_code"] != "provider_uncertain" || event.Data["error_summary"] != "model dispatch outcome is unknown" || event.Data["sequence"] != int64(17) {
+		t.Fatalf("terminal failure = %#v", event.Data)
+	}
+}
+
+func TestTerminalChatErrorRejectsMissingFailureAuthority(t *testing.T) {
+	turn := map[string]any{
+		"turn_id":          durableTestTurnID,
+		"idempotency_key":  durableTestStartID,
+		"conversation_id":  durableTestConversationID,
+		"state":            "failed",
+		"revision":         float64(5),
+		"last_sequence":    float64(16),
+		"terminal_code":    "",
+		"terminal_summary": "",
+		"created_at":       "2026-08-11T10:24:42.331Z",
+		"updated_at":       "2026-08-11T10:26:44.558Z",
+	}
+	if event, err := terminalChatErrorFromTurn(turn, 17); !errors.Is(err, ErrInvalidActionResult) || event != nil {
+		t.Fatalf("missing failure authority = event %#v err %v", event, err)
 	}
 }
 
