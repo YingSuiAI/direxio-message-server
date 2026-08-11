@@ -15,6 +15,7 @@ import (
 	"github.com/YingSuiAI/dirextalk-message-server/internal/realtime"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/releasecontrol"
 	agentmodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agent"
+	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentartifact"
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcompletion"
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentturns"
 	blocksmodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/blocks"
@@ -68,6 +69,7 @@ type Config struct {
 	// publishes the result through the existing realtime event stream.
 	AgentCompletionSource      agentcompletion.Source
 	AgentCompletionSynthesizer agentcompletion.Synthesizer
+	AgentArtifactSource        agentartifact.Source
 	// AgentConversationStateReader exposes Central's authoritative durable
 	// conversation revision before each remote chat turn.
 	AgentConversationStateReader agentmodule.ConversationStateReader
@@ -138,6 +140,7 @@ type Service struct {
 	conversationModule   *conversationmodule.Module
 	eventsModule         *eventsmodule.Module
 	agentCompletionRelay *agentcompletion.Relay
+	agentArtifactSource  agentartifact.Source
 	groupsModule         *groupsmodule.Module
 	membersModule        *membersmodule.Module
 	pluginsModule        *pluginsmodule.Module
@@ -576,15 +579,16 @@ func newService(cfg Config, store Store, transport Transport, state portalState,
 		basePluginRunner = pluginsmodule.NewEnvironmentRunner()
 	}
 	service := &Service{
-		serverName:         serverName,
-		homeserver:         homeserver,
-		store:              store,
-		transport:          transport,
-		pushRules:          cfg.PushRules,
-		remoteHTTPClient:   newRemotePublicHTTPClient(cfg.RemoteNodeInsecureSkipTLSVerify),
-		remoteAllowPrivate: cfg.RemoteNodeAllowPrivateBaseURLs,
-		storeMode:          storeMode(store),
-		releaseController:  cfg.ReleaseController,
+		serverName:          serverName,
+		homeserver:          homeserver,
+		store:               store,
+		transport:           transport,
+		pushRules:           cfg.PushRules,
+		remoteHTTPClient:    newRemotePublicHTTPClient(cfg.RemoteNodeInsecureSkipTLSVerify),
+		remoteAllowPrivate:  cfg.RemoteNodeAllowPrivateBaseURLs,
+		storeMode:           storeMode(store),
+		releaseController:   cfg.ReleaseController,
+		agentArtifactSource: cfg.AgentArtifactSource,
 		servicePortalState: servicePortalState{
 			initialized:             state.Initialized,
 			password:                state.Password,

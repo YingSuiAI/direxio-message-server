@@ -43,6 +43,12 @@ func (*testAgentGRPCRunner) GetConversationState(
 ) (int64, bool, error) {
 	return 0, false, nil
 }
+func (*testAgentGRPCRunner) DownloadTeamArtifact(
+	context.Context,
+	string,
+) (p2p.AgentArtifactDownload, error) {
+	return p2p.AgentArtifactDownload{}, nil
+}
 func (*testAgentGRPCRunner) GetRuntimeProfile(context.Context) (p2p.AgentRuntimeProfileState, error) {
 	return p2p.AgentRuntimeProfileState{}, nil
 }
@@ -205,6 +211,10 @@ func TestP2PAgentGRPCBackendBuildsChatOnlyRunnerWithTrustedOwner(t *testing.T) {
 	if err != nil || completionSynthesizer != wantRunner {
 		t.Fatalf("remote completion synthesizer=%v err=%v", completionSynthesizer, err)
 	}
+	artifactSource, err := p2pAgentArtifactSource(config, runner)
+	if err != nil || artifactSource != wantRunner {
+		t.Fatalf("remote artifact source=%v err=%v", artifactSource, err)
+	}
 	conversationStateReader, err := p2pAgentConversationStateReader(config, runner)
 	if err != nil || conversationStateReader != wantRunner {
 		t.Fatalf("remote conversation state reader=%v err=%v", conversationStateReader, err)
@@ -232,6 +242,9 @@ func TestP2PAgentGRPCBackendBuildsChatOnlyRunnerWithTrustedOwner(t *testing.T) {
 	}
 	if _, err = p2pAgentCompletionSynthesizer(config, &chatOnlyAgentGRPCRunner{}); err == nil {
 		t.Fatal("enabled Agent backend accepted a Runner without completion synthesis")
+	}
+	if _, err = p2pAgentArtifactSource(config, &chatOnlyAgentGRPCRunner{}); err == nil {
+		t.Fatal("enabled Agent backend accepted a Runner without artifact downloads")
 	}
 	if _, err = p2pAgentConversationStateReader(config, &chatOnlyAgentGRPCRunner{}); err == nil {
 		t.Fatal("enabled Agent backend accepted a Runner without conversation state")

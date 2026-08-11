@@ -154,6 +154,16 @@ func (m *Monolith) AddAllPublicRoutes(
 		}
 		logrus.Fatal("P2P Agent gRPC completion synthesis backend is unavailable")
 	}
+	agentArtifactSource, err := p2pAgentArtifactSource(
+		agentBackend,
+		agentChatRunner,
+	)
+	if err != nil {
+		if agentChatRunner != nil {
+			_ = agentChatRunner.Close()
+		}
+		logrus.Fatal("P2P Agent gRPC artifact backend is unavailable")
+	}
 	agentConversationStateReader, err := p2pAgentConversationStateReader(
 		agentBackend,
 		agentChatRunner,
@@ -179,6 +189,7 @@ func (m *Monolith) AddAllPublicRoutes(
 		AgentSearchProfileClient:        agentSearchProfileClient,
 		AgentCompletionSource:           agentCompletionSource,
 		AgentCompletionSynthesizer:      agentCompletionSynthesizer,
+		AgentArtifactSource:             agentArtifactSource,
 		AgentConversationStateReader:    agentConversationStateReader,
 		PushRules:                       m.UserAPI,
 		ReleaseController:               releasecontrol.NewUnixController(releasecontrol.UnixControllerConfig{}),
@@ -410,6 +421,22 @@ func p2pAgentCompletionSynthesizer(
 		)
 	}
 	return synthesizer, nil
+}
+
+func p2pAgentArtifactSource(
+	config p2pAgentGRPCBackendConfig,
+	runner AgentGRPCRunner,
+) (p2p.AgentArtifactSource, error) {
+	if !config.Enabled {
+		return nil, nil
+	}
+	source, ok := runner.(p2p.AgentArtifactSource)
+	if !ok || source == nil {
+		return nil, errors.New(
+			"enabled Agent gRPC backend does not support artifact downloads",
+		)
+	}
+	return source, nil
 }
 
 func p2pAgentConversationStateReader(

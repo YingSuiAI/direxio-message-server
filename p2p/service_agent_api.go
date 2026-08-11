@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	agentmodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agent"
+	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentartifact"
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentcompletion"
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agentgrpc"
 	"github.com/YingSuiAI/dirextalk-message-server/p2p/nativeagent"
@@ -36,6 +37,8 @@ type AgentSearchProfile = agentmodule.SearchProfile
 type AgentSearchProfileUpdate = agentmodule.SearchProfileUpdate
 type AgentCompletionSource = agentcompletion.Source
 type AgentCompletionSynthesizer = agentcompletion.Synthesizer
+type AgentArtifactSource = agentartifact.Source
+type AgentArtifactDownload = agentartifact.Download
 type AgentCompletionSourceEvent = agentcompletion.SourceEvent
 type AgentCompletion = agentcompletion.Completion
 type AgentCompletionSynthesis = agentcompletion.Synthesis

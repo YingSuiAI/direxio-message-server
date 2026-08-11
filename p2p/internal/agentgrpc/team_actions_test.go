@@ -522,6 +522,7 @@ type teamTestService struct {
 	getExecutionRequest    *agentv1.GetTeamExecutionV3Request
 	getPlanExecutionID     string
 	bootstrapDeviceErr     error
+	artifactContent        []byte
 }
 
 func (service *teamTestService) GetTeamPlanV3(
@@ -618,6 +619,41 @@ func (service *teamTestService) GetTeamExecutionV3(
 	return &agentv1.GetTeamExecutionV3Response{
 		Execution: proto.Clone(service.execution).(*agentv1.TeamExecutionV3),
 	}, nil
+}
+
+func (service *teamTestService) DownloadTeamArtifactV3(
+	request *agentv1.DownloadTeamArtifactV3Request,
+	stream agentv1.TeamPlanService_DownloadTeamArtifactV3Server,
+) error {
+	service.mu.Lock()
+	artifact := proto.Clone(
+		service.execution.GetArtifacts()[0],
+	).(*agentv1.TeamExecutionArtifactV3)
+	content := append([]byte(nil), service.artifactContent...)
+	service.mu.Unlock()
+	if request.GetOwnerId() != "owner-from-config" ||
+		request.GetArtifactId() != artifact.GetArtifactId() {
+		return status.Error(codes.NotFound, "not found")
+	}
+	if err := stream.Send(&agentv1.DownloadTeamArtifactV3Response{
+		Artifact: artifact,
+	}); err != nil {
+		return err
+	}
+	for offset := 0; offset < len(content); offset += maximumTeamArtifactChunkBytes {
+		end := offset + maximumTeamArtifactChunkBytes
+		if end > len(content) {
+			end = len(content)
+		}
+		if err := stream.Send(&agentv1.DownloadTeamArtifactV3Response{
+			Offset:   int64(offset),
+			Data:     content[offset:end],
+			Complete: end == len(content),
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func newTeamTestService() *teamTestService {

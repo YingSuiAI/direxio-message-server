@@ -25,6 +25,10 @@ func Register(router *mux.Router, service *Service) {
 	router.HandleFunc("/command", product).Methods(http.MethodPost, http.MethodOptions)
 	router.HandleFunc("/ws", realtimeWSHandler(service)).Methods(http.MethodGet, http.MethodOptions)
 	router.HandleFunc("/health", httpapi.HealthHandler(nil)).Methods(http.MethodGet, http.MethodOptions)
+	router.HandleFunc(
+		"/agent-artifacts/{artifact_id}",
+		agentArtifactDownloadHandler(service),
+	).Methods(http.MethodGet, http.MethodOptions)
 }
 
 func RegisterMCP(router *mux.Router, service *Service) {
