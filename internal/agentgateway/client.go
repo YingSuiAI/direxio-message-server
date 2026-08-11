@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -17,7 +18,15 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
-const agentRootCallBudget = 2 * time.Minute
+const (
+	agentAdmissionCallBudget = 2 * time.Minute
+	defaultWatchIdleTimeout  = 30 * time.Minute
+)
+
+// ErrWatchIdleTimeout ends only the current observation attachment after a
+// prolonged period without persisted events. The durable Agent operation is
+// not cancelled and can be observed again from its last sequence cursor.
+var ErrWatchIdleTimeout = errors.New("agent operation watch was idle; execution continues and can be reattached")
 
 // Config 是 AgentCapability 客户端配置
 type Config struct {
@@ -47,16 +56,22 @@ type Config struct {
 	// 连接池配置
 	MaxConcurrentQuery int // 默认 32
 	MaxConcurrentWatch int // 默认 64
+
+	// WatchIdleTimeout bounds a silent observation attachment, not the durable
+	// operation. Every persisted event resets it. A detached client can resume
+	// from after_sequence without replaying the operation.
+	WatchIdleTimeout time.Duration
 }
 
 // Client 是 AgentCapabilityService 的客户端（message-server 端）
 type Client struct {
-	mu     sync.RWMutex
-	config *Config
-	conn   *grpc.ClientConn
-	client capv1.AgentCapabilityServiceClient
-	token  []byte
-	now    func() time.Time
+	mu               sync.RWMutex
+	config           *Config
+	conn             *grpc.ClientConn
+	client           capv1.AgentCapabilityServiceClient
+	token            []byte
+	now              func() time.Time
+	watchIdleTimeout time.Duration
 
 	// 并发控制
 	querySem chan struct{}
@@ -83,6 +98,9 @@ func New(config *Config) (*Client, error) {
 	if config.MaxConcurrentWatch <= 0 {
 		config.MaxConcurrentWatch = 64
 	}
+	if config.WatchIdleTimeout <= 0 {
+		config.WatchIdleTimeout = defaultWatchIdleTimeout
+	}
 
 	// 读取方向 token
 	token, err := os.ReadFile(config.TokenFile)
@@ -97,11 +115,12 @@ func New(config *Config) (*Client, error) {
 	}
 
 	c := &Client{
-		config:   config,
-		token:    token,
-		now:      time.Now,
-		querySem: make(chan struct{}, config.MaxConcurrentQuery),
-		watchSem: make(chan struct{}, config.MaxConcurrentWatch),
+		config:           config,
+		token:            token,
+		now:              time.Now,
+		watchIdleTimeout: config.WatchIdleTimeout,
+		querySem:         make(chan struct{}, config.MaxConcurrentQuery),
+		watchSem:         make(chan struct{}, config.MaxConcurrentWatch),
 	}
 
 	// 加载 TLS 配置
@@ -301,7 +320,11 @@ func (c *Client) WatchOperation(ctx context.Context, operationID string, afterSe
 		c.releaseWatchSem()
 		return nil, err
 	}
-	return &watchStream{AgentCapabilityService_WatchOperationClient: stream, cancel: cancel, release: c.releaseWatchSem}, nil
+	return &watchStream{
+		AgentCapabilityService_WatchOperationClient: stream,
+		cancel: cancel, release: c.releaseWatchSem,
+		idleTimeout: c.watchIdleTimeout,
+	}, nil
 }
 
 type watchStream struct {
@@ -310,6 +333,7 @@ type watchStream struct {
 	cancel      context.CancelFunc
 	releaseOnce sync.Once
 	closeErr    error
+	idleTimeout time.Duration
 }
 
 func (s *watchStream) Close() {
@@ -338,11 +362,37 @@ func (s *watchStream) close() error {
 // the transport fails. This prevents a caller that forgets the optional Close
 // helper from leaking a watch slot indefinitely.
 func (s *watchStream) Recv() (*capv1.WatchOperationEvent, error) {
-	event, err := s.AgentCapabilityService_WatchOperationClient.Recv()
-	if err != nil {
-		s.Close()
+	if s == nil || s.AgentCapabilityService_WatchOperationClient == nil {
+		return nil, errors.New("agent operation watch is unavailable")
 	}
-	return event, err
+	if s.idleTimeout <= 0 {
+		event, err := s.AgentCapabilityService_WatchOperationClient.Recv()
+		if err != nil {
+			s.Close()
+		}
+		return event, err
+	}
+	type receiveResult struct {
+		event *capv1.WatchOperationEvent
+		err   error
+	}
+	received := make(chan receiveResult, 1)
+	go func() {
+		event, err := s.AgentCapabilityService_WatchOperationClient.Recv()
+		received <- receiveResult{event: event, err: err}
+	}()
+	timer := time.NewTimer(s.idleTimeout)
+	defer timer.Stop()
+	select {
+	case result := <-received:
+		if result.err != nil {
+			s.Close()
+		}
+		return result.event, result.err
+	case <-timer.C:
+		s.Close()
+		return nil, ErrWatchIdleTimeout
+	}
 }
 
 func (s *watchStream) CloseSend() error {
@@ -388,7 +438,7 @@ func (c *Client) createCallContext(rootOperationID string) *capv1.CallContext {
 	if c != nil && c.now != nil {
 		now = c.now
 	}
-	deadline := now().Add(agentRootCallBudget).UnixMilli()
+	deadline := now().Add(agentAdmissionCallBudget).UnixMilli()
 	base := capv1.NewCallContext(chainID, rootOperationID, deadline)
 	callContext, err := capv1.IncrementHop(base, "ms")
 	if err != nil {
@@ -397,10 +447,30 @@ func (c *Client) createCallContext(rootOperationID string) *capv1.CallContext {
 	return callContext
 }
 
+// refreshCallContext creates a new admission fence for a lifecycle control
+// RPC while retaining the immutable operation trace. The refreshed deadline
+// authorizes Watch admission only; it is deliberately not installed on the
+// returned gRPC stream context.
+func (c *Client) refreshCallContext(parent *capv1.CallContext) *capv1.CallContext {
+	if parent == nil {
+		return nil
+	}
+	now := time.Now
+	if c != nil && c.now != nil {
+		now = c.now
+	}
+	return &capv1.CallContext{
+		ChainId: parent.GetChainId(), RootOperationId: parent.GetRootOperationId(),
+		ParentCallId: parent.GetParentCallId(), Hop: parent.GetHop(), Route: parent.GetRoute(),
+		DeadlineUnixMs: now().Add(agentAdmissionCallBudget).UnixMilli(),
+	}
+}
+
 // callContextFor preserves one caller-owned chain across every RPC in an
 // operation lifecycle. The variadic form keeps older internal callers source
-// compatible; Runner always supplies the context it created at the operation
-// boundary, so Start/Watch/Get/Cancel cannot silently fork the audit route.
+// compatible; Runner supplies either the operation admission context or a
+// deadline-refreshed control context with the same immutable trace, so
+// Start/Watch/Get/Cancel cannot silently fork the audit route.
 func (c *Client) callContextFor(rootOperationID string, callContexts ...*capv1.CallContext) *capv1.CallContext {
 	if len(callContexts) > 0 && callContexts[0] != nil {
 		return callContexts[0]

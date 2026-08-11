@@ -119,6 +119,15 @@ Both directions enforce:
 - request/result schema digests, durable-stream event schema digests, and advertised readiness;
 - bounded deadlines, message sizes, concurrency, and sanitized errors.
 
+For a durable operation, the bounded CallContext deadline authorizes each
+admission or control RPC; it is not a total execution or observation timeout.
+Message Server renews the Watch admission context and its domain-separated
+control grant after Start succeeds. The live Watch is then owned by the client
+WebSocket lifecycle and may outlive that admission deadline. A Watch is
+detached after 30 consecutive minutes without a persisted event, on client
+disconnect, or on explicit stream cancellation; detaching never cancels the
+durable operation, and observation resumes from the persisted sequence cursor.
+
 Product Capability handlers must never synchronously call Agent. When a
 workflow needs asynchronous follow-up, it records an event or durable callback
 request and returns. A retry must retain the original immutable operation and

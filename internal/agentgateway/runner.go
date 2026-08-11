@@ -117,11 +117,12 @@ func (r *Runner) Stream(ctx context.Context, action string, params map[string]an
 	if err := operationStateError(response.GetState()); err != nil {
 		return err
 	}
-	controlPermission, err := r.operationControlPermission(callCtx, operationID, "watch", permission)
+	watchCallCtx := r.client.refreshCallContext(callCtx)
+	controlPermission, err := r.operationControlPermission(watchCallCtx, operationID, "watch", permission)
 	if err != nil {
 		return err
 	}
-	stream, err := r.client.WatchOperation(ctx, operationID, afterSequence(params), controlPermission, callCtx)
+	stream, err := r.client.WatchOperation(ctx, operationID, afterSequence(params), controlPermission, watchCallCtx)
 	if err != nil {
 		return err
 	}
@@ -229,11 +230,12 @@ func (r *Runner) invokeOperationWithReplay(ctx context.Context, action string, p
 	if err := operationStateError(response.GetState()); err != nil {
 		return nil, false, err
 	}
-	controlPermission, err := r.operationControlPermission(callCtx, operationID, "watch", permission)
+	watchCallCtx := r.client.refreshCallContext(callCtx)
+	controlPermission, err := r.operationControlPermission(watchCallCtx, operationID, "watch", permission)
 	if err != nil {
 		return nil, false, err
 	}
-	stream, err := r.client.WatchOperation(ctx, operationID, 0, controlPermission, callCtx)
+	stream, err := r.client.WatchOperation(ctx, operationID, 0, controlPermission, watchCallCtx)
 	if err != nil {
 		return nil, false, err
 	}
