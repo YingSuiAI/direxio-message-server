@@ -696,6 +696,8 @@ Use `compose.yaml` together with `compose.production.yaml` and a reviewed
 - immutable digest-pinned application images for message-server and Agent; the
   extension-runner and Core workload-runner containers resolve the exact same
   Agent digest;
+- a single-execution extension-runner whose outer container is capped at two
+  CPUs, 1 GiB memory, and 256 processes in addition to each workload cgroup;
 - an immutable digest-pinned PostgreSQL 18 plus pgvector image;
 - a unique stack name and unique network/volume names;
 - a protected output directory with mode 0700 and secret files mode 0400;

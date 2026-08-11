@@ -286,7 +286,6 @@ func TestValidateChatStreamWaitingConfirmationRequiresExactAuthority(t *testing.
 		"revision":        float64(3),
 		"sequence":        int64(4),
 		"confirmation_id": "11111111-1111-4111-8111-111111111111",
-		"attempt_id":      "22222222-2222-4222-8222-222222222222",
 		"execution_id":    "33333333-3333-4333-8333-333333333333",
 		"status":          "waiting_confirmation",
 	}
@@ -294,7 +293,7 @@ func TestValidateChatStreamWaitingConfirmationRequiresExactAuthority(t *testing.
 		t.Fatalf("waiting confirmation event rejected: %v", err)
 	}
 
-	for _, field := range []string{"confirmation_id", "attempt_id", "execution_id", "status"} {
+	for _, field := range []string{"confirmation_id", "execution_id", "status"} {
 		t.Run("missing_"+field, func(t *testing.T) {
 			invalid := maps.Clone(event)
 			delete(invalid, field)
@@ -303,6 +302,13 @@ func TestValidateChatStreamWaitingConfirmationRequiresExactAuthority(t *testing.
 			}
 		})
 	}
+	t.Run("superseded attempt authority", func(t *testing.T) {
+		invalid := maps.Clone(event)
+		invalid["attempt_id"] = "22222222-2222-4222-8222-222222222222"
+		if err := validateChatStreamEvent(invalid, actionResultAuthority{}); !errors.Is(err, ErrInvalidActionResult) {
+			t.Fatalf("superseded attempt_id accepted: %v", err)
+		}
+	})
 	for field, value := range map[string]any{
 		"text": "not allowed", "tool_call": map[string]any{}, "tool_result": map[string]any{},
 		"response": map[string]any{}, "error_code": "not_allowed", "error_summary": "not allowed",

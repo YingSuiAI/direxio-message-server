@@ -327,7 +327,7 @@ func TestNativeChatProgressProjectsWaitingConfirmation(t *testing.T) {
 		OperationId: durableTestStartID,
 		Sequence:    4,
 		Event: &capv1.WatchOperationEvent_Progress{Progress: &capv1.ProgressEvent{EventJson: []byte(
-			`{"kind":"waiting_confirmation","idempotency_key":"` + durableTestStartID + `","conversation_id":"` + durableTestConversationID + `","turn_id":"` + durableTestTurnID + `","revision":3,"confirmation_id":"11111111-1111-4111-8111-111111111111","attempt_id":"22222222-2222-4222-8222-222222222222","execution_id":"33333333-3333-4333-8333-333333333333","status":"waiting_confirmation"}`,
+			`{"kind":"waiting_confirmation","idempotency_key":"` + durableTestStartID + `","conversation_id":"` + durableTestConversationID + `","turn_id":"` + durableTestTurnID + `","revision":3,"confirmation_id":"11111111-1111-4111-8111-111111111111","execution_id":"33333333-3333-4333-8333-333333333333","status":"waiting_confirmation"}`,
 		)}},
 	}
 	event, terminal, err := nativeEventFromProto(progress, actionResultAuthority{})
@@ -335,10 +335,47 @@ func TestNativeChatProgressProjectsWaitingConfirmation(t *testing.T) {
 		t.Fatalf("waiting confirmation progress = event %#v terminal %v err %v", event, terminal, err)
 	}
 	if event.Data["confirmation_id"] != "11111111-1111-4111-8111-111111111111" ||
-		event.Data["attempt_id"] != "22222222-2222-4222-8222-222222222222" ||
 		event.Data["execution_id"] != "33333333-3333-4333-8333-333333333333" ||
 		event.Data["status"] != "waiting_confirmation" {
 		t.Fatalf("waiting confirmation authority = %#v", event.Data)
+	}
+	if _, legacy := event.Data["attempt_id"]; legacy {
+		t.Fatalf("waiting confirmation exposed superseded attempt authority: %#v", event.Data)
+	}
+}
+
+func TestNativeChatProgressRejectsWaitingConfirmationSchemaDrift(t *testing.T) {
+	base := map[string]any{
+		"kind": "waiting_confirmation", "idempotency_key": durableTestStartID,
+		"conversation_id": durableTestConversationID, "turn_id": durableTestTurnID, "revision": 3,
+		"confirmation_id": "11111111-1111-4111-8111-111111111111",
+		"execution_id":    "33333333-3333-4333-8333-333333333333",
+		"status":          "waiting_confirmation",
+	}
+	for name, mutate := range map[string]func(map[string]any){
+		"superseded attempt authority": func(event map[string]any) {
+			event["attempt_id"] = "22222222-2222-4222-8222-222222222222"
+		},
+		"mixed text": func(event map[string]any) { event["text"] = "not allowed" },
+		"authority on non-waiting": func(event map[string]any) {
+			event["kind"] = "delta"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			payload := cloneParams(base)
+			mutate(payload)
+			raw, err := json.Marshal(payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			progress := &capv1.WatchOperationEvent{
+				OperationId: durableTestStartID, Sequence: 4,
+				Event: &capv1.WatchOperationEvent_Progress{Progress: &capv1.ProgressEvent{EventJson: raw}},
+			}
+			if event, terminal, err := nativeEventFromProto(progress, actionResultAuthority{}); err == nil || !terminal || event != nil {
+				t.Fatalf("schema drift projected: event=%#v terminal=%v err=%v", event, terminal, err)
+			}
+		})
 	}
 }
 

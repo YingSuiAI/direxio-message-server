@@ -126,6 +126,7 @@ shellcheck \
   "$script_dir/cleanup-local.sh" \
   "$script_dir/cleanup-provision-failure.sh" \
   "$script_dir/cleanup-provision-failure.test.sh" \
+  "$script_dir/compose-runner-limits.test.sh" \
   "$script_dir/accept-local.sh" \
   "$script_dir/accept-local.test.sh" \
   "$script_dir/bootstrap-local-account.sh" \
@@ -170,6 +171,7 @@ shellcheck \
   "$stack_dir/aws/validate-policy.test.sh"
 "$script_dir/message-server-entrypoint.test.sh" >/dev/null
 "$script_dir/message-server-healthcheck.test.sh" >/dev/null
+"$script_dir/compose-runner-limits.test.sh" >/dev/null
 "$script_dir/initialize-capability-ca.test.sh" >/dev/null
 "$script_dir/initialize-postgres.test.sh" >/dev/null
 "$script_dir/initialize-message-server.test.sh" >/dev/null
@@ -301,6 +303,9 @@ jq -e '
   .services["extension-runner"].secrets == null and
   .services["core-runner"].secrets == null and
   .services["extension-runner"].user == "65531:65531" and
+  .services["extension-runner"].cpus == 2 and
+  .services["extension-runner"].mem_limit == "1073741824" and
+  .services["extension-runner"].pids_limit == 256 and
   .services["core-runner"].user == "65530:65530" and
   .services["extension-runner"].read_only == true and
   .services["core-runner"].read_only == true and
@@ -335,6 +340,12 @@ jq -e '
   (.services["core-runner-storage-init"].command | join(" ") | contains("chown 65530:65530 /install /workspace /state")) and
   (.services["core-runner-storage-init"].command | join(" ") | contains("chmod 0700 /install /workspace /state"))
 ' "$rendered" >/dev/null
+
+jq -e '
+  .services["extension-runner"].cpus == 2 and
+  .services["extension-runner"].mem_limit == "1073741824" and
+  .services["extension-runner"].pids_limit == 256
+' "$production_rendered" >/dev/null
 
 jq -e --arg http "$http_bind" --arg https "$https_bind" '
   ([.services["message-server"].ports[] | .published] | sort) == [$http, $https] and

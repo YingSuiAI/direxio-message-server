@@ -1198,7 +1198,7 @@ var canonicalChatStreamEventFields = map[string]struct{}{
 	"revision": {}, "text": {},
 	"tool_call": {}, "tool_result": {}, "response": {},
 	"error_code": {}, "error_summary": {}, "sequence": {},
-	"confirmation_id": {}, "attempt_id": {}, "execution_id": {}, "status": {},
+	"confirmation_id": {}, "execution_id": {}, "status": {},
 }
 
 // chatResult projects only the canonical Agent ChatResponse shape. Assistant
@@ -1653,14 +1653,14 @@ func validateChatStreamEvent(value map[string]any, authority actionResultAuthori
 			return fmt.Errorf("%w: chat stream event sequence must be non-negative", ErrInvalidActionResult)
 		}
 	}
-	confirmationFields := []string{"confirmation_id", "attempt_id", "execution_id", "status"}
+	confirmationFields := []string{"confirmation_id", "execution_id", "status"}
 	if kind == "waiting_confirmation" {
 		for _, field := range []string{"text", "tool_call", "tool_result", "response", "error_code", "error_summary"} {
 			if _, present := value[field]; present {
 				return fmt.Errorf("%w: waiting confirmation event must not carry %s", ErrInvalidActionResult, field)
 			}
 		}
-		for _, field := range confirmationFields[:3] {
+		for _, field := range confirmationFields[:2] {
 			if !canonicalTurnUUID(value[field]) {
 				return fmt.Errorf("%w: waiting confirmation event %s must be a canonical UUID", ErrInvalidActionResult, field)
 			}

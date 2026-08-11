@@ -19,6 +19,19 @@ var cloudWorkerStates = map[string]bool{
 	"succeeded": true, "failed": true, "canceled": true, "rejected": true, "expired": true,
 }
 
+const (
+	maxCloudWorkerProgressElapsedMS       = int64((24 * time.Hour) / time.Millisecond)
+	maxCloudWorkerProgressCPUTimeMS       = int64((7 * 24 * time.Hour) / time.Millisecond)
+	maxCloudWorkerProgressMemoryBytes     = int64(64 << 30)
+	maxCloudWorkerProgressInvocationCount = int64(1_000_000)
+	maxCloudWorkerProgressUploadedBytes   = int64(9 << 20)
+)
+
+var cloudWorkerProgressPhases = map[string]bool{
+	"claimed": true, "preparing_inputs": true, "running_pi": true,
+	"uploading_result": true, "completing": true,
+}
+
 func validateCloudWorkerActionResult(action string, request, output map[string]any, authority actionResultAuthority) error {
 	if output == nil {
 		return cloudWorkerResultError("response is missing")
@@ -80,25 +93,43 @@ func validateCloudWorkerActionResult(action string, request, output map[string]a
 		}
 		return nil
 	case "agent.execution.v2.runs.events":
-		if err := cloudExact(output, []string{"events", "next_sequence"}, nil, "events envelope"); err != nil {
+		if err := cloudExact(output, []string{"events", "next_sequence", "history_truncated"}, nil, "events envelope"); err != nil {
 			return err
+		}
+		historyTruncated, ok := output["history_truncated"].(bool)
+		if !ok {
+			return cloudWorkerResultError("history_truncated must be a boolean")
 		}
 		raw, ok := output["events"].([]any)
 		if !ok {
 			return cloudWorkerResultError("events must be an array")
 		}
-		last := int64(0)
+		after := int64(0)
+		if value, present := request["after_sequence"]; present {
+			var valid bool
+			after, valid = cloudInteger(value)
+			if !valid || after < 0 {
+				return cloudWorkerResultError("prepared run event cursor is invalid")
+			}
+		}
+		last := after
 		expectedRunID, ok := request["run_id"].(string)
 		if !ok || !cloudUUID(expectedRunID) {
 			return cloudWorkerResultError("prepared run event identity is missing")
 		}
-		for _, value := range raw {
+		for index, value := range raw {
 			event, ok := value.(map[string]any)
 			if !ok {
 				return cloudWorkerResultError("event must be an object")
 			}
 			sequence, err := validateCloudWorkerEvent(event)
 			if err != nil || sequence <= last {
+				return cloudWorkerResultError("event sequence is invalid")
+			}
+			if (index > 0 || !historyTruncated) && sequence != last+1 {
+				return cloudWorkerResultError("event sequence is invalid")
+			}
+			if index == 0 && historyTruncated && sequence == last+1 {
 				return cloudWorkerResultError("event sequence is invalid")
 			}
 			if err := validateCloudWorkerAuthority(event, authority); err != nil {
@@ -110,7 +141,8 @@ func validateCloudWorkerActionResult(action string, request, output map[string]a
 			last = sequence
 		}
 		next, ok := cloudInteger(output["next_sequence"])
-		if !ok || next < 0 || (len(raw) > 0 && next != last) {
+		if !ok || next < after || (len(raw) > 0 && next != last) || (len(raw) == 0 && !historyTruncated && next != after) ||
+			(len(raw) == 0 && historyTruncated && next == after) {
 			return cloudWorkerResultError("next_sequence is invalid")
 		}
 		return nil
@@ -346,14 +378,27 @@ func validateCloudWorkerArtifactDownload(request, result map[string]any, authori
 }
 
 func validateCloudWorkerEvent(event map[string]any) (int64, error) {
-	if err := cloudExact(event, []string{"event_id", "run_id", "owner_id", "account_generation", "revision", "sequence", "type", "at", "payload_digest"}, []string{"status"}, "event"); err != nil {
+	if err := cloudExact(event, []string{"event_id", "run_id", "owner_id", "account_generation", "revision", "sequence", "type", "at", "payload_digest"}, []string{"status", "progress"}, "event"); err != nil {
 		return 0, err
 	}
-	if !cloudUUID(event["event_id"]) || !cloudUUID(event["run_id"]) || !cloudNonemptyString(event["owner_id"]) || !cloudNonemptyString(event["type"]) || !cloudTimestamp(event["at"]) || !cloudDigest(event["payload_digest"]) {
+	eventType, eventTypeOK := event["type"].(string)
+	if !cloudUUID(event["event_id"]) || !cloudUUID(event["run_id"]) || !cloudNonemptyString(event["owner_id"]) ||
+		!eventTypeOK || eventType == "" || eventType != strings.TrimSpace(eventType) || !cloudTimestamp(event["at"]) || !cloudDigest(event["payload_digest"]) {
 		return 0, cloudWorkerResultError("event identity or metadata is invalid")
 	}
 	if status, present := event["status"]; present && !cloudWorkerStates[cloudString(status)] {
 		return 0, cloudWorkerResultError("event status is invalid")
+	}
+	progress, hasProgress := event["progress"]
+	if eventType == "worker_progress" {
+		if !hasProgress {
+			return 0, cloudWorkerResultError("worker_progress event is missing progress")
+		}
+		if err := validateCloudWorkerProgress(progress, event["at"]); err != nil {
+			return 0, err
+		}
+	} else if hasProgress {
+		return 0, cloudWorkerResultError("lifecycle event contains progress")
 	}
 	revision, ok := cloudInteger(event["revision"])
 	if !ok || revision <= 0 {
@@ -364,6 +409,41 @@ func validateCloudWorkerEvent(event map[string]any) (int64, error) {
 		return 0, cloudWorkerResultError("event sequence is invalid")
 	}
 	return sequence, nil
+}
+
+func validateCloudWorkerProgress(value, eventAtValue any) error {
+	progress, ok := value.(map[string]any)
+	if !ok || cloudExact(progress, []string{
+		"phase", "elapsed_ms", "last_activity_at", "cpu_time_ms", "memory_high_water_bytes",
+		"invocation_count", "uploaded_bytes", "output_truncated",
+	}, nil, "progress") != nil {
+		return cloudWorkerResultError("progress is invalid")
+	}
+	phase, ok := progress["phase"].(string)
+	if !ok || phase != strings.TrimSpace(phase) || !cloudWorkerProgressPhases[phase] {
+		return cloudWorkerResultError("progress phase is invalid")
+	}
+	for key, maximum := range map[string]int64{
+		"elapsed_ms":              maxCloudWorkerProgressElapsedMS,
+		"cpu_time_ms":             maxCloudWorkerProgressCPUTimeMS,
+		"memory_high_water_bytes": maxCloudWorkerProgressMemoryBytes,
+		"invocation_count":        maxCloudWorkerProgressInvocationCount,
+		"uploaded_bytes":          maxCloudWorkerProgressUploadedBytes,
+	} {
+		number, valid := cloudInteger(progress[key])
+		if !valid || number < 0 || number > maximum {
+			return cloudWorkerResultError("progress %s is invalid", key)
+		}
+	}
+	if _, ok := progress["output_truncated"].(bool); !ok {
+		return cloudWorkerResultError("progress output_truncated is invalid")
+	}
+	lastActivityAt, lastActivityOK := cloudTime(progress["last_activity_at"])
+	eventAt, eventAtOK := cloudTime(eventAtValue)
+	if !lastActivityOK || !eventAtOK || lastActivityAt.After(eventAt) {
+		return cloudWorkerResultError("progress last_activity_at is invalid")
+	}
+	return nil
 }
 
 func validateCloudWorkerAuthority(value map[string]any, authority actionResultAuthority) error {

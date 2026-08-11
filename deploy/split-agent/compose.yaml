@@ -47,6 +47,11 @@ x-message-hardening: &message-hardening
 x-extension-runner-hardening: &extension-runner-hardening
   <<: *hardened-service
   user: "65531:65531"
+  # The runner admits one transient sandbox execution at a time. These outer
+  # container limits remain a second fuse around every inner workload cgroup.
+  cpus: "2.0"
+  mem_limit: 1g
+  pids_limit: 256
   # The runner is an outer sandbox constructor: Docker's default seccomp
   # blocks required clone/unshare/mount/chroot operations before the runner can
   # apply its stricter inner workload sandbox. AppArmor remains bound to one

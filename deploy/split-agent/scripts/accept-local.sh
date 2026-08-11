@@ -356,6 +356,9 @@ jq -e --arg http "$http_bind" --arg https "$https_bind" --arg tls_mode "$tls_mod
   ([.services | to_entries[] | select(.value.networks | has("message_public")) | .key] == ["message-server"]) and
   ([.services | to_entries[] | select(.value.networks | has("agent_egress")) | .key] == ["agent"]) and
   (.services["extension-runner"].cgroup == "host") and
+  (.services["extension-runner"].cpus == 2) and
+  (.services["extension-runner"].mem_limit == "1073741824") and
+  (.services["extension-runner"].pids_limit == 256) and
   (.services["core-runner"].cgroup == "host") and
   ([.services.agent.volumes[] | select(.target == "/var/lib/dirextalk-agent/extension-workspaces" and .source == "agent_runner_workspaces")] | length == 1) and
   ([.services["extension-runner"].volumes[] | select(.target == "/var/lib/dirextalk-agent/extension-workspaces" and .source == "agent_runner_workspaces")] | length == 1) and

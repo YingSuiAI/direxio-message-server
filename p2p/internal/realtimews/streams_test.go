@@ -104,7 +104,6 @@ func (waitingConfirmationDurableAgent) DurableStream(_ context.Context, _ string
 		"kind": "waiting_confirmation", "idempotency_key": startID,
 		"conversation_id": conversationID, "turn_id": turnID, "revision": float64(3),
 		"confirmation_id": "11111111-1111-4111-8111-111111111111",
-		"attempt_id":      "22222222-2222-4222-8222-222222222222",
 		"execution_id":    "33333333-3333-4333-8333-333333333333",
 		"status":          "waiting_confirmation",
 	}
@@ -415,10 +414,12 @@ func TestNativeAgentDurableWaitingConfirmationExposesAuthority(t *testing.T) {
 	}
 	data, ok := frame["data"].(map[string]any)
 	if !ok || data["confirmation_id"] != "11111111-1111-4111-8111-111111111111" ||
-		data["attempt_id"] != "22222222-2222-4222-8222-222222222222" ||
 		data["execution_id"] != "33333333-3333-4333-8333-333333333333" ||
 		data["status"] != "waiting_confirmation" {
 		t.Fatalf("waiting confirmation authority = %#v", frame)
+	}
+	if _, legacy := data["attempt_id"]; legacy {
+		t.Fatalf("waiting confirmation exposed superseded attempt authority: %#v", frame)
 	}
 }
 

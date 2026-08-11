@@ -96,9 +96,12 @@ capability live.
   `request_id` alias. Input, result, and event schema digests are all pinned by
   Message Server readiness. A local MCP/Skill confirmation pause is projected
   as the non-terminal `waiting_confirmation` event with exact
-  `confirmation_id`, `attempt_id`, `execution_id`, and
+  `confirmation_id`, `execution_id`, and
   `status=waiting_confirmation`; it is never represented as an empty tool
-  event or inferred from model text.
+  event or inferred from model text. `attempt_id` is not part of the public
+  durable event. Non-waiting events cannot carry confirmation, execution, or
+  waiting status authority, and waiting events cannot mix text, tool call,
+  tool result, response, or error fields.
 - Durable turn reconciliation uses `agent.chat.turns.list` with one canonical
   conversation UUID, an optional opaque page token of at most 4,096 bytes, and
   an optional limit from 1 through 1,000. Each returned turn is the exact
@@ -236,6 +239,24 @@ offset-based read with exact per-chunk and whole-artifact SHA-256 metadata.
 Message Server returns the validated bytes and public identity/range fields;
 it never exposes the Agent's S3 locator, a pre-signed storage URL, retention
 ledger, Worker diagnostics, or provider credentials.
+
+Cloud Worker `agent.execution.v2.runs.events` returns the exact
+`events`/`next_sequence`/`history_truncated` envelope. Agent retains a bounded
+4096-event history per run; `history_truncated=true` means the requested
+`after_sequence` precedes the retained window and the returned cursor starts at
+the oldest retained event. A non-truncated page starts at `after_sequence+1`;
+all events after the first item in either page form are contiguous.
+`worker_progress` is the only event type that may
+carry `progress`, and it must carry the complete secret-free snapshot:
+`phase`, `elapsed_ms`, `last_activity_at`, `cpu_time_ms`,
+`memory_high_water_bytes`, `invocation_count`, `uploaded_bytes`, and
+`output_truncated`. Phase is one of `claimed`, `preparing_inputs`, `running_pi`,
+`uploading_result`, or `completing`; all counters are nonnegative and bounded by
+the generated ProductCore contract. A zero CPU or memory value means the Worker
+had no verified runtime metric source; it does not assert zero resource use.
+Lifecycle events must not carry progress.
+Model text, stderr, paths, environment values, secrets, and object-storage
+identities are rejected rather than projected to Message Server or clients.
 
 ## Consumer Boundaries
 

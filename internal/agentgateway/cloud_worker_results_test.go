@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 type cloudWorkerPublicFixture struct {
@@ -55,6 +56,12 @@ func sortedRawMessageKeys(value map[string]json.RawMessage) []string {
 func TestCloudWorkerExecutionV2ResultsMatchPinnedPublicFixture(t *testing.T) {
 	fixture := loadCloudWorkerPublicFixture(t)
 	authority := cloudWorkerFixtureAuthority(t, fixture)
+	runEventSequence, ok := cloudInteger(fixture.RunEvent["sequence"])
+	if !ok || runEventSequence < 1 {
+		t.Fatal("fixture run event sequence is invalid")
+	}
+	runEventsRequest := cloudWorkerRequest("run_id", fixture.Run["run_id"])
+	runEventsRequest["after_sequence"] = runEventSequence - 1
 	tests := []struct {
 		action  string
 		request map[string]any
@@ -69,7 +76,7 @@ func TestCloudWorkerExecutionV2ResultsMatchPinnedPublicFixture(t *testing.T) {
 		{"agent.execution.v2.artifacts.download", map[string]any{
 			"record_kind": "cloud_worker", "artifact_id": fixture.Artifacts[0]["artifact_id"], "offset_bytes": float64(0), "max_chunk_bytes": float64(512 << 10),
 		}, fixture.ArtifactDownload},
-		{"agent.execution.v2.runs.events", cloudWorkerRequest("run_id", fixture.Run["run_id"]), map[string]any{"events": []any{fixture.RunEvent}, "next_sequence": fixture.RunEvent["sequence"]}},
+		{"agent.execution.v2.runs.events", runEventsRequest, map[string]any{"events": []any{fixture.RunEvent}, "next_sequence": fixture.RunEvent["sequence"], "history_truncated": false}},
 	}
 	for _, test := range tests {
 		t.Run(test.action, func(t *testing.T) {
@@ -78,6 +85,183 @@ func TestCloudWorkerExecutionV2ResultsMatchPinnedPublicFixture(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCloudWorkerRunEventsPinBoundedSecretFreeProgressAndCursor(t *testing.T) {
+	fixture := loadCloudWorkerPublicFixture(t)
+	authority := cloudWorkerFixtureAuthority(t, fixture)
+	request := cloudWorkerRequest("run_id", fixture.Run["run_id"])
+	runEventSequence, ok := cloudInteger(fixture.RunEvent["sequence"])
+	if !ok || runEventSequence < 1 {
+		t.Fatal("fixture run event sequence is invalid")
+	}
+	request["after_sequence"] = runEventSequence - 1
+	validProgress := func() map[string]any {
+		return map[string]any{
+			"phase": "running_pi", "elapsed_ms": float64(1200), "last_activity_at": fixture.RunEvent["at"],
+			"cpu_time_ms": float64(800), "memory_high_water_bytes": float64(32 << 20),
+			"invocation_count": float64(2), "uploaded_bytes": float64(0), "output_truncated": false,
+		}
+	}
+	validEvent := func() map[string]any {
+		event := cloneParams(fixture.RunEvent)
+		event["type"] = "worker_progress"
+		event["progress"] = validProgress()
+		return event
+	}
+	validate := func(output map[string]any) error {
+		_, err := adaptActionResultForRequestWithAuthority("agent.execution.v2.runs.events", request, output, authority)
+		return err
+	}
+	validOutput := func(event map[string]any) map[string]any {
+		return map[string]any{"events": []any{event}, "next_sequence": event["sequence"], "history_truncated": false}
+	}
+	if err := validate(validOutput(validEvent())); err != nil {
+		t.Fatalf("valid worker progress rejected: %v", err)
+	}
+
+	for name, mutate := range map[string]func(map[string]any){
+		"missing truncation flag": func(output map[string]any) { delete(output, "history_truncated") },
+		"non-boolean truncation flag": func(output map[string]any) {
+			output["history_truncated"] = "false"
+		},
+		"unknown envelope field": func(output map[string]any) { output["s3_url"] = "s3://private/internal" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			output := validOutput(validEvent())
+			mutate(output)
+			err := validate(output)
+			if !errors.Is(err, ErrInvalidActionResult) {
+				t.Fatalf("invalid events envelope accepted: %v", err)
+			}
+			if strings.Contains(err.Error(), "s3://private/internal") {
+				t.Fatal("events validation reflected a private storage address")
+			}
+		})
+	}
+
+	for _, field := range []string{"phase", "elapsed_ms", "last_activity_at", "cpu_time_ms", "memory_high_water_bytes", "invocation_count", "uploaded_bytes", "output_truncated"} {
+		t.Run("missing progress "+field, func(t *testing.T) {
+			event := validEvent()
+			delete(event["progress"].(map[string]any), field)
+			if err := validate(validOutput(event)); !errors.Is(err, ErrInvalidActionResult) {
+				t.Fatalf("incomplete progress accepted: %v", err)
+			}
+		})
+	}
+	for _, field := range []string{"text", "raw", "model_text", "secret", "stderr", "env", "s3_url", "bucket", "key"} {
+		t.Run("forbidden progress "+field, func(t *testing.T) {
+			event := validEvent()
+			event["progress"].(map[string]any)[field] = "protected-value"
+			err := validate(validOutput(event))
+			if !errors.Is(err, ErrInvalidActionResult) || strings.Contains(err.Error(), "protected-value") {
+				t.Fatalf("private progress field handling err=%v", err)
+			}
+		})
+	}
+
+	for name, mutate := range map[string]func(map[string]any){
+		"unknown phase":         func(progress map[string]any) { progress["phase"] = "shell_output" },
+		"padded phase":          func(progress map[string]any) { progress["phase"] = " running_pi" },
+		"negative elapsed":      func(progress map[string]any) { progress["elapsed_ms"] = float64(-1) },
+		"elapsed over max":      func(progress map[string]any) { progress["elapsed_ms"] = float64(86400001) },
+		"cpu over max":          func(progress map[string]any) { progress["cpu_time_ms"] = float64(604800001) },
+		"memory over max":       func(progress map[string]any) { progress["memory_high_water_bytes"] = float64(68719476737) },
+		"invocations over max":  func(progress map[string]any) { progress["invocation_count"] = float64(1000001) },
+		"upload over max":       func(progress map[string]any) { progress["uploaded_bytes"] = float64(9437185) },
+		"invalid activity time": func(progress map[string]any) { progress["last_activity_at"] = "not-a-time" },
+		"activity after event": func(progress map[string]any) {
+			at, err := time.Parse(time.RFC3339Nano, fixture.RunEvent["at"].(string))
+			if err != nil {
+				t.Fatal(err)
+			}
+			progress["last_activity_at"] = at.Add(time.Second).Format(time.RFC3339Nano)
+		},
+		"non-boolean truncation": func(progress map[string]any) { progress["output_truncated"] = "false" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			event := validEvent()
+			mutate(event["progress"].(map[string]any))
+			if err := validate(validOutput(event)); !errors.Is(err, ErrInvalidActionResult) {
+				t.Fatalf("invalid progress accepted: %v", err)
+			}
+		})
+	}
+
+	t.Run("worker progress requires progress", func(t *testing.T) {
+		event := validEvent()
+		delete(event, "progress")
+		if err := validate(validOutput(event)); !errors.Is(err, ErrInvalidActionResult) {
+			t.Fatalf("worker_progress without progress accepted: %v", err)
+		}
+	})
+	t.Run("lifecycle event forbids progress", func(t *testing.T) {
+		event := validEvent()
+		event["type"] = "execution_running"
+		if err := validate(validOutput(event)); !errors.Is(err, ErrInvalidActionResult) {
+			t.Fatalf("lifecycle event progress accepted: %v", err)
+		}
+	})
+	t.Run("truncated cursor may resume at retained history", func(t *testing.T) {
+		event := validEvent()
+		event["sequence"] = float64(7)
+		cursorRequest := cloneParams(request)
+		cursorRequest["after_sequence"] = float64(2)
+		_, err := adaptActionResultForRequestWithAuthority("agent.execution.v2.runs.events", cursorRequest, map[string]any{
+			"events": []any{event}, "next_sequence": float64(7), "history_truncated": true,
+		}, authority)
+		if err != nil {
+			t.Fatalf("truncated retained cursor rejected: %v", err)
+		}
+	})
+	t.Run("truncated cursor requires a retained history gap", func(t *testing.T) {
+		event := validEvent()
+		event["sequence"] = float64(3)
+		cursorRequest := cloneParams(request)
+		cursorRequest["after_sequence"] = float64(2)
+		_, err := adaptActionResultForRequestWithAuthority("agent.execution.v2.runs.events", cursorRequest, map[string]any{
+			"events": []any{event}, "next_sequence": float64(3), "history_truncated": true,
+		}, authority)
+		if !errors.Is(err, ErrInvalidActionResult) {
+			t.Fatalf("truncated cursor without a retained history gap accepted: %v", err)
+		}
+	})
+	t.Run("non-truncated cursor rejects a leading gap", func(t *testing.T) {
+		event := validEvent()
+		event["sequence"] = float64(runEventSequence + 1)
+		if err := validate(validOutput(event)); !errors.Is(err, ErrInvalidActionResult) {
+			t.Fatalf("non-truncated leading gap accepted: %v", err)
+		}
+	})
+	t.Run("truncated retained suffix rejects an internal gap", func(t *testing.T) {
+		first := validEvent()
+		first["sequence"] = float64(7)
+		second := validEvent()
+		second["event_id"] = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+		second["sequence"] = float64(9)
+		cursorRequest := cloneParams(request)
+		cursorRequest["after_sequence"] = float64(2)
+		_, err := adaptActionResultForRequestWithAuthority("agent.execution.v2.runs.events", cursorRequest, map[string]any{
+			"events": []any{first, second}, "next_sequence": float64(9), "history_truncated": true,
+		}, authority)
+		if !errors.Is(err, ErrInvalidActionResult) {
+			t.Fatalf("truncated internal gap accepted: %v", err)
+		}
+	})
+	t.Run("empty cursor pages pin next sequence", func(t *testing.T) {
+		cursorRequest := cloneParams(request)
+		cursorRequest["after_sequence"] = float64(2)
+		for name, output := range map[string]map[string]any{
+			"current window":   {"events": []any{}, "next_sequence": float64(2), "history_truncated": false},
+			"truncated window": {"events": []any{}, "next_sequence": float64(7), "history_truncated": true},
+		} {
+			t.Run(name, func(t *testing.T) {
+				if _, err := adaptActionResultForRequestWithAuthority("agent.execution.v2.runs.events", cursorRequest, output, authority); err != nil {
+					t.Fatalf("valid empty cursor page rejected: %v", err)
+				}
+			})
+		}
+	})
 }
 
 func TestCloudWorkerChatReferencesConsumePinnedPublicFixture(t *testing.T) {
@@ -301,7 +485,7 @@ func TestCloudWorkerExecutionV2ResultsRejectForeignPreparedAuthority(t *testing.
 		{"plan page owner", "agent.execution.v2.plans.list", cloudWorkerRequest("", nil), map[string]any{"plans": []any{fixture.Plan, foreignPlan}, "next_page_token": ""}},
 		{"run generation", "agent.execution.v2.runs.get", cloudWorkerRequest("run_id", fixture.Run["run_id"]), map[string]any{"run": foreignRun}},
 		{"run page generation", "agent.execution.v2.runs.list", cloudWorkerRequest("", nil), map[string]any{"runs": []any{fixture.Run, foreignRun}, "next_page_token": ""}},
-		{"event generation", "agent.execution.v2.runs.events", cloudWorkerRequest("run_id", fixture.Run["run_id"]), map[string]any{"events": []any{foreignEvent}, "next_sequence": float64(1)}},
+		{"event generation", "agent.execution.v2.runs.events", cloudWorkerRequest("run_id", fixture.Run["run_id"]), map[string]any{"events": []any{foreignEvent}, "next_sequence": float64(1), "history_truncated": false}},
 		{"artifact owner", "agent.execution.v2.artifacts.get", cloudWorkerRequest("artifact_id", fixture.Artifacts[0]["artifact_id"]), map[string]any{"artifact": foreignArtifact}},
 		{"artifact generation", "agent.execution.v2.artifacts.get", cloudWorkerRequest("artifact_id", fixture.Artifacts[0]["artifact_id"]), map[string]any{"artifact": foreignGenerationArtifact}},
 		{"plan request identity", "agent.execution.v2.plans.get", cloudWorkerRequest("plan_id", "99999999-9999-4999-8999-999999999999"), map[string]any{"plan": fixture.Plan}},

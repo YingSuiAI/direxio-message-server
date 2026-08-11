@@ -192,11 +192,28 @@ func cloudWorkerEventProperties() map[string]ActionFieldSchema {
 		"owner_id":           cloudWorkerConditional("string", "exact_prepared_permission_owner"),
 		"account_generation": cloudWorkerConditional("integer", "positive_integer_equal_to_prepared_permission_generation"),
 		"revision":           cloudWorkerConditional("integer", "positive_integer"),
-		"sequence":           cloudWorkerConditional("integer", "positive_strictly_increasing_integer"),
+		"sequence":           cloudWorkerConditional("integer", "positive_contiguous_after_previous;first_equals_after_sequence_plus_one_unless_history_truncated"),
 		"type":               cloudWorkerConditional("string", "nonempty_event_type"),
 		"at":                 cloudWorkerConditional("string", "rfc3339_nano"),
 		"payload_digest":     cloudWorkerConditional("string", "lowercase_sha256"),
 		"status":             {Type: "string", Presence: &ActionPresenceSchema{Omitted: "event_has_no_state_transition", Present: "cloud_worker_execution_state"}},
+		"progress": {
+			Type: "object",
+			Presence: &ActionPresenceSchema{
+				Omitted: "type_is_not_worker_progress",
+				Present: "required_when_type_is_worker_progress;forbidden_otherwise;strict_secret_free_snapshot",
+			},
+			Properties: map[string]ActionFieldSchema{
+				"phase":                   cloudWorkerNested("string", "one_of:claimed|preparing_inputs|running_pi|uploading_result|completing"),
+				"elapsed_ms":              cloudWorkerNested("integer", "integer_0_to_86400000"),
+				"last_activity_at":        cloudWorkerNested("string", "rfc3339_nano_not_after_event_at"),
+				"cpu_time_ms":             cloudWorkerNested("integer", "integer_0_to_604800000"),
+				"memory_high_water_bytes": cloudWorkerNested("integer", "integer_0_to_68719476736"),
+				"invocation_count":        cloudWorkerNested("integer", "integer_0_to_1000000"),
+				"uploaded_bytes":          cloudWorkerNested("integer", "integer_0_to_9437184"),
+				"output_truncated":        cloudWorkerNested("boolean", "authoritative_runtime_output_truncation_flag"),
+			},
+		},
 	}
 }
 
@@ -218,8 +235,9 @@ func executionV2CloudWorkerPageResponse(name string, properties map[string]Actio
 
 func executionV2CloudWorkerEventsResponse() map[string]ActionFieldSchema {
 	return map[string]ActionFieldSchema{
-		"events":        {Type: "array", Required: true, Items: &ActionFieldSchema{Type: "object", Properties: cloudWorkerEventProperties()}},
-		"next_sequence": {Type: "integer", Required: true},
+		"events":            {Type: "array", Required: true, Items: &ActionFieldSchema{Type: "object", Properties: cloudWorkerEventProperties()}},
+		"next_sequence":     {Type: "integer", Required: true},
+		"history_truncated": {Type: "boolean", Required: true, Presence: &ActionPresenceSchema{Present: "true_when_after_sequence_precedes_retained_history"}},
 	}
 }
 

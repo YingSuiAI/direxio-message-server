@@ -11109,6 +11109,71 @@
                     "present": "required_when_record_kind=cloud_worker;lowercase_sha256"
                   }
                 },
+                "progress": {
+                  "type": "object",
+                  "properties": {
+                    "cpu_time_ms": {
+                      "type": "integer",
+                      "required": true,
+                      "presence": {
+                        "present": "integer_0_to_604800000"
+                      }
+                    },
+                    "elapsed_ms": {
+                      "type": "integer",
+                      "required": true,
+                      "presence": {
+                        "present": "integer_0_to_86400000"
+                      }
+                    },
+                    "invocation_count": {
+                      "type": "integer",
+                      "required": true,
+                      "presence": {
+                        "present": "integer_0_to_1000000"
+                      }
+                    },
+                    "last_activity_at": {
+                      "type": "string",
+                      "required": true,
+                      "presence": {
+                        "present": "rfc3339_nano_not_after_event_at"
+                      }
+                    },
+                    "memory_high_water_bytes": {
+                      "type": "integer",
+                      "required": true,
+                      "presence": {
+                        "present": "integer_0_to_68719476736"
+                      }
+                    },
+                    "output_truncated": {
+                      "type": "boolean",
+                      "required": true,
+                      "presence": {
+                        "present": "authoritative_runtime_output_truncation_flag"
+                      }
+                    },
+                    "phase": {
+                      "type": "string",
+                      "required": true,
+                      "presence": {
+                        "present": "one_of:claimed|preparing_inputs|running_pi|uploading_result|completing"
+                      }
+                    },
+                    "uploaded_bytes": {
+                      "type": "integer",
+                      "required": true,
+                      "presence": {
+                        "present": "integer_0_to_9437184"
+                      }
+                    }
+                  },
+                  "presence": {
+                    "omitted": "type_is_not_worker_progress",
+                    "present": "required_when_type_is_worker_progress;forbidden_otherwise;strict_secret_free_snapshot"
+                  }
+                },
                 "revision": {
                   "type": "integer",
                   "presence": {
@@ -11127,7 +11192,7 @@
                   "type": "integer",
                   "presence": {
                     "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;positive_strictly_increasing_integer"
+                    "present": "required_when_record_kind=cloud_worker;positive_contiguous_after_previous;first_equals_after_sequence_plus_one_unless_history_truncated"
                   }
                 },
                 "status": {
@@ -11145,6 +11210,13 @@
                   }
                 }
               }
+            }
+          },
+          "history_truncated": {
+            "type": "boolean",
+            "required": true,
+            "presence": {
+              "present": "true_when_after_sequence_precedes_retained_history"
             }
           },
           "next_sequence": {
