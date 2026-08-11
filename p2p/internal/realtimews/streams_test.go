@@ -56,6 +56,8 @@ type sequencedDurableAgent struct {
 	params chan map[string]any
 }
 
+type waitingConfirmationDurableAgent struct{}
+
 type terminalErrorDurableAgent struct{}
 
 func (terminalErrorDurableAgent) Stream(context.Context, string, map[string]any, func(agentstream.Event) error) error {
@@ -88,6 +90,29 @@ func (terminalErrorDurableAgent) DurableStream(_ context.Context, _ string, _ st
 
 func (sequencedDurableAgent) Stream(context.Context, string, map[string]any, func(agentstream.Event) error) error {
 	return nil
+}
+
+func (waitingConfirmationDurableAgent) Stream(context.Context, string, map[string]any, func(agentstream.Event) error) error {
+	return nil
+}
+
+func (waitingConfirmationDurableAgent) DurableStream(_ context.Context, _ string, _ string, params map[string]any, emit func(agentstream.StreamEvent) error) error {
+	startID := actionbase.String(params["idempotency_key"])
+	conversationID := actionbase.String(params["conversation_id"])
+	turnID := "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	data := map[string]any{
+		"kind": "waiting_confirmation", "idempotency_key": startID,
+		"conversation_id": conversationID, "turn_id": turnID, "revision": float64(3),
+		"confirmation_id": "11111111-1111-4111-8111-111111111111",
+		"attempt_id":      "22222222-2222-4222-8222-222222222222",
+		"execution_id":    "33333333-3333-4333-8333-333333333333",
+		"status":          "waiting_confirmation",
+	}
+	return emit(agentstream.StreamEvent{
+		Kind: agentstream.EventRuntime, TurnID: turnID, IdempotencyKey: startID,
+		ConversationID: conversationID, Revision: 3, Seq: 4,
+		Event: "waiting_confirmation", Data: data,
+	})
 }
 
 func (a sequencedDurableAgent) DurableStream(_ context.Context, _ string, _ string, params map[string]any, emit func(agentstream.StreamEvent) error) error {
@@ -369,6 +394,31 @@ func TestNativeAgentDurableFramesExposeSequenceCursor(t *testing.T) {
 	done := nextOutbound(t, connection)
 	if done["type"] != "server.native_agent_stream.event" || done["event"] != "done" || done["seq"] != int64(42) {
 		t.Fatalf("done frame = %#v, want seq 42", done)
+	}
+}
+
+func TestNativeAgentDurableWaitingConfirmationExposesAuthority(t *testing.T) {
+	module := New(Dependencies{Agent: waitingConfirmationDurableAgent{}}, Config{})
+	connection := newConnection("session", Ticket{Role: "owner", UserID: "@owner:example.test"}, MaxInFlightRequests)
+	module.startNativeAgentStream(context.Background(), connection, map[string]any{
+		"id": "waiting", "action": "agent.chat", "params": map[string]any{
+			"idempotency_key": "44444444-4444-4444-8444-444444444444",
+			"message":         "create html", "model_profile_id": "profile-id",
+			"model_profile_revision": int64(1), "credential_version": int64(1),
+			"conversation_id": "55555555-5555-4555-8555-555555555555",
+		},
+	})
+
+	frame := nextOutbound(t, connection)
+	if frame["type"] != "server.native_agent_stream.event" || frame["event"] != "waiting_confirmation" || frame["seq"] != int64(4) {
+		t.Fatalf("waiting confirmation frame = %#v", frame)
+	}
+	data, ok := frame["data"].(map[string]any)
+	if !ok || data["confirmation_id"] != "11111111-1111-4111-8111-111111111111" ||
+		data["attempt_id"] != "22222222-2222-4222-8222-222222222222" ||
+		data["execution_id"] != "33333333-3333-4333-8333-333333333333" ||
+		data["status"] != "waiting_confirmation" {
+		t.Fatalf("waiting confirmation authority = %#v", frame)
 	}
 }
 

@@ -2,6 +2,7 @@ package agentgateway
 
 import (
 	"errors"
+	"maps"
 	"reflect"
 	"sort"
 	"strings"
@@ -271,6 +272,47 @@ func TestChatResultRejectsAlternateDuplicateAndConflictingLocations(t *testing.T
 		t.Run(name, func(t *testing.T) {
 			if err := validateChatStreamEvent(event, actionResultAuthority{}); !errors.Is(err, ErrInvalidActionResult) {
 				t.Fatalf("non-canonical stream event accepted: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateChatStreamWaitingConfirmationRequiresExactAuthority(t *testing.T) {
+	event := map[string]any{
+		"kind":            "waiting_confirmation",
+		"idempotency_key": durableTestStartID,
+		"conversation_id": durableTestConversationID,
+		"turn_id":         durableTestTurnID,
+		"revision":        float64(3),
+		"sequence":        int64(4),
+		"confirmation_id": "11111111-1111-4111-8111-111111111111",
+		"attempt_id":      "22222222-2222-4222-8222-222222222222",
+		"execution_id":    "33333333-3333-4333-8333-333333333333",
+		"status":          "waiting_confirmation",
+	}
+	if err := validateChatStreamEvent(event, actionResultAuthority{}); err != nil {
+		t.Fatalf("waiting confirmation event rejected: %v", err)
+	}
+
+	for _, field := range []string{"confirmation_id", "attempt_id", "execution_id", "status"} {
+		t.Run("missing_"+field, func(t *testing.T) {
+			invalid := maps.Clone(event)
+			delete(invalid, field)
+			if err := validateChatStreamEvent(invalid, actionResultAuthority{}); !errors.Is(err, ErrInvalidActionResult) {
+				t.Fatalf("missing %s accepted: %v", field, err)
+			}
+		})
+	}
+
+	for _, kind := range []string{"accepted", "started", "delta", "tool_call", "tool_result", "done", "error"} {
+		t.Run("authority_on_"+kind, func(t *testing.T) {
+			invalid := maps.Clone(event)
+			invalid["kind"] = kind
+			if kind == "done" {
+				invalid["response"] = durableChatResponseForTest("done", nil, nil, nil)
+			}
+			if err := validateChatStreamEvent(invalid, actionResultAuthority{}); !errors.Is(err, ErrInvalidActionResult) {
+				t.Fatalf("confirmation authority on %s accepted: %v", kind, err)
 			}
 		})
 	}

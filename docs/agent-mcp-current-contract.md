@@ -94,7 +94,11 @@ capability live.
   capability protocol operation ID are never projected as `turn_id`. The
   `stream_chat` result and nested done response use `idempotency_key`, not a
   `request_id` alias. Input, result, and event schema digests are all pinned by
-  Message Server readiness.
+  Message Server readiness. A local MCP/Skill confirmation pause is projected
+  as the non-terminal `waiting_confirmation` event with exact
+  `confirmation_id`, `attempt_id`, `execution_id`, and
+  `status=waiting_confirmation`; it is never represented as an empty tool
+  event or inferred from model text.
 - Durable turn reconciliation uses `agent.chat.turns.list` with one canonical
   conversation UUID, an optional opaque page token of at most 4,096 bytes, and
   an optional limit from 1 through 1,000. Each returned turn is the exact

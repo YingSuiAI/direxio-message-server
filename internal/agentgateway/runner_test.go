@@ -322,6 +322,26 @@ func TestNativeChatProgressProjectsOnlyAgentAuthoredTurnIdentity(t *testing.T) {
 	}
 }
 
+func TestNativeChatProgressProjectsWaitingConfirmation(t *testing.T) {
+	progress := &capv1.WatchOperationEvent{
+		OperationId: durableTestStartID,
+		Sequence:    4,
+		Event: &capv1.WatchOperationEvent_Progress{Progress: &capv1.ProgressEvent{EventJson: []byte(
+			`{"kind":"waiting_confirmation","idempotency_key":"` + durableTestStartID + `","conversation_id":"` + durableTestConversationID + `","turn_id":"` + durableTestTurnID + `","revision":3,"confirmation_id":"11111111-1111-4111-8111-111111111111","attempt_id":"22222222-2222-4222-8222-222222222222","execution_id":"33333333-3333-4333-8333-333333333333","status":"waiting_confirmation"}`,
+		)}},
+	}
+	event, terminal, err := nativeEventFromProto(progress, actionResultAuthority{})
+	if err != nil || terminal || event == nil || event.Event != "waiting_confirmation" || event.Seq != 4 {
+		t.Fatalf("waiting confirmation progress = event %#v terminal %v err %v", event, terminal, err)
+	}
+	if event.Data["confirmation_id"] != "11111111-1111-4111-8111-111111111111" ||
+		event.Data["attempt_id"] != "22222222-2222-4222-8222-222222222222" ||
+		event.Data["execution_id"] != "33333333-3333-4333-8333-333333333333" ||
+		event.Data["status"] != "waiting_confirmation" {
+		t.Fatalf("waiting confirmation authority = %#v", event.Data)
+	}
+}
+
 func TestNativeChatStreamRejectsCloudWorkerReferenceFromForeignPreparedGeneration(t *testing.T) {
 	reference := validExecutionReferenceForTest()
 	reference["account_generation"] = float64(8)

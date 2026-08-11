@@ -1198,6 +1198,7 @@ var canonicalChatStreamEventFields = map[string]struct{}{
 	"revision": {}, "text": {},
 	"tool_call": {}, "tool_result": {}, "response": {},
 	"error_code": {}, "error_summary": {}, "sequence": {},
+	"confirmation_id": {}, "attempt_id": {}, "execution_id": {}, "status": {},
 }
 
 // chatResult projects only the canonical Agent ChatResponse shape. Assistant
@@ -1635,7 +1636,7 @@ func validateChatStreamEvent(value map[string]any, authority actionResultAuthori
 		return fmt.Errorf("%w: chat stream event kind is missing", ErrInvalidActionResult)
 	}
 	switch kind {
-	case "accepted", "started", "delta", "tool_call", "tool_result", "done", "error":
+	case "accepted", "started", "delta", "tool_call", "tool_result", "waiting_confirmation", "done", "error":
 	default:
 		return fmt.Errorf("%w: chat stream event kind is invalid", ErrInvalidActionResult)
 	}
@@ -1650,6 +1651,23 @@ func validateChatStreamEvent(value map[string]any, authority actionResultAuthori
 	if sequence, present := value["sequence"]; present {
 		if parsed, ok := turnInt64(sequence); !ok || parsed < 0 {
 			return fmt.Errorf("%w: chat stream event sequence must be non-negative", ErrInvalidActionResult)
+		}
+	}
+	confirmationFields := []string{"confirmation_id", "attempt_id", "execution_id", "status"}
+	if kind == "waiting_confirmation" {
+		for _, field := range confirmationFields[:3] {
+			if !canonicalTurnUUID(value[field]) {
+				return fmt.Errorf("%w: waiting confirmation event %s must be a canonical UUID", ErrInvalidActionResult, field)
+			}
+		}
+		if value["status"] != "waiting_confirmation" {
+			return fmt.Errorf("%w: waiting confirmation event status is invalid", ErrInvalidActionResult)
+		}
+	} else {
+		for _, field := range confirmationFields {
+			if _, present := value[field]; present {
+				return fmt.Errorf("%w: only a waiting confirmation event may carry %s", ErrInvalidActionResult, field)
+			}
 		}
 	}
 	for _, field := range []string{
