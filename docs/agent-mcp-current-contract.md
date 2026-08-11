@@ -58,8 +58,9 @@ capability live.
   has empty parameters. Config update is a revision-checked, idempotent
   full-list replacement of at most 32 ordered tools, with at most six enabled;
   it may add, delete, or reorder stable default IDs (`translation`, `summary`, `explanation`,
-  `search`) and UUID custom IDs. Execute accepts exactly `tool_id` and a
-  bounded selected-text value; it never accepts a prompt, model/profile,
+  `search`) and UUID custom IDs. Execute accepts exactly `tool_id`, a
+  bounded selected-text value, and required `output_language` (`zh` or `en`),
+  which fixes the output language for both default and custom tools; it never accepts a prompt, model/profile,
   history, or credential field. Results expose only bounded output and at most
   five bounded `{title,url,snippet}` sources. Message Server has no text-tool
   database or runtime fallback, and a possibly dispatched config mutation is

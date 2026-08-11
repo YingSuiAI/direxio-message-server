@@ -39,6 +39,10 @@ func textToolsExecuteSchema() *ActionSchema {
 		Request: map[string]ActionFieldSchema{
 			"tool_id":       {Type: "string", Required: true},
 			"selected_text": {Type: "string", Required: true},
+			"output_language": {Type: "string", Required: true, Presence: &ActionPresenceSchema{
+				Present: "one_of:zh|en",
+				Empty:   "rejected",
+			}},
 		},
 		Response: map[string]ActionFieldSchema{
 			"tool_id": {Type: "string", Required: true},

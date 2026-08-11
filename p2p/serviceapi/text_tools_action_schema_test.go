@@ -29,8 +29,11 @@ func TestTextToolsActionSurfaceIsOwnerHTTPAndWSTyped(t *testing.T) {
 		}
 	}
 	execute, _ := ActionSpecFor("agent.text_tools.execute")
-	if len(execute.Schema.Request) != 2 || !execute.Schema.Request["tool_id"].Required || !execute.Schema.Request["selected_text"].Required {
+	if len(execute.Schema.Request) != 3 || !execute.Schema.Request["tool_id"].Required || !execute.Schema.Request["selected_text"].Required || !execute.Schema.Request["output_language"].Required {
 		t.Fatalf("execute request is not closed and typed: %#v", execute.Schema.Request)
+	}
+	if got := execute.Schema.Request["output_language"].Presence; got == nil || got.Present != "one_of:zh|en" || got.Empty != "rejected" {
+		t.Fatalf("execute output_language contract = %#v", got)
 	}
 	for _, field := range []string{"tool_id", "output", "sources"} {
 		if !execute.Schema.Response[field].Required {

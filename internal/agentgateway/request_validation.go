@@ -244,7 +244,7 @@ func validateTextToolsConfigUpdateRequest(action string, params map[string]any) 
 }
 
 func validateTextToolsExecuteRequest(action string, params map[string]any) error {
-	if err := rejectUnknownActionFields(action, params, "tool_id", "selected_text"); err != nil {
+	if err := rejectUnknownActionFields(action, params, "tool_id", "selected_text", "output_language"); err != nil {
 		return err
 	}
 	if params == nil || !validTextToolID(params["tool_id"]) {
@@ -252,6 +252,10 @@ func validateTextToolsExecuteRequest(action string, params map[string]any) error
 	}
 	if !validTextToolString(params["selected_text"], 1, maxSelectedTextBytes, false) {
 		return invalidActionRequest(action, "selected_text", "must be UTF-8 of 1 to 65536 bytes")
+	}
+	outputLanguage, ok := params["output_language"].(string)
+	if !ok || (outputLanguage != "zh" && outputLanguage != "en") {
+		return invalidActionRequest(action, "output_language", "must be zh or en")
 	}
 	return nil
 }

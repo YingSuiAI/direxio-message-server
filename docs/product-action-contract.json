@@ -6617,6 +6617,14 @@
       "transport": "http_and_ws_request",
       "schema": {
         "request": {
+          "output_language": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "one_of:zh|en",
+              "empty": "rejected"
+            }
+          },
           "selected_text": {
             "type": "string",
             "required": true

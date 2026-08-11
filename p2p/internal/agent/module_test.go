@@ -255,7 +255,7 @@ func TestTextToolsActionsAreAllowlistedAndValidatedBeforeDispatch(t *testing.T) 
 		}
 	}
 	if _, actionErr := handlers["agent.text_tools.execute"](context.Background(), map[string]any{
-		"tool_id": "summary", "selected_text": "hello", "prompt": "forbidden",
+		"tool_id": "summary", "selected_text": "hello", "output_language": "en", "prompt": "forbidden",
 	}); actionErr == nil || actionErr.Status != http.StatusBadRequest {
 		t.Fatalf("closed execute request error = %#v", actionErr)
 	}
@@ -263,7 +263,7 @@ func TestTextToolsActionsAreAllowlistedAndValidatedBeforeDispatch(t *testing.T) 
 		t.Fatal("invalid text tools request reached the external Agent runner")
 	}
 	if _, actionErr := handlers["agent.text_tools.execute"](context.Background(), map[string]any{
-		"tool_id": "summary", "selected_text": "hello",
+		"tool_id": "summary", "selected_text": "hello", "output_language": "en",
 	}); actionErr != nil {
 		t.Fatalf("valid execute rejected: %#v", actionErr)
 	}

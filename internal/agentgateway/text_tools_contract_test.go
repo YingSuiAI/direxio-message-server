@@ -10,7 +10,7 @@ const (
 	textToolsEmptyInputSchema    = `{"additionalProperties":false,"properties":{},"type":"object"}`
 	textToolsUpdateInputSchema   = `{"additionalProperties":false,"properties":{"enabled":{"type":"boolean"},"expected_revision":{"minimum":0,"type":"integer"},"idempotency_key":{"format":"uuid","type":"string"},"tools":{"items":{"additionalProperties":false,"properties":{"enabled":{"type":"boolean"},"name":{"maxLength":64,"minLength":1,"type":"string"},"order":{"minimum":0,"type":"integer"},"system_prompt":{"maxLength":16384,"minLength":1,"type":"string"},"tool_id":{"anyOf":[{"enum":["translation","summary","explanation","search"],"type":"string"},{"format":"uuid","type":"string"}]}},"required":["tool_id","name","system_prompt","order","enabled"],"type":"object"},"maxItems":32,"type":"array"}},"required":["idempotency_key","expected_revision","enabled","tools"],"type":"object"}`
 	textToolsConfigResultSchema  = `{"additionalProperties":false,"properties":{"enabled":{"type":"boolean"},"revision":{"minimum":0,"type":"integer"},"tools":{"items":{"additionalProperties":false,"properties":{"enabled":{"type":"boolean"},"name":{"maxLength":64,"minLength":1,"type":"string"},"order":{"minimum":0,"type":"integer"},"system_prompt":{"maxLength":16384,"minLength":1,"type":"string"},"tool_id":{"anyOf":[{"enum":["translation","summary","explanation","search"],"type":"string"},{"format":"uuid","type":"string"}]}},"required":["tool_id","name","system_prompt","order","enabled"],"type":"object"},"maxItems":32,"type":"array"},"updated_at":{"format":"date-time","type":"string"}},"required":["enabled","revision","tools","updated_at"],"type":"object"}`
-	textToolsExecuteInputSchema  = `{"additionalProperties":false,"properties":{"selected_text":{"maxLength":65536,"minLength":1,"type":"string"},"tool_id":{"anyOf":[{"enum":["translation","summary","explanation","search"],"type":"string"},{"format":"uuid","type":"string"}]}},"required":["tool_id","selected_text"],"type":"object"}`
+	textToolsExecuteInputSchema  = `{"additionalProperties":false,"properties":{"output_language":{"enum":["zh","en"],"type":"string"},"selected_text":{"maxLength":65536,"minLength":1,"type":"string"},"tool_id":{"anyOf":[{"enum":["translation","summary","explanation","search"],"type":"string"},{"format":"uuid","type":"string"}]}},"required":["tool_id","selected_text","output_language"],"type":"object"}`
 	textToolsExecuteResultSchema = `{"additionalProperties":false,"properties":{"output":{"maxLength":65536,"minLength":1,"type":"string"},"sources":{"items":{"additionalProperties":false,"properties":{"snippet":{"maxLength":4096,"type":"string"},"title":{"maxLength":512,"minLength":1,"type":"string"},"url":{"maxLength":8192,"minLength":1,"type":"string"}},"required":["title","url","snippet"],"type":"object"},"maxItems":5,"type":"array"},"tool_id":{"anyOf":[{"enum":["translation","summary","explanation","search"],"type":"string"},{"format":"uuid","type":"string"}]}},"required":["tool_id","output","sources"],"type":"object"}`
 )
 
@@ -47,8 +47,10 @@ func TestTextToolsRequestValidationIsClosedAndBounded(t *testing.T) {
 	if err := ValidateActionRequest("agent.text_tools.config.update", validUpdate); err != nil {
 		t.Fatalf("valid update rejected: %v", err)
 	}
-	if err := ValidateActionRequest("agent.text_tools.execute", map[string]any{"tool_id": "search", "selected_text": "query"}); err != nil {
-		t.Fatalf("valid execute rejected: %v", err)
+	for _, outputLanguage := range []string{"zh", "en"} {
+		if err := ValidateActionRequest("agent.text_tools.execute", map[string]any{"tool_id": "search", "selected_text": "query", "output_language": outputLanguage}); err != nil {
+			t.Fatalf("valid %s execute rejected: %v", outputLanguage, err)
+		}
 	}
 
 	invalid := []struct {
@@ -58,8 +60,12 @@ func TestTextToolsRequestValidationIsClosedAndBounded(t *testing.T) {
 		{"agent.text_tools.config.get", map[string]any{"prompt": "no"}},
 		{"agent.text_tools.config.update", map[string]any{"idempotency_key": validUpdate["idempotency_key"], "expected_revision": float64(0), "enabled": true, "tools": []any{map[string]any{"tool_id": "translation", "name": "x", "system_prompt": "x", "order": float64(1), "enabled": true}}}},
 		{"agent.text_tools.config.update", map[string]any{"idempotency_key": validUpdate["idempotency_key"], "expected_revision": float64(0), "enabled": true, "tools": []any{map[string]any{"tool_id": "translation", "name": "x", "system_prompt": "x", "order": float64(0), "enabled": true, "api_key": "secret"}}}},
+		{"agent.text_tools.execute", map[string]any{"tool_id": "search", "selected_text": "query"}},
+		{"agent.text_tools.execute", map[string]any{"tool_id": "search", "selected_text": "query", "output_language": "fr"}},
+		{"agent.text_tools.execute", map[string]any{"tool_id": "search", "selected_text": "query", "output_language": "ZH"}},
+		{"agent.text_tools.execute", map[string]any{"tool_id": "search", "selected_text": "query", "output_language": true}},
 		{"agent.text_tools.execute", map[string]any{"tool_id": "search", "selected_text": "query", "model_profile_id": "forbidden"}},
-		{"agent.text_tools.execute", map[string]any{"tool_id": "search", "selected_text": strings.Repeat("界", 21846)}},
+		{"agent.text_tools.execute", map[string]any{"tool_id": "search", "selected_text": strings.Repeat("界", 21846), "output_language": "en"}},
 	}
 	enabledTools := make([]any, 7)
 	for index := range enabledTools {
@@ -82,7 +88,7 @@ func TestTextToolsRequestValidationIsClosedAndBounded(t *testing.T) {
 }
 
 func TestTextToolsResultProjectionRejectsAliasesExtrasAndDrift(t *testing.T) {
-	request := map[string]any{"tool_id": "search", "selected_text": "query"}
+	request := map[string]any{"tool_id": "search", "selected_text": "query", "output_language": "en"}
 	valid := map[string]any{
 		"tool_id": "search", "output": "answer", "sources": []any{
 			map[string]any{"title": "result", "url": "https://example.test", "snippet": ""},
