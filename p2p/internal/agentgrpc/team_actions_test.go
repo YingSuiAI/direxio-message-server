@@ -912,3 +912,24 @@ func newTeamTestService() *teamTestService {
 		authorization: authorization, execution: execution,
 	}
 }
+
+func TestMapTeamMarketplaceAcceptsPermanentOfficialReviewOnly(t *testing.T) {
+	t.Parallel()
+	marketplace := &agentv1.TeamWorkerMarketplaceBindingV3{
+		PublisherDisplayName: "Dirextalk Official",
+		PublisherTier:        "dirextalk_official",
+		WorkerTypeId:         "pi-worker",
+		ReviewRiskClass:      "high",
+		GrantedPermissions: &agentv1.TeamWorkerPermissionSetV3{
+			Workspace: "isolated",
+		},
+	}
+	mapped, err := mapTeamMarketplace(marketplace)
+	if err != nil || mapped["review_valid_until"] != nil {
+		t.Fatalf("permanent official Marketplace=%#v error=%v", mapped, err)
+	}
+	marketplace.PublisherTier = "verified_partner"
+	if _, err := mapTeamMarketplace(marketplace); err == nil {
+		t.Fatal("accepted permanent non-official Marketplace review")
+	}
+}

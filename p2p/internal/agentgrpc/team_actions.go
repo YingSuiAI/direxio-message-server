@@ -809,11 +809,19 @@ func mapTeamMarketplace(
 		remote.GetGrantedPermissions() == nil {
 		return nil, errors.New("invalid Team Marketplace binding")
 	}
-	reviewValidUntil, err := requiredTimestamp(
-		remote.GetReviewValidUntil(),
-	)
-	if err != nil {
-		return nil, err
+	var reviewValidUntil any
+	if remote.GetReviewValidUntil() == nil {
+		if remote.GetPublisherTier() != "dirextalk_official" {
+			return nil, errors.New("invalid Team Marketplace binding")
+		}
+	} else {
+		parsed, err := requiredTimestamp(
+			remote.GetReviewValidUntil(),
+		)
+		if err != nil {
+			return nil, err
+		}
+		reviewValidUntil = parsed
 	}
 	permissions := remote.GetGrantedPermissions()
 	networkServices, err := publicTextList(
