@@ -1655,6 +1655,11 @@ func validateChatStreamEvent(value map[string]any, authority actionResultAuthori
 	}
 	confirmationFields := []string{"confirmation_id", "attempt_id", "execution_id", "status"}
 	if kind == "waiting_confirmation" {
+		for _, field := range []string{"text", "tool_call", "tool_result", "response", "error_code", "error_summary"} {
+			if _, present := value[field]; present {
+				return fmt.Errorf("%w: waiting confirmation event must not carry %s", ErrInvalidActionResult, field)
+			}
+		}
 		for _, field := range confirmationFields[:3] {
 			if !canonicalTurnUUID(value[field]) {
 				return fmt.Errorf("%w: waiting confirmation event %s must be a canonical UUID", ErrInvalidActionResult, field)

@@ -303,6 +303,18 @@ func TestValidateChatStreamWaitingConfirmationRequiresExactAuthority(t *testing.
 			}
 		})
 	}
+	for field, value := range map[string]any{
+		"text": "not allowed", "tool_call": map[string]any{}, "tool_result": map[string]any{},
+		"response": map[string]any{}, "error_code": "not_allowed", "error_summary": "not allowed",
+	} {
+		t.Run("mixed_"+field, func(t *testing.T) {
+			invalid := maps.Clone(event)
+			invalid[field] = value
+			if err := validateChatStreamEvent(invalid, actionResultAuthority{}); !errors.Is(err, ErrInvalidActionResult) {
+				t.Fatalf("mixed waiting field %s accepted: %v", field, err)
+			}
+		})
+	}
 
 	for _, kind := range []string{"accepted", "started", "delta", "tool_call", "tool_result", "done", "error"} {
 		t.Run("authority_on_"+kind, func(t *testing.T) {
