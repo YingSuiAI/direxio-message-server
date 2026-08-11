@@ -406,7 +406,8 @@ func validCompletionArtifactKind(kind, name string) bool {
 
 func validCompletionArtifactMediaType(value string) bool {
 	return value == "application/json" ||
-		value == "text/plain; charset=utf-8"
+		value == "text/plain; charset=utf-8" ||
+		value == "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 }
 
 func completionProductEvent(

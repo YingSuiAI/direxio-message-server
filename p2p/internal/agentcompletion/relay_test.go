@@ -146,6 +146,18 @@ func TestCompletionRequiresCanonicalSourceEventUUID(t *testing.T) {
 	}
 }
 
+func TestCompletionAcceptsVerifiedPPTXArtifact(t *testing.T) {
+	t.Parallel()
+	completion := validRelayTestCompletion()
+	artifact := completion.Execution["artifacts"].([]map[string]any)[0]
+	artifact["name"] = "executive-summary.pptx"
+	artifact["kind"] = "file"
+	artifact["media_type"] = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+	if err := validateCompletion(completion); err != nil {
+		t.Fatalf("verified PPTX artifact was rejected: %v", err)
+	}
+}
+
 func TestRelayRejectsUnsafeAssistantContent(t *testing.T) {
 	t.Parallel()
 	completion := validRelayTestCompletion()
