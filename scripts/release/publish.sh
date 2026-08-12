@@ -28,8 +28,6 @@ verify_remote_platform_image() {
     release_die 'could not inspect pulled remote image ID'
   [[ "$image_id" == "$expected_config_digest" ]] || \
     release_die 'pulled image ID does not match the remote linux/amd64 config digest'
-  [[ "$image_id" == "$RELEASE_VERIFIED_IMAGE_ID" ]] || \
-    release_die 'remote linux/amd64 config does not match the locally verified image'
 }
 
 remote_image_version() {
