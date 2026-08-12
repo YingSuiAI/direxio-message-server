@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Masterminds/semver/v3"
 	serverinfo "github.com/YingSuiAI/dirextalk-message-server/internal"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/releasecontrol"
 )
@@ -259,17 +260,18 @@ func TestReleaseV2StatusKeepsLocalVersionsAuthoritative(t *testing.T) {
 
 func TestReleaseV2ApplyServerRevalidatesClientAndSendsFiveFieldCommand(t *testing.T) {
 	controller := readyReleaseController()
-	central := &recordingCentralVersionSource{version: releasecontrol.CentralServerVersion{AppID: "1", ChannelID: "server", Version: "v1.1.30", PreVersion: "v1.0.2"}}
+	targetVersion := testVersionAfterCurrent(t)
+	central := &recordingCentralVersionSource{version: releasecontrol.CentralServerVersion{AppID: "1", ChannelID: "server", Version: targetVersion, PreVersion: "v1.0.2"}}
 	service := NewService(Config{ServerName: "example.com", ReleaseController: controller, CentralVersionSource: central})
 	router := newP2PTestRouter(service)
 	releaseRoute(t, router, service.AccessToken(), "client.version.report", map[string]any{"client_version": "v1.0.2"})
 	response := releaseRoute(t, router, service.AccessToken(), "release.v2.apply", map[string]any{
-		"component": "server", "target_version": "v1.1.30", "idempotency_key": "31a20813-c5d9-4f6d-b4f0-cdf8cfc75c6e", "confirm": releasecontrol.ApplyConfirmation,
+		"component": "server", "target_version": targetVersion, "idempotency_key": "31a20813-c5d9-4f6d-b4f0-cdf8cfc75c6e", "confirm": releasecontrol.ApplyConfirmation,
 	})
 	if response["job_id"] != "job_direct" || response["job_token"] != "job-secret" || response["status"] != "queued" {
 		t.Fatalf("unexpected apply response: %#v", response)
 	}
-	want := releasecontrol.ApplyRequest{Component: releasecontrol.ReleaseComponentServer, TargetVersion: "v1.1.30", MinimumServerVersion: "", IdempotencyKey: "31a20813-c5d9-4f6d-b4f0-cdf8cfc75c6e", Confirm: releasecontrol.ApplyConfirmation}
+	want := releasecontrol.ApplyRequest{Component: releasecontrol.ReleaseComponentServer, TargetVersion: targetVersion, MinimumServerVersion: "", IdempotencyKey: "31a20813-c5d9-4f6d-b4f0-cdf8cfc75c6e", Confirm: releasecontrol.ApplyConfirmation}
 	if controller.applyRequest != want || central.calls != 1 {
 		t.Fatalf("unexpected updater command=%#v central calls=%d", controller.applyRequest, central.calls)
 	}
@@ -393,7 +395,7 @@ func TestReleaseV2ApplyRejectsUnsafeAndIncompatibleRequests(t *testing.T) {
 
 	controller := readyReleaseController()
 	central := validCentralAgentSource()
-	central.version.PreVersion = "v1.1.30"
+	central.version.PreVersion = testVersionAfterCurrent(t)
 	service := NewService(Config{ServerName: "example.com", ReleaseController: controller, CentralAgentVersionSource: central})
 	response := releaseRouteRaw(t, newP2PTestRouter(service), service.AccessToken(), "release.v2.apply", map[string]any{
 		"component": "agent", "target_version": "v1.1.2", "idempotency_key": validID, "confirm": releasecontrol.ApplyConfirmation,
@@ -401,6 +403,16 @@ func TestReleaseV2ApplyRejectsUnsafeAndIncompatibleRequests(t *testing.T) {
 	if response.Code != http.StatusConflict || releaseResponseCode(t, response) != "server_version_incompatible" || controller.applyRequest.Component != "" {
 		t.Fatalf("Agent server minimum was not fenced: %d %s", response.Code, response.Body.String())
 	}
+}
+
+func testVersionAfterCurrent(t *testing.T) string {
+	t.Helper()
+	current, err := semver.StrictNewVersion(strings.TrimPrefix(serverinfo.VersionString(), "v"))
+	if err != nil {
+		t.Fatalf("parse current server version: %v", err)
+	}
+	next := current.IncPatch()
+	return "v" + next.String()
 }
 
 func TestReleaseV2ApplyFailsClosedWhenUpdaterIsNotReady(t *testing.T) {

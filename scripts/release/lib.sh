@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
 release_die() {
   printf 'release gate failed: %s\n' "$*" >&2
   exit 1
@@ -231,4 +230,17 @@ PY
 )" || release_die 'verification evidence is invalid'
   mapfile -t verified_values <<<"$values"
   [[ "${#verified_values[@]}" == 3 && "${verified_values[0]}" == "$RELEASE_VERSION" && "${verified_values[1]}" == "$RELEASE_COMMIT" && "${verified_values[2]}" == "$RELEASE_IMAGE" ]] || release_die 'verification evidence does not match release context'
+}
+
+release_write_notes() {
+  local destination=$1
+  python3 - "$RELEASE_REPO_ROOT/release/RELEASE_NOTES.md" "$RELEASE_VERSION" "$destination" <<'PY'
+import pathlib, re, sys
+source, version, destination = sys.argv[1:]
+text = pathlib.Path(source).read_text(encoding="utf-8")
+match = re.search(rf"(?ms)^##[ \t]+{re.escape(version)}[ \t]*\n.*?(?=^##[ \t]+v|\Z)", text)
+if not match:
+    raise SystemExit("release notes section is missing")
+pathlib.Path(destination).write_text(match.group(0).rstrip() + "\n", encoding="utf-8", newline="\n")
+PY
 }

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## v1.1.32
+
+1. Publish the stable Message Server image as a provenance- and SBOM-bearing OCI index containing exactly `linux/amd64`.
+2. Verify the remote version index digest, platform descriptors, image labels, source revision, and embedded server version before creating the formal GitHub Release.
+3. Move `latest` only after the formal Release succeeds, preserve the version index by digest, and reject any version/`latest` digest drift.
+4. Apply the same OCI index and digest policy to the repository-owned Agent release scripts and verify all three Agent binaries report the release version.
+
 ## v1.1.29
 
 1. Complete the Agent Core MCP and Skills lifecycle with strict, separated ProductCore schemas for built-in, GitHub, skills.sh, registry, and managed Node/npm sources.
