@@ -29,19 +29,23 @@ type nativeAgentCatalogReadiness struct {
 	requirement []agentgateway.CatalogRequirement
 	generation  func() int64
 	onReady     func(bool)
+	publish     func(bool) error
+	publishable func(bool) bool
 	now         func() time.Time
 	ttl         time.Duration
 	interval    time.Duration
 	probeTO     time.Duration
 
-	mu        sync.RWMutex
-	ready     bool
-	probedGen int64
-	expiresAt time.Time
-	lastErr   error
-	probing   bool
-	cancel    context.CancelFunc
-	done      chan struct{}
+	mu         sync.RWMutex
+	ready      bool
+	probedGen  int64
+	expiresAt  time.Time
+	lastErr    error
+	probing    bool
+	published  bool
+	hasPublish bool
+	cancel     context.CancelFunc
+	done       chan struct{}
 }
 
 func newNativeAgentCatalogReadiness(probe func(context.Context, []agentgateway.CatalogRequirement) error, requirements []agentgateway.CatalogRequirement, generation func() int64) *nativeAgentCatalogReadiness {
@@ -161,6 +165,7 @@ func (r *nativeAgentCatalogReadiness) probeNow(parent context.Context) {
 		if wasReady != isReady && onReady != nil {
 			onReady(isReady)
 		}
+		r.publishReadiness(isReady)
 		logrus.WithError(err).WithField("account_generation", generation).Warn("Native Agent capability catalog probe failed")
 		return
 	}
@@ -174,6 +179,41 @@ func (r *nativeAgentCatalogReadiness) probeNow(parent context.Context) {
 	if wasReady != isReady && onReady != nil {
 		onReady(isReady)
 	}
+	r.publishReadiness(isReady)
+}
+
+func (r *nativeAgentCatalogReadiness) publishReadiness(ready bool) {
+	if r == nil || r.publish == nil {
+		return
+	}
+	desired := ready
+	if r.publishable != nil {
+		desired = r.publishable(ready)
+	}
+	r.mu.RLock()
+	alreadyPublished := r.hasPublish && r.published == desired
+	r.mu.RUnlock()
+	if alreadyPublished {
+		return
+	}
+	if err := r.publish(desired); err != nil {
+		logrus.WithError(err).WithField("online", desired).Warn("Native Agent readiness state publish failed")
+		return
+	}
+	r.mu.Lock()
+	r.published = desired
+	r.hasPublish = true
+	r.mu.Unlock()
+}
+
+func (r *nativeAgentCatalogReadiness) recordPublished(online bool) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.published = online
+	r.hasPublish = true
+	r.mu.Unlock()
 }
 
 func (r *nativeAgentCatalogReadiness) readyState() (bool, error) {
@@ -308,12 +348,16 @@ func (s *Service) configureNativeAgentCatalogReadiness(cfg Config) {
 	}
 	requirements := nativeAgentCatalogRequirements(cfg.NativeAgentRequiredActions)
 	s.nativeAgentCatalog = newNativeAgentCatalogReadiness(probe, requirements, currentGeneration)
-	s.nativeAgentCatalog.onReady = func(online bool) {
+	s.nativeAgentCatalog.publishable = func(ready bool) bool {
+		s.mu.Lock()
+		enabled := s.agentConfig.Enabled
+		s.mu.Unlock()
+		return ready && enabled
+	}
+	s.nativeAgentCatalog.publish = func(online bool) error {
 		ctx, cancel := context.WithTimeout(context.Background(), nativeAgentCatalogProbeTimeout)
 		defer cancel()
-		if err := s.publishNativeAgentReadinessState(ctx, online); err != nil {
-			logrus.WithError(err).WithField("online", online).Warn("Native Agent readiness state publish failed")
-		}
+		return s.publishNativeAgentReadinessState(ctx, online)
 	}
 	s.nativeAgentCatalog.start()
 }

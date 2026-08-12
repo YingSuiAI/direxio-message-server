@@ -42,6 +42,9 @@ func ApplyOnlineConfigUpdate(current dirextalkdomain.AgentConfig, params map[str
 		// through the external config update above.
 		next.MCPBlockedRoomIDs = values.Strings("mcp_blocked_room_ids")
 	}
+	if _, ok := params["enabled"]; ok {
+		next.Enabled = values.Bool("enabled")
+	}
 	return NormalizeConfig(next)
 }
 

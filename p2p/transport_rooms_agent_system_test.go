@@ -385,3 +385,21 @@ func TestAgentConfigEnableDoesNotPublishOnlineState(t *testing.T) {
 		t.Fatalf("enabling config alone must not publish online status, got %#v", transport.stateEvents)
 	}
 }
+
+func TestNativeAgentReadinessCannotOverrideDisabledConfig(t *testing.T) {
+	transport := &recordingTransport{}
+	service := NewServiceWithTransport(withTestExternalAgent(Config{ServerName: "example.com"}), transport)
+	service.agentRoomID = "!agents-real:example.com"
+	service.agentConfig.Enabled = false
+	bootstrapService(t, service)
+
+	if err := service.publishNativeAgentReadinessState(context.Background(), service.nativeAgentReady() && service.agentConfig.Enabled); err != nil {
+		t.Fatalf("publish readiness: %v", err)
+	}
+	if len(transport.stateEvents) != 1 {
+		t.Fatalf("expected one status publication, got %#v", transport.stateEvents)
+	}
+	if online, ok := agentStatusOnlineUpdate(transport.stateEvents[0], "!agents-real:example.com", "@agent:example.com", "@agent:example.com"); !ok || online {
+		t.Fatalf("disabled Agent was published online: %#v", transport.stateEvents[0])
+	}
+}

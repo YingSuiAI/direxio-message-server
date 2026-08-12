@@ -159,6 +159,77 @@ func TestNativeAgentCatalogReadinessNotifiesOnlyStateTransitions(t *testing.T) {
 	}
 }
 
+func TestNativeAgentCatalogReadinessRetriesFailedPublication(t *testing.T) {
+	readiness := newNativeAgentCatalogReadiness(func(context.Context, []agentgateway.CatalogRequirement) error {
+		return nil
+	}, nil, func() int64 { return 7 })
+	readiness.now = func() time.Time { return time.Unix(100, 0) }
+	readiness.ttl = 10 * time.Second
+	publicationAttempts := 0
+	readiness.publish = func(online bool) error {
+		publicationAttempts++
+		if !online {
+			t.Fatal("healthy catalog attempted to publish offline")
+		}
+		if publicationAttempts == 1 {
+			return errors.New("temporary Matrix write failure")
+		}
+		return nil
+	}
+
+	readiness.probeNow(context.Background())
+	readiness.probeNow(context.Background())
+	readiness.probeNow(context.Background())
+
+	if publicationAttempts != 2 {
+		t.Fatalf("publication attempts = %d, want one retry and then suppression", publicationAttempts)
+	}
+}
+
+func TestNativeAgentCatalogReadinessPublishesEffectiveDisabledState(t *testing.T) {
+	readiness := newNativeAgentCatalogReadiness(func(context.Context, []agentgateway.CatalogRequirement) error {
+		return nil
+	}, nil, func() int64 { return 7 })
+	readiness.now = func() time.Time { return time.Unix(100, 0) }
+	readiness.ttl = 10 * time.Second
+	enabled := false
+	readiness.publishable = func(ready bool) bool { return ready && enabled }
+	var publications []bool
+	readiness.publish = func(online bool) error {
+		publications = append(publications, online)
+		return nil
+	}
+
+	readiness.probeNow(context.Background())
+	enabled = true
+	readiness.probeNow(context.Background())
+
+	if len(publications) != 2 || publications[0] || !publications[1] {
+		t.Fatalf("effective publications = %#v, want [false true]", publications)
+	}
+}
+
+func TestNativeAgentCatalogReadinessRepublishesAfterExplicitOffline(t *testing.T) {
+	readiness := newNativeAgentCatalogReadiness(func(context.Context, []agentgateway.CatalogRequirement) error {
+		return nil
+	}, nil, func() int64 { return 7 })
+	readiness.now = func() time.Time { return time.Unix(100, 0) }
+	readiness.ttl = 10 * time.Second
+	var publications []bool
+	readiness.publish = func(online bool) error {
+		publications = append(publications, online)
+		return nil
+	}
+
+	readiness.probeNow(context.Background())
+	readiness.recordPublished(false)
+	readiness.probeNow(context.Background())
+
+	if len(publications) != 2 || !publications[0] || !publications[1] {
+		t.Fatalf("publications after explicit offline = %#v, want [true true]", publications)
+	}
+}
+
 func TestNativeAgentCatalogReadinessGenerationFence(t *testing.T) {
 	generation := int64(1)
 	up := false
