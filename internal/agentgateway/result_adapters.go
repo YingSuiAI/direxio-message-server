@@ -156,6 +156,10 @@ func projectActionResult(action string, output map[string]any) map[string]any {
 		return chatResult(result)
 	case "agent.web_search.config.get", "agent.web_search.config.update":
 		return webSearchConfigResult(result)
+	case "agent.memory.config.get", "agent.memory.config.update":
+		return memoryConfigResult(result)
+	case "agent.memory.status":
+		return memoryStatusResult(result)
 	case "agent.web_search.test":
 		return webSearchTestResult(result)
 	case "agent.text_tools.config.get", "agent.text_tools.config.update":
@@ -200,6 +204,8 @@ func validateActionResult(action string, request, output map[string]any, authori
 		return validateChatAttachmentActionResult(action, request, output, authority)
 	case "agent.web_search.config.get", "agent.web_search.config.update":
 		return validateWebSearchConfigResult(action, output)
+	case "agent.memory.config.get", "agent.memory.config.update", "agent.memory.status":
+		return validateMemoryResult(action, output)
 	case "agent.web_search.test":
 		return validateWebSearchTestResult(action, output)
 	case "agent.text_tools.config.get", "agent.text_tools.config.update":
@@ -472,6 +478,153 @@ func textToolsExecutionResult(result map[string]any) map[string]any {
 	}
 	projected["sources"] = projectedSources
 	return projected
+}
+
+func memoryConfigResult(value map[string]any) map[string]any {
+	return mapProjection(value, []string{"enabled", "embedding_configured", "embedding_profile_id", "embedding_model", "revision", "updated_at"}, nil)
+}
+
+func memoryStatusResult(value map[string]any) map[string]any {
+	result := memoryConfigResult(value)
+	for _, field := range []string{"active_fact_count", "timeline_event_count", "pending_observation_count", "failed_observation_count"} {
+		result[field] = valueByKey(value, field)
+	}
+	facts, _ := actionObjectSlice(valueByKey(value, "facts"))
+	projectedFacts := make([]any, 0, len(facts))
+	for _, fact := range facts {
+		projectedFacts = append(projectedFacts, mapProjection(fact, []string{"id", "subject", "predicate", "value", "kind", "confidence", "valid_from", "last_confirmed_at"}, nil))
+	}
+	result["facts"] = projectedFacts
+	events, _ := actionObjectSlice(valueByKey(value, "timeline"))
+	projectedEvents := make([]any, 0, len(events))
+	for _, event := range events {
+		projectedEvents = append(projectedEvents, mapProjection(event, []string{"kind", "summary", "effective_at", "observed_at"}, nil))
+	}
+	result["timeline"] = projectedEvents
+	return result
+}
+
+func validateMemoryResult(action string, output map[string]any) error {
+	if output == nil {
+		return fmt.Errorf("%w: %s response is missing", ErrInvalidActionResult, action)
+	}
+	configFields := []string{"enabled", "embedding_configured", "embedding_profile_id", "embedding_model", "revision", "updated_at"}
+	allowedFields := configFields
+	if strings.HasSuffix(action, ".status") {
+		allowedFields = append(append([]string{}, configFields...), "active_fact_count", "timeline_event_count", "pending_observation_count", "failed_observation_count", "facts", "timeline")
+	}
+	if !onlyResultFields(output, allowedFields...) {
+		return fmt.Errorf("%w: memory response contains an unexpected field", ErrInvalidActionResult)
+	}
+	for _, field := range []string{"enabled", "embedding_configured"} {
+		if _, ok := output[field].(bool); !ok {
+			return fmt.Errorf("%w: memory %s must be a boolean", ErrInvalidActionResult, field)
+		}
+	}
+	revision, ok := turnInt64(output["revision"])
+	if !ok || revision < 0 {
+		return fmt.Errorf("%w: memory revision is invalid", ErrInvalidActionResult)
+	}
+	if updatedAt, present := output["updated_at"]; present {
+		if !validRFC3339String(updatedAt) {
+			return fmt.Errorf("%w: memory updated_at is invalid", ErrInvalidActionResult)
+		}
+	}
+	configured, _ := output["embedding_configured"].(bool)
+	profileID, _ := output["embedding_profile_id"].(string)
+	model, _ := output["embedding_model"].(string)
+	if configured != (uuid.Validate(profileID) == nil && strings.TrimSpace(model) != "") {
+		return fmt.Errorf("%w: memory embedding configuration is inconsistent", ErrInvalidActionResult)
+	}
+	if !configured && (profileID != "" || model != "") {
+		return fmt.Errorf("%w: unconfigured memory response contains embedding identity", ErrInvalidActionResult)
+	}
+	if strings.HasSuffix(action, ".status") {
+		for _, field := range []string{"active_fact_count", "timeline_event_count", "pending_observation_count", "failed_observation_count"} {
+			value, valid := turnInt64(output[field])
+			if !valid || value < 0 {
+				return fmt.Errorf("%w: memory %s is invalid", ErrInvalidActionResult, field)
+			}
+		}
+		facts, ok := actionObjectSlice(output["facts"])
+		if !ok || len(facts) > 128 {
+			return fmt.Errorf("%w: memory facts must be an array", ErrInvalidActionResult)
+		}
+		for _, fact := range facts {
+			if !exactResultFields(fact, "id", "subject", "predicate", "value", "kind", "confidence", "valid_from", "last_confirmed_at") || !validMemoryFact(fact) {
+				return fmt.Errorf("%w: memory fact is invalid", ErrInvalidActionResult)
+			}
+		}
+		timeline, ok := actionObjectSlice(output["timeline"])
+		if !ok || len(timeline) > 64 {
+			return fmt.Errorf("%w: memory timeline must be an array", ErrInvalidActionResult)
+		}
+		for _, event := range timeline {
+			if !exactResultFields(event, "kind", "summary", "effective_at", "observed_at") || !validMemoryTimelineEvent(event) {
+				return fmt.Errorf("%w: memory timeline event is invalid", ErrInvalidActionResult)
+			}
+		}
+	}
+	return nil
+}
+
+func validMemoryFact(fact map[string]any) bool {
+	id, idOK := fact["id"].(string)
+	predicate, predicateOK := fact["predicate"].(string)
+	value, valueOK := fact["value"].(string)
+	kind, kindOK := fact["kind"].(string)
+	confidence, confidenceOK := finiteNumber(fact["confidence"])
+	if !idOK || uuid.Validate(id) != nil || fact["subject"] != "user" || !predicateOK || strings.TrimSpace(predicate) == "" || len(predicate) > 128 || !valueOK || strings.TrimSpace(value) == "" || len(value) > 2048 || !kindOK || !stringIn(kind, "identity", "preference", "relationship", "goal", "constraint", "context", "fact") || !confidenceOK || confidence < 0 || confidence > 1 {
+		return false
+	}
+	return validRFC3339String(fact["valid_from"]) && validRFC3339String(fact["last_confirmed_at"])
+}
+
+func finiteNumber(value any) (float64, bool) {
+	var result float64
+	switch typed := value.(type) {
+	case float64:
+		result = typed
+	case float32:
+		result = float64(typed)
+	case int:
+		result = float64(typed)
+	case int64:
+		result = float64(typed)
+	case json.Number:
+		parsed, err := typed.Float64()
+		if err != nil {
+			return 0, false
+		}
+		result = parsed
+	default:
+		return 0, false
+	}
+	return result, !math.IsNaN(result) && !math.IsInf(result, 0)
+}
+
+func stringIn(value string, allowed ...string) bool {
+	for _, item := range allowed {
+		if value == item {
+			return true
+		}
+	}
+	return false
+}
+
+func validMemoryTimelineEvent(event map[string]any) bool {
+	kind, kindOK := event["kind"].(string)
+	summary, summaryOK := event["summary"].(string)
+	return kindOK && stringIn(kind, "added", "confirmed", "replaced", "retracted") && summaryOK && strings.TrimSpace(summary) != "" && len(summary) <= 4096 && validRFC3339String(event["effective_at"]) && validRFC3339String(event["observed_at"])
+}
+
+func validRFC3339String(value any) bool {
+	text, ok := value.(string)
+	if !ok || text == "" || len(text) > 128 || !utf8.ValidString(text) {
+		return false
+	}
+	_, err := time.Parse(time.RFC3339Nano, text)
+	return err == nil
 }
 
 func validateKnowledgeStatusResult(output map[string]any) error {

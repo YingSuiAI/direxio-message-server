@@ -135,6 +135,10 @@ func ValidateActionRequest(action string, params map[string]any) error {
 		return validateCloudWorkerArtifactDownloadRequest(action, params)
 	case "agent.text_tools.config.get":
 		return rejectUnknownActionFields(action, params)
+	case "agent.memory.config.get", "agent.memory.status":
+		return rejectUnknownActionFields(action, params)
+	case "agent.memory.config.update":
+		return validateMemoryConfigUpdateRequest(action, params)
 	case "agent.text_tools.config.update":
 		return validateTextToolsConfigUpdateRequest(action, params)
 	case "agent.text_tools.execute":
@@ -152,6 +156,19 @@ func ValidateActionRequest(action string, params map[string]any) error {
 	default:
 		return nil
 	}
+}
+
+func validateMemoryConfigUpdateRequest(action string, params map[string]any) error {
+	if err := rejectUnknownActionFields(action, params, "idempotency_key", "expected_revision", "enabled"); err != nil {
+		return err
+	}
+	if !canonicalActionUUID(params["idempotency_key"]) || !actionIntegerInRange(params["expected_revision"], 0, math.MaxInt64) {
+		return invalidActionRequest(action, "idempotency_key", "must include a canonical UUID and non-negative expected_revision")
+	}
+	if _, ok := params["enabled"].(bool); !ok {
+		return invalidActionRequest(action, "enabled", "must be a boolean")
+	}
+	return nil
 }
 
 func validateCoreExtensionDiscoverRequest(action string, params map[string]any, kind string) error {

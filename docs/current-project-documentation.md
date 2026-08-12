@@ -95,6 +95,11 @@ Native Agent 当前边界：
 - `agent.models.list` 返回 provider catalog；model-profile actions 返回持久化
   profiles。Tavily 只从 Agent 加密配置读取，Knowledge upload 要求整文件
   SHA-256，搜索分页返回并固定 embedding provenance；长期记忆与对话摘要分离。
+- 自动用户事实记忆通过 `agent.memory.config.get/update/status` 代理到 Agent
+  `agent.memory.v1`。新实例默认关闭；只有 Agent 验证当前向量模型和密钥有效后，
+  owner 才能显式开启。关闭会停止新的事实提取及结构化事实/时间线召回，但保留
+  已有事实、冲突时间线、Knowledge 资料和对话历史。Message Server 只做闭集
+  请求/结果校验与投影，不持久化事实。
 - Cloud Worker `agent.execution.v2.runs.events` 固定返回
   `events`、`next_sequence`、`history_truncated`。只有 `worker_progress` 事件可携带
   完整且有界的结构化 `progress`；普通生命周期事件禁止混入 progress。Message

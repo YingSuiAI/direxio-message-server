@@ -99,6 +99,14 @@ published. In particular, a Product Capability bridge alone does not publish
 `skills.server` or `mcp`. Registration, schema presence, or documentation alone
 never makes an action live.
 
+`memory.server` covers durable Native conversation/history support and remains
+the client availability gate for the adjacent automatic-memory controls. The
+three public memory actions bind exactly to `agent.memory.v1/get_config`,
+`update_config`, and `status`. The descriptor schemas are digest-pinned; config
+updates require UUID idempotency plus expected revision, and status result
+projection is closed over non-secret model readiness, facts, timeline, and
+observation counters.
+
 The model-profile sync/list contract includes
 `default_tool_client_profile_id`. An empty value means no tool default; a
 non-empty value must identify a conversation-kind profile in the same
