@@ -288,7 +288,11 @@ release_catalog_origin=https://imadmin.dirextalk.ai
 if [ "$runner_fixture_mode" = true ] && [ "${DIREXTALK_SPLIT_TEST_MODE:-false}" != true ]; then
   die "DIREXTALK_SPLIT_FIXTURE_MODE requires explicit DIREXTALK_SPLIT_TEST_MODE=true"
 fi
-core_aws_enabled=$(parse_bool DIREXTALK_CORE_AWS_ENABLED "${DIREXTALK_CORE_AWS_ENABLED:-false}")
+core_aws_default=false
+if [ "$compose_mode" = production ]; then
+  core_aws_default=true
+fi
+core_aws_enabled=$(parse_bool DIREXTALK_CORE_AWS_ENABLED "${DIREXTALK_CORE_AWS_ENABLED:-$core_aws_default}")
 core_aws_ssm_enabled=$(parse_bool DIREXTALK_CORE_AWS_SSM_ENABLED "${DIREXTALK_CORE_AWS_SSM_ENABLED:-false}")
 core_knowledge_vector_dimension=${DIREXTALK_CORE_KNOWLEDGE_VECTOR_DIMENSION:-1536}
 validate_vector_dimension DIREXTALK_CORE_KNOWLEDGE_VECTOR_DIMENSION "$core_knowledge_vector_dimension"
@@ -1081,6 +1085,7 @@ core_extension_runner_socket: $extension_runner_socket
 core_extension_runner_uid: $extension_runner_uid
 core_static_sites_enabled: true
 core_static_sites_root: /var/lib/dirextalk-agent/static-sites
+core_static_sites_public_origin: $message_client_base_url
 core_workload_enabled: $core_workload_enabled
 core_workload_runner_socket: $workload_runner_socket
 core_workload_runner_uid: $workload_runner_uid

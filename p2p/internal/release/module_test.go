@@ -125,6 +125,29 @@ func TestAgentStatusRejectsDevelopmentServerForStableMinimum(t *testing.T) {
 	}
 }
 
+func TestAgentStatusDoesNotPresentOlderOrEqualCentralTargetAsLatest(t *testing.T) {
+	for _, centralVersion := range []string{"v1.0.7", "v1.0.72"} {
+		t.Run(centralVersion, func(t *testing.T) {
+			status := agentStatusMap(
+				releasecontrol.AgentStatus{Available: true, CurrentVersion: "v1.0.72"},
+				releasecontrol.CentralAgentVersion{
+					AppID: "1", ChannelID: "agents", Version: centralVersion, PreVersion: "v9.0.0",
+				},
+				"",
+				"v1.1.0",
+				true,
+			)
+			if status["current_version"] != "v1.0.72" || status["latest_version"] != "v1.0.72" || status["update_available"] != false || status["compatibility"] != "compatible" {
+				t.Fatalf("central comparison target replaced current Agent version: %#v", status)
+			}
+			reasons, ok := status["reasons"].([]string)
+			if !ok || len(reasons) != 1 || reasons[0] != "agent_up_to_date" {
+				t.Fatalf("unexpected reasons: %#v", status["reasons"])
+			}
+		})
+	}
+}
+
 func TestAgentApplyRejectsDevelopmentServerForStableMinimum(t *testing.T) {
 	module := &Module{centralAgentSource: fixedAgentVersionSource{version: releasecontrol.CentralAgentVersion{
 		AppID: "1", ChannelID: "agents", Version: "v1.0.2", PreVersion: "v1.1.0",

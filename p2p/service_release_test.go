@@ -258,6 +258,27 @@ func TestReleaseV2StatusKeepsLocalVersionsAuthoritative(t *testing.T) {
 	}
 }
 
+func TestReleaseV2StatusKeepsReceiptCurrentWhenCentralTargetIsOlder(t *testing.T) {
+	controller := readyReleaseController()
+	controller.status.Agent.CurrentVersion = "v1.0.72"
+	central := &recordingCentralAgentVersionSource{version: releasecontrol.CentralAgentVersion{
+		AppID: "1", ChannelID: "agents", Version: "v1.0.7", PreVersion: "v999.0.0",
+	}}
+	service := NewService(Config{
+		ServerName: "example.com", ReleaseController: controller,
+		CentralAgentVersionSource: central,
+	})
+	status := mustHandle[map[string]any](t, service, "release.v2.status", nil)
+	agent := status["agent"].(map[string]any)
+	if agent["available"] != true || agent["current_version"] != "v1.0.72" || agent["latest_version"] != "v1.0.72" || agent["update_available"] != false || agent["compatibility"] != "compatible" {
+		t.Fatalf("older central target was presented as the current/latest Agent: %#v", agent)
+	}
+	reasons := agent["reasons"].([]string)
+	if len(reasons) != 1 || reasons[0] != "agent_up_to_date" {
+		t.Fatalf("unexpected Agent reasons: %#v", reasons)
+	}
+}
+
 func TestReleaseV2ApplyServerRevalidatesClientAndSendsFiveFieldCommand(t *testing.T) {
 	controller := readyReleaseController()
 	targetVersion := testVersionAfterCurrent(t)

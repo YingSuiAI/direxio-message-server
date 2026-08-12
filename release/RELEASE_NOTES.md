@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v1.1.34
+
+1. Keep the updater receipt as the Agent runtime version authority and treat the central Agent version only as a newer-version comparison target.
+2. Configure Agent static-site responses with the node's public HTTPS origin.
+
 ## v1.1.33
 
 1. Consume the Message Server and Agent `latest` release channels directly in fresh production deployments.

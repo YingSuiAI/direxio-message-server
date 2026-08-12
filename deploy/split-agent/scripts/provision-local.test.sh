@@ -156,6 +156,7 @@ DIREXTALK_MESSAGE_TLS_MODE=external \
 grep -Fqx 'DIREXTALK_MESSAGE_TLS_MODE=external' "$external_dir/.env"
 grep -Fqx 'DIREXTALK_MESSAGE_SERVER_NAME=message.example.com' "$external_dir/.env"
 grep -Fqx 'DIREXTALK_MESSAGE_CLIENT_BASE_URL=https://message.example.com' "$external_dir/.env"
+grep -Fqx 'core_static_sites_public_origin: https://message.example.com' "$external_dir/agent-config.yaml"
 grep -Fqx "DIREXTALK_MESSAGE_TLS_CERT_FILE=$external_dir/message-tls-external-cert.pem" "$external_dir/.env"
 grep -Fqx "DIREXTALK_MESSAGE_TLS_KEY_FILE=$external_dir/message-tls-external-key.pem" "$external_dir/.env"
 grep -Fqx 'message_tls_mode=external' "$external_dir/.manifest"
@@ -234,6 +235,8 @@ DIREXTALK_MESSAGE_SERVER_NAME=message.example.com \
   "$script" "$edge_production_dir" >/dev/null
 grep -Fqx 'DIREXTALK_MESSAGE_TLS_MODE=edge-terminated' "$edge_production_dir/.env"
 grep -Fqx 'DIREXTALK_MESSAGE_CLIENT_BASE_URL=https://message.example.com' "$edge_production_dir/.env"
+grep -Fqx 'core_static_sites_public_origin: https://message.example.com' "$edge_production_dir/agent-config.yaml"
+grep -Fqx 'core_aws_enabled: true' "$edge_production_dir/agent-config.yaml"
 grep -Fqx 'message_tls_mode=edge-terminated' "$edge_production_dir/.manifest"
 [ ! -s "$edge_production_dir/message-tls-external-cert.pem" ]
 [ ! -s "$edge_production_dir/message-tls-external-key.pem" ]

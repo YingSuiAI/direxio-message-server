@@ -520,14 +520,19 @@ func agentStatusMap(status releasecontrol.AgentStatus, central releasecontrol.Ce
 	if err != nil {
 		return result
 	}
+	if agentComparison <= 0 {
+		// The central record is a comparison target, not the runtime fact. Do
+		// not label an older/equal central target as the latest Agent version.
+		latest = current
+	}
 	compatibility := "compatible"
-	if serverComparison < 0 {
+	if agentComparison <= 0 {
+		reasons = appendReason(reasons, "agent_up_to_date")
+	} else if serverComparison < 0 {
 		compatibility = "incompatible"
 		reasons = appendReason(reasons, "agent_requires_newer_server")
-	} else if agentComparison > 0 {
-		reasons = appendReason(reasons, "agent_update_available")
 	} else {
-		reasons = appendReason(reasons, "agent_up_to_date")
+		reasons = appendReason(reasons, "agent_update_available")
 	}
 	return map[string]any{
 		"available": true, "current_version": current, "latest_version": latest,
