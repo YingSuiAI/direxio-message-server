@@ -24,6 +24,25 @@ func TestExtensionMutationCatalogPinsCurrentStrictAgentSchemas(t *testing.T) {
 	}
 }
 
+func TestExtensionReadCatalogPinsCurrentClosedAgentSchemas(t *testing.T) {
+	const (
+		discover = `{"additionalProperties":false,"properties":{"page_size":{"maximum":100,"minimum":1,"type":"integer"},"page_token":{"maxLength":4096,"type":"string"},"query":{"type":"string"},"source":{"type":"string"}},"type":"object"}`
+		list     = `{"additionalProperties":false,"properties":{"page_size":{"maximum":100,"minimum":1,"type":"integer"},"page_token":{"maxLength":4096,"type":"string"},"source":{"type":"string"},"state":{"type":"string"}},"type":"object"}`
+		result   = `{"type":"object"}`
+	)
+	for _, test := range []struct{ action, operation, input string }{
+		{"agent.core.skills.discover", "discover_skill", discover},
+		{"agent.core.skills.list", "list_skills", list},
+		{"agent.core.mcp.discover", "discover_mcp", discover},
+		{"agent.core.mcp.list", "list_mcp", list},
+	} {
+		descriptor := catalogTestDescriptor("agent.skills.v1", test.operation, test.input, result)
+		if err := ValidateCatalog(catalogTestWithDigest(t, descriptor), []CatalogRequirement{NewCatalogRequirement(test.action)}); err != nil {
+			t.Fatalf("%s current Agent schema rejected: %v", test.action, err)
+		}
+	}
+}
+
 func TestKnowledgeCatalogPinsCurrentAgentSchemaResults(t *testing.T) {
 	want := map[string]string{
 		"agent.knowledge.config.get":    "87c332e9185a0436d6488041bbfc11cd66c9f40e345af02d9f97a76676cd65ae",

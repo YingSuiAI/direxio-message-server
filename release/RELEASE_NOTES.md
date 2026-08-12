@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v1.1.36
+
+1. Align the Skills and MCP read-action catalog pins with the current Agent schemas.
+2. Restore the Skills management page against Agent v1.0.78.
+
 ## v1.1.35
 
 1. Publish exact structured-memory fact update and delete actions.
