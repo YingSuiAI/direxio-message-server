@@ -122,6 +122,43 @@ func TestNativeAgentCatalogReadinessExpiredLeaseFailureFailsClosed(t *testing.T)
 	}
 }
 
+func TestNativeAgentCatalogReadinessNotifiesOnlyStateTransitions(t *testing.T) {
+	clock := time.Unix(100, 0)
+	up := false
+	readiness := newNativeAgentCatalogReadiness(func(context.Context, []agentgateway.CatalogRequirement) error {
+		if !up {
+			return errors.New("agent down")
+		}
+		return nil
+	}, nil, func() int64 { return 7 })
+	readiness.now = func() time.Time { return clock }
+	readiness.ttl = 10 * time.Second
+	var transitions []bool
+	readiness.onReady = func(ready bool) {
+		transitions = append(transitions, ready)
+	}
+
+	readiness.probeNow(context.Background())
+	up = true
+	readiness.probeNow(context.Background())
+	readiness.probeNow(context.Background())
+	if len(transitions) != 1 || !transitions[0] {
+		t.Fatalf("healthy renewals transitions = %#v, want [true]", transitions)
+	}
+
+	up = false
+	clock = readiness.expiresAt.Add(-time.Second)
+	readiness.probeNow(context.Background())
+	if len(transitions) != 1 {
+		t.Fatalf("valid lease failure changed readiness: %#v", transitions)
+	}
+	clock = readiness.expiresAt
+	readiness.probeNow(context.Background())
+	if len(transitions) != 2 || transitions[1] {
+		t.Fatalf("expired lease transitions = %#v, want [true false]", transitions)
+	}
+}
+
 func TestNativeAgentCatalogReadinessGenerationFence(t *testing.T) {
 	generation := int64(1)
 	up := false

@@ -28,6 +28,7 @@ type nativeAgentCatalogReadiness struct {
 	probe       func(context.Context, []agentgateway.CatalogRequirement) error
 	requirement []agentgateway.CatalogRequirement
 	generation  func() int64
+	onReady     func(bool)
 	now         func() time.Time
 	ttl         time.Duration
 	interval    time.Duration
@@ -145,7 +146,7 @@ func (r *nativeAgentCatalogReadiness) probeNow(parent context.Context) {
 		err = errors.New("account generation changed during native agent catalog probe")
 	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	wasReady := r.ready
 	if err != nil {
 		leaseValid := !generationChanged && r.ready && r.probedGen == generation && !r.expiresAt.IsZero() && r.now().Before(r.expiresAt)
 		if !leaseValid {
@@ -154,6 +155,12 @@ func (r *nativeAgentCatalogReadiness) probeNow(parent context.Context) {
 		}
 		r.probedGen = observedGeneration
 		r.lastErr = err
+		isReady := r.ready
+		onReady := r.onReady
+		r.mu.Unlock()
+		if wasReady != isReady && onReady != nil {
+			onReady(isReady)
+		}
 		logrus.WithError(err).WithField("account_generation", generation).Warn("Native Agent capability catalog probe failed")
 		return
 	}
@@ -161,6 +168,12 @@ func (r *nativeAgentCatalogReadiness) probeNow(parent context.Context) {
 	r.probedGen = generation
 	r.expiresAt = r.now().Add(r.ttl)
 	r.lastErr = nil
+	isReady := r.ready
+	onReady := r.onReady
+	r.mu.Unlock()
+	if wasReady != isReady && onReady != nil {
+		onReady(isReady)
+	}
 }
 
 func (r *nativeAgentCatalogReadiness) readyState() (bool, error) {
@@ -295,5 +308,12 @@ func (s *Service) configureNativeAgentCatalogReadiness(cfg Config) {
 	}
 	requirements := nativeAgentCatalogRequirements(cfg.NativeAgentRequiredActions)
 	s.nativeAgentCatalog = newNativeAgentCatalogReadiness(probe, requirements, currentGeneration)
+	s.nativeAgentCatalog.onReady = func(online bool) {
+		ctx, cancel := context.WithTimeout(context.Background(), nativeAgentCatalogProbeTimeout)
+		defer cancel()
+		if err := s.publishNativeAgentReadinessState(ctx, online); err != nil {
+			logrus.WithError(err).WithField("online", online).Warn("Native Agent readiness state publish failed")
+		}
+	}
 	s.nativeAgentCatalog.start()
 }

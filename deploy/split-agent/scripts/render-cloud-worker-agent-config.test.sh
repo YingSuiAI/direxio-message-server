@@ -48,13 +48,13 @@ export DIREXTALK_CLOUD_WORKER_OUTBOUND_PROXY_TRUST_SHA256=$digest
 export DIREXTALK_CLOUD_WORKER_ARTIFACT_BUCKET=dirextalk-worker-test
 export DIREXTALK_CLOUD_WORKER_ARTIFACT_BASE_PREFIX=cloud-worker/
 export DIREXTALK_CLOUD_WORKER_ARTIFACT_KMS_KEY_ARN=arn:aws:kms:ap-east-1:066107820442:key/00000000-0000-4000-8000-000000000001
-export DIREXTALK_CLOUD_WORKER_ARTIFACT_RETENTION=1h
+export DIREXTALK_CLOUD_WORKER_ARTIFACT_RETENTION=720h
 export DIREXTALK_CLOUD_WORKER_WORKER_CONTROL_TRUST_SHA256=$digest
 export DIREXTALK_CLOUD_WORKER_MODEL_RELAY_TRUST_SHA256=$digest
 export DIREXTALK_CLOUD_WORKER_PRICING_CATALOG_SHA256=$digest
 export DIREXTALK_CLOUD_WORKER_RUNTIME_QUALIFICATION_SHA256=$digest
 export DIREXTALK_CLOUD_WORKER_QUOTE_TTL=5m
-export DIREXTALK_CLOUD_WORKER_MAXIMUM_CATALOG_AGE=5m
+export DIREXTALK_CLOUD_WORKER_MAXIMUM_CATALOG_AGE=0s
 export DIREXTALK_CLOUD_WORKER_CONTINGENCY_BASIS_POINTS=1000
 export DIREXTALK_CLOUD_WORKER_ABSOLUTE_HARD_LIMIT_MICROS=20000000
 export DIREXTALK_CLOUD_WORKER_MAX_RUNTIME=30m
@@ -77,13 +77,24 @@ grep -Fqx 'core_aws_enabled: true' "$tmp/config.yaml"
 grep -Fqx 'core_execution_v2_enabled: true' "$tmp/config.yaml"
 grep -Fqx '  account_id: "066107820442"' "$tmp/config.yaml"
 grep -Fqx '  absolute_hard_limit_micros: 20000000' "$tmp/config.yaml"
+grep -Fqx '  artifact_retention: 720h' "$tmp/config.yaml"
+grep -Fqx '  maximum_catalog_age: 0s' "$tmp/config.yaml"
 grep -Fqx '  worker_control_endpoint: https://worker.example.test:443' "$tmp/config.yaml"
 grep -Fqx '  model_relay_endpoint: https://relay.example.test:443' "$tmp/config.yaml"
-[ "$(stat -c '%a' "$tmp/config.yaml")" = 400 ]
+case "$(uname -s)" in
+  Darwin) mode=$(stat -f '%Lp' "$tmp/config.yaml") ;;
+  *) mode=$(stat -c '%a' "$tmp/config.yaml") ;;
+esac
+[ "$mode" = 400 ]
 
 if DIREXTALK_CLOUD_WORKER_ARTIFACT_BUCKET="bad
 bucket" PATH="$tmp/bin:$PATH" "$script_dir/render-cloud-worker-agent-config.sh" "$tmp/injected.yaml" >/dev/null 2>&1; then
   echo 'newline YAML injection unexpectedly passed' >&2
+  exit 1
+fi
+
+if DIREXTALK_CLOUD_WORKER_ARTIFACT_RETENTION=1h PATH="$tmp/bin:$PATH" "$script_dir/render-cloud-worker-agent-config.sh" "$tmp/short-retention.yaml" >/dev/null 2>&1; then
+  echo 'short artifact retention unexpectedly passed' >&2
   exit 1
 fi
 

@@ -87,6 +87,21 @@ func TestCloudWorkerExecutionV2ResultsMatchPinnedPublicFixture(t *testing.T) {
 	}
 }
 
+func TestCloudWorkerPlanAcceptsCentralDelegation(t *testing.T) {
+	fixture := loadCloudWorkerPublicFixture(t)
+	plan := cloneParams(fixture.Plan)
+	plan["proposal_reason"] = "central_delegation"
+	request := cloudWorkerRequest("plan_id", plan["plan_id"])
+	if _, err := adaptActionResultForRequestWithAuthority(
+		"agent.execution.v2.plans.get",
+		request,
+		map[string]any{"plan": plan},
+		cloudWorkerFixtureAuthority(t, fixture),
+	); err != nil {
+		t.Fatalf("Central delegation plan rejected: %v", err)
+	}
+}
+
 func TestCloudWorkerRunEventsPinBoundedSecretFreeProgressAndCursor(t *testing.T) {
 	fixture := loadCloudWorkerPublicFixture(t)
 	authority := cloudWorkerFixtureAuthority(t, fixture)

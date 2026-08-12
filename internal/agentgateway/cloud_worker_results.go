@@ -223,7 +223,7 @@ func validateCloudWorkerPlan(plan map[string]any) error {
 	if plan["recipe_id"] != "ephemeral-pi-task" || plan["adapter"] != "pi_json_task_v1" || plan["status"] != "waiting_user" || !cloudWorkspace(plan["workspace_mode"]) {
 		return cloudWorkerResultError("plan recipe, adapter, status, or workspace mode is invalid")
 	}
-	if !cloudNonemptyString(plan["objective_summary"]) || !map[string]bool{"explicit_user_cloud": true, "local_budget_exceeded": true}[cloudString(plan["proposal_reason"])] {
+	if !cloudNonemptyString(plan["objective_summary"]) || !map[string]bool{"explicit_user_cloud": true, "central_delegation": true, "local_budget_exceeded": true}[cloudString(plan["proposal_reason"])] {
 		return cloudWorkerResultError("plan proposal is invalid")
 	}
 	if count, ok := cloudInteger(plan["input_manifest_item_count"]); !ok || count < 0 {

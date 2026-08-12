@@ -64,7 +64,7 @@ func cloudWorkerPlanProperties() map[string]ActionFieldSchema {
 		"recipe_id":                 cloudWorkerConditional("string", "exact:ephemeral-pi-task"),
 		"adapter":                   cloudWorkerConditional("string", "exact:pi_json_task_v1"),
 		"objective_summary":         cloudWorkerConditional("string", "nonempty_redacted_summary"),
-		"proposal_reason":           cloudWorkerConditional("string", "one_of:explicit_user_cloud|local_budget_exceeded"),
+		"proposal_reason":           cloudWorkerConditional("string", "one_of:explicit_user_cloud|central_delegation|local_budget_exceeded"),
 		"input_manifest_digest":     cloudWorkerConditional("string", "lowercase_sha256"),
 		"input_manifest_item_count": cloudWorkerConditional("integer", "nonnegative_integer"),
 		"workspace_mode":            cloudWorkerConditional("string", "one_of:none|read_only|write"),

@@ -11915,7 +11915,7 @@
                 "type": "string",
                 "presence": {
                   "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;one_of:explicit_user_cloud|local_budget_exceeded"
+                  "present": "required_when_record_kind=cloud_worker;one_of:explicit_user_cloud|central_delegation|local_budget_exceeded"
                 }
               },
               "quote": {
@@ -12398,7 +12398,7 @@
                   "type": "string",
                   "presence": {
                     "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;one_of:explicit_user_cloud|local_budget_exceeded"
+                    "present": "required_when_record_kind=cloud_worker;one_of:explicit_user_cloud|central_delegation|local_budget_exceeded"
                   }
                 },
                 "quote": {

@@ -131,6 +131,9 @@ func TestExecutionV2CloudWorkerConditionalResponseSchemasPinStrictPublicProjecti
 
 	planGet, _ := ActionSpecFor(executionV2Name("plans.get"))
 	assertCloudConditionalProperties(t, "plans.get.plan", planGet.Schema.Response["plan"].Properties, planFields)
+	if got := planGet.Schema.Response["plan"].Properties["proposal_reason"].Presence.Present; got != "required_when_record_kind=cloud_worker;one_of:explicit_user_cloud|central_delegation|local_budget_exceeded" {
+		t.Fatalf("plans.get proposal_reason presence=%q", got)
+	}
 	planList, _ := ActionSpecFor(executionV2Name("plans.list"))
 	assertCloudConditionalProperties(t, "plans.list.plans[]", planList.Schema.Response["plans"].Items.Properties, planFields)
 
