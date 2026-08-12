@@ -65,12 +65,6 @@ func TestExternalNativeAgentModeDoesNotConstructEmbeddedRuntime(t *testing.T) {
 	if service == nil || service.agentModule == nil {
 		t.Fatal("external mode must retain the public facade module")
 	}
-	if service.agentModule.HasLocalTurnCoordinator() {
-		t.Fatal("external mode must not construct a local native-agent turn store")
-	}
-	if service.agentModule.HasLocalVoiceCoordinator() {
-		t.Fatal("external mode must not construct a local voice coordinator")
-	}
 	processCtx := process.NewProcessContext()
 	processCtx.ShutdownDendrite()
 	handler := service.actions["agent.chat"]

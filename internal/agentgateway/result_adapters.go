@@ -91,7 +91,7 @@ func projectActionResult(action string, output map[string]any) map[string]any {
 	case "agent.chat.turns.list":
 		return turnsListResult(result)
 	case "agent.chat.attachment.commit":
-		return objectWrapper(result, "attachment")
+		return map[string]any{"attachment": result}
 	case "agent.core.tasks.get", "agent.core.tasks.cancel", "agent.core.tasks.retry":
 		return taskResult(result)
 	case "agent.core.tasks.list":
@@ -99,7 +99,7 @@ func projectActionResult(action string, output map[string]any) map[string]any {
 	case "agent.core.tasks.events":
 		return eventsResult(result)
 	case "agent.core.schedules.create", "agent.core.schedules.get", "agent.core.schedules.update", "agent.core.schedules.pause", "agent.core.schedules.resume":
-		return objectWrapper(result, "schedule")
+		return map[string]any{"schedule": result["schedule"]}
 	case "agent.core.schedules.delete":
 		return scheduleDeleteResult(result)
 	case "agent.core.schedules.list":
@@ -109,11 +109,9 @@ func projectActionResult(action string, output map[string]any) map[string]any {
 	case "agent.core.mcp.list", "agent.core.skills.list":
 		return installationListResult(result)
 	case "agent.core.mcp.get", "agent.core.skills.get":
-		return objectWrapper(result, "installation")
+		return map[string]any{"installation": normalizeInstallation(result)}
 	case "agent.core.mcp.install", "agent.core.mcp.update", "agent.core.mcp.remove", "agent.core.skills.install", "agent.core.skills.update", "agent.core.skills.remove":
 		return installationMutationResult(result)
-	case "agent.core.mcp.enable", "agent.core.mcp.disable", "agent.core.skills.enable", "agent.core.skills.disable":
-		return objectWrapper(result, "installation")
 	case "agent.model_profiles.sync":
 		return modelSyncResult(result)
 	case "agent.models.list":
@@ -126,8 +124,6 @@ func projectActionResult(action string, output map[string]any) map[string]any {
 		return modelDeleteResult(result)
 	case "agent.knowledge.sources.list":
 		return sourceListResult(result)
-	case "agent.knowledge.sources.get":
-		return sourceGetResult(result)
 	case "agent.knowledge.config.get", "agent.knowledge.config.update":
 		return embeddingConfigResult(result)
 	case "agent.knowledge.sources.delete":
@@ -153,7 +149,7 @@ func projectActionResult(action string, output map[string]any) map[string]any {
 	case "agent.memory.facts.update":
 		return memoryFactResult(result)
 	case "agent.memory.facts.delete":
-		return mapProjection(result, []string{"fact_id", "deleted"}, nil)
+		return mapProjection(result, []string{"fact_id", "deleted"})
 	case "agent.web_search.test":
 		return webSearchTestResult(result)
 	case "agent.text_tools.config.get", "agent.text_tools.config.update":
@@ -170,21 +166,21 @@ func projectActionResult(action string, output map[string]any) map[string]any {
 	case "agent.core.confirmations.acknowledge_extension_execution_uncertain":
 		return confirmationAcknowledgeResult(result)
 	case "agent.core.aws.credentials.create", "agent.core.aws.credentials.update":
-		return objectWrapper(result, "credential")
+		return map[string]any{"credential": result["credential"]}
 	case "agent.core.aws.credentials.delete":
-		return mapProjection(result, []string{"deleted", "credential_id"}, map[string][]string{"credential_id": {"credential_id", "CredentialID"}})
+		return mapProjection(result, []string{"deleted", "credential_id"})
 	case "agent.core.aws.credentials.list":
-		return mapProjection(result, []string{"credentials", "next_page_token"}, map[string][]string{"credentials": {"credentials", "Credentials"}, "next_page_token": {"next_page_token", "next_cursor", "NextPageToken"}})
+		return mapProjection(result, []string{"credentials", "next_page_token"})
 	case "agent.core.aws.credentials.test":
-		return mapProjection(result, []string{"credential_id", "account_id", "user_arn", "principal_id", "credential_revision", "tested_at"}, nil)
+		return mapProjection(result, []string{"credential_id", "account_id", "user_arn", "principal_id", "credential_revision", "tested_at"})
 	case "agent.core.mcp.discover", "agent.core.skills.discover":
-		return mapProjection(result, []string{"candidates", "next_page_token"}, nil)
+		return mapProjection(result, []string{"candidates", "next_page_token"})
 	case "agent.core.mcp.inspect", "agent.core.skills.inspect":
-		return objectWrapper(result, "inspection")
+		return map[string]any{"inspection": result["inspection"]}
 	case "agent.core.mcp.list_tools":
-		return mapProjection(result, []string{"tools"}, nil)
+		return mapProjection(result, []string{"tools"})
 	case "agent.core.mcp.execute", "agent.core.skills.execute":
-		return mapProjection(result, []string{"confirmation_id", "task_id"}, nil)
+		return mapProjection(result, []string{"confirmation_id", "task_id"})
 	default:
 		return result
 	}
@@ -213,6 +209,15 @@ func validateActionResult(action string, request, output map[string]any, authori
 		return validateModelCatalogResult(output)
 	case "agent.model_profiles.sync", "agent.model_profiles.list":
 		return validateToolModelDefaultResult(output)
+	case "agent.model_profiles.get", "agent.model_profiles.delete",
+		"agent.knowledge.sources.delete", "agent.knowledge.upload.finish",
+		"agent.core.tasks.get", "agent.core.tasks.cancel", "agent.core.tasks.retry",
+		"agent.core.schedules.create", "agent.core.schedules.get", "agent.core.schedules.update", "agent.core.schedules.pause", "agent.core.schedules.resume", "agent.core.schedules.trigger",
+		"agent.core.skills.get",
+		"agent.core.skills.install", "agent.core.skills.update", "agent.core.skills.remove",
+		"agent.core.aws.credentials.create", "agent.core.aws.credentials.update",
+		"agent.core.mcp.inspect", "agent.core.skills.inspect":
+		return validateCurrentAgentResultShape(action, output)
 	case "agent.chat.turn.stop":
 		return validateTurnStopResult(request, output)
 	case "agent.chat.turn.steer":
@@ -220,6 +225,9 @@ func validateActionResult(action string, request, output map[string]any, authori
 	case "agent.chat.turns.list":
 		return validateTurnsListResult(output)
 	case "agent.core.mcp.get", "agent.core.mcp.list", "agent.core.mcp.install", "agent.core.mcp.update", "agent.core.mcp.remove":
+		if err := validateCurrentAgentResultShape(action, output); err != nil {
+			return err
+		}
 		return validateCoreMCPNodeReceipts(action, output)
 	case "agent.knowledge.status":
 		return validateKnowledgeStatusResult(output)
@@ -248,11 +256,7 @@ func validateCoreMCPNodeReceipts(action string, output map[string]any) error {
 		}
 		installations = append(installations, installation)
 	default:
-		installation := output
-		if wrapped, ok := output["installation"].(map[string]any); ok {
-			installation = wrapped
-		}
-		installations = append(installations, installation)
+		installations = append(installations, output)
 	}
 	for _, installation := range installations {
 		if err := validateCoreMCPInstallationNodeReceipts(installation); err != nil {
@@ -260,6 +264,57 @@ func validateCoreMCPNodeReceipts(action string, output map[string]any) error {
 		}
 	}
 	return nil
+}
+
+func validateCurrentAgentResultShape(action string, output map[string]any) error {
+	requireObject := func(field string) error {
+		if _, ok := output[field].(map[string]any); !ok {
+			return fmt.Errorf("%w: %s result requires %s", ErrInvalidActionResult, action, field)
+		}
+		return nil
+	}
+	rejectObject := func(field, identity string) error {
+		if _, wrapped := output[field]; wrapped {
+			return fmt.Errorf("%w: %s result must be the unwrapped Agent %s", ErrInvalidActionResult, action, identity)
+		}
+		if value, ok := output[identity].(string); !ok || strings.TrimSpace(value) == "" {
+			return fmt.Errorf("%w: %s result requires %s", ErrInvalidActionResult, action, identity)
+		}
+		return nil
+	}
+	switch action {
+	case "agent.model_profiles.get", "agent.model_profiles.delete":
+		return rejectObject("profile", "id")
+	case "agent.knowledge.sources.delete":
+		return requireObject("source")
+	case "agent.knowledge.upload.finish":
+		if err := requireObject("upload"); err != nil {
+			return err
+		}
+		return requireObject("source")
+	case "agent.core.tasks.get", "agent.core.tasks.cancel", "agent.core.tasks.retry":
+		return rejectObject("task", "task_id")
+	case "agent.core.schedules.create", "agent.core.schedules.get", "agent.core.schedules.update", "agent.core.schedules.pause", "agent.core.schedules.resume":
+		return requireObject("schedule")
+	case "agent.core.schedules.trigger":
+		for _, field := range []string{"schedule", "occurrence", "task"} {
+			if err := requireObject(field); err != nil {
+				return err
+			}
+		}
+		return nil
+	case "agent.core.mcp.get", "agent.core.skills.get":
+		return rejectObject("installation", "id")
+	case "agent.core.mcp.install", "agent.core.mcp.update", "agent.core.mcp.remove",
+		"agent.core.skills.install", "agent.core.skills.update", "agent.core.skills.remove":
+		return requireObject("installation")
+	case "agent.core.aws.credentials.create", "agent.core.aws.credentials.update":
+		return requireObject("credential")
+	case "agent.core.mcp.inspect", "agent.core.skills.inspect":
+		return requireObject("inspection")
+	default:
+		return nil
+	}
 }
 
 func validateCoreMCPInstallationNodeReceipts(installation map[string]any) error {
@@ -475,31 +530,31 @@ func textToolsExecutionResult(result map[string]any) map[string]any {
 }
 
 func memoryConfigResult(value map[string]any) map[string]any {
-	return mapProjection(value, []string{"enabled", "embedding_configured", "embedding_profile_id", "embedding_model", "revision", "updated_at"}, nil)
+	return mapProjection(value, []string{"enabled", "embedding_configured", "embedding_profile_id", "embedding_model", "revision", "updated_at"})
 }
 
 func memoryStatusResult(value map[string]any) map[string]any {
 	result := memoryConfigResult(value)
 	for _, field := range []string{"active_fact_count", "timeline_event_count", "pending_observation_count", "failed_observation_count"} {
-		result[field] = valueByKey(value, field)
+		result[field] = value[field]
 	}
-	facts, _ := actionObjectSlice(valueByKey(value, "facts"))
+	facts, _ := actionObjectSlice(value["facts"])
 	projectedFacts := make([]any, 0, len(facts))
 	for _, fact := range facts {
-		projectedFacts = append(projectedFacts, mapProjection(fact, []string{"id", "subject", "predicate", "value", "kind", "confidence", "valid_from", "last_confirmed_at"}, nil))
+		projectedFacts = append(projectedFacts, mapProjection(fact, []string{"id", "subject", "predicate", "value", "kind", "confidence", "valid_from", "last_confirmed_at"}))
 	}
 	result["facts"] = projectedFacts
-	events, _ := actionObjectSlice(valueByKey(value, "timeline"))
+	events, _ := actionObjectSlice(value["timeline"])
 	projectedEvents := make([]any, 0, len(events))
 	for _, event := range events {
-		projectedEvents = append(projectedEvents, mapProjection(event, []string{"kind", "summary", "effective_at", "observed_at"}, nil))
+		projectedEvents = append(projectedEvents, mapProjection(event, []string{"kind", "summary", "effective_at", "observed_at"}))
 	}
 	result["timeline"] = projectedEvents
 	return result
 }
 
 func memoryFactResult(value map[string]any) map[string]any {
-	return mapProjection(value, []string{"id", "subject", "predicate", "value", "kind", "confidence", "valid_from", "last_confirmed_at"}, nil)
+	return mapProjection(value, []string{"id", "subject", "predicate", "value", "kind", "confidence", "valid_from", "last_confirmed_at"})
 }
 
 func validateMemoryResult(action string, output map[string]any) error {
@@ -642,24 +697,18 @@ func validateKnowledgeStatusResult(output map[string]any) error {
 		return fmt.Errorf("%w: knowledge status response is missing", ErrInvalidActionResult)
 	}
 	values := make(map[string]int64, 4)
-	for _, field := range []struct {
-		canonical string
-		core      string
-	}{
-		{canonical: "quota_used_bytes", core: "QuotaUsedBytes"},
-		{canonical: "quota_limit_bytes", core: "QuotaLimitBytes"},
-		{canonical: "quota_remaining_bytes", core: "QuotaRemainingBytes"},
-		{canonical: "max_source_bytes", core: "MaxSourceBytes"},
+	for _, field := range []string{
+		"quota_used_bytes", "quota_limit_bytes", "quota_remaining_bytes", "max_source_bytes",
 	} {
-		value := valueByKey(output, field.canonical, field.core)
+		value := output[field]
 		if value == nil {
-			return fmt.Errorf("%w: knowledge status %s is required", ErrInvalidActionResult, field.canonical)
+			return fmt.Errorf("%w: knowledge status %s is required", ErrInvalidActionResult, field)
 		}
 		integer, ok := turnInt64(value)
 		if !ok || integer < 0 {
-			return fmt.Errorf("%w: knowledge status %s must be a non-negative integer", ErrInvalidActionResult, field.canonical)
+			return fmt.Errorf("%w: knowledge status %s must be a non-negative integer", ErrInvalidActionResult, field)
 		}
-		values[field.canonical] = integer
+		values[field] = integer
 	}
 	used := values["quota_used_bytes"]
 	limit := values["quota_limit_bytes"]
@@ -697,14 +746,14 @@ func validateModelCatalogResult(output map[string]any) error {
 			return fmt.Errorf("%w: model catalog model %d is malformed", ErrInvalidActionResult, index)
 		}
 		normalized := normalizeModelCatalogEntries([]any{entry}, map[string][]string{
-			"id":                {"id", "ID", "model_id", "ModelID"},
-			"name":              {"name", "Name"},
-			"provider":          {"provider", "Provider"},
-			"context_length":    {"context_length", "ContextLength"},
-			"context_window":    {"context_window", "ContextWindow"},
-			"max_output_tokens": {"max_output_tokens", "MaxOutputTokens"},
-			"input_modalities":  {"input_modalities", "InputModalities"},
-			"output_modalities": {"output_modalities", "OutputModalities"},
+			"id":                {"id"},
+			"name":              {"name"},
+			"provider":          {"provider"},
+			"context_length":    {"context_length"},
+			"context_window":    {"context_window"},
+			"max_output_tokens": {"max_output_tokens"},
+			"input_modalities":  {"input_modalities"},
+			"output_modalities": {"output_modalities"},
 		}, validModelCatalogModel)
 		if len(normalized) != 1 {
 			return fmt.Errorf("%w: model catalog model %d violates the schema", ErrInvalidActionResult, index)
@@ -716,10 +765,10 @@ func validateModelCatalogResult(output map[string]any) error {
 			return fmt.Errorf("%w: model catalog provider %d is malformed", ErrInvalidActionResult, index)
 		}
 		normalized := normalizeModelCatalogEntries([]any{entry}, map[string][]string{
-			"provider":         {"provider", "Provider"},
-			"default_base_url": {"default_base_url", "DefaultBaseURL"},
-			"requires_api_key": {"requires_api_key", "RequiresAPIKey"},
-			"dynamic_models":   {"dynamic_models", "DynamicModels"},
+			"provider":         {"provider"},
+			"default_base_url": {"default_base_url"},
+			"requires_api_key": {"requires_api_key"},
+			"dynamic_models":   {"dynamic_models"},
 		}, validModelCatalogProvider)
 		if len(normalized) != 1 {
 			return fmt.Errorf("%w: model catalog provider %d violates the schema", ErrInvalidActionResult, index)
@@ -787,19 +836,12 @@ func validateWebSearchTestResult(action string, output map[string]any) error {
 }
 
 func webSearchValue(output map[string]any, field string) (any, bool) {
-	aliases := []string{field, strings.Title(strings.ReplaceAll(field, "_", ""))}
-	for actual, value := range output {
-		for _, alias := range aliases {
-			if strings.EqualFold(actual, alias) {
-				return value, true
-			}
-		}
-	}
-	return nil, false
+	value, ok := output[field]
+	return value, ok
 }
 
 func requireWebSearchBool(output map[string]any, field string) error {
-	value := valueByKey(output, field, strings.Title(strings.ReplaceAll(field, "_", "")))
+	value := output[field]
 	if value == nil {
 		return fmt.Errorf("%w: web search %s is required", ErrInvalidActionResult, field)
 	}
@@ -822,7 +864,7 @@ func requireWebSearchProvider(output map[string]any) error {
 }
 
 func requireWebSearchInteger(output map[string]any, field string, positive bool) error {
-	value := valueByKey(output, field, strings.Title(strings.ReplaceAll(field, "_", "")))
+	value := output[field]
 	if value == nil {
 		return fmt.Errorf("%w: web search %s is required", ErrInvalidActionResult, field)
 	}
@@ -874,56 +916,24 @@ func isNegativeInteger(value any) bool {
 }
 
 func conversationMutationResult(value map[string]any) map[string]any {
-	if conversation, wrapped := value["conversation"]; wrapped {
-		return map[string]any{"conversation": conversation, "replayed": boolValue(value["replayed"])}
-	}
-	replayed := boolValue(value["replayed"])
-	delete(value, "replayed")
-	return map[string]any{"conversation": value, "replayed": replayed}
+	return map[string]any{"conversation": value["conversation"], "replayed": boolValue(value["replayed"])}
 }
 
 func conversationDeleteResult(value map[string]any) map[string]any {
-	if conversation, wrapped := value["conversation"]; wrapped {
-		// The frozen ProductCore response is intentionally narrower than the
-		// Core mutation receipt. Do not leak Core-only deleted/receipt fields.
-		return map[string]any{"conversation": conversation, "replayed": boolValue(value["replayed"])}
-	}
-	// Core v1 may return only {deleted:true} until its mutation receipt is
-	// materialized. Keep the legacy envelope shape stable; an empty snapshot
-	// is preferable to exposing a Core-only deleted field.
-	conversation := map[string]any{}
-	if raw, ok := value["profile"].(map[string]any); ok {
-		conversation = raw
-	}
-	return map[string]any{"conversation": conversation, "replayed": boolValue(value["replayed"])}
+	return map[string]any{"conversation": value["conversation"], "replayed": boolValue(value["replayed"])}
 }
 
 func conversationGetResult(value map[string]any) map[string]any {
-	if conversation, wrapped := value["conversation"]; wrapped {
-		return map[string]any{
-			"conversation": conversation,
-			"messages":     anySlice(value["messages"]),
-			"next_cursor":  stringValue(valueByKey(value, "next_cursor", "next_page_token")),
-		}
+	return map[string]any{
+		"conversation": value["conversation"],
+		"messages":     anySlice(value["messages"]),
+		"next_cursor":  stringValue(value["next_page_token"]),
 	}
-	conversation := cloneParams(value)
-	messages := anySlice(value["messages"])
-	delete(conversation, "messages")
-	return map[string]any{"conversation": conversation, "messages": messages, "next_cursor": stringValue(valueByKey(value, "next_cursor", "next_page_token"))}
 }
 
 func conversationListResult(value map[string]any) map[string]any {
 	conversations := anySlice(value["conversations"])
-	return map[string]any{"conversations": conversations, "next_cursor": stringValue(valueByKey(value, "next_cursor", "next_page_token"))}
-}
-
-func renameNextCursor(value map[string]any) map[string]any {
-	if _, ok := value["next_cursor"]; !ok {
-		if cursor := value["next_page_token"]; cursor != nil {
-			value["next_cursor"] = cursor
-		}
-	}
-	return value
+	return map[string]any{"conversations": conversations, "next_cursor": stringValue(value["next_page_token"])}
 }
 
 func turnsListResult(value map[string]any) map[string]any {
@@ -1136,7 +1146,7 @@ func modelCatalogResult(value map[string]any) map[string]any {
 	return map[string]any{"models": models, "providers": providers}
 }
 
-func normalizeModelCatalogEntries(value any, aliases map[string][]string, valid func(map[string]any) bool) []any {
+func normalizeModelCatalogEntries(value any, fields map[string][]string, valid func(map[string]any) bool) []any {
 	raw := anySlice(value)
 	result := make([]any, 0, len(raw))
 	for _, item := range raw {
@@ -1144,9 +1154,9 @@ func normalizeModelCatalogEntries(value any, aliases map[string][]string, valid 
 		if !ok {
 			continue
 		}
-		normalized := make(map[string]any, len(aliases))
-		for canonical, names := range aliases {
-			if field := valueByKey(entry, names...); field != nil {
+		normalized := make(map[string]any, len(fields))
+		for canonical, names := range fields {
+			if field := entry[names[0]]; field != nil {
 				normalized[canonical] = field
 			}
 		}
@@ -1241,30 +1251,20 @@ func modelListResult(value map[string]any) map[string]any {
 }
 
 func modelGetResult(value map[string]any) map[string]any {
-	if profile, ok := value["profile"].(map[string]any); ok {
-		return map[string]any{"profile": normalizeProfile(profile)}
-	}
 	return map[string]any{"profile": normalizeProfile(value)}
 }
 
 func modelDeleteResult(value map[string]any) map[string]any {
-	profileID := stringValue(value["profile_id"])
-	if profile, ok := value["profile"].(map[string]any); ok && profileID == "" {
-		profileID = stringValue(profile["profile_id"])
-	}
-	return map[string]any{"deleted": boolValueOrDefault(value["deleted"], true), "profile_id": profileID}
+	return map[string]any{"deleted": true, "profile_id": stringValue(value["id"])}
 }
 
 func copyModelDefaults(result, value map[string]any) {
-	aliases := map[string][]string{
-		"default_client_profile_id":              {"default_client_profile_id"},
-		"default_conversation_client_profile_id": {"default_conversation_client_profile_id"},
-		"default_tool_client_profile_id":         {"default_tool_client_profile_id"},
-		"default_embedding_client_profile_id":    {"default_embedding_client_profile_id"},
-		"default_speech_client_profile_id":       {"default_speech_client_profile_id"},
-	}
-	for key, names := range aliases {
-		if item := valueByKey(value, names...); item != nil {
+	for _, key := range []string{
+		"default_conversation_client_profile_id",
+		"default_tool_client_profile_id", "default_embedding_client_profile_id",
+		"default_speech_client_profile_id",
+	} {
+		if item := value[key]; item != nil {
 			result[key] = item
 		}
 	}
@@ -1288,6 +1288,9 @@ func normalizeProfile(value map[string]any) map[string]any {
 			result[key] = item
 		}
 	}
+	if profileID := stringValue(value["id"]); profileID != "" {
+		result["profile_id"] = profileID
+	}
 	return result
 }
 
@@ -1302,19 +1305,8 @@ func sourceListResult(value map[string]any) map[string]any {
 	return map[string]any{"sources": sources, "next_page_token": stringValue(value["next_page_token"])}
 }
 
-func sourceGetResult(value map[string]any) map[string]any {
-	if source, ok := value["source"].(map[string]any); ok {
-		return map[string]any{"source": normalizeSource(source)}
-	}
-	return map[string]any{"source": normalizeSource(value)}
-}
-
 func sourceDeleteResult(value map[string]any) map[string]any {
-	replayed := boolValue(value["replayed"])
-	if source, ok := value["source"].(map[string]any); ok {
-		return map[string]any{"source": normalizeSource(source), "replayed": replayed}
-	}
-	return map[string]any{"source": normalizeSource(value), "replayed": replayed}
+	return map[string]any{"source": normalizeSource(value["source"].(map[string]any)), "replayed": boolValue(value["replayed"])}
 }
 
 func uploadResult(value map[string]any, includeReplay bool) map[string]any {
@@ -1322,10 +1314,7 @@ func uploadResult(value map[string]any, includeReplay bool) map[string]any {
 }
 
 func uploadFinishResult(value map[string]any) map[string]any {
-	if source, ok := value["source"].(map[string]any); ok {
-		return map[string]any{"source": normalizeSource(source)}
-	}
-	return map[string]any{"source": normalizeSource(value)}
+	return map[string]any{"source": normalizeSource(value["source"].(map[string]any))}
 }
 
 func knowledgeSearchResult(value map[string]any) map[string]any {
@@ -1345,15 +1334,11 @@ func knowledgeSearchResult(value map[string]any) map[string]any {
 	if mode := stringValue(value["search_mode"]); mode != "" {
 		result["search_mode"] = mode
 	}
-	aliases := map[string][]string{
-		"embedding_profile_id":       {"embedding_profile_id"},
-		"embedding_profile_revision": {"embedding_profile_revision"},
-		"embedding_model":            {"embedding_model"},
-		"embedding_generation":       {"embedding_generation"},
-		"collection_config_digest":   {"collection_config_digest"},
-	}
-	for key, names := range aliases {
-		if item := valueByKey(value, names...); item != nil {
+	for _, key := range []string{
+		"embedding_profile_id", "embedding_profile_revision", "embedding_model",
+		"embedding_generation", "collection_config_digest",
+	} {
+		if item := value[key]; item != nil {
 			result[key] = item
 		}
 	}
@@ -1978,7 +1963,7 @@ func promoteChatResultFields(target map[string]any, authority actionResultAuthor
 func webSearchConfigResult(value map[string]any) map[string]any {
 	result := mapProjection(value,
 		[]string{"enabled", "provider", "api_key_configured", "revision", "tested_at", "updated_at"},
-		nil)
+	)
 	if boolValue(value["api_key_configured"]) {
 		result["api_key_hint"] = "configured"
 	}
@@ -1988,7 +1973,7 @@ func webSearchConfigResult(value map[string]any) map[string]any {
 func webSearchTestResult(value map[string]any) map[string]any {
 	return mapProjection(value,
 		[]string{"ok", "provider", "result_count", "tested_at", "enabled", "api_key_configured", "revision"},
-		nil)
+	)
 }
 
 func confirmationResult(value map[string]any) map[string]any {
@@ -2012,36 +1997,20 @@ func confirmationListResult(value map[string]any) map[string]any {
 }
 
 func confirmationAcknowledgeResult(value map[string]any) map[string]any {
-	return mapProjection(value, []string{"confirmation", "task", "resolution", "reservation_released"}, nil)
+	return mapProjection(value, []string{"confirmation", "task", "resolution", "reservation_released"})
 }
 
-func mapProjection(value map[string]any, keys []string, aliases map[string][]string) map[string]any {
+func mapProjection(value map[string]any, keys []string) map[string]any {
 	result := make(map[string]any, len(keys))
 	for _, key := range keys {
-		names := []string{key}
-		if aliases != nil {
-			if configured, ok := aliases[key]; ok {
-				names = configured
-			}
-		}
-		if item := valueByKey(value, names...); item != nil {
+		if item := value[key]; item != nil {
 			result[key] = item
 		}
 	}
 	return result
 }
 
-func objectWrapper(value map[string]any, key string) map[string]any {
-	if _, ok := value[key]; ok {
-		return value
-	}
-	return map[string]any{key: value}
-}
-
 func taskResult(value map[string]any) map[string]any {
-	if task, ok := value["task"].(map[string]any); ok {
-		return map[string]any{"task": normalizeTask(task)}
-	}
 	return map[string]any{"task": normalizeTask(value)}
 }
 
@@ -2076,22 +2045,11 @@ func scheduleDeleteResult(value map[string]any) map[string]any {
 }
 
 func scheduleTriggerResult(value map[string]any) map[string]any {
-	result := map[string]any{}
-	if schedule, ok := value["schedule"].(map[string]any); ok {
-		result["schedule"] = schedule
+	return map[string]any{
+		"schedule":      value["schedule"],
+		"occurrence_id": stringValue(value["occurrence"].(map[string]any)["occurrence_id"]),
+		"task_id":       stringValue(value["task"].(map[string]any)["task_id"]),
 	}
-	if occurrence, ok := value["occurrence"].(map[string]any); ok {
-		result["occurrence_id"] = stringValue(occurrence["occurrence_id"])
-	}
-	if task, ok := value["task"].(map[string]any); ok {
-		result["task_id"] = stringValue(task["task_id"])
-	}
-	for _, key := range []string{"occurrence_id", "task_id"} {
-		if value := stringValue(valueByKey(value, key)); value != "" {
-			result[key] = value
-		}
-	}
-	return result
 }
 
 func installationListResult(value map[string]any) map[string]any {
@@ -2106,14 +2064,9 @@ func installationListResult(value map[string]any) map[string]any {
 }
 
 func installationMutationResult(value map[string]any) map[string]any {
-	result := map[string]any{}
-	if installation, ok := value["installation"].(map[string]any); ok {
-		result["installation"] = normalizeInstallation(installation)
-	} else {
-		result["installation"] = normalizeInstallation(value)
-	}
+	result := map[string]any{"installation": normalizeInstallation(value["installation"].(map[string]any))}
 	for _, key := range []string{"confirmation_id", "task_id"} {
-		if item := valueByKey(value, key, strings.ToUpper(key[:1])+key[1:]); item != nil {
+		if item := value[key]; item != nil {
 			result[key] = item
 		}
 	}
@@ -2123,11 +2076,7 @@ func installationMutationResult(value map[string]any) map[string]any {
 func normalizeInstallation(value map[string]any) map[string]any {
 	result := map[string]any{}
 	for _, key := range []string{"id", "candidate", "kind", "source", "candidate_id", "name", "description", "transport", "revision", "state", "enabled", "active_version_id", "proposed_version_id", "versions", "network_grants", "secret_grants", "created_at", "updated_at"} {
-		aliases := []string{key}
-		if len(key) > 0 {
-			aliases = append(aliases, strings.ToUpper(key[:1])+key[1:])
-		}
-		if value := valueByKey(value, aliases...); value != nil {
+		if value := value[key]; value != nil {
 			if key == "versions" {
 				result[key] = normalizeExtensionVersions(value)
 			} else {
@@ -2146,9 +2095,9 @@ func normalizeExtensionVersions(value any) []any {
 		if !ok {
 			continue
 		}
-		normalized := mapProjection(version, []string{"version_id", "pin", "content_digest", "manifest_digest", "execution_digest", "network_schema_digest", "secret_schema_digest", "execution", "created_at", "network_grants", "secret_grants", "node_artifact"}, nil)
+		normalized := mapProjection(version, []string{"version_id", "pin", "content_digest", "manifest_digest", "execution_digest", "network_schema_digest", "secret_schema_digest", "execution", "created_at", "network_grants", "secret_grants", "node_artifact"})
 		if receipt, ok := normalized["node_artifact"].(map[string]any); ok {
-			normalized["node_artifact"] = mapProjection(receipt, []string{"package_name", "package_version", "artifact_bytes", "file_count", "node_version", "npm_version", "lifecycle_scripts_disabled", "native_addons_absent"}, nil)
+			normalized["node_artifact"] = mapProjection(receipt, []string{"package_name", "package_version", "artifact_bytes", "file_count", "node_version", "npm_version", "lifecycle_scripts_disabled", "native_addons_absent"})
 		}
 		versions = append(versions, normalized)
 	}
@@ -2201,22 +2150,6 @@ func normalizeUpload(value map[string]any, includeReplay bool) map[string]any {
 	return result
 }
 
-func valueByKey(value map[string]any, keys ...string) any {
-	for _, key := range keys {
-		if item, ok := value[key]; ok {
-			return item
-		}
-	}
-	for actual, item := range value {
-		for _, key := range keys {
-			if strings.EqualFold(actual, key) {
-				return item
-			}
-		}
-	}
-	return nil
-}
-
 func anySlice(value any) []any {
 	switch typed := value.(type) {
 	case []any:
@@ -2241,13 +2174,6 @@ func stringValue(value any) string {
 func boolValue(value any) bool {
 	typed, _ := value.(bool)
 	return typed
-}
-
-func boolValueOrDefault(value any, fallback bool) bool {
-	if value == nil {
-		return fallback
-	}
-	return boolValue(value)
 }
 
 func integerValue(value any) int64 {
@@ -2278,11 +2204,9 @@ func numberValue(value any) float64 {
 	}
 }
 
-// applyLegacyInputAliases converts the public ProductCore names to the Core
-// capability request names before schema digesting. This is deliberately
-// performed in the gateway, not in the client, so old Flutter builds and new
-// clients share one canonical request digest.
-func applyLegacyInputAliases(action string, input map[string]any) {
+// translateProductCoreInput converts the current public ProductCore field names
+// to the current Agent capability field names before schema digesting.
+func translateProductCoreInput(action string, input map[string]any) {
 	alias := func(from, to string) {
 		if _, exists := input[to]; !exists {
 			if value, ok := input[from]; ok {
@@ -2290,16 +2214,14 @@ func applyLegacyInputAliases(action string, input map[string]any) {
 			}
 		}
 	}
-	for _, name := range []string{"agent.chat.conversations.list", "agent.model_profiles.list", "agent.knowledge.sources.list", "agent.knowledge.search", "agent.core.tasks.list"} {
-		if action == name {
-			alias("page_size", "limit")
-		}
+	if action == "agent.knowledge.search" {
+		alias("page_size", "limit")
+		delete(input, "page_size")
 	}
 	switch action {
 	case "agent.account.deprovision":
 		// ProductCore keeps the established public `confirm` field while the
 		// neutral Agent capability uses the explicit `confirmation` name.
-		// Remove the legacy spelling because the Agent schema is closed.
 		alias("confirm", "confirmation")
 		delete(input, "confirm")
 	case "agent.chat.conversations.get":

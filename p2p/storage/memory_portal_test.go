@@ -22,11 +22,6 @@ func TestMemoryStorePortalCASAndCopies(t *testing.T) {
 		MatrixDeviceID: "DEVICE_A",
 		AgentConfig: dirextalkdomain.AgentConfig{
 			MCPBlockedRoomIDs: []string{"!blocked:example.com"},
-			Native: map[string]any{
-				"nested":      map[string]any{"enabled": true},
-				"typed_map":   map[string]string{"value": "original"},
-				"typed_slice": []map[string]any{{"value": "original"}},
-			},
 		},
 		ClientBuild: clientBuild{Version: "1.0.0", BuildNumber: "1"},
 	}
@@ -35,9 +30,6 @@ func TestMemoryStorePortalCASAndCopies(t *testing.T) {
 	}
 
 	state.AgentConfig.MCPBlockedRoomIDs[0] = "mutated"
-	state.AgentConfig.Native["nested"].(map[string]any)["enabled"] = false
-	state.AgentConfig.Native["typed_map"].(map[string]string)["value"] = "mutated"
-	state.AgentConfig.Native["typed_slice"].([]map[string]any)[0]["value"] = "mutated"
 	loaded, ok, err := store.LoadPortal(ctx)
 	if err != nil || !ok {
 		t.Fatalf("LoadPortal after save = (_, %v, %v), want (_, true, nil)", ok, err)
@@ -45,35 +37,14 @@ func TestMemoryStorePortalCASAndCopies(t *testing.T) {
 	if got := loaded.AgentConfig.MCPBlockedRoomIDs[0]; got != "!blocked:example.com" {
 		t.Fatalf("stored blocked rooms aliased caller input: %q", got)
 	}
-	if got := loaded.AgentConfig.Native["nested"].(map[string]any)["enabled"]; got != true {
-		t.Fatalf("stored native config aliased caller input: %v", got)
-	}
-	if got := loaded.AgentConfig.Native["typed_map"].(map[string]string)["value"]; got != "original" {
-		t.Fatalf("stored typed map aliased caller input: %v", got)
-	}
-	if got := loaded.AgentConfig.Native["typed_slice"].([]map[string]any)[0]["value"]; got != "original" {
-		t.Fatalf("stored typed slice aliased caller input: %v", got)
-	}
 
 	loaded.AgentConfig.MCPBlockedRoomIDs[0] = "returned mutation"
-	loaded.AgentConfig.Native["nested"].(map[string]any)["enabled"] = false
-	loaded.AgentConfig.Native["typed_map"].(map[string]string)["value"] = "returned mutation"
-	loaded.AgentConfig.Native["typed_slice"].([]map[string]any)[0]["value"] = "returned mutation"
 	reloaded, _, err := store.LoadPortal(ctx)
 	if err != nil {
 		t.Fatalf("LoadPortal after returned-value mutation: %v", err)
 	}
 	if got := reloaded.AgentConfig.MCPBlockedRoomIDs[0]; got != "!blocked:example.com" {
 		t.Fatalf("LoadPortal returned aliased blocked rooms: %q", got)
-	}
-	if got := reloaded.AgentConfig.Native["nested"].(map[string]any)["enabled"]; got != true {
-		t.Fatalf("LoadPortal returned aliased native config: %v", got)
-	}
-	if got := reloaded.AgentConfig.Native["typed_map"].(map[string]string)["value"]; got != "original" {
-		t.Fatalf("LoadPortal returned aliased typed map: %v", got)
-	}
-	if got := reloaded.AgentConfig.Native["typed_slice"].([]map[string]any)[0]["value"]; got != "original" {
-		t.Fatalf("LoadPortal returned aliased typed slice: %v", got)
 	}
 
 	updated, err := store.SaveClientBuild(ctx, "WRONG_DEVICE", clientBuild{Version: "2.0.0"})

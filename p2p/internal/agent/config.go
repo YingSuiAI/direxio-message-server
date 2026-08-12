@@ -27,12 +27,6 @@ const (
 func ApplyOnlineConfigUpdate(current dirextalkdomain.AgentConfig, params map[string]any) dirextalkdomain.AgentConfig {
 	next := NormalizeConfig(current)
 	values := actionbase.Params(params)
-	if displayName := values.String(configKeyDisplayName); displayName != "" {
-		next.OnlineAgentIdentity.DisplayName = displayName
-	}
-	if avatarURL := values.String(configKeyAvatarURL); avatarURL != "" {
-		next.OnlineAgentIdentity.AvatarURL = avatarURL
-	}
 	if identity, ok := params[configKeyOnlineAgentIdentity]; ok {
 		next.OnlineAgentIdentity = mergeIdentity(next.OnlineAgentIdentity, identity)
 	}
@@ -48,51 +42,27 @@ func ApplyOnlineConfigUpdate(current dirextalkdomain.AgentConfig, params map[str
 // OnlineIdentityUpdateRequested reports whether config update changes the
 // Matrix-backed Online Agent identity. Native-only updates stay remote.
 func OnlineIdentityUpdateRequested(params map[string]any) bool {
-	if hasKey(params, configKeyOnlineAgentIdentity) {
-		return identityUpdateRequested(params[configKeyOnlineAgentIdentity])
-	}
-	return topLevelIdentityUpdateRequested(params)
+	return hasKey(params, configKeyOnlineAgentIdentity) && identityUpdateRequested(params[configKeyOnlineAgentIdentity])
 }
 
 // NormalizeConfig preserves the dual identity projection used by portal
 // bootstrap and Matrix session/room repair. Native runtime fields remain
 // opaque to this package and are populated by the external gateway response.
 func NormalizeConfig(cfg dirextalkdomain.AgentConfig) dirextalkdomain.AgentConfig {
-	empty := strings.TrimSpace(cfg.DisplayName) == "" &&
-		strings.TrimSpace(cfg.AvatarURL) == "" &&
-		identityEmpty(cfg.NativeAgentIdentity) &&
+	empty := identityEmpty(cfg.NativeAgentIdentity) &&
 		identityEmpty(cfg.OnlineAgentIdentity) &&
-		cfg.ContextWindow == 0 &&
 		!cfg.Enabled &&
-		strings.TrimSpace(cfg.Model) == "" &&
-		strings.TrimSpace(cfg.SystemPrompt) == "" &&
 		len(cfg.MCPBlockedRoomIDs) == 0
 	if empty {
-		cfg.DisplayName = DefaultNativeAgentDisplayName
 		cfg.NativeAgentIdentity = dirextalkdomain.AgentIdentityConfig{DisplayName: DefaultNativeAgentDisplayName}
 		cfg.OnlineAgentIdentity = dirextalkdomain.AgentIdentityConfig{DisplayName: DefaultOnlineAgentDisplayName}
-		cfg.ContextWindow = 30
 		cfg.Enabled = true
 		return cfg
 	}
-	if strings.TrimSpace(cfg.DisplayName) == "" {
-		cfg.DisplayName = DefaultNativeAgentDisplayName
-	} else {
-		cfg.DisplayName = strings.TrimSpace(cfg.DisplayName)
-	}
-	cfg.AvatarURL = strings.TrimSpace(cfg.AvatarURL)
-	legacyIdentity := dirextalkdomain.AgentIdentityConfig{DisplayName: cfg.DisplayName, AvatarURL: cfg.AvatarURL}
-	cfg.NativeAgentIdentity = normalizeIdentity(cfg.NativeAgentIdentity, legacyIdentity)
+	cfg.NativeAgentIdentity = normalizeIdentity(cfg.NativeAgentIdentity, dirextalkdomain.AgentIdentityConfig{DisplayName: DefaultNativeAgentDisplayName})
 	cfg.OnlineAgentIdentity = normalizeIdentity(cfg.OnlineAgentIdentity, dirextalkdomain.AgentIdentityConfig{
 		DisplayName: DefaultOnlineAgentDisplayName,
 	})
-	cfg.DisplayName = cfg.NativeAgentIdentity.DisplayName
-	cfg.AvatarURL = cfg.NativeAgentIdentity.AvatarURL
-	if cfg.ContextWindow <= 0 {
-		cfg.ContextWindow = 30
-	}
-	cfg.Model = strings.TrimSpace(cfg.Model)
-	cfg.SystemPrompt = strings.TrimSpace(cfg.SystemPrompt)
 	cfg.MCPBlockedRoomIDs = actionbase.Strings(cfg.MCPBlockedRoomIDs)
 	return cfg
 }
@@ -135,17 +105,13 @@ func normalizeIdentity(identity, fallback dirextalkdomain.AgentIdentityConfig) d
 	return identity
 }
 
-func topLevelIdentityUpdateRequested(params map[string]any) bool {
-	values := actionbase.Params(params)
-	return values.String(configKeyDisplayName) != "" || values.String(configKeyAvatarURL) != ""
-}
-
 func identityUpdateRequested(value any) bool {
 	raw, ok := value.(map[string]any)
 	if !ok {
 		return false
 	}
-	return topLevelIdentityUpdateRequested(raw)
+	values := actionbase.Params(raw)
+	return values.String(configKeyDisplayName) != "" || values.String(configKeyAvatarURL) != ""
 }
 
 func identityEmpty(identity dirextalkdomain.AgentIdentityConfig) bool {

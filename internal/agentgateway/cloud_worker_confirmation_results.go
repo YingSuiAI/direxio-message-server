@@ -44,13 +44,6 @@ func validateCloudWorkerConfirmationActionResult(action string, request, output 
 		}
 		return validateCloudWorkerConfirmation(confirmation, authority)
 	case "agent.core.confirmations.list":
-		if alias, ok := output["Confirmations"].([]any); ok {
-			for _, item := range alias {
-				if confirmation, ok := item.(map[string]any); ok && looksLikeCloudWorkerConfirmation(confirmation) {
-					return cloudWorkerResultError("confirmations page is not canonical")
-				}
-			}
-		}
 		raw, ok := output["confirmations"].([]any)
 		if !ok {
 			return nil
@@ -96,9 +89,6 @@ func confirmationActionResultRecord(output map[string]any) (map[string]any, bool
 	if confirmation, ok := output["confirmation"].(map[string]any); ok {
 		return confirmation, true
 	}
-	if confirmation, ok := output["Confirmation"].(map[string]any); ok {
-		return confirmation, true
-	}
 	if _, ok := output["confirmation_id"]; ok {
 		return output, true
 	}
@@ -135,9 +125,6 @@ func cloudWorkerConfirmationFromResult(output map[string]any) (map[string]any, b
 	}
 	if confirmation, ok := output["confirmation"].(map[string]any); ok && looksLikeCloudWorkerConfirmation(confirmation) {
 		return confirmation, true, nil
-	}
-	if confirmation, ok := output["Confirmation"].(map[string]any); ok && looksLikeCloudWorkerConfirmation(confirmation) {
-		return nil, true, cloudWorkerResultError("confirmation envelope is not canonical")
 	}
 	if looksLikeCloudWorkerConfirmation(output) {
 		return nil, true, cloudWorkerResultError("confirmation envelope is missing")

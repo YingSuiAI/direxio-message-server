@@ -247,12 +247,131 @@
     {
       "name": "agent.config.get",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_and_ws_request",
+      "schema": {
+        "response": {
+          "enabled": {
+            "type": "boolean",
+            "required": true
+          },
+          "mcp_blocked_room_ids": {
+            "type": "array",
+            "required": true,
+            "items": {
+              "type": "string"
+            }
+          },
+          "native_agent_identity": {
+            "type": "object",
+            "properties": {
+              "avatar_url": {
+                "type": "string"
+              },
+              "display_name": {
+                "type": "string"
+              }
+            }
+          },
+          "online_agent_identity": {
+            "type": "object",
+            "properties": {
+              "avatar_url": {
+                "type": "string"
+              },
+              "display_name": {
+                "type": "string"
+              }
+            }
+          },
+          "revision": {
+            "type": "integer"
+          }
+        }
+      }
     },
     {
       "name": "agent.config.update",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "expected_revision": {
+            "type": "integer"
+          },
+          "mcp_blocked_room_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "native_agent_identity": {
+            "type": "object",
+            "properties": {
+              "avatar_url": {
+                "type": "string"
+              },
+              "display_name": {
+                "type": "string"
+              }
+            }
+          },
+          "online_agent_identity": {
+            "type": "object",
+            "properties": {
+              "avatar_url": {
+                "type": "string"
+              },
+              "display_name": {
+                "type": "string"
+              }
+            }
+          },
+          "operation_id": {
+            "type": "string"
+          }
+        },
+        "response": {
+          "enabled": {
+            "type": "boolean",
+            "required": true
+          },
+          "mcp_blocked_room_ids": {
+            "type": "array",
+            "required": true,
+            "items": {
+              "type": "string"
+            }
+          },
+          "native_agent_identity": {
+            "type": "object",
+            "properties": {
+              "avatar_url": {
+                "type": "string"
+              },
+              "display_name": {
+                "type": "string"
+              }
+            }
+          },
+          "online_agent_identity": {
+            "type": "object",
+            "properties": {
+              "avatar_url": {
+                "type": "string"
+              },
+              "display_name": {
+                "type": "string"
+              }
+            }
+          },
+          "revision": {
+            "type": "integer"
+          }
+        }
+      }
     },
     {
       "name": "agent.backends.get",
@@ -265,14 +384,6 @@
       "transport": "http_and_ws_request",
       "schema": {
         "request": {
-          "default_client_profile_id": {
-            "type": "string",
-            "presence": {
-              "omitted": "no_default_reference",
-              "present": "exact_nonempty_client_profile_id",
-              "empty": "rejected"
-            }
-          },
           "default_conversation_client_profile_id": {
             "type": "string"
           },
@@ -411,9 +522,6 @@
           }
         },
         "response": {
-          "default_client_profile_id": {
-            "type": "string"
-          },
           "default_conversation_client_profile_id": {
             "type": "string"
           },
@@ -561,9 +669,6 @@
           }
         },
         "response": {
-          "default_client_profile_id": {
-            "type": "string"
-          },
           "default_conversation_client_profile_id": {
             "type": "string"
           },

@@ -571,7 +571,7 @@ func TestClientVersionReportUsesNarrowDeviceCASWithoutLosingConcurrentPortalFiel
 	if _, apiErr := service.Handle(context.Background(), "profile.update", map[string]any{"display_name": "Concurrent Profile"}); apiErr != nil {
 		t.Fatalf("concurrent profile update: %#v", apiErr)
 	}
-	if _, apiErr := service.Handle(context.Background(), "agent.config.update", map[string]any{"system_prompt": "Concurrent Agent Config"}); apiErr != nil {
+	if _, apiErr := service.Handle(context.Background(), "agent.config.update", map[string]any{"mcp_blocked_room_ids": []any{"!concurrent:example.com"}}); apiErr != nil {
 		t.Fatalf("concurrent agent update: %#v", apiErr)
 	}
 	close(store.releaseNarrow)
@@ -585,8 +585,8 @@ func TestClientVersionReportUsesNarrowDeviceCASWithoutLosingConcurrentPortalFiel
 	if durable.Profile.DisplayName != "Concurrent Profile" {
 		t.Fatalf("narrow report lost concurrent portal fields: %#v", durable)
 	}
-	if durable.AgentConfig.SystemPrompt != "" {
-		t.Fatalf("Native Agent config must remain external, got local projection: %#v", durable.AgentConfig)
+	if len(durable.AgentConfig.MCPBlockedRoomIDs) != 1 || durable.AgentConfig.MCPBlockedRoomIDs[0] != "!concurrent:example.com" {
+		t.Fatalf("concurrent Agent room policy was lost: %#v", durable.AgentConfig)
 	}
 	if durable.ClientBuild.Version != "v2.3.4" || durable.ClientBuild.BuildNumber != "42" {
 		t.Fatalf("narrow report did not persist client build: %#v", durable.ClientBuild)

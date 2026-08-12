@@ -52,8 +52,6 @@ func TestMemberRecordJSONIncludesCompatibilityFields(t *testing.T) {
 
 func TestAgentConfigJSONPreservesNativeFields(t *testing.T) {
 	raw, err := json.Marshal(AgentConfig{
-		DisplayName: "Agent",
-		AvatarURL:   "mxc://agent",
 		NativeAgentIdentity: AgentIdentityConfig{
 			DisplayName: "Ying",
 			AvatarURL:   "mxc://ying",
@@ -62,16 +60,8 @@ func TestAgentConfigJSONPreservesNativeFields(t *testing.T) {
 			DisplayName: "Your Agent",
 			AvatarURL:   "mxc://online",
 		},
-		ContextWindow:     64,
 		Enabled:           true,
-		Model:             "model-a",
-		SystemPrompt:      "system",
 		MCPBlockedRoomIDs: []string{"!blocked:example.com"},
-		Native: map[string]any{
-			"skills":                []any{map[string]any{"id": "skill-a"}},
-			"display_name":          "native-shadow",
-			"native_agent_identity": map[string]any{"display_name": "shadow"},
-		},
 	})
 	if err != nil {
 		t.Fatalf("Marshal failed: %v", err)
@@ -81,11 +71,11 @@ func TestAgentConfigJSONPreservesNativeFields(t *testing.T) {
 	if err := json.Unmarshal(raw, &encoded); err != nil {
 		t.Fatalf("Unmarshal encoded failed: %v", err)
 	}
-	if encoded["display_name"] != "Agent" {
-		t.Fatalf("known field should override same-name native field, got %#v", encoded)
+	if _, ok := encoded["display_name"]; ok {
+		t.Fatalf("flat display_name must not be serialized: %#v", encoded)
 	}
-	if _, ok := encoded["skills"]; !ok {
-		t.Fatalf("native skills field should be preserved, got %#v", encoded)
+	if _, ok := encoded["avatar_url"]; ok {
+		t.Fatalf("flat avatar_url must not be serialized: %#v", encoded)
 	}
 	nativeIdentity := encoded["native_agent_identity"].(map[string]any)
 	onlineIdentity := encoded["online_agent_identity"].(map[string]any)
@@ -98,36 +88,24 @@ func TestAgentConfigJSONPreservesNativeFields(t *testing.T) {
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		t.Fatalf("Unmarshal failed: %v", err)
 	}
-	if decoded.DisplayName != "Agent" || decoded.Model != "model-a" || !decoded.Enabled ||
+	if !decoded.Enabled ||
 		decoded.NativeAgentIdentity.DisplayName != "Ying" ||
 		decoded.OnlineAgentIdentity.DisplayName != "Your Agent" {
 		t.Fatalf("expected known fields to round-trip, got %#v", decoded)
 	}
-	if _, ok := decoded.Native["skills"]; !ok {
-		t.Fatalf("expected unknown native fields to round-trip, got %#v", decoded.Native)
-	}
-	if _, ok := decoded.Native["display_name"]; ok {
-		t.Fatalf("known fields must not remain in Native, got %#v", decoded.Native)
-	}
-	if _, ok := decoded.Native["native_agent_identity"]; ok {
-		t.Fatalf("identity fields must not remain in Native, got %#v", decoded.Native)
-	}
 }
 
-func TestAgentConfigJSONBackfillsModeIdentitiesFromLegacyFields(t *testing.T) {
+func TestAgentConfigJSONIgnoresFlatIdentityFields(t *testing.T) {
 	var decoded AgentConfig
 	if err := json.Unmarshal([]byte(`{
 		"display_name":"Legacy Agent",
-		"avatar_url":"mxc://legacy",
-		"context_window":48
+		"avatar_url":"mxc://legacy"
 	}`), &decoded); err != nil {
 		t.Fatalf("Unmarshal legacy config failed: %v", err)
 	}
-	if decoded.NativeAgentIdentity.DisplayName != "Legacy Agent" ||
-		decoded.NativeAgentIdentity.AvatarURL != "mxc://legacy" ||
-		decoded.OnlineAgentIdentity.DisplayName != "Legacy Agent" ||
-		decoded.OnlineAgentIdentity.AvatarURL != "mxc://legacy" {
-		t.Fatalf("expected legacy identity fallback, got %#v", decoded)
+	if decoded.NativeAgentIdentity != (AgentIdentityConfig{}) ||
+		decoded.OnlineAgentIdentity != (AgentIdentityConfig{}) {
+		t.Fatalf("flat identity fields must not populate current identities: %#v", decoded)
 	}
 }
 

@@ -159,7 +159,6 @@ func cloneAnyMap(values map[string]any) map[string]any {
 
 func clonePortalState(state portalState) portalState {
 	state.AgentConfig.MCPBlockedRoomIDs = cloneStringSlice(state.AgentConfig.MCPBlockedRoomIDs)
-	state.AgentConfig.Native = cloneAnyMap(state.AgentConfig.Native)
 	return state
 }
 

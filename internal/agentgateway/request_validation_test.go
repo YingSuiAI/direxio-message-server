@@ -15,6 +15,31 @@ import (
 	capv1 "github.com/YingSuiAI/dirextalk-capability-api/gen/go/dirextalk/capability/v1"
 )
 
+func TestAgentConfigRequestsUseOnlyCurrentFields(t *testing.T) {
+	if err := ValidateActionRequest("agent.config.get", map[string]any{}); err != nil {
+		t.Fatalf("empty config get rejected: %v", err)
+	}
+	valid := map[string]any{
+		"native_agent_identity": map[string]any{"display_name": "Ying", "avatar_url": ""},
+		"online_agent_identity": map[string]any{"display_name": "Your Agent", "avatar_url": ""},
+		"enabled":               true,
+		"mcp_blocked_room_ids":  []any{"!room:example.test"},
+	}
+	if err := ValidateActionRequest("agent.config.update", valid); err != nil {
+		t.Fatalf("current config update rejected: %v", err)
+	}
+	for _, field := range []string{"display_name", "avatar_url", "model", "system_prompt", "context_window"} {
+		params := cloneParams(valid)
+		params[field] = "retired"
+		if err := ValidateActionRequest("agent.config.update", params); !errors.Is(err, ErrInvalidActionRequest) {
+			t.Errorf("retired config field %s accepted: %v", field, err)
+		}
+	}
+	if err := ValidateActionRequest("agent.config.get", map[string]any{"model": "retired"}); !errors.Is(err, ErrInvalidActionRequest) {
+		t.Fatalf("config get accepted parameters: %v", err)
+	}
+}
+
 func TestValidateChatRequestRequiresImmutableProfilePins(t *testing.T) {
 	base := map[string]any{
 		"idempotency_key":        "11111111-1111-4111-8111-111111111111",

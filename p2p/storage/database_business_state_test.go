@@ -684,7 +684,10 @@ func TestDatabaseStoreClientBuildUpdateUsesDeviceCASAndPreservesPortalFields(t *
 		MatrixDeviceID: "DEVICE_A",
 		OwnerMXID:      "@owner:example.com",
 		Profile:        dirextalkdomain.OwnerProfile{UserID: "@owner:example.com", DisplayName: "Initial"},
-		AgentConfig:    dirextalkdomain.AgentConfig{DisplayName: "Agent", SystemPrompt: "Initial Agent"},
+		AgentConfig: dirextalkdomain.AgentConfig{
+			NativeAgentIdentity: dirextalkdomain.AgentIdentityConfig{DisplayName: "Agent"},
+			MCPBlockedRoomIDs:   []string{"!initial:example.com"},
+		},
 	}
 	if err := store.SavePortal(ctx, state); err != nil {
 		t.Fatal(err)
@@ -699,7 +702,7 @@ func TestDatabaseStoreClientBuildUpdateUsesDeviceCASAndPreservesPortalFields(t *
 		t.Fatalf("current device CAS updated=%v err=%v", updated, err)
 	}
 	state.Profile.DisplayName = "Concurrent Profile"
-	state.AgentConfig.SystemPrompt = "Concurrent Agent"
+	state.AgentConfig.MCPBlockedRoomIDs = []string{"!concurrent:example.com"}
 	if err := store.SavePortal(ctx, state); err != nil {
 		t.Fatal(err)
 	}
@@ -707,7 +710,7 @@ func TestDatabaseStoreClientBuildUpdateUsesDeviceCASAndPreservesPortalFields(t *
 	if err != nil || !ok {
 		t.Fatalf("load portal ok=%v err=%v", ok, err)
 	}
-	if loaded.Profile.DisplayName != "Concurrent Profile" || loaded.AgentConfig.SystemPrompt != "Concurrent Agent" || loaded.ClientBuild != build {
+	if loaded.Profile.DisplayName != "Concurrent Profile" || len(loaded.AgentConfig.MCPBlockedRoomIDs) != 1 || loaded.AgentConfig.MCPBlockedRoomIDs[0] != "!concurrent:example.com" || loaded.ClientBuild != build {
 		t.Fatalf("same-device portal write lost narrow client build or unrelated fields: %#v", loaded)
 	}
 	state.MatrixDeviceID = "DEVICE_B"

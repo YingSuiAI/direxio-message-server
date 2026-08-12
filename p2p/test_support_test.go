@@ -35,12 +35,11 @@ type testExternalNativeRunner struct {
 
 func newTestExternalNativeRunner() *testExternalNativeRunner {
 	return &testExternalNativeRunner{config: map[string]any{
-		"display_name":         "Agent",
-		"avatar_url":           "",
-		"context_window":       int64(30),
+		"native_agent_identity": map[string]any{
+			"display_name": "Agent",
+			"avatar_url":   "",
+		},
 		"enabled":              true,
-		"model":                "",
-		"system_prompt":        "",
 		"mcp_blocked_room_ids": []string(nil),
 	}}
 }
@@ -58,7 +57,7 @@ func (r *testExternalNativeRunner) Invoke(_ context.Context, action string, para
 		return map[string]any{"status": "deprovisioned"}, nil
 	}
 	if action == "agent.config.update" {
-		for _, key := range []string{"display_name", "avatar_url", "context_window", "enabled", "model", "system_prompt", "mcp_blocked_room_ids"} {
+		for _, key := range []string{"native_agent_identity", "enabled", "mcp_blocked_room_ids"} {
 			if value, ok := params[key]; ok {
 				if key == "mcp_blocked_room_ids" {
 					value = normalizeTestStringList(value)

@@ -533,8 +533,10 @@ func (r *configContractRunner) Invoke(_ context.Context, action string, params m
 	r.action = action
 	r.params = cloneMap(params)
 	return map[string]any{
-		"display_name": "Ying Remote",
-		"avatar_url":   "mxc://ying-remote",
+		"native_agent_identity": map[string]any{
+			"display_name": "Ying Remote",
+			"avatar_url":   "mxc://ying-remote",
+		},
 	}, nil
 }
 
@@ -582,9 +584,7 @@ func TestExternalConfigKeepsNativeAndOnlineIdentityOwnershipSeparate(t *testing.
 		t.Fatalf("native identity update failed: %v", actionErr)
 	}
 	if runner.action != actionConfigUpdate ||
-		runner.params["display_name"] != "Ying Requested" ||
-		runner.params["avatar_url"] != "mxc://ying-requested" ||
-		runner.params["native_agent_identity"] != nil ||
+		runner.params["native_agent_identity"] == nil ||
 		runner.params["online_agent_identity"] != nil {
 		t.Fatalf("native identity update crossed ownership boundary: action=%q params=%#v", runner.action, runner.params)
 	}

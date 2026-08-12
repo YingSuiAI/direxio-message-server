@@ -275,15 +275,21 @@ func TestAgentConfigContactsFavoritesAndReports(t *testing.T) {
 	bootstrapService(t, service)
 
 	cfg := mustHandle[map[string]any](t, service, "agent.config.update", map[string]any{
-		"display_name":         "Ops Agent",
-		"avatar_url":           "mxc://example.com/agent",
-		"context_window":       float64(64),
+		"native_agent_identity": map[string]any{
+			"display_name": "Ops Agent",
+			"avatar_url":   "mxc://example.com/agent",
+		},
+		"online_agent_identity": map[string]any{
+			"display_name": "Online Agent",
+			"avatar_url":   "mxc://example.com/online-agent",
+		},
 		"enabled":              true,
-		"model":                "local-model",
-		"system_prompt":        "help users",
-		"mcp_blocked_room_ids": []any{"!secret:example.com", " !group:example.com ", "!secret:example.com", ""},
+		"mcp_blocked_room_ids": []any{"!secret:example.com", "!group:example.com"},
 	})
-	if cfg["display_name"] != "Ops Agent" || cfg["avatar_url"] != "mxc://example.com/agent" || int64Param(cfg["context_window"]) != 64 || cfg["enabled"] != true {
+	nativeIdentity := cfg["native_agent_identity"].(map[string]any)
+	onlineIdentity := cfg["online_agent_identity"].(map[string]any)
+	if nativeIdentity["display_name"] != "Ops Agent" || nativeIdentity["avatar_url"] != "mxc://example.com/agent" ||
+		onlineIdentity["display_name"] != "Online Agent" || onlineIdentity["avatar_url"] != "mxc://example.com/online-agent" || cfg["enabled"] != true {
 		t.Fatalf("expected updated agent config, got %#v", cfg)
 	}
 	blockedRooms, ok := cfg["mcp_blocked_room_ids"].([]string)
@@ -291,7 +297,10 @@ func TestAgentConfigContactsFavoritesAndReports(t *testing.T) {
 		t.Fatalf("expected normalized blocked room ids, got %#v", cfg["mcp_blocked_room_ids"])
 	}
 	cfg = mustHandle[map[string]any](t, service, "agent.config.get", nil)
-	if cfg["display_name"] != "Ops Agent" || cfg["avatar_url"] != "mxc://example.com/agent" || cfg["model"] != "local-model" {
+	nativeIdentity = cfg["native_agent_identity"].(map[string]any)
+	onlineIdentity = cfg["online_agent_identity"].(map[string]any)
+	if nativeIdentity["display_name"] != "Ops Agent" || nativeIdentity["avatar_url"] != "mxc://example.com/agent" ||
+		onlineIdentity["display_name"] != "Online Agent" || onlineIdentity["avatar_url"] != "mxc://example.com/online-agent" {
 		t.Fatalf("expected persisted agent config, got %#v", cfg)
 	}
 

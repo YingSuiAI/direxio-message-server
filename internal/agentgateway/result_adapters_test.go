@@ -50,7 +50,7 @@ func TestPublicResultAdaptersProjectCanonicalCapabilityResults(t *testing.T) {
 				t.Fatalf("conversation delete envelope keys=%v value=%#v", keys, got)
 			}
 		}},
-		{"model get", "agent.model_profiles.get", map[string]any{"profile_id": "p1", "provider": "openai_compatible"}, func(t *testing.T, got map[string]any) {
+		{"model get", "agent.model_profiles.get", map[string]any{"id": "p1", "provider": "openai_compatible"}, func(t *testing.T, got map[string]any) {
 			profile, ok := got["profile"].(map[string]any)
 			if !ok || profile["profile_id"] != "p1" {
 				t.Fatalf("model get = %#v", got)
@@ -168,6 +168,33 @@ func TestPublicResultAdaptersProjectCanonicalCapabilityResults(t *testing.T) {
 				t.Fatal(err)
 			}
 			test.check(t, got)
+		})
+	}
+}
+
+func TestCurrentAgentResultShapesRejectAlternateEnvelopes(t *testing.T) {
+	validSource := map[string]any{"source_id": "source", "kind": "text", "status": "ready"}
+	tests := []struct {
+		action string
+		value  map[string]any
+	}{
+		{"agent.model_profiles.get", map[string]any{"profile": map[string]any{"id": "profile"}}},
+		{"agent.model_profiles.delete", map[string]any{"profile": map[string]any{"id": "profile"}}},
+		{"agent.knowledge.sources.delete", validSource},
+		{"agent.knowledge.upload.finish", map[string]any{"source": validSource}},
+		{"agent.core.tasks.get", map[string]any{"task": map[string]any{"task_id": "task"}}},
+		{"agent.core.schedules.get", map[string]any{"schedule_id": "schedule"}},
+		{"agent.core.schedules.trigger", map[string]any{"schedule": map[string]any{}, "occurrence_id": "occurrence", "task_id": "task"}},
+		{"agent.core.skills.get", map[string]any{"installation": map[string]any{"id": "installation"}}},
+		{"agent.core.skills.install", map[string]any{"id": "installation"}},
+		{"agent.core.aws.credentials.create", map[string]any{"credential_id": "credential"}},
+		{"agent.core.skills.inspect", map[string]any{"candidate": map[string]any{}}},
+	}
+	for _, test := range tests {
+		t.Run(test.action, func(t *testing.T) {
+			if _, err := adaptActionResult(test.action, test.value); !errors.Is(err, ErrInvalidActionResult) {
+				t.Fatalf("alternate Agent result error = %v, want ErrInvalidActionResult", err)
+			}
 		})
 	}
 }
@@ -660,24 +687,24 @@ func TestWebSearchResultAdapterRejectsMissingOrWrongTypedFields(t *testing.T) {
 
 func TestKnowledgeStatusResultAdapterRequiresCanonicalQuotaCounters(t *testing.T) {
 	valid := map[string]any{
-		"QuotaUsedBytes": float64(1024), "QuotaLimitBytes": float64(67108864),
-		"QuotaRemainingBytes": float64(67107840), "MaxSourceBytes": float64(16777216),
+		"quota_used_bytes": float64(1024), "quota_limit_bytes": float64(67108864),
+		"quota_remaining_bytes": float64(67107840), "max_source_bytes": float64(16777216),
 	}
 	if _, err := adaptActionResult("agent.knowledge.status", valid); err != nil {
 		t.Fatalf("valid knowledge status rejected: %v", err)
 	}
 	for name, mutate := range map[string]func(map[string]any){
-		"missing used":   func(value map[string]any) { delete(value, "QuotaUsedBytes") },
-		"fraction limit": func(value map[string]any) { value["QuotaLimitBytes"] = 1.5 },
-		"negative max":   func(value map[string]any) { value["MaxSourceBytes"] = -1 },
+		"missing used":   func(value map[string]any) { delete(value, "quota_used_bytes") },
+		"fraction limit": func(value map[string]any) { value["quota_limit_bytes"] = 1.5 },
+		"negative max":   func(value map[string]any) { value["max_source_bytes"] = -1 },
 		"wrong fixed limits": func(value map[string]any) {
-			value["QuotaLimitBytes"] = float64(33554432)
-			value["QuotaRemainingBytes"] = float64(33553408)
-			value["MaxSourceBytes"] = float64(8388608)
+			value["quota_limit_bytes"] = float64(33554432)
+			value["quota_remaining_bytes"] = float64(33553408)
+			value["max_source_bytes"] = float64(8388608)
 		},
-		"used exceeds limit":     func(value map[string]any) { value["QuotaUsedBytes"] = float64(67108865) },
-		"remaining inconsistent": func(value map[string]any) { value["QuotaRemainingBytes"] = float64(1) },
-		"source exceeds limit":   func(value map[string]any) { value["MaxSourceBytes"] = float64(67108865) },
+		"used exceeds limit":     func(value map[string]any) { value["quota_used_bytes"] = float64(67108865) },
+		"remaining inconsistent": func(value map[string]any) { value["quota_remaining_bytes"] = float64(1) },
+		"source exceeds limit":   func(value map[string]any) { value["max_source_bytes"] = float64(67108865) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			value := cloneParams(valid)
@@ -808,18 +835,23 @@ func sortedMapKeys(value map[string]any) []string {
 	return keys
 }
 
-func TestLegacyInputAliasesAreCanonicalizedBeforeAgentDigest(t *testing.T) {
+func TestProductCoreInputIsTranslatedBeforeAgentDigest(t *testing.T) {
 	input := map[string]any{"confirm": "deprovision_account"}
-	applyLegacyInputAliases("agent.account.deprovision", input)
+	translateProductCoreInput("agent.account.deprovision", input)
 	if input["confirmation"] != "deprovision_account" {
 		t.Fatalf("account confirmation alias = %#v", input)
 	}
 	if _, ok := input["confirm"]; ok {
-		t.Fatalf("legacy account confirm must not reach closed Agent schema: %#v", input)
+		t.Fatalf("ProductCore account confirm must not reach the Agent schema: %#v", input)
 	}
 	input = map[string]any{"message_limit": float64(20), "message_cursor": "cursor"}
-	applyLegacyInputAliases("agent.chat.conversations.get", input)
+	translateProductCoreInput("agent.chat.conversations.get", input)
 	if input["limit"] != float64(20) || input["page_token"] != "cursor" {
-		t.Fatalf("conversation aliases = %#v", input)
+		t.Fatalf("translated conversation input = %#v", input)
+	}
+	input = map[string]any{"page_size": float64(25)}
+	translateProductCoreInput("agent.knowledge.search", input)
+	if input["limit"] != float64(25) || input["page_size"] != nil {
+		t.Fatalf("translated knowledge search input = %#v", input)
 	}
 }

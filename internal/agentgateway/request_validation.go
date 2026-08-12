@@ -93,6 +93,10 @@ func invalidActionRequest(action, field, reason string) error {
 func ValidateActionRequest(action string, params map[string]any) error {
 	action = strings.TrimSpace(action)
 	switch action {
+	case "agent.config.get":
+		return rejectUnknownActionFields(action, params)
+	case "agent.config.update":
+		return validateAgentConfigUpdateRequest(action, params)
 	case "agent.chat", "agent.chat.stream":
 		return validateChatRequest(action, params)
 	case "agent.chat.attachment.begin":
@@ -160,6 +164,71 @@ func ValidateActionRequest(action string, params map[string]any) error {
 	default:
 		return nil
 	}
+}
+
+func validateAgentConfigUpdateRequest(action string, params map[string]any) error {
+	if err := rejectUnknownActionFields(action, params,
+		"operation_id", "idempotency_key", "expected_revision", "native_agent_identity",
+		"online_agent_identity", "enabled", "mcp_blocked_room_ids"); err != nil {
+		return err
+	}
+	for _, field := range []string{"operation_id", "idempotency_key"} {
+		if value, present := params[field]; present && !canonicalActionUUID(value) {
+			return invalidActionRequest(action, field, "must be a canonical UUID")
+		}
+	}
+	if value, present := params["expected_revision"]; present && !actionIntegerInRange(value, 0, math.MaxInt64) {
+		return invalidActionRequest(action, "expected_revision", "must be a non-negative integer")
+	}
+	for _, field := range []string{"native_agent_identity", "online_agent_identity"} {
+		value, present := params[field]
+		if !present {
+			continue
+		}
+		identity, ok := value.(map[string]any)
+		if !ok {
+			return invalidActionRequest(action, field, "must be an object")
+		}
+		if err := rejectUnknownActionFields(action, identity, "display_name", "avatar_url"); err != nil {
+			return invalidActionRequest(action, field, "contains an unsupported field")
+		}
+		for _, key := range []string{"display_name", "avatar_url"} {
+			if raw, ok := identity[key]; ok {
+				text, ok := raw.(string)
+				if !ok || text != strings.TrimSpace(text) {
+					return invalidActionRequest(action, field+"."+key, "must be a trimmed string")
+				}
+			}
+		}
+	}
+	if value, present := params["enabled"]; present {
+		if _, ok := value.(bool); !ok {
+			return invalidActionRequest(action, "enabled", "must be a boolean")
+		}
+	}
+	if value, present := params["mcp_blocked_room_ids"]; present {
+		rooms, ok := value.([]any)
+		if !ok {
+			if typed, typedOK := value.([]string); typedOK {
+				rooms = make([]any, len(typed))
+				for index := range typed {
+					rooms[index] = typed[index]
+				}
+			} else {
+				return invalidActionRequest(action, "mcp_blocked_room_ids", "must be an array of strings")
+			}
+		}
+		if len(rooms) > 512 {
+			return invalidActionRequest(action, "mcp_blocked_room_ids", "contains too many room IDs")
+		}
+		for _, room := range rooms {
+			text, ok := room.(string)
+			if !ok || text != strings.TrimSpace(text) || len(text) > 256 {
+				return invalidActionRequest(action, "mcp_blocked_room_ids", "must contain bounded trimmed strings")
+			}
+		}
+	}
+	return nil
 }
 
 func validateMemoryFactUpdateRequest(action string, params map[string]any) error {

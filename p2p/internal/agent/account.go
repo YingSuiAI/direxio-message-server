@@ -74,7 +74,10 @@ func (m *Module) createMatrixSession(ctx context.Context, params map[string]any)
 	return session.Response(), nil
 }
 
-func (m *Module) getConfig(ctx context.Context, _ map[string]any) (any, *actionbase.Error) {
+func (m *Module) getConfig(ctx context.Context, params map[string]any) (any, *actionbase.Error) {
+	if err := agentgateway.ValidateActionRequest(actionConfigGet, params); err != nil {
+		return nil, externalAgentActionError(err)
+	}
 	account, err := m.accountPort()
 	if err != nil {
 		return nil, err
@@ -93,6 +96,9 @@ func (m *Module) getConfig(ctx context.Context, _ map[string]any) (any, *actionb
 }
 
 func (m *Module) updateConfig(ctx context.Context, params map[string]any) (any, *actionbase.Error) {
+	if err := agentgateway.ValidateActionRequest(actionConfigUpdate, params); err != nil {
+		return nil, externalAgentActionError(err)
+	}
 	account, err := m.accountPort()
 	if err != nil {
 		return nil, err
@@ -166,7 +172,7 @@ func hasMCPBlockedRoomUpdate(params map[string]any) bool {
 }
 
 func hasNativeConfigUpdate(params map[string]any) bool {
-	for _, key := range []string{"display_name", "avatar_url", "native_agent_identity", "context_window", "enabled", "model", "system_prompt", "mcp_blocked_room_ids"} {
+	for _, key := range []string{"native_agent_identity", "enabled", "mcp_blocked_room_ids"} {
 		if _, ok := params[key]; ok {
 			return true
 		}
@@ -176,21 +182,9 @@ func hasNativeConfigUpdate(params map[string]any) bool {
 
 func nativeConfigUpdateParams(params map[string]any) map[string]any {
 	out := make(map[string]any)
-	for _, key := range []string{"display_name", "avatar_url", "context_window", "enabled", "model", "system_prompt", "mcp_blocked_room_ids", "expected_revision"} {
+	for _, key := range []string{"native_agent_identity", "enabled", "mcp_blocked_room_ids", "expected_revision"} {
 		if value, ok := params[key]; ok {
 			out[key] = value
-		}
-	}
-	// Agent Core owns only the Native identity and retains the legacy flat
-	// config shape. The mode-specific ProductCore field is translated here and
-	// never forwarded as a Message Server-specific nested object.
-	if identity, ok := params[configKeyNativeAgentIdentity].(map[string]any); ok {
-		values := actionbase.Params(identity)
-		if displayName := values.String(configKeyDisplayName); displayName != "" {
-			out[configKeyDisplayName] = displayName
-		}
-		if avatarURL := values.String(configKeyAvatarURL); avatarURL != "" {
-			out[configKeyAvatarURL] = avatarURL
 		}
 	}
 	return out
@@ -234,8 +228,6 @@ func (m *Module) accountPort() (AccountPort, *actionbase.Error) {
 func configResponse(config dirextalkdomain.AgentConfig) map[string]any {
 	config = NormalizeConfig(config)
 	return map[string]any{
-		"display_name": config.DisplayName,
-		"avatar_url":   config.AvatarURL,
 		"native_agent_identity": map[string]any{
 			"display_name": NativeAgentIdentity(config).DisplayName,
 			"avatar_url":   NativeAgentIdentity(config).AvatarURL,
@@ -244,10 +236,7 @@ func configResponse(config dirextalkdomain.AgentConfig) map[string]any {
 			"display_name": OnlineAgentIdentity(config).DisplayName,
 			"avatar_url":   OnlineAgentIdentity(config).AvatarURL,
 		},
-		"context_window":       config.ContextWindow,
 		"enabled":              config.Enabled,
-		"model":                config.Model,
-		"system_prompt":        config.SystemPrompt,
 		"mcp_blocked_room_ids": append([]string(nil), config.MCPBlockedRoomIDs...),
 	}
 }
@@ -257,24 +246,13 @@ func configResponseWithNative(config dirextalkdomain.AgentConfig, remote map[str
 	if remote == nil {
 		return response
 	}
-	for _, key := range []string{"revision", "display_name", "avatar_url", "context_window", "enabled", "model", "system_prompt", "mcp_blocked_room_ids"} {
+	for _, key := range []string{"revision", "enabled", "mcp_blocked_room_ids"} {
 		if value, ok := remote[key]; ok {
 			response[key] = value
 		}
 	}
 	if identity, ok := remote["native_agent_identity"].(map[string]any); ok {
 		response["native_agent_identity"] = identity
-	} else {
-		identity := response["native_agent_identity"].(map[string]any)
-		if displayName := actionbase.String(remote[configKeyDisplayName]); displayName != "" {
-			identity[configKeyDisplayName] = displayName
-		}
-		if avatarURL := actionbase.String(remote[configKeyAvatarURL]); avatarURL != "" {
-			identity[configKeyAvatarURL] = avatarURL
-		}
 	}
-	// The top-level aliases are Native Agent fields. Online identity remains
-	// sourced from message-server's account record and is never overwritten by
-	// an Agent response.
 	return response
 }

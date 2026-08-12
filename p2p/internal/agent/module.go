@@ -55,11 +55,6 @@ func (m *Module) ReadyError() error {
 	return nil
 }
 
-// HasLocalTurnCoordinator and HasLocalVoiceCoordinator remain as diagnostic
-// compatibility seams. Both are permanently false after the hard split.
-func (m *Module) HasLocalTurnCoordinator() bool  { return false }
-func (m *Module) HasLocalVoiceCoordinator() bool { return false }
-
 func (m *Module) Stream(ctx context.Context, action string, params map[string]any, emit func(agentstream.Event) error) error {
 	if m == nil || m.runner == nil {
 		return fmt.Errorf("external native agent gateway is not configured")

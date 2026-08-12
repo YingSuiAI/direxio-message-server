@@ -3,11 +3,7 @@ package serviceapi
 func modelProfileSyncSchema() *ActionSchema {
 	return &ActionSchema{
 		Request: map[string]ActionFieldSchema{
-			"idempotency_key": {Type: "string", Required: true},
-			"default_client_profile_id": {
-				Type:     "string",
-				Presence: &ActionPresenceSchema{Omitted: "no_default_reference", Present: "exact_nonempty_client_profile_id", Empty: "rejected"},
-			},
+			"idempotency_key":                        {Type: "string", Required: true},
 			"default_conversation_client_profile_id": {Type: "string"},
 			"default_tool_client_profile_id":         {Type: "string"},
 			"default_embedding_client_profile_id":    {Type: "string"},
@@ -16,7 +12,6 @@ func modelProfileSyncSchema() *ActionSchema {
 		},
 		Response: map[string]ActionFieldSchema{
 			"profiles":                               {Type: "array", Items: &ActionFieldSchema{Type: "object", Properties: modelProfileResponseFields()}},
-			"default_client_profile_id":              {Type: "string"},
 			"default_conversation_client_profile_id": {Type: "string"},
 			"default_tool_client_profile_id":         {Type: "string", Required: true},
 			"default_embedding_client_profile_id":    {Type: "string"},
@@ -94,7 +89,6 @@ func modelProfileListSchema() *ActionSchema {
 		Response: map[string]ActionFieldSchema{
 			"profiles":                               {Type: "array", Items: &ActionFieldSchema{Type: "object", Properties: modelProfileResponseFields()}},
 			"next_page_token":                        {Type: "string"},
-			"default_client_profile_id":              {Type: "string"},
 			"default_conversation_client_profile_id": {Type: "string"},
 			"default_tool_client_profile_id":         {Type: "string", Required: true},
 			"default_embedding_client_profile_id":    {Type: "string"},

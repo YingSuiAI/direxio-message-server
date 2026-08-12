@@ -16,7 +16,7 @@ import (
 )
 
 // ErrUnsupportedAction is returned before any capability RPC is attempted
-// when a legacy ProductCore action has no explicit Core v1 mapping. Keeping a
+// when a ProductCore action has no explicit Agent capability mapping. Keeping a
 // sentinel lets the HTTP/WS facade expose a stable not-implemented response
 // instead of misclassifying a contract gap as a transient gateway failure.
 var ErrUnsupportedAction = errors.New("native agent action is unsupported")
@@ -31,8 +31,8 @@ type RunnerConfig struct {
 	GrantScopes       func(action string) []string
 }
 
-// Runner adapts the capability operation protocol to the legacy Native Agent
-// runner contract used by ProductCore and the realtime websocket facade.
+// Runner adapts the capability operation protocol to the Native Agent runner
+// contract used by ProductCore and the realtime websocket facade.
 // Native Agent execution happens in dirextalk-agent; message-server only
 // admits, watches and translates the operation stream.
 type Runner struct {
@@ -68,7 +68,7 @@ func (r *Runner) Invoke(ctx context.Context, action string, params map[string]an
 	}
 	if actionSupportsReplay(strings.TrimSpace(action)) {
 		// Replay is StartOperation transport metadata, not part of the durable
-		// Core business receipt. Overlay it only on legacy mutations whose
+		// Core business receipt. Overlay it only on mutations whose
 		// public schema explicitly defines the field.
 		output["replayed"] = replayed
 	}
@@ -737,8 +737,8 @@ func positiveSequence(sequence int64) int64 {
 
 type actionBinding struct{ capabilityID, operation string }
 
-// actionBindings is the explicit compatibility map between the frozen
-// message-server action names and the Agent Core v1 catalog. There is no
+// actionBindings is the explicit public mapping between message-server action
+// names and the Agent Core v1 catalog. There is no
 // heuristic action→operation fallback: an action absent here is rejected
 // before any capability request is sent.
 var actionBindings = map[string]actionBinding{
@@ -959,7 +959,7 @@ func transformCapabilityRequest(action, operationID string, params map[string]an
 			return nil, invalidActionRequest(action, "model_kind", "must be conversation, embedding, or speech")
 		}
 	}
-	applyLegacyInputAliases(action, input)
+	translateProductCoreInput(action, input)
 	if product, ok := productActionBindings[action]; ok && binding.operation == "invoke_product" {
 		raw, err := json.Marshal(input)
 		if err != nil {
