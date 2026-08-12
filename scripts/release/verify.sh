@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# Resolved from this installed script directory.
+# shellcheck disable=SC1091
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 release_init "$@"
@@ -25,7 +27,9 @@ identity="$(docker image inspect "$RELEASE_IMAGE" --format '{{index .Config.Labe
 [[ "$identity" == "$RELEASE_VERSION|$RELEASE_COMMIT|$RELEASE_BUILD_TIME" ]] || release_die 'local image metadata does not match the verified release'
 probe="$(docker run --rm --entrypoint /usr/bin/dirextalk-message-server "$RELEASE_IMAGE" --version)"
 [[ "$probe" == "$RELEASE_VERSION" ]] || release_die "image version probe returned $probe"
+image_id="$(docker image inspect "$RELEASE_IMAGE" --format '{{.Id}}')"
+[[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || release_die 'local image ID is invalid'
 
 docker compose -f docker-compose.p2p.yml config >/dev/null
-release_write_verified
+release_write_verified "$image_id"
 printf 'release verify passed for %s\n' "$RELEASE_VERSION"

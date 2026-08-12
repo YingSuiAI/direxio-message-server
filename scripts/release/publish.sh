@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# Resolved from this installed script directory.
+# shellcheck disable=SC1091
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 release_init "$@"
@@ -15,6 +17,30 @@ verify_image() {
   [[ "$identity" == "$RELEASE_VERSION|$RELEASE_COMMIT|$RELEASE_BUILD_TIME" ]] || release_die 'release image metadata does not match the verified release'
   probe="$(docker run --rm --entrypoint /usr/bin/dirextalk-message-server "$ref" --version)"
   [[ "$probe" == "$RELEASE_VERSION" ]] || release_die 'release image reports a different version'
+}
+
+verify_remote_platform_image() {
+  local immutable_ref="$1" expected_config_digest="$2" image_id
+  docker pull --platform linux/amd64 "$immutable_ref" >/dev/null || \
+    release_die "could not pull remote linux/amd64 image: $immutable_ref"
+  verify_image "$immutable_ref"
+  image_id="$(docker image inspect "$immutable_ref" --format '{{.Id}}')" || \
+    release_die 'could not inspect pulled remote image ID'
+  [[ "$image_id" == "$expected_config_digest" ]] || \
+    release_die 'pulled image ID does not match the remote linux/amd64 config digest'
+  [[ "$image_id" == "$RELEASE_VERIFIED_IMAGE_ID" ]] || \
+    release_die 'remote linux/amd64 config does not match the locally verified image'
+}
+
+remote_image_version() {
+  local immutable_ref="$1" version
+  docker pull --platform linux/amd64 "$immutable_ref" >/dev/null || \
+    release_die "could not pull existing remote image: $immutable_ref"
+  version="$(docker image inspect "$immutable_ref" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')" || \
+    release_die 'could not inspect existing remote image version'
+  [[ "$version" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || \
+    release_die 'existing latest image has no canonical version label'
+  printf '%s\n' "$version"
 }
 
 formal_release_exists() {
@@ -112,9 +138,39 @@ if formal_release_exists "$RELEASE_VERSION"; then
 fi
 
 verify_image "$RELEASE_IMAGE"
-docker push "$RELEASE_IMAGE"
-docker pull "$RELEASE_IMAGE" >/dev/null
-verify_image "$RELEASE_IMAGE"
+[[ "$(docker image inspect "$RELEASE_IMAGE" --format '{{.Id}}')" == "$RELEASE_VERIFIED_IMAGE_ID" ]] || \
+  release_die 'local release image changed after verification'
+release_probe_remote_index "$RELEASE_IMAGE"
+if [[ "$RELEASE_OCI_INDEX_EXISTS" == 1 ]]; then
+  version_digest="$RELEASE_OCI_INDEX_DIGEST"
+  version_config_digest="$RELEASE_OCI_PLATFORM_CONFIG_DIGEST"
+else
+  buildx_metadata="$RELEASE_OUTPUT_DIR/buildx-metadata.json"
+  rm -f "$buildx_metadata"
+  docker buildx build \
+    --platform linux/amd64 \
+    --provenance=mode=max \
+    --sbom=true \
+    --push \
+    --build-arg "VERSION=$RELEASE_VERSION" \
+    --build-arg "COMMIT=$RELEASE_COMMIT" \
+    --build-arg "BUILD_TIME=$RELEASE_BUILD_TIME" \
+    --label "org.opencontainers.image.version=$RELEASE_VERSION" \
+    --label "org.opencontainers.image.revision=$RELEASE_COMMIT" \
+    --label "org.opencontainers.image.created=$RELEASE_BUILD_TIME" \
+    --tag "$RELEASE_IMAGE" \
+    --metadata-file "$buildx_metadata" .
+  built_digest="$(release_oci_buildx_metadata_digest release_die "$buildx_metadata" version)" || \
+    release_die 'version buildx digest evidence is invalid'
+  release_probe_remote_index "$RELEASE_IMAGE"
+  [[ "$RELEASE_OCI_INDEX_EXISTS" == 1 ]] || release_die 'published version OCI index is unavailable'
+  version_digest="$RELEASE_OCI_INDEX_DIGEST"
+  version_config_digest="$RELEASE_OCI_PLATFORM_CONFIG_DIGEST"
+  [[ "$built_digest" == "$version_digest" ]] || \
+    release_die 'buildx and registry version OCI index digests differ'
+fi
+version_immutable_ref="dirextalk/message-server@$version_digest"
+verify_remote_platform_image "$version_immutable_ref" "$version_config_digest"
 
 if [[ "$REMOTE_TAG_EXISTS" == 0 ]]; then
   if [[ -z "$existing_tag" ]]; then
@@ -136,9 +192,36 @@ else
 fi
 assert_formal_release "$RELEASE_VERSION" "$notes_file"
 
-docker tag "$RELEASE_IMAGE" dirextalk/message-server:latest
-docker push dirextalk/message-server:latest
-docker pull dirextalk/message-server:latest >/dev/null
-verify_image dirextalk/message-server:latest
+latest_image=dirextalk/message-server:latest
+release_probe_remote_index "$latest_image"
+if [[ "$RELEASE_OCI_INDEX_EXISTS" == 1 ]]; then
+  latest_digest="$RELEASE_OCI_INDEX_DIGEST"
+  if [[ "$latest_digest" != "$version_digest" ]]; then
+    latest_version="$(remote_image_version "dirextalk/message-server@$latest_digest")"
+    comparison="$(release_oci_compare_versions release_die "$latest_version" "$RELEASE_VERSION" latest)"
+    [[ "$comparison" -lt 0 ]] || \
+      release_die 'latest points to the same or a newer version with a different digest'
+  fi
+else
+  latest_digest=
+fi
 
-printf 'release publish passed for %s\n' "$RELEASE_VERSION"
+if [[ "$latest_digest" != "$version_digest" ]]; then
+  pre_promotion_version_digest="$(release_remote_index_digest "$RELEASE_IMAGE")"
+  [[ "$pre_promotion_version_digest" == "$version_digest" ]] || \
+    release_die 'version OCI index changed before latest publication'
+  docker buildx imagetools create \
+    --tag "$latest_image" \
+    "$version_immutable_ref"
+fi
+release_probe_remote_index "$latest_image"
+[[ "$RELEASE_OCI_INDEX_EXISTS" == 1 && "$RELEASE_OCI_INDEX_DIGEST" == "$version_digest" ]] || \
+  release_die 'version and latest tags resolve to different OCI indexes'
+latest_config_digest="$RELEASE_OCI_PLATFORM_CONFIG_DIGEST"
+verify_remote_platform_image "dirextalk/message-server@$version_digest" "$latest_config_digest"
+final_version_digest="$(release_remote_index_digest "$RELEASE_IMAGE")"
+final_latest_digest="$(release_remote_index_digest "$latest_image")"
+[[ "$final_version_digest" == "$version_digest" && "$final_latest_digest" == "$version_digest" ]] || \
+  release_die 'version or latest OCI index changed during publication'
+
+printf 'release publish passed for %s (%s)\n' "$RELEASE_VERSION" "$version_digest"

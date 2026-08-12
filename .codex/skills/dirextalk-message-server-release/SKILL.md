@@ -56,6 +56,7 @@ Release and remote tag; then rerun the normal scripts without changing version.
 `latest` must move only after the version image and formal GitHub Release are
 published successfully.
 
-After publication, verify the Git tag, formal GitHub Release, embedded version,
-version image labels, and `latest` image labels. Record non-secret evidence and
-any retryable partial state.
+After publication, verify the Git tag, formal GitHub Release, remote OCI index
+platforms and digest, embedded version, version image labels, and `latest`
+image labels. The version and `latest` tags must resolve to the same index
+digest. Record non-secret evidence and any retryable partial state.

@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# Resolved from this installed script directory.
+# shellcheck disable=SC1091
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/oci-lib.sh"
 
 agent_release_die() {
   printf 'Agent release gate failed: %s\n' "$*" >&2
@@ -132,9 +135,30 @@ agent_release_smoke() {
 EOF
 }
 
+agent_release_verify_versions() {
+  local ref=$1 binary output
+  for binary in \
+    /usr/local/bin/dirextalk-agent \
+    /usr/local/bin/dirextalk-extension-runner \
+    /usr/local/bin/dirextalk-core-runner; do
+    output=$(docker run --rm --entrypoint "$binary" "$ref" --version) || \
+      agent_release_die "$binary version probe failed"
+    [ "$output" = "$AGENT_RELEASE_VERSION" ] || \
+      agent_release_die "$binary reports a different version"
+  done
+}
+
 agent_release_verify_image() {
   local ref=$1 identity
-  identity=$(docker image inspect "$ref" --format '{{index .Config.Labels "org.opencontainers.image.version"}}|{{index .Config.Labels "org.opencontainers.image.revision"}}') || agent_release_die 'Agent image inspection failed'
-  [ "$identity" = "$AGENT_RELEASE_VERSION|$AGENT_RELEASE_COMMIT" ] || agent_release_die 'Agent image labels do not match the release source'
+  identity=$(docker image inspect "$ref" --format '{{index .Config.Labels "org.opencontainers.image.version"}}|{{index .Config.Labels "org.opencontainers.image.revision"}}|{{index .Config.Labels "org.opencontainers.image.created"}}') || agent_release_die 'Agent image inspection failed'
+  [ "$identity" = "$AGENT_RELEASE_VERSION|$AGENT_RELEASE_COMMIT|$AGENT_RELEASE_BUILD_TIME" ] || agent_release_die 'Agent image labels do not match the release source'
+  agent_release_verify_versions "$ref"
   agent_release_smoke "$ref"
+}
+
+agent_release_remote_index_digest() {
+  [ "$#" -eq 1 ] || agent_release_die 'internal error: remote index verification requires one image reference'
+  release_oci_probe_index agent_release_die "$1"
+  [ "$RELEASE_OCI_INDEX_EXISTS" = 1 ] || agent_release_die "remote OCI index is unavailable: $1"
+  printf '%s\n' "$RELEASE_OCI_INDEX_DIGEST"
 }

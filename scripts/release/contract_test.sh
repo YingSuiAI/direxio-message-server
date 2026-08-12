@@ -12,7 +12,7 @@ fail() {
 }
 
 for script in "$prepare" "$verify" "$publish"; do
-  [[ -x "$script" ]] || fail "missing executable ${script#$repo_root/}"
+  [[ -x "$script" ]] || fail "missing executable ${script#"$repo_root"/}"
 done
 
 "$repo_root/scripts/release/agent-release.test.sh" >/dev/null
@@ -51,6 +51,8 @@ for name, job in (("verify", verify.group(1)), ("publish", publish.group(1))):
         raise SystemExit(f"{name} job lacks the fixed PostgreSQL service")
 
 publish_job = publish.group(1)
+if publish_job.count('uses: docker/setup-buildx-action@v3') != 1:
+    raise SystemExit("publish job does not install the required buildx builder")
 identity = '''          git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
 '''
@@ -60,9 +62,10 @@ if publish_job.index(identity) > publish_job.index('run: bash scripts/release/pu
     raise SystemExit("publish job configures tag identity after publication")
 PY
 
-if grep -En 'release-(manifest|index)|attestation|previous_version|upgrade_from|upgrade_edges|source_test_modes|image_digest|imagetools|release download' \
-  "$repo_root/scripts/release/lib.sh" "$verify" "$publish" "$repo_root/.github/workflows/release.yml"; then
-  fail 'active release automation still depends on predecessor, digest, GitHub assets, or attestations'
+if grep -En 'release-(manifest|index|attestation)|previous_version|upgrade_from|upgrade_edges|source_test_modes|release download' \
+  "$repo_root/scripts/release/lib.sh" "$repo_root/scripts/release/oci-lib.sh" \
+  "$verify" "$publish" "$repo_root/.github/workflows/release.yml"; then
+  fail 'active release automation still depends on predecessor metadata, GitHub assets, or standalone attestations'
 fi
 
 tmp="$(mktemp -d)"
@@ -72,8 +75,9 @@ make_fixture() {
   local name="$1"
   local version="${2:-v1.0.0}"
   local fixture="$tmp/$name"
-  mkdir -p "$fixture/bin" "$fixture/repo/release" "$fixture/repo/internal"
-  cp "$prepare" "$verify" "$publish" "$repo_root/scripts/release/lib.sh" "$fixture/repo/"
+  mkdir -p "$fixture/bin" "$fixture/docker-state" "$fixture/repo/release" "$fixture/repo/internal"
+  cp "$prepare" "$verify" "$publish" "$repo_root/scripts/release/lib.sh" \
+    "$repo_root/scripts/release/oci-lib.sh" "$fixture/repo/"
   printf '## %s\n\nStable release.\n' "$version" >"$fixture/repo/release/RELEASE_NOTES.md"
   python3 - "$fixture/repo/release/$version.json" "$version" <<'PY'
 import json, pathlib, sys
@@ -152,11 +156,139 @@ printf 'docker %s\n' "$*" >>"$RELEASE_TEST_LOG"
 if [[ "${FAKE_DOCKER_FAIL_PATTERN:-}" != '' && "$*" == *"$FAKE_DOCKER_FAIL_PATTERN"* ]]; then
   exit 1
 fi
-if [[ "$*" == *'image inspect'* ]]; then
-  printf '%s\n' "$RELEASE_VERSION|${FAKE_IMAGE_REVISION:-1111111111111111111111111111111111111111}|2026-07-10T00:00:00Z"
-elif [[ "$*" == *'--entrypoint /usr/bin/dirextalk-message-server'* && "$*" == *' --version' ]]; then
-  printf '%s\n' "$RELEASE_VERSION"
-fi
+
+version_digest='sha256:1111111111111111111111111111111111111111111111111111111111111111'
+descriptor_digest='sha256:2222222222222222222222222222222222222222222222222222222222222222'
+attestation_digest='sha256:3333333333333333333333333333333333333333333333333333333333333333'
+config_digest='sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+
+case "${1:-} ${2:-} ${3:-}" in
+  'buildx build '*)
+    : >"$RELEASE_TEST_DOCKER_STATE/version-built"
+    metadata_file=''
+    previous=''
+    for argument in "$@"; do
+      if [[ "$previous" == '--metadata-file' ]]; then metadata_file="$argument"; fi
+      previous="$argument"
+    done
+    [[ -z "$metadata_file" ]] || printf '{"containerimage.digest":"%s"}\n' \
+      "${FAKE_BUILDX_DIGEST:-$version_digest}" >"$metadata_file"
+    ;;
+  'buildx imagetools inspect')
+    ref="${4:-}"
+    if [[ "${5:-}" == '--raw' ]]; then
+      case "$ref" in
+        *@"$descriptor_digest")
+          printf '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":"%s","size":1},"layers":[]}\n' \
+            "${FAKE_PLATFORM_CONFIG_DIGEST:-$config_digest}"
+          ;;
+        *@"$attestation_digest")
+          python3 - <<'PY'
+import json, os
+predicates = ["https://spdx.dev/Document", "https://slsa.dev/provenance/v0.2"]
+if os.environ.get("FAKE_OCI_MISSING_SBOM", "0") == "1": predicates.remove("https://spdx.dev/Document")
+if os.environ.get("FAKE_OCI_MISSING_PROVENANCE", "0") == "1": predicates.remove("https://slsa.dev/provenance/v0.2")
+print(json.dumps({"schemaVersion": 2, "mediaType": "application/vnd.oci.image.manifest.v1+json", "config": {"mediaType": "application/vnd.oci.image.config.v1+json", "digest": "sha256:" + "9" * 64, "size": 1}, "layers": [{"mediaType": "application/vnd.in-toto+json", "digest": "sha256:" + str(index + 5) * 64, "size": 1, "annotations": {"in-toto.io/predicate-type": predicate}} for index, predicate in enumerate(predicates)]}, separators=(",", ":")))
+PY
+          ;;
+        *) exit 1 ;;
+      esac
+      exit
+    fi
+    if [[ "$ref" == 'dirextalk/message-server:latest' ]]; then
+      if [[ ! -f "$RELEASE_TEST_DOCKER_STATE/latest-created" && "${FAKE_LATEST_EXISTS:-0}" != 1 ]]; then
+        printf 'ERROR: docker.io/%s: not found\n' "$ref" >&2
+        exit 1
+      fi
+      digest="${FAKE_LATEST_DIGEST:-${FAKE_OCI_DIGEST:-$version_digest}}"
+    else
+      if [[ ! -f "$RELEASE_TEST_DOCKER_STATE/version-built" && "${FAKE_VERSION_EXISTS:-0}" != 1 ]]; then
+        if [[ "${FAKE_OCI_INFRA_FAILURE:-0}" == 1 ]]; then
+          printf 'ERROR: registry authentication failed\n' >&2
+        else
+          printf 'ERROR: docker.io/%s: not found\n' "$ref" >&2
+        fi
+        exit 1
+      fi
+      digest="${FAKE_OCI_DIGEST:-$version_digest}"
+    fi
+    FAKE_INSPECT_DIGEST="$digest" \
+      FAKE_DESCRIPTOR_DIGEST="$descriptor_digest" \
+      FAKE_ATTESTATION_DIGEST="$attestation_digest" \
+      python3 - <<'PY'
+import json, os
+
+manifests = []
+if os.environ.get("FAKE_OCI_INCLUDE_AMD64", "1") == "1":
+    manifests.append({
+        "mediaType": "application/vnd.oci.image.manifest.v1+json",
+        "digest": os.environ["FAKE_DESCRIPTOR_DIGEST"],
+        "platform": {"os": "linux", "architecture": "amd64"},
+    })
+if os.environ.get("FAKE_OCI_EXTRA_PLATFORM", "0") == "1":
+    manifests.append({
+        "mediaType": "application/vnd.oci.image.manifest.v1+json",
+        "digest": "sha256:" + "4" * 64,
+        "platform": {"os": "linux", "architecture": "arm64"},
+    })
+if os.environ.get("FAKE_OCI_INCLUDE_ATTESTATION", "1") == "1":
+    manifests.append({
+        "mediaType": "application/vnd.oci.image.manifest.v1+json",
+        "digest": os.environ["FAKE_ATTESTATION_DIGEST"],
+        "platform": {"os": "unknown", "architecture": "unknown"},
+        "annotations": {
+            "vnd.docker.reference.type": "attestation-manifest",
+            "vnd.docker.reference.digest": os.environ.get("FAKE_ATTESTATION_SUBJECT", os.environ["FAKE_DESCRIPTOR_DIGEST"]),
+        },
+    })
+print(json.dumps({"manifest": {
+    "mediaType": os.environ.get("FAKE_OCI_MEDIA_TYPE", "application/vnd.oci.image.index.v1+json"),
+    "digest": os.environ["FAKE_INSPECT_DIGEST"],
+    "manifests": manifests,
+}}, separators=(",", ":")))
+PY
+    ;;
+  'buildx imagetools create')
+    : >"$RELEASE_TEST_DOCKER_STATE/latest-created"
+    ;;
+  'pull --platform linux/amd64')
+    printf '%s\n' "${4:-}" >"$RELEASE_TEST_DOCKER_STATE/last-pulled"
+    ;;
+  'image inspect '*)
+    ref="${3:-}"
+    if [[ "$*" == *'{{.Id}}'* ]]; then
+      printf '%s\n' "${FAKE_PULL_IMAGE_ID:-$config_digest}"
+      exit
+    fi
+    if [[ "$*" == *'org.opencontainers.image.version'* && "$*" != *'org.opencontainers.image.revision'* ]]; then
+      printf '%s\n' "${FAKE_REMOTE_IMAGE_VERSION:-$RELEASE_VERSION}"
+      exit
+    fi
+    revision="${FAKE_IMAGE_REVISION:-1111111111111111111111111111111111111111}"
+    if [[ -f "$RELEASE_TEST_DOCKER_STATE/last-pulled" ]] &&
+       [[ "$(<"$RELEASE_TEST_DOCKER_STATE/last-pulled")" == "$ref" ]]; then
+      if [[ "$ref" == 'dirextalk/message-server:latest' ]]; then
+        revision="${FAKE_LATEST_PULL_IMAGE_REVISION:-${FAKE_PULL_IMAGE_REVISION:-$revision}}"
+      else
+        revision="${FAKE_PULL_IMAGE_REVISION:-$revision}"
+      fi
+    fi
+    printf '%s\n' "$RELEASE_VERSION|$revision|2026-07-10T00:00:00Z"
+    ;;
+  'run --rm --entrypoint')
+    ref="${@: -2:1}"
+    version="$RELEASE_VERSION"
+    if [[ -f "$RELEASE_TEST_DOCKER_STATE/last-pulled" ]] &&
+       [[ "$(<"$RELEASE_TEST_DOCKER_STATE/last-pulled")" == "$ref" ]]; then
+      if [[ "$ref" == 'dirextalk/message-server:latest' ]]; then
+        version="${FAKE_LATEST_PULL_IMAGE_VERSION:-${FAKE_PULL_IMAGE_VERSION:-$version}}"
+      else
+        version="${FAKE_PULL_IMAGE_VERSION:-$version}"
+      fi
+    fi
+    printf '%s\n' "$version"
+    ;;
+esac
 EOF
 
   cat >"$fixture/bin/gh" <<'EOF'
@@ -207,9 +339,11 @@ run_script() {
       RELEASE_REPO_ROOT="$fixture/repo" \
       RELEASE_OUTPUT_DIR="$fixture/out" \
       RELEASE_TEST_LOG="$fixture/commands.log" \
+      RELEASE_TEST_DOCKER_STATE="$fixture/docker-state" \
       RELEASE_TEST_GH_STATE="$fixture/gh-state" \
       RELEASE_TEST_GIT_STATE="$fixture/git-state" \
       RELEASE_CONTRACT_TEST=1 \
+      FAKE_PULL_IMAGE_ID=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
       "$@" "$fixture/repo/$script" "$version"
   )
 }
@@ -274,9 +408,9 @@ fixture="$(make_fixture arbitrary v9.4.2)"
 run_script "$fixture" prepare.sh v9.4.2 env
 run_script "$fixture" verify.sh v9.4.2 env
 run_script "$fixture" publish.sh v9.4.2 env
-grep -F 'docker push dirextalk/message-server:v9.4.2' "$fixture/commands.log" >/dev/null || fail 'arbitrary canonical version image was not published'
+grep -F 'docker buildx build --platform linux/amd64' "$fixture/commands.log" >/dev/null || fail 'arbitrary canonical version OCI index was not published'
 grep -F 'gh release create v9.4.2' "$fixture/commands.log" >/dev/null || fail 'arbitrary canonical version GitHub Release was not created'
-grep -F 'docker push dirextalk/message-server:latest' "$fixture/commands.log" >/dev/null || fail 'latest tag was not published'
+grep -F 'docker buildx imagetools create --tag dirextalk/message-server:latest' "$fixture/commands.log" >/dev/null || fail 'latest OCI index was not published'
 
 fixture="$(make_fixture gates)"
 run_script "$fixture" prepare.sh v1.0.0 env
@@ -320,8 +454,8 @@ run_script "$fixture" verify.sh v1.0.0 env
 if run_script "$fixture" publish.sh v1.0.0 env FAKE_GIT_IDENTITY_VALID=0; then
   fail 'publish accepted missing Git committer identity when an annotated tag was required'
 fi
-if grep -F 'docker push dirextalk/message-server:v1.0.0' "$fixture/commands.log" >/dev/null ||
-   grep -F 'docker push dirextalk/message-server:latest' "$fixture/commands.log" >/dev/null; then
+if grep -F 'docker buildx build --platform linux/amd64' "$fixture/commands.log" >/dev/null ||
+   grep -F 'docker buildx imagetools create --tag dirextalk/message-server:latest' "$fixture/commands.log" >/dev/null; then
   fail 'an image tag moved without the committer identity required to create the release tag'
 fi
 
@@ -331,10 +465,10 @@ run_script "$fixture" verify.sh v1.0.0 env
 if run_script "$fixture" publish.sh v1.0.0 env FAKE_GIT_TAG=v1.0.0 FAKE_GIT_TAG_HEAD=2222222222222222222222222222222222222222; then
   fail 'publish accepted a tag bound to another commit'
 fi
-if grep -F 'docker push dirextalk/message-server:v1.0.0' "$fixture/commands.log" >/dev/null; then
+if grep -F 'docker buildx build --platform linux/amd64' "$fixture/commands.log" >/dev/null; then
   fail 'version image moved after tag mismatch'
 fi
-if grep -F 'docker push dirextalk/message-server:latest' "$fixture/commands.log" >/dev/null; then
+if grep -F 'docker buildx imagetools create --tag dirextalk/message-server:latest' "$fixture/commands.log" >/dev/null; then
   fail 'latest moved after local tag mismatch'
 fi
 
@@ -344,10 +478,10 @@ run_script "$fixture" verify.sh v1.0.0 env
 if run_script "$fixture" publish.sh v1.0.0 env FAKE_GIT_REMOTE_TAG_HEAD=2222222222222222222222222222222222222222; then
   fail 'publish accepted a remote release tag bound to another commit'
 fi
-if grep -F 'docker push dirextalk/message-server:v1.0.0' "$fixture/commands.log" >/dev/null; then
+if grep -F 'docker buildx build --platform linux/amd64' "$fixture/commands.log" >/dev/null; then
   fail 'version image moved for a mismatched remote release tag'
 fi
-if grep -F 'docker push dirextalk/message-server:latest' "$fixture/commands.log" >/dev/null; then
+if grep -F 'docker buildx imagetools create --tag dirextalk/message-server:latest' "$fixture/commands.log" >/dev/null; then
   fail 'latest moved for a mismatched remote release tag'
 fi
 
@@ -357,10 +491,46 @@ run_script "$fixture" verify.sh v1.0.0 env
 if run_script "$fixture" publish.sh v1.0.0 env FAKE_GIT_REMOTE_TAG_HEAD=1111111111111111111111111111111111111111 FAKE_GIT_REMOTE_TAG_LIGHTWEIGHT=1; then
   fail 'publish accepted a lightweight remote release tag'
 fi
-if grep -F 'docker push dirextalk/message-server:v1.0.0' "$fixture/commands.log" >/dev/null ||
-   grep -F 'docker push dirextalk/message-server:latest' "$fixture/commands.log" >/dev/null; then
+if grep -F 'docker buildx build --platform linux/amd64' "$fixture/commands.log" >/dev/null ||
+   grep -F 'docker buildx imagetools create --tag dirextalk/message-server:latest' "$fixture/commands.log" >/dev/null; then
   fail 'an image tag moved for a lightweight remote release tag'
 fi
+
+for remote_index_case in media-type missing-amd64 extra-platform invalid-digest; do
+  fixture="$(make_fixture "remote-index-$remote_index_case")"
+  run_script "$fixture" prepare.sh v1.0.0 env
+  run_script "$fixture" verify.sh v1.0.0 env
+  case "$remote_index_case" in
+    media-type) index_env=(FAKE_OCI_MEDIA_TYPE='application/vnd.docker.distribution.manifest.v2+json') ;;
+    missing-amd64) index_env=(FAKE_OCI_INCLUDE_AMD64=0) ;;
+    extra-platform) index_env=(FAKE_OCI_EXTRA_PLATFORM=1) ;;
+    invalid-digest) index_env=(FAKE_OCI_DIGEST='sha256:not-a-digest') ;;
+  esac
+  if run_script "$fixture" publish.sh v1.0.0 env "${index_env[@]}"; then
+    fail "publish accepted invalid remote OCI index: $remote_index_case"
+  fi
+  if grep -F 'gh release create v1.0.0' "$fixture/commands.log" >/dev/null ||
+     grep -F 'docker buildx imagetools create --tag dirextalk/message-server:latest' "$fixture/commands.log" >/dev/null; then
+    fail "release metadata or latest moved for invalid remote OCI index: $remote_index_case"
+  fi
+done
+
+for pulled_image_case in labels version; do
+  fixture="$(make_fixture "pulled-image-$pulled_image_case")"
+  run_script "$fixture" prepare.sh v1.0.0 env
+  run_script "$fixture" verify.sh v1.0.0 env
+  case "$pulled_image_case" in
+    labels) pull_env=(FAKE_PULL_IMAGE_REVISION=2222222222222222222222222222222222222222) ;;
+    version) pull_env=(FAKE_PULL_IMAGE_VERSION=v9.9.9) ;;
+  esac
+  if run_script "$fixture" publish.sh v1.0.0 env "${pull_env[@]}"; then
+    fail "publish accepted mismatched pulled version image: $pulled_image_case"
+  fi
+  if grep -F 'gh release create v1.0.0' "$fixture/commands.log" >/dev/null ||
+     grep -F 'docker buildx imagetools create --tag dirextalk/message-server:latest' "$fixture/commands.log" >/dev/null; then
+    fail "release metadata or latest moved for mismatched pulled version image: $pulled_image_case"
+  fi
+done
 
 fixture="$(make_fixture github-failure)"
 run_script "$fixture" prepare.sh v1.0.0 env
@@ -368,7 +538,7 @@ run_script "$fixture" verify.sh v1.0.0 env
 if run_script "$fixture" publish.sh v1.0.0 env FAKE_GH_FAIL=1; then
   fail 'publish unexpectedly succeeded when GitHub Release failed'
 fi
-if grep -F 'docker push dirextalk/message-server:latest' "$fixture/commands.log" >/dev/null; then
+if grep -F 'docker buildx imagetools create --tag dirextalk/message-server:latest' "$fixture/commands.log" >/dev/null; then
   fail 'latest moved before GitHub Release succeeded'
 fi
 
@@ -394,10 +564,10 @@ for stale_release_case in title notes assets; do
       FAKE_GIT_REMOTE_TAG_HEAD=1111111111111111111111111111111111111111 "${stale_env[@]}"; then
     fail "publish accepted stale GitHub Release $stale_release_case"
   fi
-  if grep -F 'docker push dirextalk/message-server:latest' "$fixture/commands.log" >/dev/null; then
+  if grep -F 'docker buildx imagetools create --tag dirextalk/message-server:latest' "$fixture/commands.log" >/dev/null; then
     fail "latest moved for stale GitHub Release $stale_release_case"
   fi
-  if grep -F 'docker push dirextalk/message-server:v1.0.0' "$fixture/commands.log" >/dev/null; then
+  if grep -F 'docker buildx build --platform linux/amd64' "$fixture/commands.log" >/dev/null; then
     fail "version image moved for stale GitHub Release $stale_release_case"
   fi
 done
@@ -411,18 +581,33 @@ if grep -F 'gh release create v1.0.0' "$fixture/commands.log" >/dev/null; then
   fail 'idempotent publication recreated an existing valid GitHub Release'
 fi
 
+fixture="$(make_fixture latest-digest)"
+run_script "$fixture" prepare.sh v1.0.0 env
+run_script "$fixture" verify.sh v1.0.0 env
+if run_script "$fixture" publish.sh v1.0.0 env \
+    FAKE_LATEST_DIGEST=sha256:5555555555555555555555555555555555555555555555555555555555555555; then
+  fail 'publish accepted different version and latest OCI index digests'
+fi
+grep -F 'docker buildx imagetools create --tag dirextalk/message-server:latest' "$fixture/commands.log" >/dev/null || fail 'latest digest mismatch was not tested after latest creation'
+if grep -F 'docker pull --platform linux/amd64 dirextalk/message-server:latest' "$fixture/commands.log" >/dev/null; then
+  fail 'latest was pulled after its digest mismatched the version index'
+fi
+
 fixture="$(make_fixture order)"
 run_script "$fixture" prepare.sh v1.0.0 env
 run_script "$fixture" verify.sh v1.0.0 env
 run_script "$fixture" publish.sh v1.0.0 env
-fixed_push_line="$(grep -nF 'docker push dirextalk/message-server:v1.0.0' "$fixture/commands.log" | tail -1 | cut -d: -f1)"
+fixed_push_line="$(grep -nF 'docker buildx build --platform linux/amd64' "$fixture/commands.log" | tail -1 | cut -d: -f1)"
+version_inspect_line="$(grep -nF 'docker buildx imagetools inspect dirextalk/message-server:v1.0.0' "$fixture/commands.log" | head -1 | cut -d: -f1)"
 release_line="$(grep -nF 'gh release create v1.0.0' "$fixture/commands.log" | tail -1 | cut -d: -f1)"
-latest_push_line="$(grep -nF 'docker push dirextalk/message-server:latest' "$fixture/commands.log" | tail -1 | cut -d: -f1)"
-[[ -n "$fixed_push_line" && -n "$release_line" && -n "$latest_push_line" ]] || fail 'publish omitted version image, GitHub Release, or latest update'
-(( fixed_push_line < release_line && release_line < latest_push_line )) || fail 'publish order is not version image -> GitHub Release -> latest'
+latest_push_line="$(grep -nF 'docker buildx imagetools create --tag dirextalk/message-server:latest' "$fixture/commands.log" | tail -1 | cut -d: -f1)"
+latest_inspect_line="$(grep -nF 'docker buildx imagetools inspect dirextalk/message-server:latest' "$fixture/commands.log" | head -1 | cut -d: -f1)"
+latest_pull_line="$(grep -nF 'docker pull --platform linux/amd64 dirextalk/message-server@sha256:' "$fixture/commands.log" | tail -1 | cut -d: -f1)"
+[[ -n "$fixed_push_line" && -n "$version_inspect_line" && -n "$release_line" && -n "$latest_push_line" && -n "$latest_inspect_line" && -n "$latest_pull_line" ]] || fail 'publish omitted version index, remote proof, GitHub Release, or latest proof'
+(( version_inspect_line < fixed_push_line && fixed_push_line < release_line && release_line < latest_inspect_line && latest_inspect_line < latest_push_line && latest_push_line < latest_pull_line )) || fail 'publish order is not version lookup/build/proof -> GitHub Release -> latest lookup/promotion/proof'
 
-if grep -E 'gh release (create|upload).*\.json|gh release download|docker buildx imagetools|sha256:' "$fixture/commands.log"; then
-  fail 'simplified publication still transfers release assets or validates digests'
+if grep -E 'gh release (create|upload).*\.json|gh release download' "$fixture/commands.log"; then
+  fail 'publication transferred forbidden GitHub Release assets'
 fi
 
 printf 'release contract tests passed\n'
