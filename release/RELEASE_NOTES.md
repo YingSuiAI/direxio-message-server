@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## v1.1.30
+## v1.1.31
 
 1. Publish the stable Message Server image as a provenance- and SBOM-bearing OCI index containing exactly `linux/amd64`.
 2. Verify the remote version index digest, platform descriptors, image labels, source revision, and embedded server version before creating the formal GitHub Release.
