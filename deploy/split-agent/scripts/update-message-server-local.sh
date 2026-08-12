@@ -91,10 +91,10 @@ awk -F= -v version="$target_version" -v revision="$target_revision" '
 chmod 400 "$new_env"
 new_env_identity=$(stat -c '%d:%i:%u' "$new_env"); new_env_sha=$(sha256sum "$new_env" | awk '{print $1}')
 new_receipt=$(mktemp "$out/.cleanup-receipt.XXXXXX")
-awk -F= -v index="$message_index" -v id="$new_id" -v identity="$new_env_identity" -v digest="$new_env_sha" '
+awk -F= -v service_index="$message_index" -v id="$new_id" -v identity="$new_env_identity" -v digest="$new_env_sha" '
   $1=="control.env_identity" {$0=$1 "=" identity}
   $1=="control.env_sha256" {$0=$1 "=" digest}
-  $1==("container." index ".id") {$0=$1 "=" id}
+  $1==("container." service_index ".id") {$0=$1 "=" id}
   {print}
 ' "$receipt" >"$new_receipt"
 chmod 400 "$new_receipt"
