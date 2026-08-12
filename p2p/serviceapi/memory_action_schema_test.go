@@ -3,7 +3,7 @@ package serviceapi
 import "testing"
 
 func TestMemoryActionsPublishOwnerHTTPAndWSSchemas(t *testing.T) {
-	for _, action := range []string{"agent.memory.config.get", "agent.memory.config.update", "agent.memory.status"} {
+	for _, action := range []string{"agent.memory.config.get", "agent.memory.config.update", "agent.memory.status", "agent.memory.facts.update", "agent.memory.facts.delete"} {
 		spec, ok := ActionSpecFor(action)
 		if !ok || spec.Auth != ActionAuthOwner || spec.Transport != ActionTransportHTTPAndWS || spec.Schema == nil {
 			t.Fatalf("%s schema = %#v", action, spec)
@@ -19,6 +19,18 @@ func TestMemoryActionsPublishOwnerHTTPAndWSSchemas(t *testing.T) {
 	for _, field := range []string{"enabled", "embedding_configured", "revision", "active_fact_count", "timeline_event_count", "pending_observation_count", "failed_observation_count", "facts", "timeline"} {
 		if !status.Schema.Response[field].Required {
 			t.Errorf("memory status response.%s must be required", field)
+		}
+	}
+	factUpdate, _ := ActionSpecFor("agent.memory.facts.update")
+	for _, field := range []string{"fact_id", "idempotency_key", "value"} {
+		if !factUpdate.Schema.Request[field].Required {
+			t.Errorf("memory fact update request.%s must be required", field)
+		}
+	}
+	factDelete, _ := ActionSpecFor("agent.memory.facts.delete")
+	for _, field := range []string{"fact_id", "idempotency_key"} {
+		if !factDelete.Schema.Request[field].Required {
+			t.Errorf("memory fact delete request.%s must be required", field)
 		}
 	}
 }

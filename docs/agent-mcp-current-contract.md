@@ -188,8 +188,7 @@ capability live.
 - Supported model-provider identifiers are `openai`, `anthropic`, `deepseek`, `gemini`, `xai`, `openai_compatible`, and `openrouter`. `litellm`, `vertex`, and unknown identifiers are rejected; clients use `openai_compatible` for custom compatible endpoints.
 - `agent.models.list` is the provider/runtime catalog backed by Agent Core
   `agent.info.v1/list_models`; it returns `models` and `providers` and remains
-  separate from `agent.model_profiles.list` and
-  `agent.core.model_profiles.list`, which return persisted `profiles` from
+  separate from `agent.model_profiles.list`, which returns persisted `profiles` from
   `agent.models.v1/list_models`. An omitted `model_kind` is canonicalized to
   `conversation` at the gateway boundary. The catalog preserves upstream
   `input_modalities` only when the
@@ -218,20 +217,19 @@ capability live.
   `max_source_bytes` counters. Agent `RESOURCE_EXHAUSTED` failures carrying
   `details.code=knowledge_quota_exceeded` map to ProductCore HTTP 413 with both
   `code` and `error_code` set to `knowledge_quota_exceeded`.
-- `agent.knowledge.memory.create` is the singular Eino remember/recall write
-  tool. `agent.knowledge.memories.list`, `.update`, and `.delete` expose the
-  editable durable-memory records; they are distinct from conversation
-  summaries and uploaded source chunks. Managed mutations are owner-scoped,
-  revision-checked, and idempotent.
-- Automatic user-fact memory is a separate owner-client surface mapped to
+- Automatic user-fact memory is the single long-term-memory truth mapped to
   `agent.memory.v1`: `agent.memory.config.get`,
-  `agent.memory.config.update`, and `agent.memory.status`. Fresh state is
+  `agent.memory.config.update`, `agent.memory.status`,
+  `agent.memory.facts.update`, and `agent.memory.facts.delete`. Fresh state is
   disabled. Enabling requires Agent to prove a configured active embedding
   profile; the gateway preserves the typed precondition failure. Status
   exposes the non-secret embedding profile/model identity, revision, bounded
   current facts, separate effective/observed timeline clocks, and
-  pending/failed observation counters. Message Server validates and projects
-  this closed result but never extracts, stores, edits, or recalls facts.
+  pending/failed observation counters. Fact edits replace the exact active fact
+  while preserving its semantic key and append timeline history; deletion
+  retracts the exact active fact. Both mutations are owner-scoped and
+  idempotent. Message Server validates and projects this closed contract but
+  never extracts, stores, or recalls facts itself.
 - Successful `agent.chat` responses and Native Agent stream `done` payloads may include additive `related_task_ids`, `related_plan_ids`, and strict `references[]`. Message Server promotes only fields authored by Agent at the top level, on the assistant message, or in the nested stream response; it never synthesizes a reference from a related id. Room references derived from successful built-in Dirextalk tool results use `kind=room`, `room_id`, optional `room_type=direct|group|channel`, `title`, and optional `preview`; channel-post references use `kind=channel_post`, `room_id`, `channel_id`, `post_id`, `title`, and optional `preview`. Execution references use `kind=execution_plan|execution_run|execution_confirmation` and require the complete account-generation, task/plan/run/confirmation UUID, revision, and digest linkage authored by Agent. They are informational projections, not confirmation authority. References preserve producer order, reject duplicates or unknown fields/kinds, never include message `event_id`, and are not inferred from model-authored text or third-party/runtime tool output.
 - `mcp.channel_posts.list` and the Agent-side `dirextalk_channel_posts_list` result envelope include both top-level `channel_id` and `room_id`, allowing a post reference to identify its product channel and Matrix room without parsing post content.
 

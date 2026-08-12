@@ -42,17 +42,9 @@ var expectedCatalogSchemaDigests = map[string]catalogSchemaDigest{
 		inputHex:  "44da7f228706998fd7e631c8d7e3aaed945d6fe794dd7cfd295c6c02e9f27368",
 		resultHex: "b405eb007985d32e32e87c8eadb3599b13123dd790939e00a80b41da03e1f0d9",
 	},
-	"agent.config.propose_patch": {
-		inputHex:  "dde1e726d312471001f873c69302d2fe452258d808bf5abb0f6d7b9c8de92907",
-		resultHex: "b547df800957f22d72b72c261ae70bb0a038542f6345940b5f2ec9122fcb000d",
-	},
 	"agent.backends.get": {
 		inputHex:  "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
 		resultHex: "4a0f95cd99ddf917e51efbf74e83f2dd78775f7602437f9afe31df0a25e82d19",
-	},
-	"agent.core.status.get": {
-		inputHex:  "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
-		resultHex: "677f2cc7224b592e8bebc7e63eeecef4a63bda3b74fbe673999fc5bf559b675e",
 	},
 	"agent.chat": {
 		inputHex:  "5a7ef7ea09ccf4dcdb6a8f120c74b18d7ef9b2e7912d203947c2238e2476afe1",
@@ -80,7 +72,7 @@ var expectedCatalogSchemaDigests = map[string]catalogSchemaDigest{
 		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
 	},
 	"agent.chat.conversations.list": {
-		inputHex:  "4be38b2951e4fd2b2c47a6cda142ec2dd648478a29ed560c263431c3d2ca5a1a",
+		inputHex:  "90c5ae536626119eea09e7ef6ffe7be8b9c59e0a01e2d78356cc6d7d6047ac3a",
 		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
 	},
 	"agent.chat.conversations.get": {
@@ -159,6 +151,14 @@ var expectedCatalogSchemaDigests = map[string]catalogSchemaDigest{
 		inputHex:  "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
 		resultHex: "3be9cb9c6bd5dee7e91933f5cea529fb9d1095d59aab0c14428344f38f255e2f",
 	},
+	"agent.memory.facts.update": {
+		inputHex:  "2cf805df2e12bb93f921e63a777bd9c81c73c39e942dd63066efeea7a75563a0",
+		resultHex: "c293aeed52e6b97c42a358d8d85a76143f16e53cb55dfb5d9a7ffd7d7e28cdeb",
+	},
+	"agent.memory.facts.delete": {
+		inputHex:  "24fb0d0d604fd507a4a93926c2f3cb1b4bfbe9df8ef2c0a9af3acf69312aae37",
+		resultHex: "f606a405ee84f07b93c6739e831ba128d9ec10cda0b7d9f8c60cfd077ac4f58c",
+	},
 	"agent.text_tools.config.get": {
 		inputHex:  "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
 		resultHex: "ce1c828fed02c65c9ba92123d5e88f8087acec7ca3007c6fb57e6a1aa34eef56",
@@ -191,28 +191,12 @@ var expectedCatalogSchemaDigests = map[string]catalogSchemaDigest{
 		inputHex:  "695285a75e6b3c2d0706d01b50e7b3d57b072599efe362a48cb192ec44735a8d",
 		resultHex: "b17197b1c57c81abf31fbb19a815d47f2af52d25236d999fb13d5553a2c34599",
 	},
-	"agent.core.model_profiles.sync": {
-		inputHex:  "25374faf14f544c968d39368e2ba28394f7e2e04c51188a1cba37f1a0eec8b84",
-		resultHex: "627867fcd8ef94e4425c8756c0b9ea76bc999626736d5656adf2ca6c68e3bb59",
-	},
-	"agent.core.model_profiles.list": {
-		inputHex:  "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
-		resultHex: "327e27f75fcac55ef777b6bf895df90cff1f3c7e3edd3f386fceeeceeb568e85",
-	},
-	"agent.core.model_profiles.get": {
-		inputHex:  "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
-		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-	},
-	"agent.core.model_profiles.delete": {
-		inputHex:  "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
-		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-	},
 	"agent.model_profiles.sync": {
 		inputHex:  "25374faf14f544c968d39368e2ba28394f7e2e04c51188a1cba37f1a0eec8b84",
 		resultHex: "627867fcd8ef94e4425c8756c0b9ea76bc999626736d5656adf2ca6c68e3bb59",
 	},
 	"agent.model_profiles.list": {
-		inputHex:  "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
+		inputHex:  "90c5ae536626119eea09e7ef6ffe7be8b9c59e0a01e2d78356cc6d7d6047ac3a",
 		resultHex: "327e27f75fcac55ef777b6bf895df90cff1f3c7e3edd3f386fceeeceeb568e85",
 	},
 	"agent.model_profiles.get": {
@@ -232,11 +216,11 @@ var expectedCatalogSchemaDigests = map[string]catalogSchemaDigest{
 		resultHex: "87c332e9185a0436d6488041bbfc11cd66c9f40e345af02d9f97a76676cd65ae",
 	},
 	"agent.knowledge.config.update": {
-		inputHex:  "c9d87f07b7dc15e181a272bfacceecfa82e331e516eff88358dd32c64661d97b",
+		inputHex:  "4f7021e460ac17f946d1190e57dc14df63002111bf658a5cfa54527bb1366a95",
 		resultHex: "87c332e9185a0436d6488041bbfc11cd66c9f40e345af02d9f97a76676cd65ae",
 	},
 	"agent.knowledge.sources.list": {
-		inputHex:  "b0418cb4b54dc5e1f787929dd8ba9c6fdd7d80d665779879e7da2a5a905aa08d",
+		inputHex:  "ae26e10e695a62e49f89e573649f93bdb6598bdc559325046487540ea40724e8",
 		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
 	},
 	"agent.knowledge.sources.delete": {
@@ -252,24 +236,8 @@ var expectedCatalogSchemaDigests = map[string]catalogSchemaDigest{
 		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
 	},
 	"agent.knowledge.upload.finish": {
-		inputHex:  "5c3ca14110e4195b443f226af01c2610b5595d612e198b1996b3341889c4e353",
+		inputHex:  "6754c7e261b10112f5225022968a889710b90f6508c6eae49ddb55bf8c1ede47",
 		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-	},
-	"agent.knowledge.memory.create": {
-		inputHex:  "c04cf443c490416332723c300b6044f976bdd023f797a135a22b4ee47b6af216",
-		resultHex: "57ed8c9f5f52f0eaf3e3692c17c567f1a7ddb3f1c69faa8163d707735da3299e",
-	},
-	"agent.knowledge.memories.list": {
-		inputHex:  "0d8115d6c255081822e7cd5c17405596b480bc42ceb6623e7a5c793865d87be2",
-		resultHex: "9651cc57500bee6ee243fe6eb27950eb194a9fe5996af90c7a3090d825c98085",
-	},
-	"agent.knowledge.memories.update": {
-		inputHex:  "09d90a8d9865b2e768ab6ff43a35a009324b4abedb9fe305a851cb838ffcf117",
-		resultHex: "5ff713d2c2628dcb1742f23725d3ee50347b578f58675b41c07f269e52793913",
-	},
-	"agent.knowledge.memories.delete": {
-		inputHex:  "94749fd60006d5ac350fecd3f2f34fc85bc5bf894afa9acc209b8848484bee87",
-		resultHex: "5ff713d2c2628dcb1742f23725d3ee50347b578f58675b41c07f269e52793913",
 	},
 	"agent.knowledge.search": {
 		inputHex:  "50578c159dc6f9691d3c9e36a04f8216f1ff4d53414e35ac67cdbe8a43ebf62a",
@@ -278,54 +246,6 @@ var expectedCatalogSchemaDigests = map[string]catalogSchemaDigest{
 	"agent.knowledge.status": {
 		inputHex:  "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
 		resultHex: "01c2cda93a058ad6e133692089afb4b81b9e5800d18003f6cd2f3e62f8efa4a3",
-	},
-	"agent.skills.list": {
-		inputHex:  "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
-		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-	},
-	"agent.skills.install": {
-		inputHex:  "9acc5baf60e119e1870f8521f9a5dc7686bd7e7cc3f86a88db232efc095b3296",
-		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-	},
-	"agent.skills.enable": {
-		inputHex:  "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
-		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-	},
-	"agent.skills.disable": {
-		inputHex:  "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
-		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-	},
-	"agent.skills.uninstall": {
-		inputHex:  "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
-		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-	},
-	"agent.skills.registry.search": {
-		inputHex:  "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
-		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-	},
-	"agent.mcp.servers.list": {
-		inputHex:  "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
-		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-	},
-	"agent.mcp.servers.install": {
-		inputHex:  "d298a2044537c6fe426468db657e114784169bc3404008073ac37e6b29a62d83",
-		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-	},
-	"agent.mcp.servers.enable": {
-		inputHex:  "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
-		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-	},
-	"agent.mcp.servers.disable": {
-		inputHex:  "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
-		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-	},
-	"agent.mcp.servers.uninstall": {
-		inputHex:  "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
-		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-	},
-	"agent.mcp.registry.search": {
-		inputHex:  "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
-		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
 	},
 	"agent.core.mcp.discover": {
 		inputHex:  "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
@@ -400,7 +320,7 @@ var expectedCatalogSchemaDigests = map[string]catalogSchemaDigest{
 		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
 	},
 	"agent.core.tasks.list": {
-		inputHex:  "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
+		inputHex:  "f662a440cf4bc247b0e48491ab700e9a1979deb08476443c3c0da50ec9ef4d27",
 		resultHex: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
 	},
 	"agent.core.tasks.cancel": {

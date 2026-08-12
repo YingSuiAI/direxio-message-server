@@ -103,7 +103,7 @@ func ValidateActionRequest(action string, params map[string]any) error {
 		return validateChatAttachmentCommitRequest(action, params)
 	case "agent.models.list":
 		return validateModelCatalogRequest(action, params)
-	case "agent.core.model_profiles.sync", "agent.model_profiles.sync":
+	case "agent.model_profiles.sync":
 		return validateModelProfileSyncRequest(action, params)
 	case "agent.chat.turn.stop":
 		return validateTurnStopRequest(action, params)
@@ -139,6 +139,10 @@ func ValidateActionRequest(action string, params map[string]any) error {
 		return rejectUnknownActionFields(action, params)
 	case "agent.memory.config.update":
 		return validateMemoryConfigUpdateRequest(action, params)
+	case "agent.memory.facts.update":
+		return validateMemoryFactUpdateRequest(action, params)
+	case "agent.memory.facts.delete":
+		return validateMemoryFactDeleteRequest(action, params)
 	case "agent.text_tools.config.update":
 		return validateTextToolsConfigUpdateRequest(action, params)
 	case "agent.text_tools.execute":
@@ -156,6 +160,28 @@ func ValidateActionRequest(action string, params map[string]any) error {
 	default:
 		return nil
 	}
+}
+
+func validateMemoryFactUpdateRequest(action string, params map[string]any) error {
+	if err := validateMemoryFactDeleteRequest(action, params, "value"); err != nil {
+		return err
+	}
+	value, ok := params["value"].(string)
+	if !ok || value != strings.TrimSpace(value) || value == "" || utf8.RuneCountInString(value) > 2048 {
+		return invalidActionRequest(action, "value", "must be a non-empty string no longer than 2048 bytes")
+	}
+	return nil
+}
+
+func validateMemoryFactDeleteRequest(action string, params map[string]any, extra ...string) error {
+	fields := append([]string{"fact_id", "idempotency_key"}, extra...)
+	if err := rejectUnknownActionFields(action, params, fields...); err != nil {
+		return err
+	}
+	if !canonicalActionUUID(params["fact_id"]) || !canonicalActionUUID(params["idempotency_key"]) {
+		return invalidActionRequest(action, "fact_id", "must include canonical fact_id and idempotency_key UUIDs")
+	}
+	return nil
 }
 
 func validateMemoryConfigUpdateRequest(action string, params map[string]any) error {

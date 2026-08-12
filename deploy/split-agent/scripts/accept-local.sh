@@ -460,7 +460,7 @@ db_query message-postgres dirextalk_message_server dirextalk_message_server \
 params=$tmp/empty.params.json
 new_file "$params"
 printf '%s\n' '{}' >"$params"
-call agent.core.status.get "$params" core-status
+call agent.backends.get "$params" backends
 jq -e 'type=="object"' "$last_response" >/dev/null || die "Agent status response is not an object"
 
 call agent.web_search.config.get "$params" web-search-config-get
@@ -522,7 +522,7 @@ jq -n --rawfile ck "$chat_key" --rawfile ek "$embed_key" \
     ]
   }' >"$model_params"
 chmod 400 "$model_params"
-call agent.core.model_profiles.sync "$model_params" model-sync
+call agent.model_profiles.sync "$model_params" model-sync
 jq -e --arg chat "$chat_profile" --arg embed "$embedding_profile" '
   (.profiles | type == "array") and
   (any(.profiles[]; .client_profile_id == $chat and .api_key_configured == true)) and
@@ -753,70 +753,6 @@ while :; do
   i=$((i + 2))
 done
 
-old_memory_phrase=ACCEPT_MEMORY_OLD_$(date +%s)_$(od -An -N3 -tx1 /dev/urandom | tr -d '[:space:]')
-new_memory_phrase=ACCEPT_MEMORY_NEW_$(date +%s)_$(od -An -N3 -tx1 /dev/urandom | tr -d '[:space:]')
-memory_create=$tmp/memory-create.params.json
-memory_create_key=$(uuid4)
-jq -n --arg content "Long-term memory initial phrase $old_memory_phrase" --arg title "Split acceptance memory" --arg idem "$memory_create_key" \
-  '{content:$content,title:$title,tags:["split-acceptance","initial"],idempotency_key:$idem}' >"$memory_create"
-chmod 400 "$memory_create"
-call agent.knowledge.memory.create "$memory_create" memory-create
-memory_id=$(jq -r '.memory_id // empty' "$last_response")
-[ -n "$memory_id" ] || die "memory.create returned no memory_id"
-memories_params=$tmp/memories.params.json
-jq -n '{page_size:100}' >"$memories_params"
-chmod 400 "$memories_params"
-i=0
-memory_revision=
-while :; do
-  call agent.knowledge.memories.list "$memories_params" memory-list-before-update
-  memory_revision=$(jq -r --arg id "$memory_id" '.items[]? | select(.memory_id==$id) | (.revision // 1)' "$last_response" | head -n 1)
-  [ -n "$memory_revision" ] && break
-  [ "$i" -lt "$timeout_seconds" ] || die "created memory was not visible"
-  sleep 2
-  i=$((i + 2))
-done
-memory_update=$tmp/memory-update.params.json
-memory_update_key=$(uuid4)
-jq -n --arg id "$memory_id" --arg content "Long-term memory updated phrase $new_memory_phrase" --arg title "Split acceptance memory updated" \
-  --arg idem "$memory_update_key" --argjson revision "$memory_revision" \
-  '{memory_id:$id,content:$content,title:$title,tags:["split-acceptance","updated"],expected_revision:$revision,idempotency_key:$idem}' >"$memory_update"
-chmod 400 "$memory_update"
-call agent.knowledge.memories.update "$memory_update" memory-update
-new_revision=$(jq -r '.revision // empty' "$last_response")
-[ -n "$new_revision" ] && [ "$new_revision" -gt "$memory_revision" ] 2>/dev/null || die "memory.update did not advance revision"
-
-# Update schedules a new immutable vector generation.  First wait until this
-# exact source revision is visible.  The public source-list compatibility
-# projection intentionally does not expose internal embedding fields, so the
-# following search loop treats 409 as an expected indexing state and waits for
-# the promoted generation itself.
-memory_sources=$tmp/memory-sources.params.json
-jq -n '{kind:"memory",page_size:100}' >"$memory_sources"
-chmod 400 "$memory_sources"
-i=0
-while :; do
-  call agent.knowledge.sources.list "$memory_sources" memory-source-after-update
-  if jq -e --arg id "$memory_id" --argjson revision "$new_revision" \
-    'any(.sources[]?; .source_id == $id and .revision == $revision and (.status == "ready" or .status == "indexing"))' \
-    "$last_response" >/dev/null 2>&1; then break; fi
-  [ "$i" -lt "$timeout_seconds" ] || die "updated memory embedding did not become ready"
-  sleep 2
-  i=$((i + 2))
-done
-
-memory_search=$tmp/memory-search.params.json
-jq -n --arg query "$new_memory_phrase" '{query:$query,page_size:20}' >"$memory_search"
-chmod 400 "$memory_search"
-i=0
-while :; do
-  call agent.knowledge.search "$memory_search" memory-search true
-  if [ "$last_status" = 200 ] && jq -e --arg id "$memory_id" --arg phrase "$new_memory_phrase" 'any(.items[]?; (.source_id == $id) and ((.snippet // .content // "") | contains($phrase)))' "$last_response" >/dev/null 2>&1; then break; fi
-  [ "$i" -lt "$timeout_seconds" ] || die "updated long-term memory was not searchable"
-  sleep 2
-  i=$((i + 2))
-done
-
 if run_compose restart agent >"$tmp/restart.out" 2>"$tmp/restart.err"; then
   :
 else
@@ -828,10 +764,7 @@ while ! agent_health; do
   sleep 2
   i=$((i + 2))
 done
-call agent.core.status.get "$params" core-status-after-restart
-call agent.knowledge.search "$memory_search" memory-search-after-restart
-jq -e --arg id "$memory_id" --arg phrase "$new_memory_phrase" 'any(.items[]?; (.source_id == $id) and ((.snippet // .content // "") | contains($phrase)))' "$last_response" >/dev/null || die "updated memory was not searchable after Agent restart"
-
+call agent.backends.get "$params" backends-after-restart
 # Continue the pre-restart conversation with a fresh turn. The second prompt
 # deliberately omits history_marker, so the only production path that can
 # return it is Agent-owned durable conversation context loaded after restart.
@@ -844,25 +777,6 @@ jq -e --arg marker "$history_marker" \
   '.text | type == "string" and contains("ACCEPT_CONTEXT_OK") and contains($marker)' \
   "$last_response" >/dev/null || die "Native Agent did not preserve multi-turn conversation context after restart"
 
-# A new conversation has no transcript to leak the marker. Its first turn asks
-# for the stored fact without including the value, so observing the unique
-# marker proves the production long-term-memory recall path reached the model.
-memory_recall_conversation_id=$(uuid4)
-memory_recall_create=$tmp/memory-recall-conversation-create.params.json
-memory_recall_create_key=$(uuid4)
-jq -n --arg id "$memory_recall_conversation_id" --arg idem "$memory_recall_create_key" \
-  '{conversation_id:$id,title:"Split acceptance memory recall",idempotency_key:$idem}' >"$memory_recall_create"
-chmod 400 "$memory_recall_create"
-call agent.chat.conversations.create "$memory_recall_create" memory-recall-conversation-create
-jq -e --arg id "$memory_recall_conversation_id" '.conversation.conversation_id == $id and .conversation.status == "active"' \
-  "$last_response" >/dev/null || die "fresh memory recall conversation was not created"
-memory_recall_turn_id=$(uuid4)
-memory_recall_chat=$tmp/memory-recall-chat.params.json
-write_chat_params "$memory_recall_chat" "$memory_recall_conversation_id" "$memory_recall_turn_id" \
-  'What is the exact unique phrase in the updated long-term memory titled Split acceptance memory updated? Reply with only that stored phrase.'
-call agent.chat "$memory_recall_chat" memory-recall-chat
-jq -e --arg phrase "$new_memory_phrase" '.text | type == "string" and contains($phrase)' "$last_response" >/dev/null || \
-  die "fresh Native Agent conversation did not recall the updated long-term-memory marker"
 call agent.knowledge.search "$search_params" knowledge-search-after-restart
 jq -e --arg sid "$source_id" 'any(.items[]?; .source_id == $sid)' "$last_response" >/dev/null || die "knowledge source was not searchable after Agent restart"
 call agent.web_search.config.get "$params" web-search-config-after-restart
@@ -895,21 +809,6 @@ if [ "$last_status" = 200 ] && jq -e --arg id "$source_id" 'any(.items[]?; .sour
   die "deleted knowledge source remains searchable"
 fi
 
-memory_delete=$tmp/memory-delete.params.json
-memory_delete_key=$(uuid4)
-jq -n --arg id "$memory_id" --arg idem "$memory_delete_key" --argjson revision "$new_revision" \
-  '{memory_id:$id,expected_revision:$revision,idempotency_key:$idem}' >"$memory_delete"
-chmod 400 "$memory_delete"
-call agent.knowledge.memories.delete "$memory_delete" memory-delete
-call agent.knowledge.memories.list "$memories_params" memories-after-delete
-if jq -e --arg id "$memory_id" 'any(.items[]?; ((.memory_id // .id)==$id) and ((.status // "") != "deleted"))' "$last_response" >/dev/null 2>&1; then
-  die "deleted long-term memory remains active"
-fi
-call agent.knowledge.search "$memory_search" memory-search-after-delete true
-if [ "$last_status" = 200 ] && jq -e --arg id "$memory_id" 'any(.items[]?; .source_id == $id)' "$last_response" >/dev/null 2>&1; then
-  die "deleted long-term memory remains searchable"
-fi
-
 if [ "$account_delete_enabled" = true ]; then
   account_delete=$tmp/account-delete.params.json
   account_delete_key=$(uuid4)
@@ -937,7 +836,7 @@ if [ "$account_delete_enabled" = true ]; then
   # The deleted owner session must not retain an ordinary Agent capability path.
   # Rejection may occur at message-server authorization or at the sealed Agent
   # lifecycle boundary; either is valid, but a successful response is not.
-  call agent.core.status.get "$params" core-status-after-account-delete true
+  call agent.backends.get "$params" backends-after-account-delete true
   case "$last_status" in
     400|401|403|409|412|428) ;;
     *) die "ordinary Agent capability remained accessible after account deletion" ;;

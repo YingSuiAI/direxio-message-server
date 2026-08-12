@@ -101,11 +101,12 @@ never makes an action live.
 
 `memory.server` covers durable Native conversation/history support and remains
 the client availability gate for the adjacent automatic-memory controls. The
-three public memory actions bind exactly to `agent.memory.v1/get_config`,
-`update_config`, and `status`. The descriptor schemas are digest-pinned; config
-updates require UUID idempotency plus expected revision, and status result
-projection is closed over non-secret model readiness, facts, timeline, and
-observation counters.
+five public memory actions bind exactly to `agent.memory.v1/get_config`,
+`update_config`, `status`, `update_fact`, and `delete_fact`. The descriptor
+schemas are digest-pinned; config updates require UUID idempotency plus expected
+revision, fact mutations require an exact fact UUID plus UUID idempotency, and
+result projection is closed over non-secret model readiness, facts, timeline,
+and observation counters.
 
 The model-profile sync/list contract includes
 `default_tool_client_profile_id`. An empty value means no tool default; a

@@ -22,7 +22,6 @@ func TestAgentConversationAndKnowledgeSchemasMatchHandlerResponses(t *testing.T)
 		{"agent.chat.conversations.get", map[string]string{"conversation": "object", "messages": "array", "next_cursor": "string"}},
 		{"agent.chat.conversations.rename", map[string]string{"conversation": "object", "replayed": "boolean"}},
 		{"agent.chat.conversations.delete", map[string]string{"conversation": "object", "replayed": "boolean"}},
-		{"agent.knowledge.memory.create", map[string]string{"memory_id": "string", "title": "string", "content": "string", "tags": "array", "created_at": "string", "replayed": "boolean", "embedding_indexed": "boolean", "embedding_stale": "boolean", "embedding_status": "string", "error_code": "string", "embedding_profile_id": "string", "embedding_profile_revision": "integer", "embedding_model": "string"}},
 		{"agent.knowledge.search", map[string]string{"items": "array", "next_cursor": "string", "search_mode": "string", "embedding_profile_id": "string", "embedding_profile_revision": "integer", "embedding_model": "string", "embedding_generation": "string", "collection_config_digest": "string"}},
 		{"agent.knowledge.status", map[string]string{"supported": "boolean", "count": "integer", "embedding_indexed": "integer", "embedding_stale": "integer", "ready_count": "integer", "uploading_count": "integer", "indexing_count": "integer", "failed_count": "integer", "cleanup_pending_count": "integer", "checked_at": "string", "embedding_profile_id": "string", "embedding_profile_revision": "integer", "embedding_model": "string", "quota_used_bytes": "integer", "quota_limit_bytes": "integer", "quota_remaining_bytes": "integer", "max_source_bytes": "integer"}},
 	} {
@@ -164,13 +163,13 @@ func TestActionSpecForRejectsUnknownAndRetiredActions(t *testing.T) {
 }
 
 func TestModelProfileActionSchemasDescribePresenceSensitiveFields(t *testing.T) {
-	for _, action := range []string{"agent.core.model_profiles.sync", "agent.core.model_profiles.list", "agent.core.model_profiles.get", "agent.core.model_profiles.delete"} {
+	for _, action := range []string{"agent.model_profiles.sync", "agent.model_profiles.list", "agent.model_profiles.get", "agent.model_profiles.delete"} {
 		spec, ok := ActionSpecFor(action)
 		if !ok || spec.Schema == nil {
 			t.Fatalf("%s must publish an action schema", action)
 		}
 	}
-	syncSpec, _ := ActionSpecFor("agent.core.model_profiles.sync")
+	syncSpec, _ := ActionSpecFor("agent.model_profiles.sync")
 	if syncSpec.Schema.Request["default_tool_client_profile_id"].Type != "string" || !syncSpec.Schema.Response["default_tool_client_profile_id"].Required {
 		t.Fatal("sync schema must expose the optional tool default and required readback")
 	}

@@ -23,24 +23,24 @@ func canonicalChatResponseForTest(content string, references, taskIDs, planIDs [
 	return response
 }
 
-func TestPublicResultAdaptersPreserveLegacyEnvelopes(t *testing.T) {
+func TestPublicResultAdaptersProjectCanonicalCapabilityResults(t *testing.T) {
 	tests := []struct {
 		name   string
 		action string
 		input  map[string]any
 		check  func(*testing.T, map[string]any)
 	}{
-		{"conversation create", "agent.chat.conversations.create", map[string]any{"ID": "c1", "Title": "Chat"}, func(t *testing.T, got map[string]any) {
+		{"conversation create", "agent.chat.conversations.create", map[string]any{"conversation_id": "c1", "title": "Chat"}, func(t *testing.T, got map[string]any) {
 			if _, ok := got["conversation"]; !ok || got["replayed"] != false {
 				t.Fatalf("conversation create = %#v", got)
 			}
 		}},
-		{"conversation get", "agent.chat.conversations.get", map[string]any{"ID": "c1", "Messages": []any{map[string]any{"role": "user"}}, "NextCursor": "next"}, func(t *testing.T, got map[string]any) {
+		{"conversation get", "agent.chat.conversations.get", map[string]any{"conversation": map[string]any{"conversation_id": "c1"}, "messages": []any{map[string]any{"role": "user"}}, "next_page_token": "next"}, func(t *testing.T, got map[string]any) {
 			if _, ok := got["conversation"]; !ok || got["next_cursor"] != "next" || len(got["messages"].([]any)) != 1 {
 				t.Fatalf("conversation get = %#v", got)
 			}
 		}},
-		{"conversation list", "agent.chat.conversations.list", map[string]any{"Conversations": []any{}, "next_page_token": "p"}, func(t *testing.T, got map[string]any) {
+		{"conversation list", "agent.chat.conversations.list", map[string]any{"conversations": []any{}, "next_page_token": "p"}, func(t *testing.T, got map[string]any) {
 			if _, ok := got["conversations"]; !ok || got["next_cursor"] != "p" {
 				t.Fatalf("conversation list = %#v", got)
 			}
@@ -50,7 +50,7 @@ func TestPublicResultAdaptersPreserveLegacyEnvelopes(t *testing.T) {
 				t.Fatalf("conversation delete envelope keys=%v value=%#v", keys, got)
 			}
 		}},
-		{"model get", "agent.model_profiles.get", map[string]any{"id": "p1", "provider": "openai_compatible"}, func(t *testing.T, got map[string]any) {
+		{"model get", "agent.model_profiles.get", map[string]any{"profile_id": "p1", "provider": "openai_compatible"}, func(t *testing.T, got map[string]any) {
 			profile, ok := got["profile"].(map[string]any)
 			if !ok || profile["profile_id"] != "p1" {
 				t.Fatalf("model get = %#v", got)
@@ -59,14 +59,14 @@ func TestPublicResultAdaptersPreserveLegacyEnvelopes(t *testing.T) {
 				t.Fatalf("core id leaked into model profile: %#v", profile)
 			}
 		}},
-		{"model list", "agent.model_profiles.list", map[string]any{"Profiles": []any{}, "NextCursor": "p", "default_tool_client_profile_id": ""}, func(t *testing.T, got map[string]any) {
+		{"model list", "agent.model_profiles.list", map[string]any{"profiles": []any{}, "next_page_token": "p", "default_tool_client_profile_id": ""}, func(t *testing.T, got map[string]any) {
 			if _, ok := got["profiles"]; !ok || got["next_page_token"] != "p" || got["default_tool_client_profile_id"] != "" {
 				t.Fatalf("model list = %#v", got)
 			}
 		}},
 		{"provider model catalog", "agent.models.list", map[string]any{
-			"Models":    []any{map[string]any{"ID": "openai/gpt-4o", "Name": "GPT-4o", "Provider": "openrouter", "InputModalities": []any{"text", "image"}, "pricing": map[string]any{"prompt": "1"}}},
-			"Providers": []any{map[string]any{"Provider": "openrouter", "DefaultBaseURL": "https://openrouter.ai/api/v1", "RequiresAPIKey": true, "DynamicModels": true}},
+			"models":    []any{map[string]any{"id": "openai/gpt-4o", "name": "GPT-4o", "provider": "openrouter", "input_modalities": []any{"text", "image"}, "pricing": map[string]any{"prompt": "1"}}},
+			"providers": []any{map[string]any{"provider": "openrouter", "default_base_url": "https://openrouter.ai/api/v1", "requires_api_key": true, "dynamic_models": true}},
 		}, func(t *testing.T, got map[string]any) {
 			if keys := sortedMapKeys(got); !reflect.DeepEqual(keys, []string{"models", "providers"}) {
 				t.Fatalf("model catalog keys=%v value=%#v", keys, got)
@@ -88,26 +88,19 @@ func TestPublicResultAdaptersPreserveLegacyEnvelopes(t *testing.T) {
 				t.Fatalf("model catalog provider = %#v", provider)
 			}
 		}},
-		{"source list", "agent.knowledge.sources.list", map[string]any{"Sources": []any{map[string]any{"ID": "s1", "SizeBytes": float64(4)}}, "NextPageToken": "p"}, func(t *testing.T, got map[string]any) {
+		{"source list", "agent.knowledge.sources.list", map[string]any{"sources": []any{map[string]any{"source_id": "s1", "size_bytes": float64(4)}}, "next_page_token": "p"}, func(t *testing.T, got map[string]any) {
 			items := got["sources"].([]any)
 			if items[0].(map[string]any)["source_id"] != "s1" || got["next_page_token"] != "p" {
 				t.Fatalf("source list = %#v", got)
 			}
 		}},
-		{"memory list", "agent.knowledge.memories.list", map[string]any{"Sources": []any{map[string]any{"ID": "m1", "Content": "hello", "EmbeddingIndexed": false, "EmbeddingStale": true, "EmbeddingStatus": "indexing", "ErrorCode": "embedding_retry"}}, "NextPageToken": "p"}, func(t *testing.T, got map[string]any) {
-			items := got["items"].([]any)
-			memory := items[0].(map[string]any)
-			if memory["memory_id"] != "m1" || memory["content"] != "hello" || memory["embedding_indexed"] != false || memory["embedding_stale"] != true || memory["embedding_status"] != "indexing" || memory["error_code"] != "embedding_retry" || got["next_page_token"] != "p" {
-				t.Fatalf("memory list = %#v", got)
-			}
-		}},
-		{"knowledge search", "agent.knowledge.search", map[string]any{"Matches": []any{map[string]any{"SourceID": "s1", "Score": float64(.9)}}, "NextPageToken": "p", "EmbeddingProfileID": "embed", "EmbeddingProfileRevision": float64(4), "EmbeddingModel": "text-embedding-3-small", "EmbeddingGeneration": "gen-7", "CollectionConfigDigest": "digest-8"}, func(t *testing.T, got map[string]any) {
+		{"knowledge search", "agent.knowledge.search", map[string]any{"items": []any{map[string]any{"source_id": "s1", "score": float64(.9)}}, "next_page_token": "p", "embedding_profile_id": "embed", "embedding_profile_revision": float64(4), "embedding_model": "text-embedding-3-small", "embedding_generation": "gen-7", "collection_config_digest": "digest-8"}, func(t *testing.T, got map[string]any) {
 			items := got["items"].([]any)
 			if items[0].(map[string]any)["source_id"] != "s1" || got["next_cursor"] != "p" || got["embedding_profile_id"] != "embed" || got["embedding_profile_revision"] != float64(4) || got["embedding_model"] != "text-embedding-3-small" || got["embedding_generation"] != "gen-7" || got["collection_config_digest"] != "digest-8" {
 				t.Fatalf("knowledge search = %#v", got)
 			}
 		}},
-		{"knowledge config", "agent.knowledge.config.get", map[string]any{"EmbeddingProfileID": "embed", "EmbeddingProfileRevision": float64(4), "EmbeddingModel": "text-embedding-3-small", "EmbeddingGeneration": "drop-me", "Dimension": float64(3), "Collection": "knowledge", "CollectionConfigDigest": "digest-8", "Revision": float64(2), "UpdatedAt": "updated"}, func(t *testing.T, got map[string]any) {
+		{"knowledge config", "agent.knowledge.config.get", map[string]any{"embedding_profile_id": "embed", "embedding_profile_revision": float64(4), "embedding_model": "text-embedding-3-small", "embedding_generation": "drop-me", "dimension": float64(3), "collection": "knowledge", "collection_config_digest": "digest-8", "revision": float64(2), "updated_at": "updated"}, func(t *testing.T, got map[string]any) {
 			if got["embedding_profile_id"] != "embed" || got["embedding_profile_revision"] != float64(4) || got["embedding_model"] != "text-embedding-3-small" || got["dimension"] != float64(3) || got["collection"] != "knowledge" || got["collection_config_digest"] != "digest-8" || got["revision"] != float64(2) || got["updated_at"] != "updated" {
 				t.Fatalf("knowledge config = %#v", got)
 			}
@@ -115,12 +108,12 @@ func TestPublicResultAdaptersPreserveLegacyEnvelopes(t *testing.T) {
 				t.Fatalf("knowledge config exposed search-only generation: %#v", got)
 			}
 		}},
-		{"knowledge upload start exact projection", "agent.knowledge.upload.start", map[string]any{"upload_id": "u1", "source_id": "s1", "status": "open", "size": float64(8), "received_size": float64(2), "max_chunk_bytes": float64(4), "progress": float64(.25), "replayed": true, "revision": float64(2)}, func(t *testing.T, got map[string]any) {
+		{"knowledge upload start exact projection", "agent.knowledge.upload.start", map[string]any{"upload_id": "u1", "source_id": "s1", "status": "open", "declared_size": float64(8), "received_size": float64(2), "max_chunk_bytes": float64(4), "progress": float64(.25), "replayed": true, "revision": float64(2)}, func(t *testing.T, got map[string]any) {
 			if keys := sortedMapKeys(got); !reflect.DeepEqual(keys, []string{"max_chunk_bytes", "progress", "received_size", "replayed", "size", "source_id", "status", "upload_id"}) {
 				t.Fatalf("upload start keys=%v value=%#v", keys, got)
 			}
 		}},
-		{"knowledge status exact projection", "agent.knowledge.status", map[string]any{"Supported": true, "Count": float64(6), "ReadyCount": float64(2), "UploadingCount": float64(1), "IndexingCount": float64(1), "FailedCount": float64(1), "CleanupPendingCount": float64(1), "CheckedAt": "2026-08-08T12:00:00Z", "EmbeddingIndexed": float64(1), "EmbeddingStale": float64(2), "EmbeddingProfileID": "embed", "EmbeddingProfileRevision": float64(4), "EmbeddingModel": "text-embedding-3-small", "QuotaUsedBytes": float64(1024), "QuotaLimitBytes": float64(67108864), "QuotaRemainingBytes": float64(67107840), "MaxSourceBytes": float64(16777216), "extra": "drop"}, func(t *testing.T, got map[string]any) {
+		{"knowledge status exact projection", "agent.knowledge.status", map[string]any{"supported": true, "count": float64(6), "ready_count": float64(2), "uploading_count": float64(1), "indexing_count": float64(1), "failed_count": float64(1), "cleanup_pending_count": float64(1), "checked_at": "2026-08-08T12:00:00Z", "embedding_indexed": float64(1), "embedding_stale": float64(2), "embedding_profile_id": "embed", "embedding_profile_revision": float64(4), "embedding_model": "text-embedding-3-small", "quota_used_bytes": float64(1024), "quota_limit_bytes": float64(67108864), "quota_remaining_bytes": float64(67107840), "max_source_bytes": float64(16777216), "extra": "drop"}, func(t *testing.T, got map[string]any) {
 			if keys := sortedMapKeys(got); !reflect.DeepEqual(keys, []string{"checked_at", "cleanup_pending_count", "count", "embedding_indexed", "embedding_model", "embedding_profile_id", "embedding_profile_revision", "embedding_stale", "failed_count", "indexing_count", "max_source_bytes", "quota_limit_bytes", "quota_remaining_bytes", "quota_used_bytes", "ready_count", "supported", "uploading_count"}) {
 				t.Fatalf("knowledge status keys=%v value=%#v", keys, got)
 			}
@@ -128,22 +121,7 @@ func TestPublicResultAdaptersPreserveLegacyEnvelopes(t *testing.T) {
 				t.Fatalf("knowledge status counters were inferred/changed: %#v", got)
 			}
 		}},
-		{"memory create exact projection", "agent.knowledge.memory.create", map[string]any{"memory_id": "m1", "title": "title", "content": "hello", "tags": []any{"a"}, "revision": float64(2), "created_at": "now", "updated_at": "later", "replayed": true, "embedding_indexed": false, "embedding_stale": true, "embedding_status": "failed", "error_code": "embedding_provider_failed", "embedding_profile_id": "embed", "embedding_profile_revision": float64(4), "embedding_model": "model", "extra": "drop"}, func(t *testing.T, got map[string]any) {
-			if keys := sortedMapKeys(got); !reflect.DeepEqual(keys, []string{"content", "created_at", "embedding_indexed", "embedding_model", "embedding_profile_id", "embedding_profile_revision", "embedding_stale", "embedding_status", "error_code", "memory_id", "replayed", "tags", "title"}) {
-				t.Fatalf("memory create keys=%v value=%#v", keys, got)
-			}
-		}},
-		{"memory get exact projection", "agent.knowledge.memories.get", map[string]any{"memory_id": "m1", "title": "title", "content": "hello", "tags": []any{}, "revision": float64(2), "created_at": "now", "updated_at": "later", "replayed": true, "embedding_indexed": false, "embedding_stale": true, "embedding_status": "ready"}, func(t *testing.T, got map[string]any) {
-			if keys := sortedMapKeys(got); !reflect.DeepEqual(keys, []string{"content", "created_at", "embedding_indexed", "embedding_stale", "embedding_status", "memory_id", "revision", "tags", "title", "updated_at"}) {
-				t.Fatalf("memory get keys=%v value=%#v", keys, got)
-			}
-		}},
-		{"memory update preserves embedding state", "agent.knowledge.memories.update", map[string]any{"memory_id": "m1", "title": "title", "content": "updated", "tags": []any{}, "revision": float64(3), "created_at": "now", "updated_at": "later", "replayed": false, "embedding_indexed": false, "embedding_stale": true, "embedding_status": "indexing", "error_code": "embedding_retry"}, func(t *testing.T, got map[string]any) {
-			if got["embedding_indexed"] != false || got["embedding_stale"] != true || got["embedding_status"] != "indexing" || got["error_code"] != "embedding_retry" {
-				t.Fatalf("memory update = %#v", got)
-			}
-		}},
-		{"task get", "agent.core.tasks.get", map[string]any{"ID": "t1", "State": "queued"}, func(t *testing.T, got map[string]any) {
+		{"task get", "agent.core.tasks.get", map[string]any{"task_id": "t1", "status": "queued"}, func(t *testing.T, got map[string]any) {
 			if _, ok := got["task"]; !ok {
 				t.Fatalf("task get = %#v", got)
 			}
@@ -153,7 +131,7 @@ func TestPublicResultAdaptersPreserveLegacyEnvelopes(t *testing.T) {
 				t.Fatalf("schedule list = %#v", got)
 			}
 		}},
-		{"extension list", "agent.core.skills.list", map[string]any{"Installations": []any{map[string]any{"ID": "i1", "State": "installed"}}, "NextPageToken": "p"}, func(t *testing.T, got map[string]any) {
+		{"extension list", "agent.core.skills.list", map[string]any{"installations": []any{map[string]any{"id": "i1", "state": "installed"}}, "next_page_token": "p"}, func(t *testing.T, got map[string]any) {
 			items := got["installations"].([]any)
 			if items[0].(map[string]any)["id"] != "i1" || got["next_page_token"] != "p" {
 				t.Fatalf("extension list = %#v", got)
@@ -164,7 +142,7 @@ func TestPublicResultAdaptersPreserveLegacyEnvelopes(t *testing.T) {
 				t.Fatalf("chat = %#v", got)
 			}
 		}},
-		{"web search config drops secrets", "agent.web_search.config.get", map[string]any{"Enabled": true, "Provider": "tavily", "APIKeyConfigured": true, "APIKeyHint": "tvly-secret-must-not-leak", "Revision": float64(2), "TestedAt": "tested", "UpdatedAt": "updated", "api_key": "must-not-leak", "secret": "must-not-leak"}, func(t *testing.T, got map[string]any) {
+		{"web search config drops secrets", "agent.web_search.config.get", map[string]any{"enabled": true, "provider": "tavily", "api_key_configured": true, "api_key_hint": "tvly-secret-must-not-leak", "revision": float64(2), "tested_at": "tested", "updated_at": "updated", "api_key": "must-not-leak", "secret": "must-not-leak"}, func(t *testing.T, got map[string]any) {
 			if keys := sortedMapKeys(got); !reflect.DeepEqual(keys, []string{"api_key_configured", "api_key_hint", "enabled", "provider", "revision", "tested_at", "updated_at"}) {
 				t.Fatalf("web search config keys=%v value=%#v", keys, got)
 			}
@@ -177,7 +155,7 @@ func TestPublicResultAdaptersPreserveLegacyEnvelopes(t *testing.T) {
 				t.Fatalf("unconfigured web search exposed a hint: %#v", got)
 			}
 		}},
-		{"web search test exact projection", "agent.web_search.test", map[string]any{"OK": true, "Provider": "tavily", "ResultCount": float64(1), "TestedAt": "tested", "Enabled": true, "APIKeyConfigured": true, "Revision": float64(3), "api_key_hint": "drop", "provider_body": "drop"}, func(t *testing.T, got map[string]any) {
+		{"web search test exact projection", "agent.web_search.test", map[string]any{"ok": true, "provider": "tavily", "result_count": float64(1), "tested_at": "tested", "enabled": true, "api_key_configured": true, "revision": float64(3), "api_key_hint": "drop", "provider_body": "drop"}, func(t *testing.T, got map[string]any) {
 			if keys := sortedMapKeys(got); !reflect.DeepEqual(keys, []string{"api_key_configured", "enabled", "ok", "provider", "result_count", "revision", "tested_at"}) {
 				t.Fatalf("web search test keys=%v value=%#v", keys, got)
 			}
@@ -446,13 +424,13 @@ func withReferenceField(source map[string]any, key string, value any) map[string
 func TestModelCatalogResultAdapterDropsUnknownModelFieldsAtGatewayBoundary(t *testing.T) {
 	got := modelCatalogResult(map[string]any{
 		"models": []any{map[string]any{
-			"ID":                  "model-1",
-			"Name":                "Model 1",
-			"Provider":            "openrouter",
-			"ContextLength":       float64(128000),
-			"MaxOutputTokens":     float64(4096),
-			"InputModalities":     []any{"text"},
-			"OutputModalities":    []any{"text"},
+			"id":                  "model-1",
+			"name":                "Model 1",
+			"provider":            "openrouter",
+			"context_length":      float64(128000),
+			"max_output_tokens":   float64(4096),
+			"input_modalities":    []any{"text"},
+			"output_modalities":   []any{"text"},
 			"API_KEY":             "canary-key",
 			"Authorization":       "Bearer canary-key",
 			"nested":              map[string]any{"api_key": "canary-key"},

@@ -12,7 +12,7 @@ func TestModelSyncToolDefaultRequiresConversationEntry(t *testing.T) {
 			"client_profile_id": "tool", "model_kind": "conversation",
 		}},
 	}
-	for _, action := range []string{"agent.core.model_profiles.sync", "agent.model_profiles.sync"} {
+	for _, action := range []string{"agent.model_profiles.sync"} {
 		valid := cloneParams(base)
 		valid["default_tool_client_profile_id"] = "tool"
 		if err := ValidateActionRequest(action, valid); err != nil {
@@ -37,7 +37,7 @@ func TestModelProfileResultsProjectAndValidateToolDefault(t *testing.T) {
 		"profiles":        []any{map[string]any{"client_profile_id": "tool", "model_kind": "conversation"}},
 		"next_page_token": "", "default_tool_client_profile_id": "tool",
 	}
-	for _, action := range []string{"agent.core.model_profiles.list", "agent.model_profiles.list"} {
+	for _, action := range []string{"agent.model_profiles.list"} {
 		result, err := adaptActionResult(action, valid)
 		if err != nil {
 			t.Fatalf("%s valid result rejected: %v", action, err)
@@ -70,13 +70,11 @@ func TestModelProfileCatalogPinsMatchAgentToolDefaultSchemas(t *testing.T) {
 	const (
 		syncInput  = `{"type":"object","additionalProperties":false,"properties":{"idempotency_key":{"type":"string"},"default_client_profile_id":{"type":"string"},"default_conversation_client_profile_id":{"type":"string"},"default_tool_client_profile_id":{"type":"string"},"default_embedding_client_profile_id":{"type":"string"},"default_speech_client_profile_id":{"type":"string"},"entries":{"type":"array"}},"required":["idempotency_key","entries"]}`
 		syncResult = `{"additionalProperties":false,"properties":{"default_client_profile_id":{"type":"string"},"default_conversation_client_profile_id":{"type":"string"},"default_embedding_client_profile_id":{"type":"string"},"default_speech_client_profile_id":{"type":"string"},"default_tool_client_profile_id":{"type":"string"},"profiles":{"type":"array"}},"required":["profiles","default_client_profile_id","default_conversation_client_profile_id","default_tool_client_profile_id","default_embedding_client_profile_id","default_speech_client_profile_id"],"type":"object"}`
-		listInput  = `{"type":"object","additionalProperties":true}`
+		listInput  = `{"additionalProperties":false,"properties":{"page_size":{"maximum":100,"minimum":1,"type":"integer"},"page_token":{"maxLength":4096,"type":"string"}},"type":"object"}`
 		listResult = `{"additionalProperties":false,"properties":{"default_client_profile_id":{"type":"string"},"default_conversation_client_profile_id":{"type":"string"},"default_embedding_client_profile_id":{"type":"string"},"default_speech_client_profile_id":{"type":"string"},"default_tool_client_profile_id":{"type":"string"},"next_page_token":{"type":"string"},"profiles":{"type":"array"}},"required":["profiles","next_page_token","default_client_profile_id","default_conversation_client_profile_id","default_tool_client_profile_id","default_embedding_client_profile_id","default_speech_client_profile_id"],"type":"object"}`
 	)
 	for _, test := range []struct{ action, operation, input, result string }{
-		{"agent.core.model_profiles.sync", "sync_models", syncInput, syncResult},
 		{"agent.model_profiles.sync", "sync_models", syncInput, syncResult},
-		{"agent.core.model_profiles.list", "list_models", listInput, listResult},
 		{"agent.model_profiles.list", "list_models", listInput, listResult},
 	} {
 		descriptor := catalogTestDescriptor("agent.models.v1", test.operation, test.input, test.result)

@@ -106,23 +106,23 @@ func projectActionResult(action string, output map[string]any) map[string]any {
 		return scheduleListResult(result)
 	case "agent.core.schedules.trigger":
 		return scheduleTriggerResult(result)
-	case "agent.core.mcp.list", "agent.core.skills.list", "agent.mcp.servers.list", "agent.skills.list":
+	case "agent.core.mcp.list", "agent.core.skills.list":
 		return installationListResult(result)
 	case "agent.core.mcp.get", "agent.core.skills.get":
 		return objectWrapper(result, "installation")
 	case "agent.core.mcp.install", "agent.core.mcp.update", "agent.core.mcp.remove", "agent.core.skills.install", "agent.core.skills.update", "agent.core.skills.remove":
 		return installationMutationResult(result)
-	case "agent.core.mcp.enable", "agent.core.mcp.disable", "agent.core.skills.enable", "agent.core.skills.disable", "agent.mcp.servers.enable", "agent.mcp.servers.disable", "agent.skills.enable", "agent.skills.disable":
+	case "agent.core.mcp.enable", "agent.core.mcp.disable", "agent.core.skills.enable", "agent.core.skills.disable":
 		return objectWrapper(result, "installation")
-	case "agent.core.model_profiles.sync", "agent.model_profiles.sync":
+	case "agent.model_profiles.sync":
 		return modelSyncResult(result)
 	case "agent.models.list":
 		return modelCatalogResult(result)
-	case "agent.core.model_profiles.list", "agent.model_profiles.list":
+	case "agent.model_profiles.list":
 		return modelListResult(result)
-	case "agent.core.model_profiles.get", "agent.model_profiles.get":
+	case "agent.model_profiles.get":
 		return modelGetResult(result)
-	case "agent.core.model_profiles.delete", "agent.model_profiles.delete":
+	case "agent.model_profiles.delete":
 		return modelDeleteResult(result)
 	case "agent.knowledge.sources.list":
 		return sourceListResult(result)
@@ -138,17 +138,7 @@ func projectActionResult(action string, output map[string]any) map[string]any {
 		return uploadResult(result, false)
 	case "agent.knowledge.upload.finish":
 		return uploadFinishResult(result)
-	case "agent.knowledge.memory.create":
-		return memoryResult(result, "create")
-	case "agent.knowledge.memories.list":
-		return memoryListResult(result)
-	case "agent.knowledge.memories.get":
-		return memoryResult(result, "get")
-	case "agent.knowledge.memories.update", "agent.knowledge.memories.delete":
-		return memoryResult(result, "mutation")
 	case "agent.knowledge.search":
-		return knowledgeSearchResult(result)
-	case "agent.knowledge.memory.search":
 		return knowledgeSearchResult(result)
 	case "agent.knowledge.status":
 		return knowledgeStatusResult(result)
@@ -160,6 +150,10 @@ func projectActionResult(action string, output map[string]any) map[string]any {
 		return memoryConfigResult(result)
 	case "agent.memory.status":
 		return memoryStatusResult(result)
+	case "agent.memory.facts.update":
+		return memoryFactResult(result)
+	case "agent.memory.facts.delete":
+		return mapProjection(result, []string{"fact_id", "deleted"}, nil)
 	case "agent.web_search.test":
 		return webSearchTestResult(result)
 	case "agent.text_tools.config.get", "agent.text_tools.config.update":
@@ -204,7 +198,7 @@ func validateActionResult(action string, request, output map[string]any, authori
 		return validateChatAttachmentActionResult(action, request, output, authority)
 	case "agent.web_search.config.get", "agent.web_search.config.update":
 		return validateWebSearchConfigResult(action, output)
-	case "agent.memory.config.get", "agent.memory.config.update", "agent.memory.status":
+	case "agent.memory.config.get", "agent.memory.config.update", "agent.memory.status", "agent.memory.facts.update", "agent.memory.facts.delete":
 		return validateMemoryResult(action, output)
 	case "agent.web_search.test":
 		return validateWebSearchTestResult(action, output)
@@ -217,7 +211,7 @@ func validateActionResult(action string, request, output map[string]any, authori
 		return validateImageToolActionResult(action, request, output, authority)
 	case "agent.models.list":
 		return validateModelCatalogResult(output)
-	case "agent.core.model_profiles.sync", "agent.model_profiles.sync", "agent.core.model_profiles.list", "agent.model_profiles.list":
+	case "agent.model_profiles.sync", "agent.model_profiles.list":
 		return validateToolModelDefaultResult(output)
 	case "agent.chat.turn.stop":
 		return validateTurnStopResult(request, output)
@@ -504,9 +498,25 @@ func memoryStatusResult(value map[string]any) map[string]any {
 	return result
 }
 
+func memoryFactResult(value map[string]any) map[string]any {
+	return mapProjection(value, []string{"id", "subject", "predicate", "value", "kind", "confidence", "valid_from", "last_confirmed_at"}, nil)
+}
+
 func validateMemoryResult(action string, output map[string]any) error {
 	if output == nil {
 		return fmt.Errorf("%w: %s response is missing", ErrInvalidActionResult, action)
+	}
+	if strings.HasSuffix(action, ".facts.update") {
+		if !exactResultFields(output, "id", "subject", "predicate", "value", "kind", "confidence", "valid_from", "last_confirmed_at") || !validMemoryFact(output) {
+			return fmt.Errorf("%w: updated memory fact is invalid", ErrInvalidActionResult)
+		}
+		return nil
+	}
+	if strings.HasSuffix(action, ".facts.delete") {
+		if !exactResultFields(output, "fact_id", "deleted") || !canonicalTurnUUID(output["fact_id"]) || output["deleted"] != true {
+			return fmt.Errorf("%w: deleted memory fact result is invalid", ErrInvalidActionResult)
+		}
+		return nil
 	}
 	configFields := []string{"enabled", "embedding_configured", "embedding_profile_id", "embedding_model", "revision", "updated_at"}
 	allowedFields := configFields
@@ -671,12 +681,12 @@ func validateModelCatalogResult(output map[string]any) error {
 	if output == nil {
 		return fmt.Errorf("%w: model catalog response is missing", ErrInvalidActionResult)
 	}
-	modelsValue := valueByKey(output, "models", "Models")
+	modelsValue := output["models"]
 	models, ok := modelsValue.([]any)
 	if !ok {
 		return fmt.Errorf("%w: model catalog models must be an array", ErrInvalidActionResult)
 	}
-	providersValue := valueByKey(output, "providers", "Providers")
+	providersValue := output["providers"]
 	providers, ok := providersValue.([]any)
 	if !ok {
 		return fmt.Errorf("%w: model catalog providers must be an array", ErrInvalidActionResult)
@@ -800,7 +810,7 @@ func requireWebSearchBool(output map[string]any, field string) error {
 }
 
 func requireWebSearchProvider(output map[string]any) error {
-	value := valueByKey(output, "provider", "Provider")
+	value := output["provider"]
 	provider, ok := value.(string)
 	if !ok || strings.TrimSpace(provider) == "" {
 		return fmt.Errorf("%w: web search provider must be a string", ErrInvalidActionResult)
@@ -882,7 +892,7 @@ func conversationDeleteResult(value map[string]any) map[string]any {
 	// materialized. Keep the legacy envelope shape stable; an empty snapshot
 	// is preferable to exposing a Core-only deleted field.
 	conversation := map[string]any{}
-	if raw, ok := valueByKey(value, "profile", "Profile").(map[string]any); ok {
+	if raw, ok := value["profile"].(map[string]any); ok {
 		conversation = raw
 	}
 	return map[string]any{"conversation": conversation, "replayed": boolValue(value["replayed"])}
@@ -892,25 +902,24 @@ func conversationGetResult(value map[string]any) map[string]any {
 	if conversation, wrapped := value["conversation"]; wrapped {
 		return map[string]any{
 			"conversation": conversation,
-			"messages":     anySlice(valueByKey(value, "messages", "Messages")),
-			"next_cursor":  stringValue(valueByKey(value, "next_cursor", "next_page_token", "NextCursor")),
+			"messages":     anySlice(value["messages"]),
+			"next_cursor":  stringValue(valueByKey(value, "next_cursor", "next_page_token")),
 		}
 	}
 	conversation := cloneParams(value)
-	messages := anySlice(valueByKey(value, "messages", "Messages"))
+	messages := anySlice(value["messages"])
 	delete(conversation, "messages")
-	delete(conversation, "Messages")
-	return map[string]any{"conversation": conversation, "messages": messages, "next_cursor": stringValue(valueByKey(value, "next_cursor", "next_page_token", "NextCursor"))}
+	return map[string]any{"conversation": conversation, "messages": messages, "next_cursor": stringValue(valueByKey(value, "next_cursor", "next_page_token"))}
 }
 
 func conversationListResult(value map[string]any) map[string]any {
-	conversations := anySlice(valueByKey(value, "conversations", "Conversations"))
-	return map[string]any{"conversations": conversations, "next_cursor": stringValue(valueByKey(value, "next_cursor", "next_page_token", "NextCursor"))}
+	conversations := anySlice(value["conversations"])
+	return map[string]any{"conversations": conversations, "next_cursor": stringValue(valueByKey(value, "next_cursor", "next_page_token"))}
 }
 
 func renameNextCursor(value map[string]any) map[string]any {
 	if _, ok := value["next_cursor"]; !ok {
-		if cursor := valueByKey(value, "next_page_token", "NextCursor"); cursor != nil {
+		if cursor := value["next_page_token"]; cursor != nil {
 			value["next_cursor"] = cursor
 		}
 	}
@@ -1102,27 +1111,27 @@ func turnInt64(value any) (int64, bool) {
 }
 
 func modelSyncResult(value map[string]any) map[string]any {
-	result := map[string]any{"profiles": normalizeProfiles(valueByKey(value, "profiles", "Profiles"))}
+	result := map[string]any{"profiles": normalizeProfiles(value["profiles"])}
 	copyModelDefaults(result, value)
 	return result
 }
 
 func modelCatalogResult(value map[string]any) map[string]any {
-	models := normalizeModelCatalogEntries(valueByKey(value, "models", "Models"), map[string][]string{
-		"id":                {"id", "ID", "model_id", "ModelID"},
-		"name":              {"name", "Name"},
-		"provider":          {"provider", "Provider"},
-		"context_length":    {"context_length", "ContextLength"},
-		"context_window":    {"context_window", "ContextWindow"},
-		"max_output_tokens": {"max_output_tokens", "MaxOutputTokens"},
-		"input_modalities":  {"input_modalities", "InputModalities"},
-		"output_modalities": {"output_modalities", "OutputModalities"},
+	models := normalizeModelCatalogEntries(value["models"], map[string][]string{
+		"id":                {"id"},
+		"name":              {"name"},
+		"provider":          {"provider"},
+		"context_length":    {"context_length"},
+		"context_window":    {"context_window"},
+		"max_output_tokens": {"max_output_tokens"},
+		"input_modalities":  {"input_modalities"},
+		"output_modalities": {"output_modalities"},
 	}, validModelCatalogModel)
-	providers := normalizeModelCatalogEntries(valueByKey(value, "providers", "Providers"), map[string][]string{
-		"provider":         {"provider", "Provider"},
-		"default_base_url": {"default_base_url", "DefaultBaseURL"},
-		"requires_api_key": {"requires_api_key", "RequiresAPIKey"},
-		"dynamic_models":   {"dynamic_models", "DynamicModels"},
+	providers := normalizeModelCatalogEntries(value["providers"], map[string][]string{
+		"provider":         {"provider"},
+		"default_base_url": {"default_base_url"},
+		"requires_api_key": {"requires_api_key"},
+		"dynamic_models":   {"dynamic_models"},
 	}, validModelCatalogProvider)
 	return map[string]any{"models": models, "providers": providers}
 }
@@ -1224,35 +1233,35 @@ func catalogStringList(value any) bool {
 
 func modelListResult(value map[string]any) map[string]any {
 	result := map[string]any{
-		"profiles":        normalizeProfiles(valueByKey(value, "profiles", "Profiles")),
-		"next_page_token": stringValue(valueByKey(value, "next_page_token", "next_cursor", "NextCursor")),
+		"profiles":        normalizeProfiles(value["profiles"]),
+		"next_page_token": stringValue(value["next_page_token"]),
 	}
 	copyModelDefaults(result, value)
 	return result
 }
 
 func modelGetResult(value map[string]any) map[string]any {
-	if profile, ok := valueByKey(value, "profile", "Profile").(map[string]any); ok {
+	if profile, ok := value["profile"].(map[string]any); ok {
 		return map[string]any{"profile": normalizeProfile(profile)}
 	}
 	return map[string]any{"profile": normalizeProfile(value)}
 }
 
 func modelDeleteResult(value map[string]any) map[string]any {
-	profileID := stringValue(valueByKey(value, "profile_id", "id", "ID"))
-	if profile, ok := valueByKey(value, "profile", "Profile").(map[string]any); ok && profileID == "" {
-		profileID = stringValue(valueByKey(profile, "profile_id", "id", "ID"))
+	profileID := stringValue(value["profile_id"])
+	if profile, ok := value["profile"].(map[string]any); ok && profileID == "" {
+		profileID = stringValue(profile["profile_id"])
 	}
-	return map[string]any{"deleted": boolValueOrDefault(valueByKey(value, "deleted", "Deleted"), true), "profile_id": profileID}
+	return map[string]any{"deleted": boolValueOrDefault(value["deleted"], true), "profile_id": profileID}
 }
 
 func copyModelDefaults(result, value map[string]any) {
 	aliases := map[string][]string{
-		"default_client_profile_id":              {"default_client_profile_id", "DefaultClientProfileID"},
-		"default_conversation_client_profile_id": {"default_conversation_client_profile_id", "default_conversation_profile_id", "DefaultConversationProfileID"},
+		"default_client_profile_id":              {"default_client_profile_id"},
+		"default_conversation_client_profile_id": {"default_conversation_client_profile_id"},
 		"default_tool_client_profile_id":         {"default_tool_client_profile_id"},
-		"default_embedding_client_profile_id":    {"default_embedding_client_profile_id", "default_embedding_profile_id", "DefaultEmbeddingProfileID"},
-		"default_speech_client_profile_id":       {"default_speech_client_profile_id", "default_speech_profile_id", "DefaultSpeechProfileID"},
+		"default_embedding_client_profile_id":    {"default_embedding_client_profile_id"},
+		"default_speech_client_profile_id":       {"default_speech_client_profile_id"},
 	}
 	for key, names := range aliases {
 		if item := valueByKey(value, names...); item != nil {
@@ -1275,16 +1284,7 @@ func normalizeProfiles(value any) []any {
 func normalizeProfile(value map[string]any) map[string]any {
 	result := map[string]any{}
 	for _, key := range []string{"profile_id", "client_profile_id", "display_name", "provider", "base_url", "model", "system_prompt", "api_key_configured", "temperature", "top_p", "max_output_tokens", "context_window", "reasoning_effort", "revision", "credential_version", "model_kind", "input_modalities", "provider_config", "provider_secret_status", "created_at", "updated_at"} {
-		aliases := []string{key}
-		switch key {
-		case "profile_id":
-			aliases = append(aliases, "id", "ID")
-		case "api_key_configured":
-			aliases = append(aliases, "APIKeyConfigured")
-		case "client_profile_id":
-			aliases = append(aliases, "ClientProfileID")
-		}
-		if item := valueByKey(value, aliases...); item != nil {
+		if item := value[key]; item != nil {
 			result[key] = item
 		}
 	}
@@ -1292,26 +1292,26 @@ func normalizeProfile(value map[string]any) map[string]any {
 }
 
 func sourceListResult(value map[string]any) map[string]any {
-	raw := anySlice(valueByKey(value, "sources", "Sources"))
+	raw := anySlice(value["sources"])
 	sources := make([]any, 0, len(raw))
 	for _, item := range raw {
 		if source, ok := item.(map[string]any); ok {
 			sources = append(sources, normalizeSource(source))
 		}
 	}
-	return map[string]any{"sources": sources, "next_page_token": stringValue(valueByKey(value, "next_page_token", "NextPageToken"))}
+	return map[string]any{"sources": sources, "next_page_token": stringValue(value["next_page_token"])}
 }
 
 func sourceGetResult(value map[string]any) map[string]any {
-	if source, ok := valueByKey(value, "source", "Source").(map[string]any); ok {
+	if source, ok := value["source"].(map[string]any); ok {
 		return map[string]any{"source": normalizeSource(source)}
 	}
 	return map[string]any{"source": normalizeSource(value)}
 }
 
 func sourceDeleteResult(value map[string]any) map[string]any {
-	replayed := boolValue(valueByKey(value, "replayed", "Replay"))
-	if source, ok := valueByKey(value, "source", "Source").(map[string]any); ok {
+	replayed := boolValue(value["replayed"])
+	if source, ok := value["source"].(map[string]any); ok {
 		return map[string]any{"source": normalizeSource(source), "replayed": replayed}
 	}
 	return map[string]any{"source": normalizeSource(value), "replayed": replayed}
@@ -1322,53 +1322,35 @@ func uploadResult(value map[string]any, includeReplay bool) map[string]any {
 }
 
 func uploadFinishResult(value map[string]any) map[string]any {
-	if source, ok := valueByKey(value, "source", "Source").(map[string]any); ok {
+	if source, ok := value["source"].(map[string]any); ok {
 		return map[string]any{"source": normalizeSource(source)}
 	}
 	return map[string]any{"source": normalizeSource(value)}
 }
 
-func memoryResult(value map[string]any, mode string) map[string]any {
-	if source, ok := valueByKey(value, "source", "Source").(map[string]any); ok {
-		return normalizeMemory(source, mode)
-	}
-	return normalizeMemory(value, mode)
-}
-
-func memoryListResult(value map[string]any) map[string]any {
-	raw := anySlice(valueByKey(value, "items", "Items", "sources", "Sources"))
-	items := make([]any, 0, len(raw))
-	for _, item := range raw {
-		if memory, ok := item.(map[string]any); ok {
-			items = append(items, normalizeMemory(memory, "list"))
-		}
-	}
-	return map[string]any{"items": items, "next_page_token": stringValue(valueByKey(value, "next_page_token", "NextPageToken"))}
-}
-
 func knowledgeSearchResult(value map[string]any) map[string]any {
-	raw := anySlice(valueByKey(value, "items", "Items", "matches", "Matches"))
+	raw := anySlice(value["items"])
 	items := make([]any, 0, len(raw))
 	for _, item := range raw {
 		if match, ok := item.(map[string]any); ok {
 			items = append(items, map[string]any{
-				"source_id": stringValue(valueByKey(match, "source_id", "SourceID")),
-				"chunk_ref": stringValue(valueByKey(match, "chunk_ref", "ChunkRef")),
-				"snippet":   stringValue(valueByKey(match, "snippet", "Snippet")),
-				"score":     numberValue(valueByKey(match, "score", "Score")),
+				"source_id": stringValue(match["source_id"]),
+				"chunk_ref": stringValue(match["chunk_ref"]),
+				"snippet":   stringValue(match["snippet"]),
+				"score":     numberValue(match["score"]),
 			})
 		}
 	}
-	result := map[string]any{"items": items, "next_cursor": stringValue(valueByKey(value, "next_cursor", "next_page_token", "NextPageToken"))}
-	if mode := stringValue(valueByKey(value, "search_mode", "SearchMode")); mode != "" {
+	result := map[string]any{"items": items, "next_cursor": stringValue(value["next_page_token"])}
+	if mode := stringValue(value["search_mode"]); mode != "" {
 		result["search_mode"] = mode
 	}
 	aliases := map[string][]string{
-		"embedding_profile_id":       {"embedding_profile_id", "EmbeddingProfileID"},
-		"embedding_profile_revision": {"embedding_profile_revision", "EmbeddingProfileRevision"},
-		"embedding_model":            {"embedding_model", "EmbeddingModel"},
-		"embedding_generation":       {"embedding_generation", "EmbeddingGeneration"},
-		"collection_config_digest":   {"collection_config_digest", "CollectionConfigDigest"},
+		"embedding_profile_id":       {"embedding_profile_id"},
+		"embedding_profile_revision": {"embedding_profile_revision"},
+		"embedding_model":            {"embedding_model"},
+		"embedding_generation":       {"embedding_generation"},
+		"collection_config_digest":   {"collection_config_digest"},
 	}
 	for key, names := range aliases {
 		if item := valueByKey(value, names...); item != nil {
@@ -1380,27 +1362,8 @@ func knowledgeSearchResult(value map[string]any) map[string]any {
 
 func knowledgeStatusResult(value map[string]any) map[string]any {
 	result := map[string]any{}
-	aliases := map[string][]string{
-		"supported":                  {"supported", "Supported"},
-		"count":                      {"count", "Count", "total", "Total"},
-		"embedding_indexed":          {"embedding_indexed", "EmbeddingIndexed", "indexed", "Indexed"},
-		"embedding_stale":            {"embedding_stale", "EmbeddingStale", "stale", "Stale"},
-		"ready_count":                {"ready_count", "ReadyCount"},
-		"uploading_count":            {"uploading_count", "UploadingCount"},
-		"indexing_count":             {"indexing_count", "IndexingCount"},
-		"failed_count":               {"failed_count", "FailedCount"},
-		"cleanup_pending_count":      {"cleanup_pending_count", "CleanupPendingCount"},
-		"checked_at":                 {"checked_at", "CheckedAt"},
-		"embedding_profile_id":       {"embedding_profile_id", "EmbeddingProfileID"},
-		"embedding_profile_revision": {"embedding_profile_revision", "EmbeddingProfileRevision"},
-		"embedding_model":            {"embedding_model", "EmbeddingModel"},
-		"quota_used_bytes":           {"quota_used_bytes", "QuotaUsedBytes"},
-		"quota_limit_bytes":          {"quota_limit_bytes", "QuotaLimitBytes"},
-		"quota_remaining_bytes":      {"quota_remaining_bytes", "QuotaRemainingBytes"},
-		"max_source_bytes":           {"max_source_bytes", "MaxSourceBytes"},
-	}
-	for key, names := range aliases {
-		if item := valueByKey(value, names...); item != nil {
+	for _, key := range []string{"supported", "count", "embedding_indexed", "embedding_stale", "ready_count", "uploading_count", "indexing_count", "failed_count", "cleanup_pending_count", "checked_at", "embedding_profile_id", "embedding_profile_revision", "embedding_model", "quota_used_bytes", "quota_limit_bytes", "quota_remaining_bytes", "max_source_bytes"} {
+		if item := value[key]; item != nil {
 			result[key] = item
 		}
 	}
@@ -1409,9 +1372,9 @@ func knowledgeStatusResult(value map[string]any) map[string]any {
 
 func embeddingConfigResult(value map[string]any) map[string]any {
 	result := map[string]any{}
-	for _, pair := range [][2]string{{"embedding_profile_id", "EmbeddingProfileID"}, {"embedding_profile_revision", "EmbeddingProfileRevision"}, {"embedding_model", "EmbeddingModel"}, {"dimension", "Dimension"}, {"collection", "Collection"}, {"collection_config_digest", "CollectionConfigDigest"}, {"revision", "Revision"}, {"updated_at", "UpdatedAt"}} {
-		if item := valueByKey(value, pair[0], pair[1]); item != nil {
-			result[pair[0]] = item
+	for _, key := range []string{"embedding_profile_id", "embedding_profile_revision", "embedding_model", "dimension", "collection", "collection_config_digest", "revision", "updated_at"} {
+		if item := value[key]; item != nil {
+			result[key] = item
 		}
 	}
 	return result
@@ -2015,15 +1978,8 @@ func promoteChatResultFields(target map[string]any, authority actionResultAuthor
 func webSearchConfigResult(value map[string]any) map[string]any {
 	result := mapProjection(value,
 		[]string{"enabled", "provider", "api_key_configured", "revision", "tested_at", "updated_at"},
-		map[string][]string{
-			"enabled":            {"enabled", "Enabled"},
-			"provider":           {"provider", "Provider"},
-			"api_key_configured": {"api_key_configured", "APIKeyConfigured"},
-			"revision":           {"revision", "Revision"},
-			"tested_at":          {"tested_at", "TestedAt"},
-			"updated_at":         {"updated_at", "UpdatedAt"},
-		})
-	if boolValue(valueByKey(value, "api_key_configured", "APIKeyConfigured")) {
+		nil)
+	if boolValue(value["api_key_configured"]) {
 		result["api_key_hint"] = "configured"
 	}
 	return result
@@ -2032,26 +1988,18 @@ func webSearchConfigResult(value map[string]any) map[string]any {
 func webSearchTestResult(value map[string]any) map[string]any {
 	return mapProjection(value,
 		[]string{"ok", "provider", "result_count", "tested_at", "enabled", "api_key_configured", "revision"},
-		map[string][]string{
-			"ok":                 {"ok", "OK"},
-			"provider":           {"provider", "Provider"},
-			"result_count":       {"result_count", "ResultCount"},
-			"tested_at":          {"tested_at", "TestedAt"},
-			"enabled":            {"enabled", "Enabled"},
-			"api_key_configured": {"api_key_configured", "APIKeyConfigured"},
-			"revision":           {"revision", "Revision"},
-		})
+		nil)
 }
 
 func confirmationResult(value map[string]any) map[string]any {
-	if confirmation, ok := valueByKey(value, "confirmation", "Confirmation").(map[string]any); ok {
+	if confirmation, ok := value["confirmation"].(map[string]any); ok {
 		return map[string]any{"confirmation": projectCloudWorkerConfirmation(confirmation)}
 	}
 	return map[string]any{"confirmation": projectCloudWorkerConfirmation(value)}
 }
 
 func confirmationListResult(value map[string]any) map[string]any {
-	confirmations := anySlice(valueByKey(value, "confirmations", "Confirmations"))
+	confirmations := anySlice(value["confirmations"])
 	for index, item := range confirmations {
 		if confirmation, ok := item.(map[string]any); ok {
 			confirmations[index] = projectCloudWorkerConfirmation(confirmation)
@@ -2059,7 +2007,7 @@ func confirmationListResult(value map[string]any) map[string]any {
 	}
 	return map[string]any{
 		"confirmations":   confirmations,
-		"next_page_token": stringValue(valueByKey(value, "next_page_token", "next_cursor", "NextPageToken")),
+		"next_page_token": stringValue(value["next_page_token"]),
 	}
 }
 
@@ -2091,63 +2039,52 @@ func objectWrapper(value map[string]any, key string) map[string]any {
 }
 
 func taskResult(value map[string]any) map[string]any {
-	if task, ok := valueByKey(value, "task", "Task").(map[string]any); ok {
+	if task, ok := value["task"].(map[string]any); ok {
 		return map[string]any{"task": normalizeTask(task)}
 	}
 	return map[string]any{"task": normalizeTask(value)}
 }
 
 func normalizeTask(value map[string]any) map[string]any {
-	result := cloneParams(value)
-	for _, pair := range [][2]string{{"task_id", "ID"}, {"status", "State"}, {"revision", "Revision"}, {"attempt", "Attempt"}, {"lease_epoch", "LeaseEpoch"}, {"failure_code", "FailureCode"}} {
-		if _, exists := result[pair[0]]; !exists {
-			if item := valueByKey(value, pair[0], pair[1]); item != nil {
-				result[pair[0]] = item
-			}
-		}
-	}
-	return result
+	return cloneParams(value)
 }
 
 func eventsResult(value map[string]any) map[string]any {
-	return map[string]any{"events": anySlice(valueByKey(value, "events", "Events"))}
+	return map[string]any{"events": anySlice(value["events"])}
 }
 
 func taskListResult(value map[string]any) map[string]any {
-	raw := anySlice(valueByKey(value, "tasks", "Tasks"))
+	raw := anySlice(value["tasks"])
 	items := make([]any, 0, len(raw))
 	for _, item := range raw {
 		if task, ok := item.(map[string]any); ok {
 			items = append(items, normalizeTask(task))
 		}
 	}
-	return map[string]any{"tasks": items, "next_page_token": stringValue(valueByKey(value, "next_page_token", "NextPageToken"))}
+	return map[string]any{"tasks": items, "next_page_token": stringValue(value["next_page_token"])}
 }
 
 func scheduleListResult(value map[string]any) map[string]any {
-	result := map[string]any{"schedules": anySlice(valueByKey(value, "schedules", "Schedules"))}
-	cursor := stringValue(valueByKey(value, "next_cursor", "next_page_token", "NextPageToken"))
+	result := map[string]any{"schedules": anySlice(value["schedules"])}
+	cursor := stringValue(value["next_page_token"])
 	result["next_page_token"] = cursor
 	return result
 }
 
 func scheduleDeleteResult(value map[string]any) map[string]any {
-	return map[string]any{"deleted": true, "schedule_id": stringValue(valueByKey(value, "schedule_id", "id", "ID"))}
+	return map[string]any{"deleted": true, "schedule_id": stringValue(value["schedule_id"])}
 }
 
 func scheduleTriggerResult(value map[string]any) map[string]any {
 	result := map[string]any{}
-	if schedule, ok := valueByKey(value, "schedule", "Schedule").(map[string]any); ok {
+	if schedule, ok := value["schedule"].(map[string]any); ok {
 		result["schedule"] = schedule
 	}
-	if occurrence, ok := valueByKey(value, "occurrence", "Occurrence").(map[string]any); ok {
-		result["occurrence_id"] = stringValue(valueByKey(occurrence, "id", "ID"))
-		if result["occurrence_id"] == "" {
-			result["occurrence_id"] = stringValue(valueByKey(occurrence, "occurrence_id", "OccurrenceID"))
-		}
+	if occurrence, ok := value["occurrence"].(map[string]any); ok {
+		result["occurrence_id"] = stringValue(occurrence["occurrence_id"])
 	}
-	if task, ok := valueByKey(value, "task", "Task").(map[string]any); ok {
-		result["task_id"] = stringValue(valueByKey(task, "id", "ID", "task_id", "TaskID"))
+	if task, ok := value["task"].(map[string]any); ok {
+		result["task_id"] = stringValue(task["task_id"])
 	}
 	for _, key := range []string{"occurrence_id", "task_id"} {
 		if value := stringValue(valueByKey(value, key)); value != "" {
@@ -2158,19 +2095,19 @@ func scheduleTriggerResult(value map[string]any) map[string]any {
 }
 
 func installationListResult(value map[string]any) map[string]any {
-	raw := anySlice(valueByKey(value, "installations", "Installations"))
+	raw := anySlice(value["installations"])
 	items := make([]any, 0, len(raw))
 	for _, item := range raw {
 		if installation, ok := item.(map[string]any); ok {
 			items = append(items, normalizeInstallation(installation))
 		}
 	}
-	return map[string]any{"installations": items, "next_page_token": stringValue(valueByKey(value, "next_page_token", "NextPageToken"))}
+	return map[string]any{"installations": items, "next_page_token": stringValue(value["next_page_token"])}
 }
 
 func installationMutationResult(value map[string]any) map[string]any {
 	result := map[string]any{}
-	if installation, ok := valueByKey(value, "installation", "Installation").(map[string]any); ok {
+	if installation, ok := value["installation"].(map[string]any); ok {
 		result["installation"] = normalizeInstallation(installation)
 	} else {
 		result["installation"] = normalizeInstallation(value)
@@ -2220,88 +2157,44 @@ func normalizeExtensionVersions(value any) []any {
 
 func normalizeSource(value map[string]any) map[string]any {
 	return map[string]any{
-		"source_id":     stringValue(valueByKey(value, "source_id", "id", "ID")),
-		"kind":          stringValue(valueByKey(value, "kind", "Kind")),
-		"status":        stringValue(valueByKey(value, "status", "Status")),
-		"title":         stringValue(valueByKey(value, "title", "Title")),
-		"relative_path": stringValue(valueByKey(value, "relative_path", "RelativePath")),
-		"digest":        stringValue(valueByKey(value, "digest", "Digest")),
-		"size":          integerValue(valueByKey(value, "size", "size_bytes", "SizeBytes")),
-		"mime_type":     stringValue(valueByKey(value, "mime_type", "media_type", "MediaType")),
-		"revision":      integerValue(valueByKey(value, "revision", "Revision")),
-		"created_at":    stringValue(valueByKey(value, "created_at", "CreatedAt")),
-		"updated_at":    stringValue(valueByKey(value, "updated_at", "UpdatedAt")),
-		"error_code":    stringValue(valueByKey(value, "error_code", "ErrorCode")),
-		"content_ref":   stringValue(valueByKey(value, "content_ref", "ContentRef")),
-		"tags":          anySlice(valueByKey(value, "tags", "Tags")),
+		"source_id":     stringValue(value["source_id"]),
+		"kind":          stringValue(value["kind"]),
+		"status":        stringValue(value["status"]),
+		"title":         stringValue(value["title"]),
+		"relative_path": stringValue(value["relative_path"]),
+		"digest":        stringValue(value["digest"]),
+		"size":          integerValue(value["size_bytes"]),
+		"mime_type":     stringValue(value["media_type"]),
+		"revision":      integerValue(value["revision"]),
+		"created_at":    stringValue(value["created_at"]),
+		"updated_at":    stringValue(value["updated_at"]),
+		"error_code":    stringValue(value["error_code"]),
+		"content_ref":   stringValue(value["content_ref"]),
+		"tags":          anySlice(value["tags"]),
 	}
-}
-
-func normalizeMemory(value map[string]any, mode string) map[string]any {
-	result := map[string]any{
-		"memory_id": stringValue(valueByKey(value, "memory_id", "source_id", "id", "ID")),
-		"title":     stringValue(valueByKey(value, "title", "Title")),
-		"content":   stringValue(valueByKey(value, "content", "Content")),
-		"tags":      anySlice(valueByKey(value, "tags", "Tags")),
-	}
-	if mode == "get" || mode == "mutation" || mode == "list" {
-		for _, key := range []string{"revision", "created_at", "updated_at"} {
-			if item := valueByKey(value, key, strings.ToUpper(key[:1])+key[1:]); item != nil {
-				result[key] = item
-			}
-		}
-		if mode == "mutation" {
-			if item := valueByKey(value, "replayed", "Replay"); item != nil {
-				result["replayed"] = item
-			}
-		}
-	}
-	if mode == "create" {
-		if item := valueByKey(value, "created_at", "CreatedAt"); item != nil {
-			result["created_at"] = item
-		}
-		if item := valueByKey(value, "replayed", "Replay"); item != nil {
-			result["replayed"] = item
-		}
-	}
-	aliases := map[string][]string{
-		"embedding_indexed":          {"embedding_indexed", "EmbeddingIndexed"},
-		"embedding_stale":            {"embedding_stale", "EmbeddingStale"},
-		"embedding_status":           {"embedding_status", "EmbeddingStatus"},
-		"embedding_profile_id":       {"embedding_profile_id", "EmbeddingProfileID"},
-		"embedding_profile_revision": {"embedding_profile_revision", "EmbeddingProfileRevision"},
-		"embedding_model":            {"embedding_model", "EmbeddingModel"},
-		"error_code":                 {"error_code", "ErrorCode"},
-	}
-	for key, names := range aliases {
-		if item := valueByKey(value, names...); item != nil {
-			result[key] = item
-		}
-	}
-	return result
 }
 
 func normalizeUpload(value map[string]any, includeReplay bool) map[string]any {
-	metadata, _ := valueByKey(value, "metadata", "Metadata").(map[string]any)
-	size := integerValue(valueByKey(value, "size", "declared_size", "DeclaredSize"))
+	metadata, _ := value["metadata"].(map[string]any)
+	size := integerValue(value["declared_size"])
 	if size == 0 {
-		size = integerValue(valueByKey(metadata, "size", "declared_size", "DeclaredSize"))
+		size = integerValue(metadata["declared_size"])
 	}
-	sourceID := stringValue(valueByKey(value, "source_id", "SourceID"))
+	sourceID := stringValue(value["source_id"])
 	if sourceID == "" {
-		sourceID = stringValue(valueByKey(metadata, "source_id", "SourceID"))
+		sourceID = stringValue(metadata["source_id"])
 	}
 	result := map[string]any{
-		"upload_id":       stringValue(valueByKey(value, "upload_id", "ID", "UploadID")),
+		"upload_id":       stringValue(value["upload_id"]),
 		"source_id":       sourceID,
-		"status":          stringValue(valueByKey(value, "status", "Status")),
+		"status":          stringValue(value["status"]),
 		"size":            size,
-		"received_size":   integerValue(valueByKey(value, "received_size", "ReceivedSize")),
-		"max_chunk_bytes": integerValue(valueByKey(value, "max_chunk_bytes", "MaxChunkBytes")),
-		"progress":        numberValue(valueByKey(value, "progress", "Progress")),
+		"received_size":   integerValue(value["received_size"]),
+		"max_chunk_bytes": integerValue(value["max_chunk_bytes"]),
+		"progress":        numberValue(value["progress"]),
 	}
 	if includeReplay {
-		if item := valueByKey(value, "replayed", "Replay"); item != nil {
+		if item := value["replayed"]; item != nil {
 			result["replayed"] = item
 		}
 	}
@@ -2397,7 +2290,7 @@ func applyLegacyInputAliases(action string, input map[string]any) {
 			}
 		}
 	}
-	for _, name := range []string{"agent.chat.conversations.list", "agent.core.model_profiles.list", "agent.model_profiles.list", "agent.knowledge.sources.list", "agent.knowledge.memories.list", "agent.knowledge.search", "agent.core.tasks.list"} {
+	for _, name := range []string{"agent.chat.conversations.list", "agent.model_profiles.list", "agent.knowledge.sources.list", "agent.knowledge.search", "agent.core.tasks.list"} {
 		if action == name {
 			alias("page_size", "limit")
 		}

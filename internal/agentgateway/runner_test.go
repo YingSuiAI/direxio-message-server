@@ -55,10 +55,10 @@ func TestActionBindingIsExplicit(t *testing.T) {
 
 func TestActionBindingsExcludeUnpublishedModelAndKnowledgeActions(t *testing.T) {
 	for _, action := range []string{
-		"agent.core.model_profiles.create", "agent.core.model_profiles.update", "agent.core.model_profiles.test",
+		"agent.core.model_profiles.sync", "agent.core.model_profiles.list", "agent.core.model_profiles.get", "agent.core.model_profiles.delete", "agent.core.model_profiles.create", "agent.core.model_profiles.update", "agent.core.model_profiles.test",
 		"agent.model_profiles.create", "agent.model_profiles.update",
-		"agent.knowledge.sources.get", "agent.knowledge.memories.get",
-		"agent.knowledge.memory.search", "agent.knowledge.index",
+		"agent.knowledge.sources.get", "agent.knowledge.memory.create", "agent.knowledge.memories.list", "agent.knowledge.memories.get", "agent.knowledge.memories.update", "agent.knowledge.memories.delete",
+		"agent.knowledge.memory.search", "agent.knowledge.index", "agent.skills.list", "agent.skills.install", "agent.skills.enable", "agent.skills.disable", "agent.skills.uninstall", "agent.skills.registry.search", "agent.mcp.servers.list", "agent.mcp.servers.install", "agent.mcp.servers.enable", "agent.mcp.servers.disable", "agent.mcp.servers.uninstall", "agent.mcp.registry.search",
 	} {
 		if _, ok := actionBindingFor(action); ok {
 			t.Errorf("unpublished ProductCore action %q retains a gateway binding", action)

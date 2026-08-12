@@ -9,18 +9,8 @@ import (
 	capv1 "github.com/YingSuiAI/dirextalk-capability-api/gen/go/dirextalk/capability/v1"
 )
 
-const agentMemoryResultSchema = `{"additionalProperties":false,"properties":{"content":{"type":"string"},"created_at":{"format":"date-time","type":"string"},"embedding_indexed":{"type":"boolean"},"embedding_revision":{"minimum":0,"type":"integer"},"embedding_stale":{"type":"boolean"},"embedding_status":{"type":"string"},"error_code":{"type":"string"},"memory_id":{"format":"uuid","type":"string"},"replayed":{"type":"boolean"},"revision":{"minimum":1,"type":"integer"},"tags":{"items":{"type":"string"},"type":"array"},"title":{"type":"string"},"updated_at":{"format":"date-time","type":"string"}},"required":["memory_id","title","content","tags","revision","created_at","updated_at","replayed","embedding_indexed","embedding_stale","embedding_status"],"type":"object"}`
-
-const agentMemoryCreateResultSchema = `{"additionalProperties":false,"properties":{"content":{"type":"string"},"created_at":{"format":"date-time","type":"string"},"embedding_indexed":{"type":"boolean"},"embedding_model":{"type":"string"},"embedding_profile_id":{"format":"uuid","type":"string"},"embedding_profile_revision":{"minimum":1,"type":"integer"},"embedding_revision":{"minimum":0,"type":"integer"},"embedding_stale":{"type":"boolean"},"embedding_status":{"type":"string"},"error_code":{"type":"string"},"memory_id":{"format":"uuid","type":"string"},"replayed":{"type":"boolean"},"revision":{"minimum":1,"type":"integer"},"tags":{"items":{"type":"string"},"type":"array"},"title":{"type":"string"},"updated_at":{"format":"date-time","type":"string"}},"required":["memory_id","title","content","tags","revision","created_at","updated_at","replayed","embedding_indexed","embedding_stale","embedding_status"],"type":"object"}`
-
-const agentMemoryListItemSchema = `{"additionalProperties":false,"properties":{"content":{"type":"string"},"created_at":{"format":"date-time","type":"string"},"embedding_indexed":{"type":"boolean"},"embedding_stale":{"type":"boolean"},"embedding_status":{"type":"string"},"error_code":{"type":"string"},"memory_id":{"format":"uuid","type":"string"},"revision":{"minimum":1,"type":"integer"},"tags":{"items":{"type":"string"},"type":"array"},"title":{"type":"string"},"updated_at":{"format":"date-time","type":"string"}},"required":["memory_id","title","content","tags","revision","created_at","updated_at","embedding_indexed","embedding_stale","embedding_status"],"type":"object"}`
-
-const agentMemoryListResultSchema = `{"additionalProperties":false,"properties":{"items":{"items":` + agentMemoryListItemSchema + `,"type":"array"},"next_page_token":{"type":"string"}},"required":["items","next_page_token"],"type":"object"}`
-
 func TestExtensionMutationCatalogPinsCurrentStrictAgentSchemas(t *testing.T) {
 	want := map[string]string{
-		"agent.skills.install":      "9acc5baf60e119e1870f8521f9a5dc7686bd7e7cc3f86a88db232efc095b3296",
-		"agent.mcp.servers.install": "d298a2044537c6fe426468db657e114784169bc3404008073ac37e6b29a62d83",
 		"agent.core.mcp.install":    "d298a2044537c6fe426468db657e114784169bc3404008073ac37e6b29a62d83",
 		"agent.core.mcp.update":     "38e0d16c5ba8fb0ee20323ddb997840cdbaae6aa9b16dfe6e20f992ca2ee735c",
 		"agent.core.skills.install": "9acc5baf60e119e1870f8521f9a5dc7686bd7e7cc3f86a88db232efc095b3296",
@@ -36,50 +26,16 @@ func TestExtensionMutationCatalogPinsCurrentStrictAgentSchemas(t *testing.T) {
 
 func TestKnowledgeCatalogPinsCurrentAgentSchemaResults(t *testing.T) {
 	want := map[string]string{
-		"agent.knowledge.config.get":      "87c332e9185a0436d6488041bbfc11cd66c9f40e345af02d9f97a76676cd65ae",
-		"agent.knowledge.config.update":   "87c332e9185a0436d6488041bbfc11cd66c9f40e345af02d9f97a76676cd65ae",
-		"agent.knowledge.memory.create":   "57ed8c9f5f52f0eaf3e3692c17c567f1a7ddb3f1c69faa8163d707735da3299e",
-		"agent.knowledge.memories.list":   "9651cc57500bee6ee243fe6eb27950eb194a9fe5996af90c7a3090d825c98085",
-		"agent.knowledge.memories.update": "5ff713d2c2628dcb1742f23725d3ee50347b578f58675b41c07f269e52793913",
-		"agent.knowledge.memories.delete": "5ff713d2c2628dcb1742f23725d3ee50347b578f58675b41c07f269e52793913",
-		"agent.knowledge.search":          "3bff0a96cb6f09421ee1a5ea243b8801a0b61fa4b1f8e01cdf98653acfd99761",
-		"agent.knowledge.status":          "01c2cda93a058ad6e133692089afb4b81b9e5800d18003f6cd2f3e62f8efa4a3",
+		"agent.knowledge.config.get":    "87c332e9185a0436d6488041bbfc11cd66c9f40e345af02d9f97a76676cd65ae",
+		"agent.knowledge.config.update": "87c332e9185a0436d6488041bbfc11cd66c9f40e345af02d9f97a76676cd65ae",
+		"agent.knowledge.search":        "3bff0a96cb6f09421ee1a5ea243b8801a0b61fa4b1f8e01cdf98653acfd99761",
+		"agent.knowledge.status":        "01c2cda93a058ad6e133692089afb4b81b9e5800d18003f6cd2f3e62f8efa4a3",
 	}
 	for action, expected := range want {
 		requirement := NewCatalogRequirement(action)
 		if got := hex.EncodeToString(requirement.ResultSchemaDigest); got != expected {
 			t.Errorf("%s result schema digest = %s, want %s", action, got, expected)
 		}
-	}
-}
-
-func TestValidateCatalogPinsCurrentMemoryResultSchemas(t *testing.T) {
-	tests := []struct {
-		action, operation, input, result string
-	}{
-		{"agent.knowledge.memory.create", "create_memory", `{"type":"object","properties":{"source_id":{"type":"string"},"title":{"type":"string"},"content":{"type":"string"},"content_sha256":{"type":"string"},"media_type":{"type":"string"},"tags":{"type":"array"},"idempotency_key":{"format":"uuid","type":"string"}},"required":["content","idempotency_key"]}`, agentMemoryCreateResultSchema},
-		{"agent.knowledge.memories.list", "list_memories", `{"type":"object","properties":{"page_token":{"type":"string"},"page_size":{"type":"integer"},"limit":{"type":"integer"},"status":{"type":"string"}}}`, agentMemoryListResultSchema},
-		{"agent.knowledge.memories.update", "update_memory", `{"type":"object","properties":{"memory_id":{"type":"string"},"source_id":{"type":"string"},"expected_revision":{"type":"integer"},"title":{"type":"string"},"content":{"type":"string"},"content_sha256":{"type":"string"},"media_type":{"type":"string"},"tags":{"type":"array"},"idempotency_key":{"format":"uuid","type":"string"}},"required":["memory_id","expected_revision","content","idempotency_key"]}`, agentMemoryResultSchema},
-		{"agent.knowledge.memories.delete", "delete_memory", `{"type":"object","properties":{"memory_id":{"type":"string"},"expected_revision":{"type":"integer"},"idempotency_key":{"format":"uuid","type":"string"}},"required":["memory_id","expected_revision","idempotency_key"]}`, agentMemoryResultSchema},
-	}
-
-	for _, test := range tests {
-		t.Run(test.action, func(t *testing.T) {
-			descriptor := catalogTestDescriptor("agent.knowledge.v1", test.operation, test.input, test.result)
-			catalog := catalogTestWithDigest(t, descriptor)
-			requirement := NewCatalogRequirement(test.action)
-			if err := ValidateCatalog(catalog, []CatalogRequirement{requirement}); err != nil {
-				t.Fatalf("current Agent memory schema rejected: %v", err)
-			}
-
-			descriptor.Operations[0].ResultSchemaJson = `{"type":"object"}`
-			drifted := sha256.Sum256([]byte(descriptor.Operations[0].ResultSchemaJson))
-			descriptor.Operations[0].ResultSchemaDigest = drifted[:]
-			catalog.CatalogDigest = computeCatalogDigest(catalog.Capabilities)
-			if err := ValidateCatalog(catalog, []CatalogRequirement{requirement}); err == nil {
-				t.Fatal("catalog accepted generic memory result schema")
-			}
-		})
 	}
 }
 
@@ -149,15 +105,11 @@ func TestValidateCatalogAcceptsCurrentAgentInfoSchemas(t *testing.T) {
 		Readiness:       true,
 		Operations: []*capv1.OperationDescriptor{
 			catalogTestDescriptor("agent.info.v1", "get_backends", input, backends).Operations[0],
-			catalogTestDescriptor("agent.info.v1", "get_status", input, backend).Operations[0],
 		},
 	}
 	catalog := catalogTestWithDigest(t, descriptor)
-	wantDigest := map[string]string{
-		"agent.backends.get":    "4a0f95cd99ddf917e51efbf74e83f2dd78775f7602437f9afe31df0a25e82d19",
-		"agent.core.status.get": "677f2cc7224b592e8bebc7e63eeecef4a63bda3b74fbe673999fc5bf559b675e",
-	}
-	for _, action := range []string{"agent.backends.get", "agent.core.status.get"} {
+	wantDigest := map[string]string{"agent.backends.get": "4a0f95cd99ddf917e51efbf74e83f2dd78775f7602437f9afe31df0a25e82d19"}
+	for _, action := range []string{"agent.backends.get"} {
 		t.Run(action, func(t *testing.T) {
 			requirement := NewCatalogRequirement(action)
 			if got := hex.EncodeToString(requirement.ResultSchemaDigest); got != wantDigest[action] {
@@ -355,14 +307,11 @@ func TestValidateCatalogAcceptsCurrentMutationSchemas(t *testing.T) {
 		{"agent.chat.attachment.commit", "agent.chat.v1", "upload_attachment_commit", `{"additionalProperties":false,"properties":{"content_sha256":{"pattern":"^[a-f0-9]{64}$","type":"string"},"expected_revision":{"minimum":1,"type":"integer"},"idempotency_key":{"format":"uuid","type":"string"},"upload_id":{"format":"uuid","type":"string"}},"required":["idempotency_key","upload_id","expected_revision","content_sha256"],"type":"object"}`, `{"additionalProperties":false,"properties":{"expires_at":{"format":"date-time","type":"string"},"kind":{"enum":["image","file","workspace_archive"],"type":"string"},"mime_type":{"maxLength":255,"minLength":1,"type":"string"},"name":{"maxLength":255,"minLength":1,"type":"string"},"revision":{"minimum":1,"type":"integer"},"sha256":{"pattern":"^[a-f0-9]{64}$","type":"string"},"size_bytes":{"maximum":8388608,"minimum":1,"type":"integer"},"source_id":{"format":"uuid","type":"string"},"status":{"const":"committed","type":"string"},"turn_request_id":{"format":"uuid","type":"string"}},"required":["source_id","revision","turn_request_id","kind","name","mime_type","size_bytes","sha256","status","expires_at"],"type":"object"}`},
 		{"agent.chat.conversations.create", "agent.chat.v1", "create_conversation", `{"type":"object","properties":{"title":{"type":"string"},"conversation_id":{"type":"string","format":"uuid"},"idempotency_key":{"type":"string","format":"uuid"}},"required":["conversation_id","idempotency_key"]}`, objectResult},
 		{"agent.chat.turn.stop", "agent.chat.v1", "stop_turn", `{"additionalProperties":false,"properties":{"expected_revision":{"minimum":1,"type":"integer"},"idempotency_key":{"format":"uuid","type":"string"},"turn_id":{"format":"uuid","type":"string"}},"required":["idempotency_key","turn_id","expected_revision"],"type":"object"}`, `{"additionalProperties":false,"properties":{"conversation_id":{"format":"uuid","type":"string"},"created_at":{"format":"date-time","type":"string"},"idempotency_key":{"format":"uuid","type":"string"},"last_sequence":{"minimum":0,"type":"integer"},"revision":{"minimum":1,"type":"integer"},"state":{"enum":["accepted","running","waiting_confirmation","completed","canceled","failed"],"type":"string"},"terminal_code":{"type":"string"},"terminal_summary":{"type":"string"},"turn_id":{"format":"uuid","type":"string"},"updated_at":{"format":"date-time","type":"string"}},"required":["turn_id","idempotency_key","conversation_id","state","revision","last_sequence","terminal_code","terminal_summary","created_at","updated_at"],"type":"object"}`},
-		{"agent.knowledge.config.update", "agent.knowledge.v1", "update_config", `{"type":"object","properties":{"idempotency_key":{"format":"uuid","type":"string"},"expected_revision":{"type":"integer"},"embedding_profile_id":{"type":"string"},"profile_id":{"type":"string"},"dimension":{"type":"integer"},"collection":{"type":"string"},"collection_config_digest":{"type":"string"}},"required":["idempotency_key","expected_revision"]}`, knowledgeConfigResult},
+		{"agent.knowledge.config.update", "agent.knowledge.v1", "update_config", `{"additionalProperties":false,"properties":{"collection":{"type":"string"},"collection_config_digest":{"type":"string"},"dimension":{"type":"integer"},"embedding_profile_id":{"format":"uuid","type":"string"},"expected_revision":{"minimum":1,"type":"integer"},"idempotency_key":{"format":"uuid","type":"string"}},"required":["idempotency_key","expected_revision"],"type":"object"}`, knowledgeConfigResult},
 		{"agent.knowledge.sources.delete", "agent.knowledge.v1", "delete_source", `{"type":"object","properties":{"source_id":{"type":"string"},"expected_revision":{"type":"integer"},"idempotency_key":{"format":"uuid","type":"string"}},"required":["source_id","expected_revision","idempotency_key"]}`, objectResult},
 		{"agent.knowledge.upload.start", "agent.knowledge.v1", "start_upload", `{"type":"object","properties":{"upload_id":{"type":"string"},"source_id":{"type":"string"},"title":{"type":"string"},"relative_path":{"type":"string"},"media_type":{"type":"string"},"declared_size":{"type":"integer"},"content_sha256":{"type":"string"},"idempotency_key":{"format":"uuid","type":"string"}},"required":["declared_size","content_sha256","idempotency_key"]}`, objectResult},
 		{"agent.knowledge.upload.chunk", "agent.knowledge.v1", "append_upload_chunk", `{"type":"object","properties":{"upload_id":{"type":"string"},"ordinal":{"type":"integer"},"offset_bytes":{"type":"integer"},"data":{"type":"string"},"chunk_sha256":{"type":"string"},"idempotency_key":{"format":"uuid","type":"string"}},"required":["upload_id","data","chunk_sha256","idempotency_key"]}`, objectResult},
-		{"agent.knowledge.upload.finish", "agent.knowledge.v1", "commit_upload", `{"type":"object","properties":{"upload_id":{"type":"string"},"expected_revision":{"type":"integer"},"content_sha256":{"type":"string"},"idempotency_key":{"format":"uuid","type":"string"}},"required":["upload_id","content_sha256","idempotency_key"]}`, objectResult},
-		{"agent.knowledge.memory.create", "agent.knowledge.v1", "create_memory", `{"type":"object","properties":{"source_id":{"type":"string"},"title":{"type":"string"},"content":{"type":"string"},"content_sha256":{"type":"string"},"media_type":{"type":"string"},"tags":{"type":"array"},"idempotency_key":{"format":"uuid","type":"string"}},"required":["content","idempotency_key"]}`, agentMemoryCreateResultSchema},
-		{"agent.knowledge.memories.update", "agent.knowledge.v1", "update_memory", `{"type":"object","properties":{"memory_id":{"type":"string"},"source_id":{"type":"string"},"expected_revision":{"type":"integer"},"title":{"type":"string"},"content":{"type":"string"},"content_sha256":{"type":"string"},"media_type":{"type":"string"},"tags":{"type":"array"},"idempotency_key":{"format":"uuid","type":"string"}},"required":["memory_id","expected_revision","content","idempotency_key"]}`, agentMemoryResultSchema},
-		{"agent.knowledge.memories.delete", "agent.knowledge.v1", "delete_memory", `{"type":"object","properties":{"memory_id":{"type":"string"},"expected_revision":{"type":"integer"},"idempotency_key":{"format":"uuid","type":"string"}},"required":["memory_id","expected_revision","idempotency_key"]}`, agentMemoryResultSchema},
+		{"agent.knowledge.upload.finish", "agent.knowledge.v1", "commit_upload", `{"additionalProperties":false,"properties":{"content_sha256":{"pattern":"^[a-f0-9]{64}$","type":"string"},"expected_revision":{"minimum":1,"type":"integer"},"idempotency_key":{"format":"uuid","type":"string"},"upload_id":{"format":"uuid","type":"string"}},"required":["upload_id","expected_revision","content_sha256","idempotency_key"],"type":"object"}`, objectResult},
 		{"agent.core.aws.credentials.test", "agent.aws.v1", "test_credential", `{"type":"object","additionalProperties":false,"properties":{"credential_id":{"format":"uuid","type":"string"},"expected_revision":{"type":"integer"},"idempotency_key":{"format":"uuid","type":"string"}},"required":["credential_id","expected_revision","idempotency_key"]}`, `{"additionalProperties":false,"properties":{"account_id":{"type":"string"},"credential_id":{"format":"uuid","type":"string"},"credential_revision":{"minimum":1,"type":"integer"},"principal_id":{"type":"string"},"tested_at":{"format":"date-time","type":"string"},"user_arn":{"type":"string"}},"required":["credential_id","credential_revision","account_id","user_arn","principal_id","tested_at"],"type":"object"}`},
 	}
 

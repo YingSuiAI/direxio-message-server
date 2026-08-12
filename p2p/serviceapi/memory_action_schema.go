@@ -34,3 +34,40 @@ func memoryStatusSchema() *ActionSchema {
 	}
 	return schema
 }
+
+func memoryFactUpdateSchema() *ActionSchema {
+	return &ActionSchema{
+		Request: map[string]ActionFieldSchema{
+			"fact_id":         {Type: "string", Required: true},
+			"idempotency_key": {Type: "string", Required: true},
+			"value":           {Type: "string", Required: true},
+		},
+		Response: memoryFactFields(),
+	}
+}
+
+func memoryFactDeleteSchema() *ActionSchema {
+	return &ActionSchema{
+		Request: map[string]ActionFieldSchema{
+			"fact_id":         {Type: "string", Required: true},
+			"idempotency_key": {Type: "string", Required: true},
+		},
+		Response: map[string]ActionFieldSchema{
+			"fact_id": {Type: "string", Required: true},
+			"deleted": {Type: "boolean", Required: true},
+		},
+	}
+}
+
+func memoryFactFields() map[string]ActionFieldSchema {
+	return map[string]ActionFieldSchema{
+		"id":                {Type: "string", Required: true},
+		"subject":           {Type: "string", Required: true},
+		"predicate":         {Type: "string", Required: true},
+		"value":             {Type: "string", Required: true},
+		"kind":              {Type: "string", Required: true},
+		"confidence":        {Type: "number", Required: true},
+		"valid_from":        {Type: "string", Required: true},
+		"last_confirmed_at": {Type: "string", Required: true},
+	}
+}
