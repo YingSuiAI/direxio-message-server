@@ -187,8 +187,10 @@ for layer in layers:
     if not isinstance(predicate, str):
         raise SystemExit(f"attestation manifest has an untyped layer: {ref}")
     predicates.add(predicate)
-required = {"https://spdx.dev/Document", "https://slsa.dev/provenance/v0.2"}
-if not required.issubset(predicates):
+if "https://spdx.dev/Document" not in predicates or not any(
+    value in predicates
+    for value in ("https://slsa.dev/provenance/v0.2", "https://slsa.dev/provenance/v1")
+):
     raise SystemExit(f"attestation manifest lacks provenance or SBOM: {ref}")
 PY
   then
