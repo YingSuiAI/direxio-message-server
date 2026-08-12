@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v1.1.35
+
+1. Publish exact structured-memory fact update and delete actions.
+2. Remove superseded Agent action aliases and legacy Knowledge-memory CRUD.
+3. Pin the ProductCore gateway to the current Agent capability schemas.
+
 ## v1.1.34
 
 1. Keep the updater receipt as the Agent runtime version authority and treat the central Agent version only as a newer-version comparison target.
