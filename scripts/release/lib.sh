@@ -1,9 +1,5 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Resolved from this installed script directory.
-# shellcheck disable=SC1091
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/oci-lib.sh"
-
 release_die() {
   printf 'release gate failed: %s\n' "$*" >&2
   exit 1
@@ -186,11 +182,10 @@ PY
 }
 
 release_write_verified() {
-  [[ $# -eq 1 && "$1" =~ ^sha256:[0-9a-f]{64}$ ]] || release_die 'local verified image ID is invalid'
-  python3 - "$RELEASE_VERIFIED" "$RELEASE_VERSION" "$RELEASE_COMMIT" "$RELEASE_IMAGE" "$1" <<'PY'
+  python3 - "$RELEASE_VERIFIED" "$RELEASE_VERSION" "$RELEASE_COMMIT" "$RELEASE_IMAGE" <<'PY'
 import json, os, pathlib, sys, tempfile
 path = pathlib.Path(sys.argv[1])
-value = {"commit": sys.argv[3], "image": sys.argv[4], "image_id": sys.argv[5], "image_probe": "passed", "tests": "passed", "version": sys.argv[2]}
+value = {"commit": sys.argv[3], "image": sys.argv[4], "image_probe": "passed", "tests": "passed", "version": sys.argv[2]}
 data = json.dumps(value, separators=(",", ":"), sort_keys=True).encode()
 fd, temporary = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
 try:
@@ -216,7 +211,7 @@ try:
     value = json.loads(raw)
 except Exception as exc:
     raise SystemExit(f"invalid verification evidence: {exc}")
-required = {"version", "commit", "image", "image_id", "tests", "image_probe"}
+required = {"version", "commit", "image", "tests", "image_probe"}
 if set(value) != required or raw != json.dumps(value, separators=(",", ":"), sort_keys=True).encode():
     raise SystemExit("verification evidence is not canonical")
 if value["tests"] != "passed" or value["image_probe"] != "passed":
@@ -225,29 +220,27 @@ patterns = {
     "version": r"^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$",
     "commit": r"^[0-9a-f]{40}$",
     "image": r"^dirextalk/message-server:v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$",
-    "image_id": r"^sha256:[0-9a-f]{64}$",
 }
 if any(not isinstance(value[key], str) or not re.fullmatch(pattern, value[key]) for key, pattern in patterns.items()):
     raise SystemExit("verification evidence value is invalid")
 print(value["version"])
 print(value["commit"])
 print(value["image"])
-print(value["image_id"])
 PY
 )" || release_die 'verification evidence is invalid'
   mapfile -t verified_values <<<"$values"
-  [[ "${#verified_values[@]}" == 4 && "${verified_values[0]}" == "$RELEASE_VERSION" && "${verified_values[1]}" == "$RELEASE_COMMIT" && "${verified_values[2]}" == "$RELEASE_IMAGE" ]] || release_die 'verification evidence does not match release context'
-  RELEASE_VERIFIED_IMAGE_ID="${verified_values[3]}"
-  export RELEASE_VERIFIED_IMAGE_ID
+  [[ "${#verified_values[@]}" == 3 && "${verified_values[0]}" == "$RELEASE_VERSION" && "${verified_values[1]}" == "$RELEASE_COMMIT" && "${verified_values[2]}" == "$RELEASE_IMAGE" ]] || release_die 'verification evidence does not match release context'
 }
 
-release_probe_remote_index() {
-  [[ $# -eq 1 ]] || release_die 'internal error: remote index verification requires one image reference'
-  release_oci_probe_index release_die "$1"
-}
-
-release_remote_index_digest() {
-  release_probe_remote_index "$1"
-  [[ "$RELEASE_OCI_INDEX_EXISTS" == 1 ]] || release_die "remote OCI index is unavailable: $1"
-  printf '%s\n' "$RELEASE_OCI_INDEX_DIGEST"
+release_write_notes() {
+  local destination=$1
+  python3 - "$RELEASE_REPO_ROOT/release/RELEASE_NOTES.md" "$RELEASE_VERSION" "$destination" <<'PY'
+import pathlib, re, sys
+source, version, destination = sys.argv[1:]
+text = pathlib.Path(source).read_text(encoding="utf-8")
+match = re.search(rf"(?ms)^##[ \t]+{re.escape(version)}[ \t]*\n.*?(?=^##[ \t]+v|\Z)", text)
+if not match:
+    raise SystemExit("release notes section is missing")
+pathlib.Path(destination).write_text(match.group(0).rstrip() + "\n", encoding="utf-8", newline="\n")
+PY
 }

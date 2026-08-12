@@ -19,11 +19,8 @@ the complete authorization for a node to request that canonical target.
 
 The release gate runs the affected Go packages, the retained-data migration
 suite, the production build, Compose validation, and an image version probe.
-The built image labels must bind the requested version, reviewed commit, and
-commit timestamp. Verification evidence is canonical JSON bound to those same
-values. Publication uses buildx to push a provenance- and SBOM-bearing OCI
-index with exactly one real platform, `linux/amd64`; buildx attestation
-descriptors with platform `unknown/unknown` do not count as runtime platforms.
+The built image labels bind the requested version, reviewed commit, and commit
+timestamp. Verification evidence is canonical JSON bound to those values.
 
 No release manifest, release index, checksum, predecessor asset, or offline
 attestation is generated, downloaded, uploaded, or consulted.
@@ -32,28 +29,15 @@ attestation is generated, downloaded, uploaded, or consulted.
 
 1. Pass repository tests, build the local version image, and probe its metadata
    and embedded version.
-2. Push `dirextalk/message-server:vX.Y.Z` as an OCI index, inspect and record
-   its canonical digest and exact `linux/amd64` platform set, pull that platform
-   back, and probe its labels, revision, timestamp, and embedded version again.
-3. Create or verify the annotated Git tag and matching formal GitHub Release
-   using the checked-in title and release notes. The Release has no assets.
-4. Only after the formal Release succeeds, create
-   `dirextalk/message-server:latest` from the immutable version-index digest.
-   Require both tags to resolve to the same OCI index digest, then pull the
-   `linux/amd64` platform and probe its metadata and embedded version.
+2. Push `dirextalk/message-server:vX.Y.Z`, pull it back, and probe its version
+   and revision labels plus embedded version again.
+3. Create or reuse the same-version Git tag and matching formal GitHub Release.
+4. Only after the formal Release succeeds, update
+   `dirextalk/message-server:latest` from the version tag, pull `latest`, and
+   probe its version/revision labels and embedded version.
 
-The repository-owned Agent release scripts use the same buildx OCI index,
-platform, digest, label, and pull-back rules. They additionally require all
-three Agent binaries to report the requested version. Their `latest` tag moves
-only after the version index and all three binary probes pass.
+The sibling Agent repository owns Agent publication and its three-binary
+version probes. Message Server release automation never publishes Agent images.
 
-The scripts require a clean `main` whose `HEAD` equals `origin/main`. An
-existing version tag must already resolve to the same reviewed commit; the
-scripts check the remote tag before moving either image tag and never move a tag
-that belongs to another commit. An existing formal Release must exactly match
-the checked-in title and notes and contain no assets.
-
-An explicitly authorized same-version replacement preserves the old tag,
-Release, and image evidence outside the repository, deletes both the old formal
-Release and remote tag, and then runs the normal scripts from the new reviewed
-commit. The script does not require a version bump after that external cleanup.
+The scripts require a clean `main` whose `HEAD` equals `origin/main`. The final
+same-version tag must resolve to that reviewed commit.

@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Stable version on main, or exact Agent commit on the integration branch
+        description: Stable vX.Y.Z version on main
         required: true
         type: string
 
@@ -16,130 +16,6 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  integration-publish:
-    name: Publish split Agent integration images
-    if: github.ref == 'refs/heads/adam/agent-core-v1-integration'
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-    steps:
-      - name: Validate requested Agent revision
-        env:
-          AGENT_REVISION_INPUT: ${{ inputs.version }}
-        run: |
-          case "$AGENT_REVISION_INPUT" in
-            *[!0-9a-f]*|'')
-              echo 'integration publication requires a lowercase hexadecimal Agent commit' >&2
-              exit 1
-              ;;
-          esac
-          test "${#AGENT_REVISION_INPUT}" -eq 40
-          remote_revision=$(git ls-remote --exit-code \
-            https://github.com/YingSuiAI/dirextalk-agent.git \
-            refs/heads/adam/agent-core-v1-integration | awk '{print $1}')
-          test "$remote_revision" = "$AGENT_REVISION_INPUT"
-
-      - name: Check out message-server
-        uses: actions/checkout@v4
-        with:
-          path: message-server
-          persist-credentials: false
-
-      - name: Check out exact Agent revision
-        uses: actions/checkout@v4
-        with:
-          repository: YingSuiAI/dirextalk-agent
-          ref: ${{ inputs.version }}
-          path: agent
-          persist-credentials: false
-
-      - id: identity
-        name: Bind source and image identities
-        env:
-          EXPECTED_MESSAGE_REVISION: ${{ github.sha }}
-          EXPECTED_AGENT_REVISION: ${{ inputs.version }}
-        run: |
-          message_revision=$(git -C message-server rev-parse HEAD)
-          agent_revision=$(git -C agent rev-parse HEAD)
-          test "$message_revision" = "$EXPECTED_MESSAGE_REVISION"
-          test "$agent_revision" = "$EXPECTED_AGENT_REVISION"
-          message_short=$(git -C message-server rev-parse --short=8 HEAD)
-          agent_short=$(git -C agent rev-parse --short=8 HEAD)
-          message_build_time=$(git -C message-server show -s --format=%cI HEAD)
-          agent_build_time=$(git -C agent show -s --format=%cI HEAD)
-          {
-            echo "message_revision=$message_revision"
-            echo "agent_revision=$agent_revision"
-            echo "message_tag=agent-core-v1-$message_short"
-            echo "agent_tag=agent-core-v1-$agent_short"
-            echo "message_build_time=$message_build_time"
-            echo "agent_build_time=$agent_build_time"
-          } >>"$GITHUB_OUTPUT"
-
-      - uses: docker/setup-buildx-action@v3
-
-      - name: Authenticate to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - id: message-image
-        name: Build and publish message-server image
-        uses: docker/build-push-action@v6
-        with:
-          context: ./message-server
-          file: ./message-server/Dockerfile
-          platforms: linux/amd64
-          push: true
-          provenance: mode=max
-          sbom: true
-          tags: docker.io/dirextalk/message-server:${{ steps.identity.outputs.message_tag }}
-          build-args: |
-            GOPROXY=https://proxy.golang.org,direct
-            VERSION=${{ steps.identity.outputs.message_tag }}
-            COMMIT=${{ steps.identity.outputs.message_revision }}
-            BUILD_TIME=${{ steps.identity.outputs.message_build_time }}
-
-      - id: agent-image
-        name: Build and publish unified Agent image
-        uses: docker/build-push-action@v6
-        with:
-          context: ./agent
-          file: ./agent/deploy/container/agent.Containerfile
-          platforms: linux/amd64
-          push: true
-          provenance: mode=max
-          sbom: true
-          tags: docker.io/dirextalk/agent:${{ steps.identity.outputs.agent_tag }}
-          build-args: |
-            GOPROXY=https://proxy.golang.org,direct
-            VERSION=${{ steps.identity.outputs.agent_tag }}
-            REVISION=${{ steps.identity.outputs.agent_revision }}
-
-      - name: Record immutable publication evidence
-        env:
-          MESSAGE_TAG: ${{ steps.identity.outputs.message_tag }}
-          MESSAGE_REVISION: ${{ steps.identity.outputs.message_revision }}
-          MESSAGE_DIGEST: ${{ steps.message-image.outputs.digest }}
-          AGENT_TAG: ${{ steps.identity.outputs.agent_tag }}
-          AGENT_REVISION: ${{ steps.identity.outputs.agent_revision }}
-          AGENT_DIGEST: ${{ steps.agent-image.outputs.digest }}
-        run: |
-          case "$MESSAGE_DIGEST" in sha256:[0-9a-f][0-9a-f]*) ;; *) exit 1 ;; esac
-          case "$AGENT_DIGEST" in sha256:[0-9a-f][0-9a-f]*) ;; *) exit 1 ;; esac
-          test "${#MESSAGE_DIGEST}" -eq 71
-          test "${#AGENT_DIGEST}" -eq 71
-          {
-            echo '## Split Agent integration publication'
-            echo
-            echo "- message-server: docker.io/dirextalk/message-server:$MESSAGE_TAG@$MESSAGE_DIGEST"
-            echo "- message-server source: $MESSAGE_REVISION"
-            echo "- Agent: docker.io/dirextalk/agent:$AGENT_TAG@$AGENT_DIGEST"
-            echo "- Agent source: $AGENT_REVISION"
-            echo '- platform: linux/amd64'
-          } >>"$GITHUB_STEP_SUMMARY"
-
   verify:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04

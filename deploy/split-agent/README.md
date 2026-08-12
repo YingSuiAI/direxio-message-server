@@ -276,23 +276,9 @@ removed. Agent and database
 containers are never recreated, and no wrapper performs a global prune.
 
 Formal Agent images are built from the sibling `dirextalk-agent` repository.
-The first channel version is `v1.0.0`:
-
-    scripts/release/prepare-agent.sh v1.0.0
-    scripts/release/verify-agent.sh v1.0.0
-    scripts/release/publish-agent.sh v1.0.0
-
-Preparation requires the committed HEAD of Agent branch
-`adam/agent-core-v1-integration`. The only permitted worktree entry is the
-protected untracked `.codex-final-overlay.Containerfile`; verification records
-that exact revision and exports the committed Git tree to a temporary build
-context, so that local overlay can never enter the released image.
-Verification builds `dirextalk/agent:v1.0.0` from
-`deploy/container/agent.Containerfile`, checks its source/version OCI labels,
-and executes all three bundled binaries. Publication pushes only after that
-commit-bound evidence, verifies the version tag, then moves
-`dirextalk/agent:latest` to the same image and verifies both tags resolve to the
-same immutable Docker Hub digest used by the deployment channel.
+The Agent repository owns its stable release workflow, version tag, GitHub
+Release, `dirextalk/agent:latest` update, and three-binary version probes. This
+repository does not build or publish Agent release images.
 
 The message-server portal owner is initialized by the protected
 `portal.bootstrap` action, not by the ordinary Matrix `create-account` binary.

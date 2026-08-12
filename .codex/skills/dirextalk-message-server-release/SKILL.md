@@ -47,16 +47,12 @@ faulty gate in code; never bypass it.
 ## Stop And Report
 
 Stop when version, notes, compatibility metadata, schema metadata, image
-labels, image version output, Git tag, or GitHub Release metadata disagree.
-An existing formal Release must have the exact checked-in title and notes and
-no assets. A conflicting remote tag stops publication before either Docker tag
-moves. To intentionally replace the current version from a new reviewed commit,
-first preserve the old evidence and explicitly delete both the old formal
-Release and remote tag; then rerun the normal scripts without changing version.
+labels, image version output, or Git tag disagree. Resolve any conflicting tag
+before retrying the release.
+
 `latest` must move only after the version image and formal GitHub Release are
 published successfully.
 
-After publication, verify the Git tag, formal GitHub Release, remote OCI index
-platforms and digest, embedded version, version image labels, and `latest`
-image labels. The version and `latest` tags must resolve to the same index
-digest. Record non-secret evidence and any retryable partial state.
+After publication, pull `latest` and verify its version/revision labels and
+embedded binary version. Record non-secret results and any retryable partial
+state.
