@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v1.1.38
+
+1. Expose the current Agent static-site release inventory and exact delete action to owner clients.
+2. Publish Native Agent room readiness from the live capability catalog while respecting the enabled setting.
+
 ## v1.1.37
 
 1. Return the current Agent model-profile identity fields required by the client readback contract.
