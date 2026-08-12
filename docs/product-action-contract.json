@@ -8884,6 +8884,134 @@
       }
     },
     {
+      "name": "agent.memory.config.get",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "response": {
+          "embedding_configured": {
+            "type": "boolean",
+            "required": true
+          },
+          "embedding_model": {
+            "type": "string"
+          },
+          "embedding_profile_id": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean",
+            "required": true
+          },
+          "revision": {
+            "type": "integer",
+            "required": true
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.memory.config.update",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "enabled": {
+            "type": "boolean",
+            "required": true
+          },
+          "expected_revision": {
+            "type": "integer",
+            "required": true
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "embedding_configured": {
+            "type": "boolean",
+            "required": true
+          },
+          "embedding_model": {
+            "type": "string"
+          },
+          "embedding_profile_id": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean",
+            "required": true
+          },
+          "revision": {
+            "type": "integer",
+            "required": true
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.memory.status",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "response": {
+          "active_fact_count": {
+            "type": "integer",
+            "required": true
+          },
+          "embedding_configured": {
+            "type": "boolean",
+            "required": true
+          },
+          "embedding_model": {
+            "type": "string"
+          },
+          "embedding_profile_id": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean",
+            "required": true
+          },
+          "facts": {
+            "type": "array",
+            "required": true
+          },
+          "failed_observation_count": {
+            "type": "integer",
+            "required": true
+          },
+          "pending_observation_count": {
+            "type": "integer",
+            "required": true
+          },
+          "revision": {
+            "type": "integer",
+            "required": true
+          },
+          "timeline": {
+            "type": "array",
+            "required": true
+          },
+          "timeline_event_count": {
+            "type": "integer",
+            "required": true
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
       "name": "agent.text_tools.config.get",
       "auth": "owner",
       "transport": "http_and_ws_request",

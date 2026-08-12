@@ -223,6 +223,15 @@ capability live.
   editable durable-memory records; they are distinct from conversation
   summaries and uploaded source chunks. Managed mutations are owner-scoped,
   revision-checked, and idempotent.
+- Automatic user-fact memory is a separate owner-client surface mapped to
+  `agent.memory.v1`: `agent.memory.config.get`,
+  `agent.memory.config.update`, and `agent.memory.status`. Fresh state is
+  disabled. Enabling requires Agent to prove a configured active embedding
+  profile; the gateway preserves the typed precondition failure. Status
+  exposes the non-secret embedding profile/model identity, revision, bounded
+  current facts, separate effective/observed timeline clocks, and
+  pending/failed observation counters. Message Server validates and projects
+  this closed result but never extracts, stores, edits, or recalls facts.
 - Successful `agent.chat` responses and Native Agent stream `done` payloads may include additive `related_task_ids`, `related_plan_ids`, and strict `references[]`. Message Server promotes only fields authored by Agent at the top level, on the assistant message, or in the nested stream response; it never synthesizes a reference from a related id. Room references derived from successful built-in Dirextalk tool results use `kind=room`, `room_id`, optional `room_type=direct|group|channel`, `title`, and optional `preview`; channel-post references use `kind=channel_post`, `room_id`, `channel_id`, `post_id`, `title`, and optional `preview`. Execution references use `kind=execution_plan|execution_run|execution_confirmation` and require the complete account-generation, task/plan/run/confirmation UUID, revision, and digest linkage authored by Agent. They are informational projections, not confirmation authority. References preserve producer order, reject duplicates or unknown fields/kinds, never include message `event_id`, and are not inferred from model-authored text or third-party/runtime tool output.
 - `mcp.channel_posts.list` and the Agent-side `dirextalk_channel_posts_list` result envelope include both top-level `channel_id` and `room_id`, allowing a post reference to identify its product channel and Matrix room without parsing post content.
 
