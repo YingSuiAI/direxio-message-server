@@ -256,9 +256,8 @@
     "run_id": "7e3937bb-c334-5360-90f9-931322e7fd88",
     "conversation_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
     "turn_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
-    "result_message_id": "1036574d-bb51-5a90-b62d-ba820eee4dfc",
     "terminal_state": "succeeded",
     "completed_at": "2026-08-07T10:11:00.123456Z",
-    "payload_digest": "409de1798c6b0a404c776731165c273bbbb51137f6551308afdc2fea622a79cd"
+    "payload_digest": "c9b0f61d37d848e3585a64cde51397d5a5495ddbca63ef1ba3bbc7a7cb5628fa"
   }
 }

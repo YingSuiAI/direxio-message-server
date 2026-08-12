@@ -23,7 +23,6 @@ type AgentExecutionCompletionReceipt struct {
 	RunID             string `json:"run_id"`
 	ConversationID    string `json:"conversation_id"`
 	TurnID            string `json:"turn_id"`
-	ResultMessageID   string `json:"result_message_id"`
 	TerminalState     string `json:"terminal_state"`
 	CompletedAt       string `json:"completed_at"`
 	PayloadDigest     string `json:"payload_digest"`
@@ -31,7 +30,7 @@ type AgentExecutionCompletionReceipt struct {
 	AccountGeneration int64  `json:"-"`
 }
 
-// CanonicalAgentExecutionCompletionDigest binds exactly the eight public
+// CanonicalAgentExecutionCompletionDigest binds exactly the seven public
 // completion fields other than PayloadDigest. Keep the field order aligned
 // with dirextalk-agent's CompletionDigest golden contract.
 func CanonicalAgentExecutionCompletionDigest(r AgentExecutionCompletionReceipt) (string, error) {
@@ -40,19 +39,18 @@ func CanonicalAgentExecutionCompletionDigest(r AgentExecutionCompletionReceipt) 
 		return "", err
 	}
 	payload, err := json.Marshal(struct {
-		EventID         string `json:"event_id"`
-		ExecutionID     string `json:"execution_id"`
-		RunID           string `json:"run_id"`
-		ConversationID  string `json:"conversation_id"`
-		TurnID          string `json:"turn_id"`
-		ResultMessageID string `json:"result_message_id"`
-		TerminalState   string `json:"terminal_state"`
-		CompletedAt     string `json:"completed_at"`
+		EventID        string `json:"event_id"`
+		ExecutionID    string `json:"execution_id"`
+		RunID          string `json:"run_id"`
+		ConversationID string `json:"conversation_id"`
+		TurnID         string `json:"turn_id"`
+		TerminalState  string `json:"terminal_state"`
+		CompletedAt    string `json:"completed_at"`
 	}{
 		EventID: r.EventID, ExecutionID: r.ExecutionID, RunID: r.RunID,
 		ConversationID: r.ConversationID, TurnID: r.TurnID,
-		ResultMessageID: r.ResultMessageID, TerminalState: r.TerminalState,
-		CompletedAt: completedAt,
+		TerminalState: r.TerminalState,
+		CompletedAt:   completedAt,
 	})
 	if err != nil {
 		return "", err
@@ -68,7 +66,6 @@ func (r AgentExecutionCompletionReceipt) Validate() error {
 	for name, value := range map[string]string{
 		"event_id": r.EventID, "execution_id": r.ExecutionID, "run_id": r.RunID,
 		"conversation_id": r.ConversationID, "turn_id": r.TurnID,
-		"result_message_id": r.ResultMessageID,
 	} {
 		if !canonicalNonNilUUID(value) {
 			return fmt.Errorf("%s must be a canonical lowercase non-nil UUID", name)
@@ -123,14 +120,13 @@ func canonicalCompletionTime(value string) (string, error) {
 
 func (r AgentExecutionCompletionReceipt) PublicPayload() map[string]any {
 	return map[string]any{
-		"event_id":          r.EventID,
-		"execution_id":      r.ExecutionID,
-		"run_id":            r.RunID,
-		"conversation_id":   r.ConversationID,
-		"turn_id":           r.TurnID,
-		"result_message_id": r.ResultMessageID,
-		"terminal_state":    r.TerminalState,
-		"completed_at":      r.CompletedAt,
-		"payload_digest":    r.PayloadDigest,
+		"event_id":        r.EventID,
+		"execution_id":    r.ExecutionID,
+		"run_id":          r.RunID,
+		"conversation_id": r.ConversationID,
+		"turn_id":         r.TurnID,
+		"terminal_state":  r.TerminalState,
+		"completed_at":    r.CompletedAt,
+		"payload_digest":  r.PayloadDigest,
 	}
 }

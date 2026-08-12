@@ -259,7 +259,6 @@ func (s *DatabaseStore) migrate(ctx context.Context) error {
 					run_id UUID NOT NULL CHECK (run_id = execution_id),
 					conversation_id UUID NOT NULL,
 					turn_id UUID NOT NULL,
-					result_message_id UUID NOT NULL,
 					terminal_state TEXT NOT NULL CHECK (terminal_state IN ('succeeded','failed','canceled')),
 					completed_at TEXT NOT NULL CHECK (completed_at <> ''),
 					payload_digest TEXT NOT NULL CHECK (payload_digest ~ '^[0-9a-f]{64}$'),
@@ -902,7 +901,18 @@ func (s *DatabaseStore) migrate(ctx context.Context) error {
 			})
 		},
 	})
-	return m.Up(ctx)
+	if err := m.Up(ctx); err != nil {
+		return err
+	}
+	forward := sqlutil.NewMigrator(s.db)
+	forward.AddMigrations(sqlutil.Migration{
+		Version: "p2p: drop retired completion result message v2",
+		Up: func(ctx context.Context, txn *sql.Tx) error {
+			_, err := txn.ExecContext(ctx, `ALTER TABLE p2p_agent_execution_completion_receipts DROP COLUMN IF EXISTS result_message_id`)
+			return err
+		},
+	})
+	return forward.Up(ctx)
 }
 
 func backfillLegacyChannelFavorites(ctx context.Context, txn *sql.Tx) error {

@@ -12,10 +12,9 @@ func goldenAgentExecutionCompletionReceipt() AgentExecutionCompletionReceipt {
 		RunID:             "00000000-0000-4000-8000-000000000002",
 		ConversationID:    "00000000-0000-4000-8000-000000000003",
 		TurnID:            "00000000-0000-4000-8000-000000000004",
-		ResultMessageID:   "00000000-0000-4000-8000-000000000005",
 		TerminalState:     "succeeded",
 		CompletedAt:       "2026-08-07T01:02:03.123456789Z",
-		PayloadDigest:     "c6fba672154b8fea194d834674dc4a129d7a0c8ff0c9300fa110299ab91290f4",
+		PayloadDigest:     "2d0ca6e1e63d3ef71d036a2c28c943376fa8e157e640bc7b701043fe86f7b850",
 		OwnerID:           "@owner:example.test",
 		AccountGeneration: 7,
 	}

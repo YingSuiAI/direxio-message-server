@@ -279,7 +279,9 @@ Agent conversation and use generic `agent.core.confirmations.*`; the former
 Execution V2 confirmation aliases and public `runs.reconcile` are absent.
 Worker completion reaches Message Server only through the private fixed
 `product.agent_execution.v1/record_completion` receipt callback after Agent
-result validation and verified cleanup.
+result validation and verified cleanup. That receipt carries execution and turn
+identity plus terminal state/time/digest; it does not carry an assistant-message
+identity because the central continuation creates that message.
 
 Verified Cloud Worker output is retrievable only through the owner-authenticated
 `agent.execution.v2.artifacts.download` proxy. It is a bounded 512 KiB,

@@ -70,12 +70,12 @@ func TestRecordAgentExecutionCompletionPublishesOneDurableInvalidation(t *testin
 	if event.Seq <= 0 || event.Type != "agent.execution.v2.completed" || event.EventID != receipt.EventID || event.Payload["execution_id"] != receipt.ExecutionID || event.Payload["payload_digest"] != receipt.PayloadDigest {
 		t.Fatalf("completion invalidation=%#v", event)
 	}
-	if len(event.Payload) != 9 {
+	if len(event.Payload) != 8 {
 		t.Fatalf("completion invalidation payload keys=%#v", event.Payload)
 	}
 	for _, key := range []string{
 		"event_id", "execution_id", "run_id", "conversation_id", "turn_id",
-		"result_message_id", "terminal_state", "completed_at", "payload_digest",
+		"terminal_state", "completed_at", "payload_digest",
 	} {
 		if _, ok := event.Payload[key]; !ok {
 			t.Fatalf("completion invalidation is missing %q: %#v", key, event.Payload)
@@ -113,7 +113,7 @@ func TestRecordAgentExecutionCompletionFencesIdentityAndConflicts(t *testing.T) 
 		t.Fatal(err)
 	}
 	conflict := receipt
-	conflict.ResultMessageID = "00000000-0000-4000-8000-000000000006"
+	conflict.TerminalState = "failed"
 	digest, _ := dirextalkdomain.CanonicalAgentExecutionCompletionDigest(conflict)
 	conflict.PayloadDigest = digest
 	if _, err := service.RecordAgentExecutionCompletion(context.Background(), conflict); !errors.Is(err, dirextalkdomain.ErrAgentExecutionCompletionConflict) {

@@ -249,7 +249,10 @@ is injected from `Service.OwnerMXID()` rather than request JSON.
 Message Server atomically stores one minimal receipt and one
 `agent.execution.v2.completed` realtime invalidation. Exact event/execution and
 payload replay succeeds idempotently; a different payload conflicts. The
-receipt contains no result body, quote, artifact details, S3 address, AWS
+receipt contains only event/execution/run/conversation/turn identity, terminal
+state, completion time, and payload digest. It contains no result-message
+identity because the central continuation owns the eventual assistant message,
+and contains no result body, quote, artifact details, S3 address, AWS
 resource identity, secret, or Worker diagnostics. Flutter treats the realtime
 event only as an invalidation and reads authoritative history and Execution V2
 state back from Agent.

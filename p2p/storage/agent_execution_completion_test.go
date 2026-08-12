@@ -20,10 +20,9 @@ func storageCompletionReceipt() agentExecutionCompletionReceipt {
 		RunID:             "00000000-0000-4000-8000-000000000002",
 		ConversationID:    "00000000-0000-4000-8000-000000000003",
 		TurnID:            "00000000-0000-4000-8000-000000000004",
-		ResultMessageID:   "00000000-0000-4000-8000-000000000005",
 		TerminalState:     "succeeded",
 		CompletedAt:       "2026-08-07T01:02:03.123456789Z",
-		PayloadDigest:     "c6fba672154b8fea194d834674dc4a129d7a0c8ff0c9300fa110299ab91290f4",
+		PayloadDigest:     "2d0ca6e1e63d3ef71d036a2c28c943376fa8e157e640bc7b701043fe86f7b850",
 		OwnerID:           "@owner:example.test",
 		AccountGeneration: 7,
 	}
@@ -166,7 +165,8 @@ func TestPostgresCompletionConcurrentDedupeAndRestartReplay(t *testing.T) {
 		t.Fatalf("restart replay created=%t sequence=%d err=%v", created, replaySequence, err)
 	}
 	conflict := receipt
-	conflict.ResultMessageID = "00000000-0000-4000-8000-000000000006"
+	conflict.TerminalState = "failed"
+	conflict.PayloadDigest, _ = dirextalkdomain.CanonicalAgentExecutionCompletionDigest(conflict)
 	if _, _, err := reopened.RecordAgentExecutionCompletion(ctx, conflict, storageCompletionEvent(conflict)); !errors.Is(err, dirextalkdomain.ErrAgentExecutionCompletionConflict) {
 		t.Fatalf("postgres completion conflict error=%v", err)
 	}

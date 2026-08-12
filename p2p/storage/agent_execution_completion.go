@@ -136,11 +136,11 @@ func (s *DatabaseStore) RecordAgentExecutionCompletion(
 		}
 		if _, err := txn.ExecContext(ctx, `
 			INSERT INTO p2p_agent_execution_completion_receipts (
-				event_id,execution_id,run_id,conversation_id,turn_id,result_message_id,
+				event_id,execution_id,run_id,conversation_id,turn_id,
 				terminal_state,completed_at,payload_digest,owner_id,account_generation,event_seq
-			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
 		`, receipt.EventID, receipt.ExecutionID, receipt.RunID, receipt.ConversationID, receipt.TurnID,
-			receipt.ResultMessageID, receipt.TerminalState, receipt.CompletedAt, receipt.PayloadDigest,
+			receipt.TerminalState, receipt.CompletedAt, receipt.PayloadDigest,
 			receipt.OwnerID, receipt.AccountGeneration, eventSeq); err != nil {
 			return err
 		}
@@ -181,13 +181,13 @@ func loadAgentExecutionCompletion(
 	var eventSeq int64
 	err := txn.QueryRowContext(ctx, `
 		SELECT event_id::text,execution_id::text,run_id::text,conversation_id::text,turn_id::text,
-			result_message_id::text,terminal_state,completed_at,payload_digest,owner_id,account_generation,event_seq
+			terminal_state,completed_at,payload_digest,owner_id,account_generation,event_seq
 		FROM p2p_agent_execution_completion_receipts
 		WHERE `+where+`
 		FOR UPDATE
 	`, args...).Scan(
 		&receipt.EventID, &receipt.ExecutionID, &receipt.RunID, &receipt.ConversationID, &receipt.TurnID,
-		&receipt.ResultMessageID, &receipt.TerminalState, &receipt.CompletedAt, &receipt.PayloadDigest,
+		&receipt.TerminalState, &receipt.CompletedAt, &receipt.PayloadDigest,
 		&receipt.OwnerID, &receipt.AccountGeneration, &eventSeq,
 	)
 	return receipt, eventSeq, err

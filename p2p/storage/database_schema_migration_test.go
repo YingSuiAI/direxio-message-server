@@ -33,8 +33,8 @@ func TestFreshProductBaselineIsSingleVersionAndReopenIdempotent(t *testing.T) {
 	if err := store.Migrate(ctx); err != nil {
 		t.Fatalf("second baseline run: %v", err)
 	}
-	const baseline = "p2p: fresh ProductCore baseline v1"
-	assertP2PMigrationSet(t, store.DB(), baseline)
+	wantMigrations := []string{"p2p: drop retired completion result message v2", "p2p: fresh ProductCore baseline v1"}
+	assertP2PMigrationSet(t, store.DB(), wantMigrations)
 
 	for _, table := range []string{
 		"p2p_portal", "p2p_read_markers", "p2p_channels", "p2p_channel_posts", "p2p_channel_post_settings", "p2p_channel_comments",
@@ -73,6 +73,7 @@ func TestFreshProductBaselineIsSingleVersionAndReopenIdempotent(t *testing.T) {
 		}
 	}
 	assertRelationPresent(t, store.DB(), "p2p_channel_posts_channel_visibility_idx")
+	assertColumnAbsent(t, store.DB(), "p2p_agent_execution_completion_receipts", "result_message_id")
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -82,14 +83,42 @@ func TestFreshProductBaselineIsSingleVersionAndReopenIdempotent(t *testing.T) {
 		t.Fatalf("reopen fresh baseline: %v", err)
 	}
 	defer reopened.Close()
-	assertP2PMigrationSet(t, reopened.DB(), baseline)
+	assertP2PMigrationSet(t, reopened.DB(), wantMigrations)
+}
+
+func TestCompletionResultMessageForwardMigrationDropsRetiredColumn(t *testing.T) {
+	ctx := context.Background()
+	connStr, closeDB := test.PrepareDBConnectionString(t, test.DBTypePostgres)
+	defer closeDB()
+	dbOpts := config.DatabaseOptions{ConnectionString: config.DataSource(connStr)}
+
+	store, err := NewDatabaseStore(ctx, sqlutil.NewConnectionManager(nil, dbOpts), &dbOpts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `ALTER TABLE p2p_agent_execution_completion_receipts ADD COLUMN result_message_id UUID NOT NULL DEFAULT '00000000-0000-4000-8000-000000000005'::uuid`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `DELETE FROM db_migrations WHERE version='p2p: drop retired completion result message v2'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := NewDatabaseStore(ctx, sqlutil.NewConnectionManager(nil, dbOpts), &dbOpts)
+	if err != nil {
+		t.Fatalf("forward migration: %v", err)
+	}
+	defer reopened.Close()
+	assertColumnAbsent(t, reopened.DB(), "p2p_agent_execution_completion_receipts", "result_message_id")
 }
 
 func assertP2PMigrationSet(t *testing.T, db interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
-}, baseline string) {
+}, want []string) {
 	t.Helper()
-	rows, err := db.QueryContext(context.Background(), `SELECT version FROM db_migrations WHERE version LIKE 'p2p:%'`)
+	rows, err := db.QueryContext(context.Background(), `SELECT version FROM db_migrations WHERE version LIKE 'p2p:%' ORDER BY version`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,8 +134,26 @@ func assertP2PMigrationSet(t *testing.T, db interface {
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if len(versions) != 1 || versions[0] != baseline {
-		t.Fatalf("P2P migration ledger=%v, want [%q]", versions, baseline)
+	if len(versions) != len(want) {
+		t.Fatalf("P2P migration ledger=%v, want %v", versions, want)
+	}
+	for index := range want {
+		if versions[index] != want[index] {
+			t.Fatalf("P2P migration ledger=%v, want %v", versions, want)
+		}
+	}
+}
+
+func assertColumnAbsent(t *testing.T, db interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, table, column string) {
+	t.Helper()
+	var present bool
+	if err := db.QueryRowContext(context.Background(), `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name=$1 AND column_name=$2)`, table, column).Scan(&present); err != nil {
+		t.Fatal(err)
+	}
+	if present {
+		t.Fatalf("retired column %s.%s is still present", table, column)
 	}
 }
 

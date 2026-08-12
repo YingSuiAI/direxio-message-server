@@ -92,20 +92,19 @@ func (s *Server) recordAgentExecutionCompletion(ctx context.Context, req *capv1.
 
 func decodeAgentExecutionCompletion(raw []byte) (dirextalkdomain.AgentExecutionCompletionReceipt, error) {
 	var wire struct {
-		EventID         string `json:"event_id"`
-		ExecutionID     string `json:"execution_id"`
-		RunID           string `json:"run_id"`
-		ConversationID  string `json:"conversation_id"`
-		TurnID          string `json:"turn_id"`
-		ResultMessageID string `json:"result_message_id"`
-		TerminalState   string `json:"terminal_state"`
-		CompletedAt     string `json:"completed_at"`
-		PayloadDigest   string `json:"payload_digest"`
+		EventID        string `json:"event_id"`
+		ExecutionID    string `json:"execution_id"`
+		RunID          string `json:"run_id"`
+		ConversationID string `json:"conversation_id"`
+		TurnID         string `json:"turn_id"`
+		TerminalState  string `json:"terminal_state"`
+		CompletedAt    string `json:"completed_at"`
+		PayloadDigest  string `json:"payload_digest"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&wire); err != nil {
-		return dirextalkdomain.AgentExecutionCompletionReceipt{}, fmt.Errorf("completion request must contain exactly the nine public fields: %w", err)
+		return dirextalkdomain.AgentExecutionCompletionReceipt{}, fmt.Errorf("completion request must contain exactly the eight public fields: %w", err)
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return dirextalkdomain.AgentExecutionCompletionReceipt{}, errors.New("completion request must contain one JSON object")
@@ -113,7 +112,7 @@ func decodeAgentExecutionCompletion(raw []byte) (dirextalkdomain.AgentExecutionC
 	return dirextalkdomain.AgentExecutionCompletionReceipt{
 		EventID: wire.EventID, ExecutionID: wire.ExecutionID, RunID: wire.RunID,
 		ConversationID: wire.ConversationID, TurnID: wire.TurnID,
-		ResultMessageID: wire.ResultMessageID, TerminalState: wire.TerminalState,
-		CompletedAt: wire.CompletedAt, PayloadDigest: wire.PayloadDigest,
+		TerminalState: wire.TerminalState,
+		CompletedAt:   wire.CompletedAt, PayloadDigest: wire.PayloadDigest,
 	}, nil
 }
