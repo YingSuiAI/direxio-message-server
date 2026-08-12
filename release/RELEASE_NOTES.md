@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v1.1.39
+
+1. Remove the retired Cloud Worker completion result-message identity from the current Agent callback and ProductCore invalidation.
+2. Drop the unused receipt column while keeping central continuation as the assistant-message authority.
+
 ## v1.1.38
 
 1. Expose the current Agent static-site release inventory and exact delete action to owner clients.
