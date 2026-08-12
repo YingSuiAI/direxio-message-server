@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/url"
 	"reflect"
 	"sort"
 	"strings"
@@ -150,6 +151,10 @@ func projectActionResult(action string, output map[string]any) map[string]any {
 		return memoryFactResult(result)
 	case "agent.memory.facts.delete":
 		return mapProjection(result, []string{"fact_id", "deleted"})
+	case "agent.static_sites.list":
+		return mapProjection(result, []string{"releases", "next_page_token"})
+	case "agent.static_sites.delete":
+		return mapProjection(result, []string{"release_id", "deleted", "replayed"})
 	case "agent.web_search.test":
 		return webSearchTestResult(result)
 	case "agent.text_tools.config.get", "agent.text_tools.config.update":
@@ -196,6 +201,8 @@ func validateActionResult(action string, request, output map[string]any, authori
 		return validateWebSearchConfigResult(action, output)
 	case "agent.memory.config.get", "agent.memory.config.update", "agent.memory.status", "agent.memory.facts.update", "agent.memory.facts.delete":
 		return validateMemoryResult(action, output)
+	case "agent.static_sites.list", "agent.static_sites.delete":
+		return validateStaticSiteResult(action, request, output)
 	case "agent.web_search.test":
 		return validateWebSearchTestResult(action, output)
 	case "agent.text_tools.config.get", "agent.text_tools.config.update":
@@ -631,6 +638,70 @@ func validateMemoryResult(action string, output map[string]any) error {
 		}
 	}
 	return nil
+}
+
+func validateStaticSiteResult(action string, request, output map[string]any) error {
+	if output == nil {
+		return fmt.Errorf("%w: %s response is missing", ErrInvalidActionResult, action)
+	}
+	if action == "agent.static_sites.delete" {
+		if !exactResultFields(output, "release_id", "deleted", "replayed") ||
+			!canonicalTurnUUID(output["release_id"]) || output["deleted"] != true {
+			return fmt.Errorf("%w: static-site delete response is invalid", ErrInvalidActionResult)
+		}
+		if replayed, ok := output["replayed"].(bool); !ok || replayed && request == nil {
+			return fmt.Errorf("%w: static-site delete replay state is invalid", ErrInvalidActionResult)
+		}
+		if request == nil || output["release_id"] != request["release_id"] {
+			return fmt.Errorf("%w: static-site delete identity does not match the request", ErrInvalidActionResult)
+		}
+		return nil
+	}
+	if !exactResultFields(output, "releases", "next_page_token") {
+		return fmt.Errorf("%w: static-site list response is invalid", ErrInvalidActionResult)
+	}
+	if next, ok := output["next_page_token"].(string); !ok || next != strings.TrimSpace(next) || len(next) > 4096 {
+		return fmt.Errorf("%w: static-site list cursor is invalid", ErrInvalidActionResult)
+	}
+	releases, ok := actionObjectSlice(output["releases"])
+	if !ok || len(releases) > 100 {
+		return fmt.Errorf("%w: static-site release list is invalid", ErrInvalidActionResult)
+	}
+	seen := make(map[string]struct{}, len(releases))
+	for _, release := range releases {
+		if !exactResultFields(release, "site_id", "release_id", "conversation_id", "public_url", "public_path", "size_bytes", "created_at") ||
+			!canonicalTurnUUID(release["site_id"]) || !canonicalTurnUUID(release["release_id"]) || !canonicalTurnUUID(release["conversation_id"]) ||
+			!actionIntegerInRange(release["size_bytes"], 1, 196608) || !validStaticSitePublicLocation(release) {
+			return fmt.Errorf("%w: static-site release is invalid", ErrInvalidActionResult)
+		}
+		createdAt, ok := release["created_at"].(string)
+		if !ok || len(createdAt) > 128 {
+			return fmt.Errorf("%w: static-site release timestamp is invalid", ErrInvalidActionResult)
+		}
+		if _, err := time.Parse(time.RFC3339Nano, createdAt); err != nil {
+			return fmt.Errorf("%w: static-site release timestamp is invalid", ErrInvalidActionResult)
+		}
+		releaseID := release["release_id"].(string)
+		if _, duplicate := seen[releaseID]; duplicate {
+			return fmt.Errorf("%w: static-site release is duplicated", ErrInvalidActionResult)
+		}
+		seen[releaseID] = struct{}{}
+	}
+	return nil
+}
+
+func validStaticSitePublicLocation(release map[string]any) bool {
+	publicPath, pathOK := release["public_path"].(string)
+	publicURL, urlOK := release["public_url"].(string)
+	siteID, siteOK := release["site_id"].(string)
+	releaseID, releaseOK := release["release_id"].(string)
+	wantPath := "/.sites/" + siteID + "/" + releaseID + "/"
+	if !pathOK || !urlOK || publicPath != strings.TrimSpace(publicPath) || publicURL != strings.TrimSpace(publicURL) ||
+		!siteOK || !releaseOK || publicPath != wantPath {
+		return false
+	}
+	parsed, err := url.Parse(publicURL)
+	return err == nil && parsed.Scheme == "https" && parsed.Host != "" && parsed.RawQuery == "" && parsed.Fragment == "" && parsed.EscapedPath() == publicPath
 }
 
 func validMemoryFact(fact map[string]any) bool {

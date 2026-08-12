@@ -145,6 +145,63 @@ func TestNativeAgentCatalogReadinessGenerationFence(t *testing.T) {
 	}
 }
 
+func TestNativeAgentCatalogReadinessPublishesTransitionsAndRetriesFailures(t *testing.T) {
+	ready := true
+	publicationCalls := 0
+	published := make([]bool, 0, 2)
+	readiness := newNativeAgentCatalogReadiness(func(context.Context, []agentgateway.CatalogRequirement) error {
+		if !ready {
+			return errors.New("agent down")
+		}
+		return nil
+	}, nil, func() int64 { return 7 })
+	readiness.now = func() time.Time { return time.Unix(100, 0) }
+	readiness.publish = func(online bool) error {
+		publicationCalls++
+		if publicationCalls == 1 {
+			return errors.New("matrix write failed")
+		}
+		published = append(published, online)
+		return nil
+	}
+
+	readiness.probeNow(context.Background())
+	readiness.probeNow(context.Background())
+	if publicationCalls != 2 || len(published) != 1 || !published[0] {
+		t.Fatalf("readiness publication retry = calls %d values %#v", publicationCalls, published)
+	}
+
+	ready = false
+	readiness.now = func() time.Time { return time.Unix(200, 0) }
+	readiness.probeNow(context.Background())
+	if len(published) != 2 || published[1] {
+		t.Fatalf("failed readiness did not publish offline: %#v", published)
+	}
+}
+
+func TestNativeAgentCatalogReadinessRespectsDisabledProjection(t *testing.T) {
+	enabled := false
+	published := make([]bool, 0, 2)
+	readiness := newNativeAgentCatalogReadiness(func(context.Context, []agentgateway.CatalogRequirement) error { return nil }, nil, func() int64 { return 7 })
+	readiness.now = func() time.Time { return time.Unix(100, 0) }
+	readiness.publishable = func(ready bool) bool { return ready && enabled }
+	readiness.publish = func(online bool) error {
+		published = append(published, online)
+		return nil
+	}
+
+	readiness.probeNow(context.Background())
+	if len(published) != 1 || published[0] {
+		t.Fatalf("disabled Agent publication = %#v, want offline", published)
+	}
+	enabled = true
+	readiness.recordPublished(false)
+	readiness.probeNow(context.Background())
+	if len(published) != 2 || !published[1] {
+		t.Fatalf("re-enabled ready Agent publication = %#v, want online", published)
+	}
+}
+
 func TestNativeAgentCatalogRequirementsKeepOptionalCapabilitiesExplicit(t *testing.T) {
 	requirements := nativeAgentCatalogRequirements(nil)
 	requiredActions := map[string]bool{
@@ -158,6 +215,8 @@ func TestNativeAgentCatalogRequirementsKeepOptionalCapabilitiesExplicit(t *testi
 		"agent.text_tools.config.get":    false,
 		"agent.text_tools.config.update": false,
 		"agent.text_tools.execute":       false,
+		"agent.static_sites.list":        false,
+		"agent.static_sites.delete":      false,
 		"agent.knowledge.config.get":     false,
 		"agent.knowledge.config.update":  false,
 		"agent.knowledge.sources.list":   false,

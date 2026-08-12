@@ -60,6 +60,19 @@ func TestImageToolsAreOwnerProxyActions(t *testing.T) {
 	}
 }
 
+func TestStaticSitesAreOwnerProxyActions(t *testing.T) {
+	actions := make(map[string]bool, len(externalNativeActions))
+	for _, action := range externalNativeActions {
+		actions[action] = true
+	}
+	handlers := New(Config{Runner: &requestValidationRunner{}}).Handlers()
+	for _, action := range []string{"agent.static_sites.list", "agent.static_sites.delete"} {
+		if !actions[action] || handlers[action] == nil {
+			t.Errorf("static-site action %s is not routed through the external owner proxy", action)
+		}
+	}
+}
+
 func TestExternalAgentActionErrorClassifiesForgedServerDerivedIdentity(t *testing.T) {
 	err := externalAgentActionError(errors.New(`agent operation failed: query error: request field "owner_id" is server-derived`))
 	if err == nil || err.Status != http.StatusBadRequest {
@@ -615,5 +628,19 @@ func TestExternalConfigKeepsNativeAndOnlineIdentityOwnershipSeparate(t *testing.
 	if response["native_agent_identity"].(map[string]any)["display_name"] != "Ying Remote" ||
 		response["online_agent_identity"].(map[string]any)["display_name"] != "Your Online" {
 		t.Fatalf("mode-specific identities were not preserved: %#v", response)
+	}
+}
+
+func TestExternalConfigPersistsEnabledProjection(t *testing.T) {
+	runner := &configContractRunner{}
+	account := &configContractAccount{config: NormalizeConfig(dirextalkdomain.AgentConfig{})}
+	handler := New(Config{Runner: runner, Account: account, OwnerID: func() string { return "@owner:example.com" }}).Handlers()[actionConfigUpdate]
+
+	value, actionErr := handler(context.Background(), map[string]any{"enabled": false})
+	if actionErr != nil {
+		t.Fatalf("disable config failed: %v", actionErr)
+	}
+	if account.config.Enabled || value.(map[string]any)["enabled"] != false {
+		t.Fatalf("disabled projection was not persisted: config=%#v response=%#v", account.config, value)
 	}
 }

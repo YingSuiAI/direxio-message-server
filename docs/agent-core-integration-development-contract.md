@@ -75,6 +75,7 @@ model_profiles.server
 model_roles.server
 knowledge
 memory.server
+static_sites.server
 task
 schedules.server
 confirmation
@@ -107,6 +108,13 @@ schemas are digest-pinned; config updates require UUID idempotency plus expected
 revision, fact mutations require an exact fact UUID plus UUID idempotency, and
 result projection is closed over non-secret model readiness, facts, timeline,
 and observation counters.
+
+`static_sites.server` is published only when the ready
+`agent.static_sites.v1` descriptor contains both `list_releases` and
+`delete_release`. Flutter gates the server-backed release inventory on this
+token. Its only public ProductCore actions are `agent.static_sites.list` and
+`agent.static_sites.delete`; static HTML publication remains an Agent tool
+operation rather than a second Message Server action.
 
 The model-profile sync/list contract includes
 `default_tool_client_profile_id`. An empty value means no tool default; a

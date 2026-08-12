@@ -803,6 +803,11 @@ var actionBindings = map[string]actionBinding{
 	"agent.knowledge.search":         {"agent.knowledge.v1", "search_knowledge"},
 	"agent.knowledge.status":         {"agent.knowledge.v1", "status"},
 
+	// Agent-owned static-site releases. Message Server forwards only the
+	// owner-scoped release inventory and exact delete mutation.
+	"agent.static_sites.list":   {"agent.static_sites.v1", "list_releases"},
+	"agent.static_sites.delete": {"agent.static_sites.v1", "delete_release"},
+
 	// Core Skill/MCP lifecycle operations keep their typed operation IDs and
 	// confirmation fences.
 	"agent.core.mcp.discover":    {"agent.skills.v1", "discover_mcp"},

@@ -126,5 +126,11 @@ func agentIdentitySyncError(err error) *apiError {
 }
 
 func (p serviceAgentAccountPort) PublishOffline(ctx context.Context) *apiError {
-	return transportWriteError(p.service.publishCurrentAgentStatusState(ctx))
+	if err := p.service.publishCurrentAgentStatusState(ctx); err != nil {
+		return transportWriteError(err)
+	}
+	if p.service.nativeAgentCatalog != nil {
+		p.service.nativeAgentCatalog.recordPublished(false)
+	}
+	return nil
 }

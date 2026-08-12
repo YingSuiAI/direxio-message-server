@@ -28,19 +28,23 @@ type nativeAgentCatalogReadiness struct {
 	probe       func(context.Context, []agentgateway.CatalogRequirement) error
 	requirement []agentgateway.CatalogRequirement
 	generation  func() int64
+	publish     func(bool) error
+	publishable func(bool) bool
 	now         func() time.Time
 	ttl         time.Duration
 	interval    time.Duration
 	probeTO     time.Duration
 
-	mu        sync.RWMutex
-	ready     bool
-	probedGen int64
-	expiresAt time.Time
-	lastErr   error
-	probing   bool
-	cancel    context.CancelFunc
-	done      chan struct{}
+	mu         sync.RWMutex
+	ready      bool
+	probedGen  int64
+	expiresAt  time.Time
+	lastErr    error
+	probing    bool
+	published  bool
+	hasPublish bool
+	cancel     context.CancelFunc
+	done       chan struct{}
 }
 
 func newNativeAgentCatalogReadiness(probe func(context.Context, []agentgateway.CatalogRequirement) error, requirements []agentgateway.CatalogRequirement, generation func() int64) *nativeAgentCatalogReadiness {
@@ -145,7 +149,6 @@ func (r *nativeAgentCatalogReadiness) probeNow(parent context.Context) {
 		err = errors.New("account generation changed during native agent catalog probe")
 	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if err != nil {
 		leaseValid := !generationChanged && r.ready && r.probedGen == generation && !r.expiresAt.IsZero() && r.now().Before(r.expiresAt)
 		if !leaseValid {
@@ -154,6 +157,9 @@ func (r *nativeAgentCatalogReadiness) probeNow(parent context.Context) {
 		}
 		r.probedGen = observedGeneration
 		r.lastErr = err
+		isReady := r.ready
+		r.mu.Unlock()
+		r.publishReadiness(isReady)
 		logrus.WithError(err).WithField("account_generation", generation).Warn("Native Agent capability catalog probe failed")
 		return
 	}
@@ -161,6 +167,43 @@ func (r *nativeAgentCatalogReadiness) probeNow(parent context.Context) {
 	r.probedGen = generation
 	r.expiresAt = r.now().Add(r.ttl)
 	r.lastErr = nil
+	isReady := r.ready
+	r.mu.Unlock()
+	r.publishReadiness(isReady)
+}
+
+func (r *nativeAgentCatalogReadiness) publishReadiness(ready bool) {
+	if r == nil || r.publish == nil {
+		return
+	}
+	desired := ready
+	if r.publishable != nil {
+		desired = r.publishable(ready)
+	}
+	r.mu.RLock()
+	alreadyPublished := r.hasPublish && r.published == desired
+	r.mu.RUnlock()
+	if alreadyPublished {
+		return
+	}
+	if err := r.publish(desired); err != nil {
+		logrus.WithError(err).WithField("online", desired).Warn("Native Agent readiness state publish failed")
+		return
+	}
+	r.mu.Lock()
+	r.published = desired
+	r.hasPublish = true
+	r.mu.Unlock()
+}
+
+func (r *nativeAgentCatalogReadiness) recordPublished(online bool) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.published = online
+	r.hasPublish = true
+	r.mu.Unlock()
 }
 
 func (r *nativeAgentCatalogReadiness) readyState() (bool, error) {
@@ -228,6 +271,7 @@ func nativeAgentCatalogRequirements(extra []string) []agentgateway.CatalogRequir
 		"agent.chat.attachment.begin", "agent.chat.attachment.append", "agent.chat.attachment.commit",
 		"agent.web_search.config.get", "agent.web_search.config.update", "agent.web_search.test",
 		"agent.memory.config.get", "agent.memory.config.update", "agent.memory.status", "agent.memory.facts.update", "agent.memory.facts.delete",
+		"agent.static_sites.list", "agent.static_sites.delete",
 		"agent.text_tools.config.get", "agent.text_tools.config.update", "agent.text_tools.execute",
 		"agent.chat.conversations.create", "agent.chat.conversations.list", "agent.chat.conversations.get", "agent.chat.conversations.rename", "agent.chat.conversations.delete", "agent.chat.turn.stop", "agent.chat.turn.steer", "agent.chat.turns.list",
 		"agent.context.compress", "agent.summarize",
@@ -296,5 +340,16 @@ func (s *Service) configureNativeAgentCatalogReadiness(cfg Config) {
 	}
 	requirements := nativeAgentCatalogRequirements(cfg.NativeAgentRequiredActions)
 	s.nativeAgentCatalog = newNativeAgentCatalogReadiness(probe, requirements, currentGeneration)
+	s.nativeAgentCatalog.publishable = func(ready bool) bool {
+		s.mu.Lock()
+		enabled := s.agentConfig.Enabled
+		s.mu.Unlock()
+		return ready && enabled
+	}
+	s.nativeAgentCatalog.publish = func(online bool) error {
+		ctx, cancel := context.WithTimeout(context.Background(), nativeAgentCatalogProbeTimeout)
+		defer cancel()
+		return s.publishNativeAgentReadinessState(ctx, online)
+	}
 	s.nativeAgentCatalog.start()
 }

@@ -113,6 +113,8 @@ var actionSpecs = []ActionSpec{
 	{Name: "agent.memory.status", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: memoryStatusSchema()},
 	{Name: "agent.memory.facts.update", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: memoryFactUpdateSchema()},
 	{Name: "agent.memory.facts.delete", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: memoryFactDeleteSchema()},
+	{Name: "agent.static_sites.list", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: staticSiteListSchema()},
+	{Name: "agent.static_sites.delete", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: staticSiteDeleteSchema()},
 	{Name: "agent.text_tools.config.get", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: textToolsConfigSchema(false)},
 	{Name: "agent.text_tools.config.update", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: textToolsConfigSchema(true)},
 	{Name: "agent.text_tools.execute", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: textToolsExecuteSchema()},

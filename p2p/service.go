@@ -308,7 +308,7 @@ func (s *Service) ensureAgentRoom(ctx context.Context) (bool, error) {
 			if err := s.ensureAgentRoomPowerLevels(ctx, currentRoomID, ownerMXID, agentMXID); err != nil {
 				return false, err
 			}
-			if err := s.publishAgentStatusState(ctx, currentRoomID, agentMXID, agentMXID, false); err != nil {
+			if err := s.publishAgentStatusState(ctx, currentRoomID, agentMXID, agentMXID, s.nativeAgentOnline()); err != nil {
 				return false, err
 			}
 			if err := s.ensureAgentRoomPushRule(ctx, currentRoomID, ownerMXID); err != nil {
@@ -340,7 +340,7 @@ func (s *Service) ensureAgentRoom(ctx context.Context) (bool, error) {
 	if err := s.ensureAgentRoomAgentMember(ctx, roomID, ownerMXID, agentMXID, agentIdentity); err != nil {
 		return false, err
 	}
-	if err := s.publishAgentStatusState(ctx, roomID, agentMXID, agentMXID, false); err != nil {
+	if err := s.publishAgentStatusState(ctx, roomID, agentMXID, agentMXID, s.nativeAgentOnline()); err != nil {
 		return false, err
 	}
 	if err := s.ensureAgentRoomPushRule(ctx, roomID, ownerMXID); err != nil {
@@ -1074,6 +1074,32 @@ func (s *Service) publishCurrentAgentStatusState(ctx context.Context) error {
 	agentMXID := s.agentMXIDLocked()
 	s.mu.Unlock()
 	return s.publishAgentStatusState(ctx, roomID, agentMXID, agentMXID, false)
+}
+
+func (s *Service) nativeAgentReady() bool {
+	if s == nil || s.nativeAgentCatalog == nil {
+		return false
+	}
+	ready, _ := s.nativeAgentCatalog.readyState()
+	return ready
+}
+
+func (s *Service) nativeAgentOnline() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	enabled := s.agentConfig.Enabled
+	s.mu.Unlock()
+	return enabled && s.nativeAgentReady()
+}
+
+func (s *Service) publishNativeAgentReadinessState(ctx context.Context, online bool) error {
+	s.mu.Lock()
+	roomID := s.agentRoomID
+	agentMXID := s.agentMXIDLocked()
+	s.mu.Unlock()
+	return s.publishAgentStatusState(ctx, roomID, agentMXID, agentMXID, online)
 }
 
 func (s *Service) publishAgentStatusState(ctx context.Context, roomID, senderMXID, agentMXID string, online bool) error {

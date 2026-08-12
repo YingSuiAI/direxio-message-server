@@ -139,7 +139,7 @@ func (m *Module) updateExternalConfig(ctx context.Context, account AccountPort, 
 	}
 
 	config := account.Config()
-	if OnlineIdentityUpdateRequested(params) || hasMCPBlockedRoomUpdate(params) {
+	if OnlineIdentityUpdateRequested(params) || hasMCPBlockedRoomUpdate(params) || hasEnabledUpdate(params) {
 		var actionErr *actionbase.Error
 		config, actionErr = account.UpdateConfig(ctx, func(current dirextalkdomain.AgentConfig) dirextalkdomain.AgentConfig {
 			return ApplyOnlineConfigUpdate(current, params)
@@ -168,6 +168,11 @@ func (m *Module) updateExternalConfig(ctx context.Context, account AccountPort, 
 
 func hasMCPBlockedRoomUpdate(params map[string]any) bool {
 	_, ok := params["mcp_blocked_room_ids"]
+	return ok
+}
+
+func hasEnabledUpdate(params map[string]any) bool {
+	_, ok := params["enabled"]
 	return ok
 }
 

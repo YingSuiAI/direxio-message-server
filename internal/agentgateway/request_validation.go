@@ -147,6 +147,10 @@ func ValidateActionRequest(action string, params map[string]any) error {
 		return validateMemoryFactUpdateRequest(action, params)
 	case "agent.memory.facts.delete":
 		return validateMemoryFactDeleteRequest(action, params)
+	case "agent.static_sites.list":
+		return validateStaticSiteListRequest(action, params)
+	case "agent.static_sites.delete":
+		return validateStaticSiteDeleteRequest(action, params)
 	case "agent.text_tools.config.update":
 		return validateTextToolsConfigUpdateRequest(action, params)
 	case "agent.text_tools.execute":
@@ -164,6 +168,34 @@ func ValidateActionRequest(action string, params map[string]any) error {
 	default:
 		return nil
 	}
+}
+
+func validateStaticSiteListRequest(action string, params map[string]any) error {
+	if err := rejectUnknownActionFields(action, params, "page_size", "page_token"); err != nil {
+		return err
+	}
+	if value, present := params["page_size"]; present && !actionIntegerInRange(value, 1, 100) {
+		return invalidActionRequest(action, "page_size", "must be an integer between 1 and 100")
+	}
+	if value, present := params["page_token"]; present {
+		pageToken, ok := value.(string)
+		if !ok || pageToken != strings.TrimSpace(pageToken) || len(pageToken) > 4096 {
+			return invalidActionRequest(action, "page_token", "must be a bounded trimmed string")
+		}
+	}
+	return nil
+}
+
+func validateStaticSiteDeleteRequest(action string, params map[string]any) error {
+	if err := rejectUnknownActionFields(action, params, "release_id", "idempotency_key"); err != nil {
+		return err
+	}
+	for _, field := range []string{"release_id", "idempotency_key"} {
+		if !canonicalActionUUID(params[field]) {
+			return invalidActionRequest(action, field, "must be a canonical UUID")
+		}
+	}
+	return nil
 }
 
 func validateAgentConfigUpdateRequest(action string, params map[string]any) error {

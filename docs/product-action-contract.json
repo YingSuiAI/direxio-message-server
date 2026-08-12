@@ -8599,6 +8599,95 @@
       }
     },
     {
+      "name": "agent.static_sites.list",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "page_size": {
+            "type": "integer"
+          },
+          "page_token": {
+            "type": "string"
+          }
+        },
+        "response": {
+          "next_page_token": {
+            "type": "string",
+            "required": true
+          },
+          "releases": {
+            "type": "array",
+            "required": true,
+            "items": {
+              "type": "object",
+              "properties": {
+                "conversation_id": {
+                  "type": "string",
+                  "required": true
+                },
+                "created_at": {
+                  "type": "string",
+                  "required": true
+                },
+                "public_path": {
+                  "type": "string",
+                  "required": true
+                },
+                "public_url": {
+                  "type": "string",
+                  "required": true
+                },
+                "release_id": {
+                  "type": "string",
+                  "required": true
+                },
+                "site_id": {
+                  "type": "string",
+                  "required": true
+                },
+                "size_bytes": {
+                  "type": "integer",
+                  "required": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.static_sites.delete",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "idempotency_key": {
+            "type": "string",
+            "required": true
+          },
+          "release_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "deleted": {
+            "type": "boolean",
+            "required": true
+          },
+          "release_id": {
+            "type": "string",
+            "required": true
+          },
+          "replayed": {
+            "type": "boolean",
+            "required": true
+          }
+        }
+      }
+    },
+    {
       "name": "agent.text_tools.config.get",
       "auth": "owner",
       "transport": "http_and_ws_request",
