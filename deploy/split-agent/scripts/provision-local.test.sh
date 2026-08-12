@@ -186,16 +186,6 @@ if grep -Fq "$tls_cert_source" "$external_log" || grep -Fq "$tls_key_source" "$e
 fi
 "$script_dir/verify-production-tls.sh" "$external_dir/.env" >/dev/null
 
-attestation_source=$tmp_dir/image-attestation
-image_digest=1111111111111111111111111111111111111111111111111111111111111111
-cat >"$attestation_source" <<EOF
-# dirextalk-image-attestation-v2
-capability_api_version=v1.0.3
-capability_api_source=published
-message_source_revision=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-agent_source_revision=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-EOF
-chmod 400 "$attestation_source"
 
 if DIREXTALK_SPLIT_COMPOSE_MODE=production \
   "$script" "$tmp_dir/production-without-runners" >/dev/null 2>&1; then
@@ -209,9 +199,12 @@ DIREXTALK_SPLIT_COMPOSE_MODE=production \
 DIREXTALK_CORE_EXTENSION_ENABLED=true \
 DIREXTALK_CORE_WORKLOAD_ENABLED=true \
 DIREXTALK_TURN_EXTERNAL_IP=192.0.2.10 \
-DIREXTALK_MESSAGE_SERVER_IMAGE_IMMUTABLE=docker.io/dirextalk/message-server@sha256:$image_digest \
-DIREXTALK_AGENT_IMAGE_IMMUTABLE=docker.io/dirextalk/agent@sha256:$image_digest \
-DIREXTALK_IMAGE_ATTESTATION_SOURCE_FILE=$attestation_source \
+DIREXTALK_MESSAGE_SERVER_IMAGE=docker.io/dirextalk/message-server:latest \
+DIREXTALK_MESSAGE_SERVER_VERSION=v1.1.33 \
+DIREXTALK_MESSAGE_SOURCE_REVISION=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+DIREXTALK_AGENT_IMAGE=docker.io/dirextalk/agent:latest \
+DIREXTALK_AGENT_VERSION=v1.0.69 \
+DIREXTALK_AGENT_SOURCE_REVISION=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
 DIREXTALK_MESSAGE_TLS_MODE=external \
 DIREXTALK_MESSAGE_SERVER_NAME=message.example.com \
 DIREXTALK_MESSAGE_TLS_CERT_SOURCE_FILE=$tls_cert_source \
@@ -220,9 +213,8 @@ DIREXTALK_MESSAGE_TLS_KEY_SOURCE_FILE=$tls_key_source \
 grep -Fqx 'DIREXTALK_SPLIT_COMPOSE_MODE=production' "$production_dir/.env"
 grep -Fqx 'DIREXTALK_RELEASE_CATALOG_ORIGIN=https://imadmin.dirextalk.ai' "$production_dir/.env"
 grep -Fqx 'compose_mode=production' "$production_dir/.manifest"
-grep -Fqx "DIREXTALK_IMAGE_ATTESTATION_FILE=$production_dir/image-attestation" "$production_dir/.env"
-cmp -- "$attestation_source" "$production_dir/image-attestation"
-[ "$(stat -c '%a' "$production_dir/image-attestation")" = 400 ]
+grep -Fqx 'DIREXTALK_MESSAGE_SERVER_IMAGE=docker.io/dirextalk/message-server:latest' "$production_dir/.env"
+grep -Fqx 'DIREXTALK_AGENT_IMAGE=docker.io/dirextalk/agent:latest' "$production_dir/.env"
 
 edge_production_dir=$tmp_dir/production-edge-terminated
 DIREXTALK_SPLIT_FIXTURE_MODE=true \
@@ -231,9 +223,12 @@ DIREXTALK_SPLIT_COMPOSE_MODE=production \
 DIREXTALK_CORE_EXTENSION_ENABLED=true \
 DIREXTALK_CORE_WORKLOAD_ENABLED=true \
 DIREXTALK_TURN_EXTERNAL_IP=192.0.2.10 \
-DIREXTALK_MESSAGE_SERVER_IMAGE_IMMUTABLE=docker.io/dirextalk/message-server@sha256:$image_digest \
-DIREXTALK_AGENT_IMAGE_IMMUTABLE=docker.io/dirextalk/agent@sha256:$image_digest \
-DIREXTALK_IMAGE_ATTESTATION_SOURCE_FILE=$attestation_source \
+DIREXTALK_MESSAGE_SERVER_IMAGE=docker.io/dirextalk/message-server:latest \
+DIREXTALK_MESSAGE_SERVER_VERSION=v1.1.33 \
+DIREXTALK_MESSAGE_SOURCE_REVISION=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+DIREXTALK_AGENT_IMAGE=docker.io/dirextalk/agent:latest \
+DIREXTALK_AGENT_VERSION=v1.0.69 \
+DIREXTALK_AGENT_SOURCE_REVISION=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
 DIREXTALK_MESSAGE_TLS_MODE=edge-terminated \
 DIREXTALK_MESSAGE_SERVER_NAME=message.example.com \
   "$script" "$edge_production_dir" >/dev/null

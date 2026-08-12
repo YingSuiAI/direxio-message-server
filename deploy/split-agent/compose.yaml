@@ -1,14 +1,14 @@
 name: ${DIREXTALK_SPLIT_STACK_NAME:?set a unique fresh split-stack name}
 
-# Production shape for the split deployment. Every application image must be
-# an immutable registry reference (normally a digest). The local sibling
-# build is intentionally kept in compose.local.yaml.
+# Production consumes the published application release channels. Third-party
+# infrastructure images remain digest-pinned below. Local sibling builds stay
+# in compose.local.yaml.
 
 x-message-image: &message-image
-  image: ${DIREXTALK_MESSAGE_SERVER_IMAGE_IMMUTABLE:?set an immutable message-server image reference}
+  image: ${DIREXTALK_MESSAGE_SERVER_IMAGE:?set the message-server release channel}
 
 x-agent-image: &agent-image
-  image: ${DIREXTALK_AGENT_IMAGE_IMMUTABLE:?set an immutable Agent image reference}
+  image: ${DIREXTALK_AGENT_IMAGE:?set the Agent release channel}
 
 x-coturn-image: &coturn-image
   image: ${DIREXTALK_COTURN_IMAGE_IMMUTABLE:?set an immutable coturn image reference}

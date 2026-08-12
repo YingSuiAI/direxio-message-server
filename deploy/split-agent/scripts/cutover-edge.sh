@@ -442,8 +442,8 @@ read_and_validate_inputs() {
   message_server_name=$(read_kv "$stack_env" DIREXTALK_MESSAGE_SERVER_NAME) || return 1
   message_tls_mode=$(read_kv "$stack_env" DIREXTALK_MESSAGE_TLS_MODE) || return 1
   message_tls_cert=$(read_kv "$stack_env" DIREXTALK_MESSAGE_TLS_CERT_FILE) || return 1
-  message_image=$(read_kv "$stack_env" DIREXTALK_MESSAGE_SERVER_IMAGE_IMMUTABLE) || return 1
-  agent_image=$(read_kv "$stack_env" DIREXTALK_AGENT_IMAGE_IMMUTABLE) || return 1
+  message_image=$(read_kv "$stack_env" DIREXTALK_MESSAGE_SERVER_IMAGE) || return 1
+  agent_image=$(read_kv "$stack_env" DIREXTALK_AGENT_IMAGE) || return 1
   stack_compose=$(optional_kv "$stack_env" DIREXTALK_MESSAGE_COMPOSE_FILE) || return 1
   [ -n "${stack_compose:-}" ] || stack_compose=$default_stack_compose
 

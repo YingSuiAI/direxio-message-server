@@ -223,7 +223,10 @@ jq -e '
 ' "$rendered" >/dev/null
 
 jq -e '
-  ([.services | to_entries[] | .value.image] | all(test("@sha256:[0-9a-f]{64}$"))) and
+  (.services["message-server"].image == "docker.io/dirextalk/message-server:latest") and
+  (.services.agent.image == "docker.io/dirextalk/agent:latest") and
+  (.services["extension-runner"].image == "docker.io/dirextalk/agent:latest") and
+  (.services["core-runner"].image == "docker.io/dirextalk/agent:latest") and
   ([.services | to_entries[] | .value.build // null] | all(. == null)) and
   (.services.agent.image == .services["extension-runner"].image) and
   (.services.agent.image == .services["core-runner"].image)

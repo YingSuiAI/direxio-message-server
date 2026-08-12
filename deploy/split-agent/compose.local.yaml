@@ -8,7 +8,7 @@ services:
       args:
         VERSION: ${DIREXTALK_AGENT_BUILD_VERSION:-dev}
         REVISION: ${DIREXTALK_AGENT_BUILD_REVISION:-working-tree}
-    image: ${DIREXTALK_AGENT_IMAGE_LOCAL:-dirextalk-agent:split-local}
+    image: ${DIREXTALK_AGENT_IMAGE:-dirextalk-agent:split-local}
 
   agent-migrate:
     build:
@@ -17,15 +17,15 @@ services:
       args:
         VERSION: ${DIREXTALK_AGENT_BUILD_VERSION:-dev}
         REVISION: ${DIREXTALK_AGENT_BUILD_REVISION:-working-tree}
-    image: ${DIREXTALK_AGENT_IMAGE_LOCAL:-dirextalk-agent:split-local}
+    image: ${DIREXTALK_AGENT_IMAGE:-dirextalk-agent:split-local}
 
   # The bundled runner binaries use the exact same local Agent image as the
   # main process; no runner-specific build context or image tag exists.
   extension-runner:
-    image: ${DIREXTALK_AGENT_IMAGE_LOCAL:-dirextalk-agent:split-local}
+    image: ${DIREXTALK_AGENT_IMAGE:-dirextalk-agent:split-local}
 
   core-runner:
-    image: ${DIREXTALK_AGENT_IMAGE_LOCAL:-dirextalk-agent:split-local}
+    image: ${DIREXTALK_AGENT_IMAGE:-dirextalk-agent:split-local}
 
   message-server:
     build:
@@ -34,7 +34,7 @@ services:
       args:
         VERSION: ${DIREXTALK_MESSAGE_BUILD_VERSION:-local}
         COMMIT: ${DIREXTALK_MESSAGE_BUILD_REVISION:-working-tree}
-    image: ${DIREXTALK_MESSAGE_SERVER_IMAGE_LOCAL:-dirextalk-message-server:split-local}
+    image: ${DIREXTALK_MESSAGE_SERVER_IMAGE:-dirextalk-message-server:split-local}
     environment:
       # The local sibling stack has no host updater daemon. Account deletion
       # remains monotonic and is fenced durably in both databases; production
@@ -48,4 +48,4 @@ services:
       args:
         VERSION: ${DIREXTALK_MESSAGE_BUILD_VERSION:-local}
         COMMIT: ${DIREXTALK_MESSAGE_BUILD_REVISION:-working-tree}
-    image: ${DIREXTALK_MESSAGE_SERVER_IMAGE_LOCAL:-dirextalk-message-server:split-local}
+    image: ${DIREXTALK_MESSAGE_SERVER_IMAGE:-dirextalk-message-server:split-local}

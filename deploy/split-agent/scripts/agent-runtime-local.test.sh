@@ -31,8 +31,8 @@ write_fixture() {
   env_file=$fixture/.env
   manifest=$fixture/.manifest
   receipt=$fixture/.cleanup-receipt
-  printf 'DIREXTALK_SPLIT_STACK_NAME=%s\nDIREXTALK_AGENT_IMAGE_LOCAL=%s\nDIREXTALK_AGENT_IMAGE_IMMUTABLE=registry.example/agent@sha256:%064d\n' \
-    "$stack_name" "$agent_image" 1 >"$env_file"
+  printf 'DIREXTALK_SPLIT_STACK_NAME=%s\nDIREXTALK_AGENT_IMAGE=%s\n' \
+    "$stack_name" "$agent_image" >"$env_file"
   chmod 400 -- "$env_file"
   printf 'stack_name=%s\ncompose_mode=local\nrunner.machine_id=%s\nrunner.docker_engine_id=%s\n' \
     "$stack_name" "$machine_id" "$engine_id" >"$manifest"

@@ -75,7 +75,7 @@ Compose harness is not an AWS authorization boundary.
    missing or mismatched role ARN must be rejected before any AWS call.
 5. Revoke the STS session, remove the disposable role/policy and target
    resources, and run the exact split-stack cleanup script. Keep the manifest,
-   policy digest, image attestation, and verification output as audit evidence;
+   application version/revision and verification output as release evidence;
    do not delete the manifest before the review closes.
 
 No AWS call is considered tested by a Compose render or a unit fixture. A live

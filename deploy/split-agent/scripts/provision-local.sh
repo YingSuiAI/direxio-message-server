@@ -229,9 +229,14 @@ validate_root_owned_asset() {
   done
 }
 
-validate_immutable_image() {
+validate_digest_image() {
   local name=$1 value=$2
-  printf '%s\n' "$value" | grep -Eq '@sha256:[0-9a-f]{64}$' || die "$name must end with @sha256:<64 lowercase hex>; use the *_IMAGE_LOCAL override for local builds"
+  printf '%s\n' "$value" | grep -Eq '@sha256:[0-9a-f]{64}$' || die "$name must end with @sha256:<64 lowercase hex>"
+}
+
+validate_application_image() {
+  local name=$1 value=$2 expected=$3
+  [ "$value" = "$expected" ] || die "$name must be $expected"
 }
 
 require_fresh_docker_namespace() {
@@ -389,8 +394,8 @@ if [ "$compose_mode" = local ]; then
   message_build_version=local
   message_build_revision=working-tree
 else
-  # Production consumes only this root-owned deployment bundle plus immutable
-  # public images.  It must not require either Git checkout on the target host.
+  # Production consumes only this root-owned deployment bundle plus public
+  # release channels. It must not require either Git checkout on the target host.
   message_root=$split_deploy_dir
   agent_root=$split_deploy_dir
   agent_build_version=production-attested
@@ -902,28 +907,42 @@ postgres_image=$(printenv DIREXTALK_POSTGRES_IMAGE_IMMUTABLE 2>/dev/null || true
 [ -n "$postgres_image" ] || postgres_image=docker.io/pgvector/pgvector:pg18@sha256:691673308c99d2161ba298736f3147f1f22d79de2fb7ec93ae9b4afcab870b62
 utility_image=$(printenv DIREXTALK_UTILITY_IMAGE_IMMUTABLE 2>/dev/null || true)
 [ -n "$utility_image" ] || utility_image=$postgres_image
-message_image=$(printenv DIREXTALK_MESSAGE_SERVER_IMAGE_IMMUTABLE 2>/dev/null || true)
-[ -n "$message_image" ] || message_image=registry.invalid/dirextalk-message-server@sha256:0000000000000000000000000000000000000000000000000000000000000000
-agent_image=$(printenv DIREXTALK_AGENT_IMAGE_IMMUTABLE 2>/dev/null || true)
-[ -n "$agent_image" ] || agent_image=registry.invalid/dirextalk-agent@sha256:0000000000000000000000000000000000000000000000000000000000000000
+message_image=$(printenv DIREXTALK_MESSAGE_SERVER_IMAGE 2>/dev/null || true)
+[ -n "$message_image" ] || message_image=dirextalk-message-server:split-local
+agent_image=$(printenv DIREXTALK_AGENT_IMAGE 2>/dev/null || true)
+[ -n "$agent_image" ] || agent_image=dirextalk-agent:split-local
+message_version=${DIREXTALK_MESSAGE_SERVER_VERSION:-$message_build_version}
+message_revision=${DIREXTALK_MESSAGE_SOURCE_REVISION:-$message_build_revision}
+agent_version=${DIREXTALK_AGENT_VERSION:-$agent_build_version}
+agent_revision=${DIREXTALK_AGENT_SOURCE_REVISION:-$agent_build_revision}
 coturn_image=$(printenv DIREXTALK_COTURN_IMAGE_IMMUTABLE 2>/dev/null || true)
 [ -n "$coturn_image" ] || coturn_image=docker.io/coturn/coturn:4.6.3-alpine@sha256:e2bca2f79a4269d7240de5872ab60a9305013ad37296d2acf14f9510874346be
 for image_pair in \
   DIREXTALK_POSTGRES_IMAGE_IMMUTABLE:$postgres_image \
   DIREXTALK_UTILITY_IMAGE_IMMUTABLE:$utility_image \
-  DIREXTALK_MESSAGE_SERVER_IMAGE_IMMUTABLE:$message_image \
-  DIREXTALK_AGENT_IMAGE_IMMUTABLE:$agent_image \
   DIREXTALK_COTURN_IMAGE_IMMUTABLE:$coturn_image; do
   image_name=${image_pair%%:*}
   image_value=${image_pair#*:}
-  validate_immutable_image "$image_name" "$image_value"
+  validate_digest_image "$image_name" "$image_value"
 done
 if [ "$compose_mode" = production ]; then
-  case "$message_image:$agent_image" in
-    *registry.invalid*|*sha256:0000000000000000000000000000000000000000000000000000000000000000*)
-      die "production application images must be non-placeholder Docker Hub digests"
-      ;;
-  esac
+  validate_application_image DIREXTALK_MESSAGE_SERVER_IMAGE "$message_image" docker.io/dirextalk/message-server:latest
+  validate_application_image DIREXTALK_AGENT_IMAGE "$agent_image" docker.io/dirextalk/agent:latest
+  for version_pair in \
+    DIREXTALK_MESSAGE_SERVER_VERSION:$message_version \
+    DIREXTALK_AGENT_VERSION:$agent_version; do
+    image_name=${version_pair%%:*}
+    image_value=${version_pair#*:}
+    printf '%s\n' "$image_value" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' || \
+      die "$image_name must be a canonical release version"
+  done
+  for revision_pair in \
+    DIREXTALK_MESSAGE_SOURCE_REVISION:$message_revision \
+    DIREXTALK_AGENT_SOURCE_REVISION:$agent_revision; do
+    image_name=${revision_pair%%:*}
+    image_value=${revision_pair#*:}
+    printf '%s\n' "$image_value" | grep -Eq '^[0-9a-f]{40}$' || die "$image_name must be a full lowercase Git revision"
+  done
 fi
 
 write_secret "$out/agent-postgres-password" "$agent_password"
@@ -969,15 +988,6 @@ core_secret_master_key_uid=$(stat -c '%u' "$out/core-secret-master-key")
 # Compose or the manifest.
 message_tls_cert_file=$out/message-tls-external-cert.pem
 message_tls_key_file=$out/message-tls-external-key.pem
-image_attestation_source=${DIREXTALK_IMAGE_ATTESTATION_SOURCE_FILE:-}
-image_attestation_file=$out/image-attestation
-if [ "$compose_mode" = production ]; then
-  [ -n "$image_attestation_source" ] || die "DIREXTALK_IMAGE_ATTESTATION_SOURCE_FILE is required for production"
-  validate_absolute_path DIREXTALK_IMAGE_ATTESTATION_SOURCE_FILE "$image_attestation_source"
-elif [ -n "$image_attestation_source" ]; then
-  die "DIREXTALK_IMAGE_ATTESTATION_SOURCE_FILE is only valid for production"
-fi
-
 copy_secret_or_empty "$openrouter_source" "$out/openrouter-api-key" "OpenRouter API key"
 copy_secret_or_empty "$embedding_source" "$out/embedding-api-key" "embedding API key"
 copy_secret_or_empty "$tavily_source" "$out/tavily-api-key" "Tavily API key"
@@ -985,19 +995,6 @@ tls_placeholder_warning=true
 [ "$message_tls_mode" != edge-terminated ] || tls_placeholder_warning=false
 copy_secret_or_empty "$message_tls_cert_source" "$message_tls_cert_file" "external message-server TLS certificate" "$tls_placeholder_warning"
 copy_secret_or_empty "$message_tls_key_source" "$message_tls_key_file" "external message-server TLS private key" "$tls_placeholder_warning"
-copy_secret_or_empty "$image_attestation_source" "$image_attestation_file" "production image attestation"
-
-if [ "$compose_mode" = production ]; then
-  [ -s "$image_attestation_file" ] || die "production image attestation must be non-empty"
-fi
-[ -f "$image_attestation_file" ] && [ ! -L "$image_attestation_file" ] || die "provisioned image attestation is not a regular non-symlink file"
-[ "$(stat -c '%u' -- "$image_attestation_file")" = "$(id -u)" ] || die "provisioned image attestation is not owned by the provisioning user"
-[ "$(stat -c '%a' -- "$image_attestation_file")" = 400 ] || die "provisioned image attestation must have mode 0400"
-image_attestation_device=$(stat -c '%d' -- "$image_attestation_file")
-image_attestation_inode=$(stat -c '%i' -- "$image_attestation_file")
-image_attestation_uid=$(stat -c '%u' -- "$image_attestation_file")
-image_attestation_sha256=$(sha256sum -- "$image_attestation_file" | awk '{print $1}')
-
 if [ "$message_tls_mode" = external ]; then
   [ -s "$message_tls_cert_file" ] || die "external message-server TLS certificate must be non-empty"
   [ -s "$message_tls_key_file" ] || die "external message-server TLS private key must be non-empty"
@@ -1129,8 +1126,8 @@ DIREXTALK_POSTGRES_ENTRYPOINT_FILE=$split_deploy_dir/scripts/postgres-entrypoint
 DIREXTALK_POSTGRES_INITIALIZER_FILE=$split_deploy_dir/scripts/initialize-postgres.sh
 DIREXTALK_MESSAGE_SERVER_INITIALIZER_FILE=$split_deploy_dir/scripts/initialize-message-server.sh
 DIREXTALK_AGENT_SECRET_MATERIALIZER_FILE=$split_deploy_dir/scripts/materialize-agent-secrets.sh
-DIREXTALK_MESSAGE_SERVER_IMAGE_IMMUTABLE=$message_image
-DIREXTALK_AGENT_IMAGE_IMMUTABLE=$agent_image
+DIREXTALK_MESSAGE_SERVER_IMAGE=$message_image
+DIREXTALK_AGENT_IMAGE=$agent_image
 DIREXTALK_POSTGRES_IMAGE_IMMUTABLE=$postgres_image
 DIREXTALK_UTILITY_IMAGE_IMMUTABLE=$utility_image
 DIREXTALK_COTURN_IMAGE_IMMUTABLE=$coturn_image
@@ -1140,9 +1137,10 @@ DIREXTALK_AGENT_BUILD_VERSION=$agent_build_version
 DIREXTALK_AGENT_BUILD_REVISION=$agent_build_revision
 DIREXTALK_MESSAGE_BUILD_VERSION=$message_build_version
 DIREXTALK_MESSAGE_BUILD_REVISION=$message_build_revision
-DIREXTALK_MESSAGE_SERVER_IMAGE_LOCAL=dirextalk-message-server:split-local
-DIREXTALK_AGENT_IMAGE_LOCAL=dirextalk-agent:split-local
-DIREXTALK_IMAGE_ATTESTATION_FILE=$image_attestation_file
+DIREXTALK_MESSAGE_SERVER_VERSION=$message_version
+DIREXTALK_MESSAGE_SOURCE_REVISION=$message_revision
+DIREXTALK_AGENT_VERSION=$agent_version
+DIREXTALK_AGENT_SOURCE_REVISION=$agent_revision
 DIREXTALK_MESSAGE_SERVER_INSTANCE_ID=$message_instance_id
 DIREXTALK_AGENT_INSTANCE_ID=$agent_instance_id
 DIREXTALK_ACCOUNT_GENERATION=$account_generation
@@ -1299,11 +1297,6 @@ message_tls_key_device=$message_tls_key_device
 message_tls_key_inode=$message_tls_key_inode
 message_tls_key_uid=$message_tls_key_uid
 message_tls_key_sha256=$message_tls_key_sha256
-image_attestation_path=$image_attestation_file
-image_attestation_device=$image_attestation_device
-image_attestation_inode=$image_attestation_inode
-image_attestation_uid=$image_attestation_uid
-image_attestation_sha256=$image_attestation_sha256
 runner_host_prepared=$runner_host_prepared
 core_extension_enabled=$core_extension_enabled
 core_workload_enabled=$core_workload_enabled

@@ -36,8 +36,8 @@ DIREXTALK_SPLIT_STACK_NAME=$stack
 DIREXTALK_SPLIT_COMPOSE_MODE=production
 DIREXTALK_POSTGRES_IMAGE_IMMUTABLE=$utility_image
 DIREXTALK_UTILITY_IMAGE_IMMUTABLE=$utility_image
-DIREXTALK_MESSAGE_SERVER_IMAGE_IMMUTABLE=docker.io/dirextalk/message-server:v1.1.5
-DIREXTALK_AGENT_IMAGE_IMMUTABLE=$agent_image
+DIREXTALK_MESSAGE_SERVER_IMAGE=docker.io/dirextalk/message-server:latest
+DIREXTALK_AGENT_IMAGE=$agent_image
 DIREXTALK_COTURN_IMAGE_IMMUTABLE=coturn/coturn:4.6.3-alpine
 DIREXTALK_ACCOUNT_GENERATION=1
 DIREXTALK_AGENT_INSTANCE_ID=11111111-1111-4111-8111-111111111111
@@ -97,10 +97,10 @@ docker volume create "$extension_socket_volume" >/dev/null
 docker volume create "$core_socket_volume" >/dev/null
 
 # This is the exact Compose consumer command used by normalize_runner_volumes.
-DIREXTALK_AGENT_IMAGE_IMMUTABLE=$agent_image docker compose --env-file "$env_file" \
+DIREXTALK_AGENT_IMAGE=$agent_image docker compose --env-file "$env_file" \
   -f "$compose_file" -f "$production_compose_file" --project-name "$stack" \
   run --rm --no-deps --pull never -T --interactive=false extension-socket-init >/dev/null
-DIREXTALK_AGENT_IMAGE_IMMUTABLE=$agent_image docker compose --env-file "$env_file" \
+DIREXTALK_AGENT_IMAGE=$agent_image docker compose --env-file "$env_file" \
   -f "$compose_file" -f "$production_compose_file" --project-name "$stack" \
   run --rm --no-deps --pull never -T --interactive=false core-runner-socket-init >/dev/null
 extension_actual=$(docker run --rm --network none -v "$extension_socket_volume:/socket" "$utility_image" stat -c '%u:%g:%a' /socket)
@@ -110,7 +110,7 @@ core_actual=$(docker run --rm --network none -v "$core_socket_volume:/socket" "$
 
 # Missing sockets are the expected negative result. The real runner mounts
 # must not copy image-directory metadata over the initialized volume roots.
-if DIREXTALK_AGENT_IMAGE_IMMUTABLE=$agent_image docker compose --env-file "$env_file" \
+if DIREXTALK_AGENT_IMAGE=$agent_image docker compose --env-file "$env_file" \
     -f "$compose_file" -f "$production_compose_file" --project-name "$stack" \
     run --rm --no-deps --pull never -T --interactive=false extension-runner \
     probe --socket /run/dirextalk-agent/missing.sock --runner-uid 65531 >/dev/null 2>&1; then
@@ -120,7 +120,7 @@ else
   status=$?
   [ "$status" -ne 125 ] || { echo 'extension runner mount probe had a Docker infrastructure failure' >&2; exit 1; }
 fi
-if DIREXTALK_AGENT_IMAGE_IMMUTABLE=$agent_image docker compose --env-file "$env_file" \
+if DIREXTALK_AGENT_IMAGE=$agent_image docker compose --env-file "$env_file" \
     -f "$compose_file" -f "$production_compose_file" --project-name "$stack" \
     run --rm --no-deps --pull never -T --interactive=false core-runner \
     probe --socket /run/dirextalk-core-runner/missing.sock >/dev/null 2>&1; then

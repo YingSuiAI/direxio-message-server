@@ -44,15 +44,13 @@ verify_control_identity() {
   [ "$(stat -c '%a' "$manifest")" = 400 ] || die ".manifest permissions changed during startup"
   [ "$(sha256sum -- "$env_file" | awk '{print $1}')" = "$env_digest" ] || die ".env content changed during startup"
   [ "$(sha256sum -- "$manifest" | awk '{print $1}')" = "$manifest_digest" ] || die ".manifest content changed during startup"
-  for bound_file in "$message_tls_cert" "$message_tls_key" "$image_attestation"; do
+  for bound_file in "$message_tls_cert" "$message_tls_key"; do
     [ -f "$bound_file" ] && [ ! -L "$bound_file" ] || die "bound deployment file was replaced during startup: $bound_file"
   done
   [ "$(stat -c '%d:%i:%u:%a' -- "$message_tls_cert")" = "$message_tls_cert_identity" ] || die "message TLS certificate identity changed during startup"
   [ "$(stat -c '%d:%i:%u:%a' -- "$message_tls_key")" = "$message_tls_key_identity" ] || die "message TLS key identity changed during startup"
-  [ "$(stat -c '%d:%i:%u:%a' -- "$image_attestation")" = "$image_attestation_identity" ] || die "image attestation identity changed during startup"
   [ "$(sha256sum -- "$message_tls_cert" | awk '{print $1}')" = "$message_tls_cert_digest" ] || die "message TLS certificate changed during startup"
   [ "$(sha256sum -- "$message_tls_key" | awk '{print $1}')" = "$message_tls_key_digest" ] || die "message TLS key changed during startup"
-  [ "$(sha256sum -- "$image_attestation" | awk '{print $1}')" = "$image_attestation_digest" ] || die "image attestation changed during startup"
   [ "$(stat -c '%d:%i:%u:%g:%a' -- "$runner_apparmor_profile_path")" = "$runner_apparmor_profile_identity" ] || die "runner AppArmor profile identity changed during startup"
   [ "$(stat -c '%d:%i:%u:%g:%a' -- "$runner_apparmor_manager_path")" = "$runner_apparmor_manager_identity" ] || die "runner AppArmor manager identity changed during startup"
   [ "$(sha256sum -- "$runner_apparmor_profile_path" | awk '{print $1}')" = "$runner_apparmor_profile_sha256" ] || die "runner AppArmor profile changed during startup"
@@ -152,14 +150,10 @@ verify_bound_deployment_file() {
 
 message_tls_cert=$(verify_bound_deployment_file "message TLS certificate" DIREXTALK_MESSAGE_TLS_CERT_FILE message_tls_cert "$out/message-tls-external-cert.pem")
 message_tls_key=$(verify_bound_deployment_file "message TLS key" DIREXTALK_MESSAGE_TLS_KEY_FILE message_tls_key "$out/message-tls-external-key.pem")
-image_attestation=$(verify_bound_deployment_file "image attestation" DIREXTALK_IMAGE_ATTESTATION_FILE image_attestation "$out/image-attestation")
 message_tls_cert_identity=$(stat -c '%d:%i:%u:%a' -- "$message_tls_cert")
 message_tls_key_identity=$(stat -c '%d:%i:%u:%a' -- "$message_tls_key")
-image_attestation_identity=$(stat -c '%d:%i:%u:%a' -- "$image_attestation")
 message_tls_cert_digest=$(sha256sum -- "$message_tls_cert" | awk '{print $1}')
 message_tls_key_digest=$(sha256sum -- "$message_tls_key" | awk '{print $1}')
-image_attestation_digest=$(sha256sum -- "$image_attestation" | awk '{print $1}')
-[ "$compose_mode" = local ] || [ -s "$image_attestation" ] || die "production image attestation is empty"
 
 network_pairs=(
   'DIREXTALK_MESSAGE_PRIVATE_NETWORK:resource.network.message_private'
@@ -626,7 +620,7 @@ else
   "$script_dir/verify-production-tls.sh" "$env_file"
   "${compose[@]}" pull --policy always
   verify_control_identity
-  "$script_dir/verify-production-images.sh" "$env_file" "$image_attestation"
+  "$script_dir/verify-production-images.sh" "$env_file"
 fi
 
 # Recheck immediately before creating resources so a build-time race cannot
@@ -872,6 +866,11 @@ for service in agent extension-runner core-runner message-server; do
     extension-runner|core-runner) inspect_runner_cgroup_namespace "$service" "$container" ;;
   esac
 done
+
+if [ "$compose_mode" = production ]; then
+  verify_control_identity
+  "$script_dir/verify-production-images.sh" "$env_file" --running
+fi
 
 # Persist the exact objects created by this fresh start.  Cleanup consumes this
 # receipt instead of resolving mutable Compose names again.  Docker volumes do

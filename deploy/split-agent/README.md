@@ -215,33 +215,16 @@ The wrapper accepts exactly `OUTPUT_DIR target_version minimum_server_version`;
 both version values must be canonical stable `vX.Y.Z`. It performs no channel
 directory, metadata file, path, or environment discovery. The minimum comes
 directly from the authenticated updater command and is compared to
-the OCI version label of the exact receipt-bound running message-server
+the version label of the exact receipt-bound running message-server
 container; it never compares a Flutter or other client version. An unmet
 minimum, a non-newer Agent target, or a non-production stack is an expected
 negative result (exit `3`) before pull or mutation. Exit `1` is an identity,
 Docker, migration, health, or control-commit infrastructure failure. A successful
-update pulls the fixed
-`docker.io/dirextalk/agent:<version>` repository, resolves it to an immutable
-digest, migrates Agent storage, recreates both runners and then Agent from that
-one digest, then atomically updates the Agent digest and source revision in the
-protected image attestation together with its manifest, environment, cleanup
-receipt, and three container IDs. The same transaction runs the production
-image smoke and isolated three-container topology gates before publishing the
-new protected controls. A fixed owner-bound lock serializes the complete
-transaction, and file-plus-directory fsync makes journal and control state
-durable across process or host failure. Updates are one-way: a post-mutation failure does not
-start the previous image or restore old controls. It preserves the last
-receipt, publishes no replacement success receipt, exits non-zero, and writes
-a mode-0400 `.agent-update-failure.*` record with the failed phase and immutable
-target identity for operator audit and explicit recovery. After committing the
-new controls and a `cleanup-pending` receipt, the wrapper revalidates the three
-healthy target container identities, removes all fixed-repository references
-to the previous image without `--force`, and only then publishes the complete
-receipt.
-If any non-owned, unbound, or running container or foreign repository alias
-still uses the old image ID, the wrapper retains that image ID after removing
-only its fixed `dirextalk/agent` repository references; it never removes the
-foreign alias or performs a global prune.
+update pulls `docker.io/dirextalk/agent:latest`, verifies its expected version,
+revision, and three binary versions, migrates Agent storage, recreates both
+runners and Agent from that pulled image, and updates the expected release and
+receipt-bound container IDs. The wrapper verifies the same binary versions in
+the healthy running containers. A fixed owner-bound lock serializes updates.
 
 This wrapper is the host execution adapter only. The current message-server
 `release.v2` actions delegate exclusively to the
@@ -260,19 +243,11 @@ The target is canonical stable `vX.Y.Z`; repository, image, Compose files,
 project, and service are code-owned and are never argv inputs. Status `0`
 means only message-server was recreated healthy, `3` is an expected
 non-production or non-newer result, and `1` is an identity, Docker, health, or
-control/journal infrastructure failure. The adapter atomically binds the resolved image digest and
-OCI revision through the protected image attestation, manifest, environment,
-cleanup receipt, and new container ID. Updates are one-way. A fixed root-owned
-journal and lock preserve an interrupted or failed mutation for explicit
-operator recovery; a later invocation refuses to resume it automatically and
-never starts the previous image. Journal and control renames and the final
-journal unlink are file-plus-directory fsynced. After committing the new controls and a
-`cleanup-pending` receipt, the wrapper revalidates the healthy target container,
-removes all fixed-repository references to the previous image without
-`--force`, and only then publishes the complete receipt. Images used by an
-unbound or other container, or carrying a foreign alias, retain their image ID
-and foreign references after fixed `dirextalk/message-server` references are
-removed. Agent and database
+control infrastructure failure. The adapter pulls
+`docker.io/dirextalk/message-server:latest`, verifies its expected version,
+revision, and binary version, recreates message-server, then repeats the binary
+probe against the healthy container and updates its receipt-bound container ID.
+Agent and database
 containers are never recreated, and no wrapper performs a global prune.
 
 Formal Agent images are built from the sibling `dirextalk-agent` repository.
@@ -429,12 +404,12 @@ step:
 
 The same consumer wrapper is the production Docker Hub path. Set
 `DIREXTALK_FIRST_FRESH_COMPOSE_MODE=production`, provide the two application
-digests, the protected image-attestation source, and the public server name.
+release channels with their expected versions and revisions, and the public server name.
 Production provisioning records that mode in both `.env` and `.manifest`.
 `start-local.sh` then renders `compose.yaml` with
-`compose.production.yaml`, verifies the protected TLS and attestation
-identities, pulls every digest-pinned public image, runs the three-binary Agent
-smoke gate, and starts with `--no-build --pull never`. The production override
+`compose.production.yaml`, verifies protected TLS, pulls the application
+`latest` channels and digest-pinned infrastructure images, checks all real
+binary versions, and starts with `--no-build --pull never`. The production override
 binds only the host updater socket directory and control-token file into
 message-server; local mode does not consume those host paths.
 Neither the Agent nor message-server Git checkout is required on the target
@@ -444,9 +419,12 @@ host:
     DIREXTALK_FIRST_FRESH_COMPOSE_MODE=production \
     DIREXTALK_CORE_EXTENSION_ENABLED=true \
     DIREXTALK_CORE_WORKLOAD_ENABLED=true \
-    DIREXTALK_MESSAGE_SERVER_IMAGE_IMMUTABLE=docker.io/dirextalk/message-server@sha256:<digest> \
-    DIREXTALK_AGENT_IMAGE_IMMUTABLE=docker.io/dirextalk/agent@sha256:<digest> \
-    DIREXTALK_IMAGE_ATTESTATION_SOURCE_FILE=/absolute/path/image-attestation \
+    DIREXTALK_MESSAGE_SERVER_IMAGE=docker.io/dirextalk/message-server:latest \
+    DIREXTALK_MESSAGE_SERVER_VERSION=v1.1.33 \
+    DIREXTALK_MESSAGE_SOURCE_REVISION=<full-commit> \
+    DIREXTALK_AGENT_IMAGE=docker.io/dirextalk/agent:latest \
+    DIREXTALK_AGENT_VERSION=v1.0.69 \
+    DIREXTALK_AGENT_SOURCE_REVISION=<full-commit> \
     DIREXTALK_MESSAGE_TLS_MODE=edge-terminated \
     DIREXTALK_MESSAGE_SERVER_NAME=s1.dirextalk.ai \
       deploy/split-agent/scripts/verify-first-fresh.sh \
@@ -486,14 +464,10 @@ system/user/global slice.
 
 Only the local override builds sibling Agent sources, directly through the
 Agent repository's Dockerfiles. Both consumer module graphs use the public
-capability-api v1.0.3 release with no replace. The production compose file has no build section and
-requires every image reference to end in `@sha256:<64 lowercase hex>`. The
-provisioner writes `registry.invalid/...@sha256:<64 hex>` placeholders for
-unpublished local application images; the local override replaces them with
-`*_IMAGE_LOCAL` tags. Replace all placeholder immutable refs with release
-digests before any production `up`. Production images must resolve the
-released v1.0.3 module with no replace directive; use registry digests for
-every non-local deployment.
+capability-api v1.0.3 release with no replace. The production compose file has
+no build section. Application services consume only the two canonical
+Docker Hub `latest` channels; PostgreSQL, utility, coturn, and Caddy remain
+digest-pinned.
 
 For a fresh baseline stack, use the guarded startup sequence after the
 API/runtime acceptance gate is green:
@@ -677,16 +651,14 @@ missing or wildcarded. The Agent never falls back to the caller role.
 The neutral Capability API is published and locally verified at v1.0.3. Both
 committed Go modules resolve this public release without a replace directive,
 submodule, workspace path, or capability-api build context. Both Go consumers
-must require `github.com/YingSuiAI/dirextalk-capability-api v1.0.3`. The image
-attestation therefore includes `capability_api_source=published`; the verifier
-rejects `local-relative-replace`.
+must require `github.com/YingSuiAI/dirextalk-capability-api v1.0.3`.
 
 Use `compose.yaml` together with `compose.production.yaml` and a reviewed
 `.env` containing:
 
-- immutable digest-pinned application images for message-server and Agent; the
-  extension-runner and Core workload-runner containers resolve the exact same
-  Agent digest;
+- `docker.io/dirextalk/message-server:latest` and
+  `docker.io/dirextalk/agent:latest`, with expected versions and full source
+  revisions; all Agent runtime containers resolve the same pulled image ID;
 - a single-execution extension-runner whose outer container is capped at two
   CPUs, 1 GiB memory, and 256 processes in addition to each workload cgroup;
 - an immutable digest-pinned PostgreSQL 18 plus pgvector image;
@@ -695,23 +667,18 @@ Use `compose.yaml` together with `compose.production.yaml` and a reviewed
 - fresh message-server/Agent instance IDs and the generated positive account
   generation pair (never copy these values into a replacement stack).
 
-Before a production render, create a mode 0400
-`# dirextalk-image-attestation-v2` file containing the exact five digest
-references, `capability_api_version=v1.0.3`,
-`capability_api_source=published`, and the full lowercase Git commits in
-`message_source_revision` and `agent_source_revision`, then run:
+Before production startup, render the expected application versions and full
+lowercase source revisions into `.env`, then run:
 
     deploy/split-agent/scripts/verify-production-images.sh \
-      /absolute/path/.run/split/.env \
-      /absolute/path/release/image-attestation
+      /absolute/path/.run/split/.env
 
-The image gate inspects both immutable application digests and requires each
-`org.opencontainers.image.revision` label to match its repository-specific
-attested revision. It runs `docker run --rm --entrypoint` smoke checks against
-the Agent digest for `/usr/local/bin/dirextalk-agent`,
+The image gate requires each image version/revision label to match the expected
+release and runs `--version` checks for message-server and all Agent binaries:
+`/usr/local/bin/dirextalk-agent`,
 `/usr/local/bin/dirextalk-extension-runner`, and
-`/usr/local/bin/dirextalk-core-runner`; a missing binary, unexpected exit, or
-metadata mismatch blocks the production render.
+`/usr/local/bin/dirextalk-core-runner`. Startup repeats the probes against the
+healthy running containers.
 
 Production requires either the canonical
 `DIREXTALK_MESSAGE_TLS_MODE=edge-terminated` contract or the explicit

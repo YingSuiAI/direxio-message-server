@@ -1,7 +1,0 @@
-{
-  "version": "v1.1.1",
-  "minimum_client_version": "v1.0.0",
-  "maximum_client_version_exclusive": "v2.0.0",
-  "schema_version": 2,
-  "schema_compat_version": 1
-}

@@ -90,20 +90,9 @@ agent_runtime_verify_host() {
   [ "$engine" = "$agent_runtime_engine_id" ] || agent_runtime_die "Docker Engine ID changed"
 }
 
-agent_runtime_image_id() {
-  local image=$1 image_id
-  if image_id=$(docker image inspect "$image" --format '{{.Id}}' 2>/dev/null); then
-    :
-  else
-    agent_runtime_die "Docker image identity inspection failed for $image"
-  fi
-  printf '%s\n' "$image_id" | grep -Eq '^sha256:[0-9a-f]{64}$' || agent_runtime_die "Docker image identity is invalid for $image"
-  printf '%s' "$image_id"
-}
-
 agent_runtime_verify_target() {
   local role=$1 id=${agent_runtime_ids[$1]} name=${agent_runtime_names[$1]}
-  local service=${agent_runtime_services[$1]} data replacement actual_id raw_name actual_name actual_service project image image_id
+  local service=${agent_runtime_services[$1]} data replacement actual_id raw_name actual_name actual_service project image
   if data=$(docker inspect "$id" 2>/dev/null); then
     :
   else
@@ -116,7 +105,6 @@ agent_runtime_verify_target() {
   if ! jq -e 'type == "array" and length == 1' <<<"$data" >/dev/null; then
     agent_runtime_die "$role container inspect returned malformed JSON"
   fi
-  image_id=$(agent_runtime_image_id "$agent_runtime_expected_image")
   actual_id=$(jq -r '.[0].Id // empty' <<<"$data")
   raw_name=$(jq -r '.[0].Name // empty' <<<"$data")
   actual_name=${raw_name#/}
@@ -132,7 +120,6 @@ agent_runtime_verify_target() {
   [ "$project" = "$agent_runtime_stack" ] || agent_runtime_die "$role container project identity changed"
   [ "$image" = "$agent_runtime_expected_image" ] || agent_runtime_die "$role container Config.Image identity changed"
   printf '%s\n' "${agent_runtime_target_image_id[$role]}" | grep -Eq '^sha256:[0-9a-f]{64}$' || agent_runtime_die "$role container image ID is invalid"
-  [ "${agent_runtime_target_image_id[$role]}" = "$image_id" ] || agent_runtime_die "$role container image ID identity changed"
   [ -n "${agent_runtime_target_status[$role]}" ] || agent_runtime_die "$role container state is unavailable"
 }
 
@@ -141,6 +128,9 @@ agent_runtime_refresh_targets() {
   for role in agent extension-runner core-runner; do
     agent_runtime_verify_target "$role"
   done
+  [ "${agent_runtime_target_image_id[agent]}" = "${agent_runtime_target_image_id[extension-runner]}" ] && \
+    [ "${agent_runtime_target_image_id[agent]}" = "${agent_runtime_target_image_id[core-runner]}" ] || \
+    agent_runtime_die "Agent runtime containers do not use one image ID"
 }
 
 agent_runtime_before_mutation() {
@@ -321,8 +311,7 @@ agent_runtime_main() {
 
   agent_runtime_compose_mode=$(agent_runtime_read_pair "$agent_runtime_manifest" compose_mode)
   case "$agent_runtime_compose_mode" in
-    local) agent_runtime_expected_image=$(agent_runtime_read_pair "$agent_runtime_env_file" DIREXTALK_AGENT_IMAGE_LOCAL) ;;
-    production) agent_runtime_expected_image=$(agent_runtime_read_pair "$agent_runtime_env_file" DIREXTALK_AGENT_IMAGE_IMMUTABLE) ;;
+    local|production) agent_runtime_expected_image=$(agent_runtime_read_pair "$agent_runtime_env_file" DIREXTALK_AGENT_IMAGE) ;;
     *) agent_runtime_die "compose mode is invalid" ;;
   esac
   case "$agent_runtime_expected_image" in
