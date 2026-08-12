@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v1.1.37
+
+1. Return the current Agent model-profile identity fields required by the client readback contract.
+2. Remove superseded Agent response aliases and keep memory fact mutations on the current capability contract.
+
 ## v1.1.36
 
 1. Align the Skills and MCP read-action catalog pins with the current Agent schemas.
