@@ -5,6 +5,12 @@ script_dir=$(cd -- "$(dirname -- "$0")" && pwd -P)
 script=$script_dir/provision-local.sh
 [ -x "$script" ] || { echo "provision-local.sh must be executable" >&2; exit 1; }
 bash -n "$script"
+grep -Fq "runner_apparmor_manager_path=\${DIREXTALK_RUNNER_APPARMOR_MANAGER_PATH:-/usr/local/libexec/dirextalk/split-agent/scripts/manage-runner-apparmor.sh}" "$script"
+grep -Fq "[ \"\$runner_apparmor_manager_path\" = /usr/local/libexec/dirextalk/split-agent/scripts/manage-runner-apparmor.sh ]" "$script"
+if grep -Fq "[ \"\$runner_apparmor_manager_path\" = \"\$script_dir/manage-runner-apparmor.sh\" ]" "$script"; then
+  echo "production provision must not bind the root receipt to a user-owned repository manager" >&2
+  exit 1
+fi
 if command -v shellcheck >/dev/null 2>&1; then
   shellcheck -x "$script"
 fi

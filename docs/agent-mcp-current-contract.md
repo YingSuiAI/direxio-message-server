@@ -150,6 +150,35 @@ capability live.
   the full Skills lifecycle. `mcp` is advertised only when MCP lifecycle
   operations are published. A product-capability bridge by itself advertises
   neither token.
+- Managed Node MCP discovery uses the explicit `npm` source and an immutable
+  `registry_version` plus `registry_sha256` pin. Its transport is
+  `stdio_node`; the inspected stdio entry has `runtime=node`, and inspection
+  accepts no Node build receipt, network grant, secret grant, or client secret
+  input. The Node build receipt is Agent-authored only after publication and
+  is returned on the published version as exactly `package_name`,
+  `package_version`, `artifact_bytes`, `file_count`, `node_version`,
+  `npm_version`, `lifecycle_scripts_disabled`, and `native_addons_absent`.
+  `lifecycle_scripts_disabled=true` attests that dependency resolution and
+  offline installation both disabled lifecycle execution; package declarations
+  may remain in the immutable source artifact. The superseded
+  `lifecycle_scripts_absent` field, a false value, or any ninth field is
+  rejected.
+  Internal artifact, entry, lock, and input digests are not ProductCore fields.
+  Capacity failures expose only the stable safe codes
+  `extension_install_busy`, `extension_installation_limit`, and
+  `extension_node_storage_quota`; raw Agent sentinels and private details are
+  never reflected to the client.
+- Skill discovery accepts the Agent-owned `builtin`, `skills_sh`, and `github`
+  sources and only `kind=skill` with `transport=skill_static`. MCP discovery
+  separately accepts `official_registry`, `smithery`, `glama`, `github`, and
+  `npm`, only `kind=mcp`, and only `stdio_static`, `streamable_http`, or
+  `stdio_node`. The generated ProductCore schemas and Message Server request
+  validation keep these action families disjoint; a candidate, source,
+  transport, or inspection execution branch from the other family is rejected
+  before the Agent call. Built-in Skills are ordinary pinned installation
+  records: Flutter may inspect, install, update, or remove them, while Message
+  Server remains a schema-validating proxy and never reseeds or executes Skill
+  content. Agent restart does not reinstall a built-in Skill the owner removed.
 - The current Flutter release hides AWS management/planning UI, and the
   external Agent registry release-hides AWS-specific Skills: they are not
   listed, selected explicitly or by intent, added to bootstrap metadata, or

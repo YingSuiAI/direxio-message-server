@@ -10,6 +10,16 @@ import (
 	"github.com/YingSuiAI/dirextalk-message-server/internal/agentgateway"
 )
 
+func TestNativeAgentCatalogProbeBudgetCoversInitialConnection(t *testing.T) {
+	if nativeAgentCatalogProbeTimeout <= agentgateway.AgentCapabilityMinConnectTimeout {
+		t.Fatalf(
+			"catalog probe timeout %s must exceed minimum gRPC connect timeout %s",
+			nativeAgentCatalogProbeTimeout,
+			agentgateway.AgentCapabilityMinConnectTimeout,
+		)
+	}
+}
+
 func TestNativeAgentCatalogReadinessInitialFailureFailsClosed(t *testing.T) {
 	clock := time.Unix(100, 0)
 	readiness := newNativeAgentCatalogReadiness(func(context.Context, []agentgateway.CatalogRequirement) error {

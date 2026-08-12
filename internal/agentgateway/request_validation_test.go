@@ -560,14 +560,229 @@ func TestCapabilityHTTPStatusUsesStructuredErrorCode(t *testing.T) {
 	}
 }
 
-func TestCapabilityErrorFromProtoPreservesOnlyKnowledgeQuotaClientCode(t *testing.T) {
-	err := capabilityErrorFromProto(&capv1.CapabilityError{Code: capv1.ErrorCode_ERROR_CODE_RESOURCE_EXHAUSTED, Details: map[string]string{"code": KnowledgeQuotaExceededCode, "secret": "drop"}})
-	var capabilityErr *CapabilityError
-	if !errors.As(err, &capabilityErr) || capabilityErr.ClientCode != KnowledgeQuotaExceededCode || capabilityErr.Error() != "knowledge quota exceeded" {
-		t.Fatalf("knowledge quota capability error = %#v", err)
+func TestValidateCoreMCPManagedNodeContract(t *testing.T) {
+	if err := ValidateActionRequest("agent.core.mcp.discover", map[string]any{}); err != nil {
+		t.Fatalf("default official registry discovery rejected: %v", err)
 	}
-	other := capabilityErrorFromProto(&capv1.CapabilityError{Code: capv1.ErrorCode_ERROR_CODE_RESOURCE_EXHAUSTED, Details: map[string]string{"code": "untrusted_code"}})
-	if !errors.As(other, &capabilityErr) || capabilityErr.ClientCode != "" {
-		t.Fatalf("untrusted client code escaped Agent boundary: %#v", other)
+	if err := ValidateActionRequest("agent.core.mcp.discover", map[string]any{"source": "npm", "query": "filesystem", "page_size": int64(10)}); err != nil {
+		t.Fatalf("npm discovery rejected: %v", err)
+	}
+	valid := validManagedNodeMCPMutation()
+	if err := ValidateActionRequest("agent.core.mcp.install", valid); err != nil {
+		t.Fatalf("managed Node MCP install rejected: %v", err)
+	}
+	if err := ValidateActionRequest("agent.core.mcp.inspect", map[string]any{"candidate": valid["candidate"]}); err != nil {
+		t.Fatalf("managed Node MCP inspection request rejected: %v", err)
+	}
+	update := validManagedNodeMCPMutation()
+	update["installation_id"] = "22222222-2222-4222-8222-222222222222"
+	update["expected_revision"] = int64(4)
+	if err := ValidateActionRequest("agent.core.mcp.update", update); err != nil {
+		t.Fatalf("managed Node MCP update rejected: %v", err)
+	}
+	if err := ValidateActionRequest("agent.core.mcp.remove", map[string]any{
+		"idempotency_key":   "11111111-1111-4111-8111-111111111111",
+		"installation_id":   "22222222-2222-4222-8222-222222222222",
+		"expected_revision": int64(5),
+	}); err != nil {
+		t.Fatalf("managed MCP removal rejected: %v", err)
+	}
+
+	invalid := map[string]func(map[string]any){
+		"floating npm tag": func(value map[string]any) {
+			value["candidate"].(map[string]any)["pin"].(map[string]any)["registry_version"] = "latest"
+			value["inspection"].(map[string]any)["candidate"] = value["candidate"]
+		},
+		"numeric prerelease leading zero": func(value map[string]any) {
+			value["candidate"].(map[string]any)["pin"].(map[string]any)["registry_version"] = "1.2.3-01"
+			value["inspection"].(map[string]any)["candidate"] = value["candidate"]
+		},
+		"wrong transport": func(value map[string]any) {
+			value["candidate"].(map[string]any)["transport"] = "stdio_static"
+			value["inspection"].(map[string]any)["candidate"] = value["candidate"]
+		},
+		"missing node runtime": func(value map[string]any) {
+			delete(value["inspection"].(map[string]any)["execution"].(map[string]any)["stdio"].(map[string]any), "runtime")
+		},
+		"network grant": func(value map[string]any) {
+			value["inspection"].(map[string]any)["network_grants"] = []any{map[string]any{"host": "example.com"}}
+		},
+		"client secret": func(value map[string]any) {
+			value["secret_inputs"] = []any{map[string]any{"secret_value": "must-not-leak"}}
+		},
+		"client node receipt": func(value map[string]any) {
+			value["inspection"].(map[string]any)["node_artifact"] = map[string]any{}
+		},
+		"install revision": func(value map[string]any) { value["expected_revision"] = int64(1) },
+	}
+	for name, mutate := range invalid {
+		t.Run(name, func(t *testing.T) {
+			value := validManagedNodeMCPMutation()
+			mutate(value)
+			err := ValidateActionRequest("agent.core.mcp.install", value)
+			if !errors.Is(err, ErrInvalidActionRequest) {
+				t.Fatalf("invalid managed Node MCP request error = %v, want ErrInvalidActionRequest", err)
+			}
+			if strings.Contains(err.Error(), "must-not-leak") {
+				t.Fatalf("request validation leaked secret material: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateCoreExtensionFamiliesStayDisjoint(t *testing.T) {
+	if err := ValidateActionRequest("agent.core.skills.discover", map[string]any{}); err != nil {
+		t.Fatalf("default built-in Skill discovery rejected: %v", err)
+	}
+	if err := ValidateActionRequest("agent.core.skills.discover", map[string]any{"source": "skills_sh", "query": "frontend"}); err != nil {
+		t.Fatalf("skills.sh discovery rejected: %v", err)
+	}
+	for action, params := range map[string]map[string]any{
+		"agent.core.mcp.discover":    {"source": "builtin"},
+		"agent.core.skills.discover": {"source": "npm", "query": "calculator"},
+		"agent.core.mcp.list":        {"source": "skills_sh"},
+		"agent.core.skills.list":     {"source": "official_registry"},
+		"agent.core.mcp.get":         {"installation_id": "not-a-uuid"},
+		"agent.core.skills.get":      {},
+	} {
+		if err := ValidateActionRequest(action, params); !errors.Is(err, ErrInvalidActionRequest) {
+			t.Errorf("cross-family %s request error = %v, want ErrInvalidActionRequest", action, err)
+		}
+	}
+
+	valid := validManagedSkillMutation()
+	if err := ValidateActionRequest("agent.core.skills.inspect", map[string]any{"candidate": valid["candidate"]}); err != nil {
+		t.Fatalf("Skill inspection request rejected: %v", err)
+	}
+	if err := ValidateActionRequest("agent.core.skills.install", valid); err != nil {
+		t.Fatalf("Skill install rejected: %v", err)
+	}
+	update := validManagedSkillMutation()
+	update["installation_id"] = "22222222-2222-4222-8222-222222222222"
+	update["expected_revision"] = int64(2)
+	if err := ValidateActionRequest("agent.core.skills.update", update); err != nil {
+		t.Fatalf("Skill update rejected: %v", err)
+	}
+	if err := ValidateActionRequest("agent.core.skills.remove", map[string]any{
+		"idempotency_key":   "11111111-1111-4111-8111-111111111111",
+		"installation_id":   "22222222-2222-4222-8222-222222222222",
+		"expected_revision": int64(3),
+	}); err != nil {
+		t.Fatalf("Skill removal rejected: %v", err)
+	}
+
+	mcp := validManagedNodeMCPMutation()["candidate"]
+	if err := ValidateActionRequest("agent.core.skills.inspect", map[string]any{"candidate": mcp}); !errors.Is(err, ErrInvalidActionRequest) {
+		t.Fatalf("MCP candidate crossed into Skills: %v", err)
+	}
+	skill := valid["candidate"]
+	if err := ValidateActionRequest("agent.core.mcp.inspect", map[string]any{"candidate": skill}); !errors.Is(err, ErrInvalidActionRequest) {
+		t.Fatalf("Skill candidate crossed into MCP: %v", err)
+	}
+
+	invalid := map[string]func(map[string]any){
+		"MCP source": func(value map[string]any) {
+			value["candidate"].(map[string]any)["source"] = "npm"
+			value["candidate"].(map[string]any)["pin"] = map[string]any{"registry_version": "1.0.0", "registry_sha256": strings.Repeat("a", 64)}
+			value["inspection"].(map[string]any)["candidate"] = value["candidate"]
+		},
+		"MCP transport": func(value map[string]any) {
+			value["candidate"].(map[string]any)["transport"] = "stdio_node"
+			value["inspection"].(map[string]any)["candidate"] = value["candidate"]
+		},
+		"MCP execution": func(value map[string]any) {
+			value["inspection"].(map[string]any)["execution"] = map[string]any{"stdio": map[string]any{"relative_path": "entry", "digest": strings.Repeat("a", 64), "argv": []any{"entry"}}}
+		},
+		"invalid executable Skill": func(value map[string]any) {
+			value["inspection"].(map[string]any)["execution"].(map[string]any)["skill"].(map[string]any)["executable"] = true
+		},
+		"missing network grants": func(value map[string]any) {
+			delete(value["inspection"].(map[string]any), "network_grants")
+		},
+		"missing secret grants": func(value map[string]any) {
+			delete(value["inspection"].(map[string]any), "secret_grants")
+		},
+	}
+	for name, mutate := range invalid {
+		t.Run(name, func(t *testing.T) {
+			value := validManagedSkillMutation()
+			mutate(value)
+			if err := ValidateActionRequest("agent.core.skills.install", value); !errors.Is(err, ErrInvalidActionRequest) {
+				t.Fatalf("invalid Skill request error = %v, want ErrInvalidActionRequest", err)
+			}
+		})
+	}
+}
+
+func validManagedSkillMutation() map[string]any {
+	digest := strings.Repeat("a", sha256.Size*2)
+	candidate := map[string]any{
+		"id": "frontend-design", "kind": "skill", "source": "builtin", "name": "Frontend Design",
+		"pin": map[string]any{"registry_version": "1.0.0", "registry_sha256": digest}, "transport": "skill_static",
+	}
+	inspection := map[string]any{
+		"candidate": candidate, "content_digest": digest, "manifest_digest": digest, "execution_digest": digest,
+		"network_schema_digest": digest, "secret_schema_digest": digest,
+		"execution":      map[string]any{"skill": map[string]any{"relative_path": "SKILL.md", "digest": digest}},
+		"network_grants": []any{}, "secret_grants": []any{},
+	}
+	return map[string]any{
+		"idempotency_key": "11111111-1111-4111-8111-111111111111",
+		"candidate":       candidate, "inspection": inspection, "secret_inputs": []any{},
+	}
+}
+
+func validManagedNodeMCPMutation() map[string]any {
+	digest := strings.Repeat("a", sha256.Size*2)
+	candidate := map[string]any{
+		"id": "@modelcontextprotocol/server-filesystem", "kind": "mcp", "source": "npm", "name": "Filesystem MCP",
+		"pin": map[string]any{"registry_version": "1.2.3", "registry_sha256": digest}, "transport": "stdio_node",
+	}
+	inspection := map[string]any{
+		"candidate": candidate, "content_digest": digest, "manifest_digest": digest, "execution_digest": digest,
+		"network_schema_digest": digest, "secret_schema_digest": digest,
+		"execution": map[string]any{"stdio": map[string]any{
+			"relative_path": "node_modules/@modelcontextprotocol/server-filesystem/dist/index.js", "digest": digest, "argv": []any{"--stdio"}, "runtime": "node",
+		}},
+		"network_grants": []any{}, "secret_grants": []any{},
+	}
+	return map[string]any{
+		"idempotency_key": "11111111-1111-4111-8111-111111111111",
+		"candidate":       candidate, "inspection": inspection, "secret_inputs": []any{},
+	}
+}
+
+func TestCapabilityErrorFromProtoPreservesOnlySafeClientCodes(t *testing.T) {
+	tests := []struct {
+		name, code, message string
+		capabilityCode      capv1.ErrorCode
+	}{
+		{"knowledge quota", KnowledgeQuotaExceededCode, "knowledge quota exceeded", capv1.ErrorCode_ERROR_CODE_RESOURCE_EXHAUSTED},
+		{"install busy", ExtensionInstallBusyCode, "another extension installation is already in progress", capv1.ErrorCode_ERROR_CODE_PRECONDITION_FAILED},
+		{"installation limit", ExtensionInstallationLimitCode, "extension installation limit reached", capv1.ErrorCode_ERROR_CODE_RESOURCE_EXHAUSTED},
+		{"Node storage quota", ExtensionNodeStorageQuotaCode, "extension Node storage quota exceeded", capv1.ErrorCode_ERROR_CODE_RESOURCE_EXHAUSTED},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := capabilityErrorFromProto(&capv1.CapabilityError{Code: test.capabilityCode, Message: "raw private sentinel", Details: map[string]string{"code": test.code, "secret": "drop"}})
+			var capabilityErr *CapabilityError
+			if !errors.As(err, &capabilityErr) || capabilityErr.ClientCode != test.code || capabilityErr.Error() != test.message {
+				t.Fatalf("safe capability error = %#v", err)
+			}
+			if strings.Contains(capabilityErr.Error(), "sentinel") || strings.Contains(capabilityErr.Error(), "drop") {
+				t.Fatalf("capability error leaked protected detail: %q", capabilityErr.Error())
+			}
+		})
+	}
+	for _, value := range []*capv1.CapabilityError{
+		{Code: capv1.ErrorCode_ERROR_CODE_RESOURCE_EXHAUSTED, Details: map[string]string{"code": "untrusted_code"}},
+		{Code: capv1.ErrorCode_ERROR_CODE_PRECONDITION_FAILED, Details: map[string]string{"code": ExtensionInstallationLimitCode}},
+		{Code: capv1.ErrorCode_ERROR_CODE_RESOURCE_EXHAUSTED, Details: map[string]string{"code": ExtensionInstallBusyCode}},
+	} {
+		other := capabilityErrorFromProto(value)
+		var capabilityErr *CapabilityError
+		if !errors.As(other, &capabilityErr) || capabilityErr.ClientCode != "" {
+			t.Fatalf("untrusted or mismatched client code escaped Agent boundary: %#v", other)
+		}
 	}
 }

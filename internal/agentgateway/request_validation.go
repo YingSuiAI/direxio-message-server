@@ -31,6 +31,8 @@ var ErrInvalidActionRequest = errors.New("native agent action request is invalid
 // sanitizer. Chat input is not scanned for secret-looking string values, but
 // a key that names a credential or bearer must never cross the gateway.
 var catalogSensitiveKeyRE = regexp.MustCompile(`(?i)(^|[^a-z0-9])(access[_-]?token|refresh[_-]?token|client[_-]?secret|authorization|headers?|cookies?|bearer|basic|secret|token|pass(?:word|wd|phrase)|credential|api[_-]?key|private[_-]?key)([^a-z0-9]|$)`)
+var extensionExactSemverRE = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$`)
+var extensionNPMNamePartRE = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 
 var maxInt64Rat = new(big.Rat).SetInt64(math.MaxInt64)
 
@@ -109,6 +111,26 @@ func ValidateActionRequest(action string, params map[string]any) error {
 		return validateTurnSteerRequest(action, params)
 	case "agent.chat.turns.list":
 		return validateTurnsListRequest(action, params)
+	case "agent.core.mcp.discover":
+		return validateCoreExtensionDiscoverRequest(action, params, "mcp")
+	case "agent.core.mcp.get", "agent.core.skills.get":
+		return validateCoreExtensionGetRequest(action, params)
+	case "agent.core.mcp.list":
+		return validateCoreExtensionListRequest(action, params, "mcp")
+	case "agent.core.mcp.inspect":
+		return validateCoreExtensionInspectRequest(action, params, "mcp")
+	case "agent.core.mcp.install", "agent.core.mcp.update":
+		return validateCoreExtensionMutationRequest(action, params, "mcp")
+	case "agent.core.skills.discover":
+		return validateCoreExtensionDiscoverRequest(action, params, "skill")
+	case "agent.core.skills.list":
+		return validateCoreExtensionListRequest(action, params, "skill")
+	case "agent.core.skills.inspect":
+		return validateCoreExtensionInspectRequest(action, params, "skill")
+	case "agent.core.skills.install", "agent.core.skills.update":
+		return validateCoreExtensionMutationRequest(action, params, "skill")
+	case "agent.core.mcp.remove", "agent.core.skills.remove":
+		return validateCoreExtensionRemoveRequest(action, params)
 	case "agent.execution.v2.artifacts.download":
 		return validateCloudWorkerArtifactDownloadRequest(action, params)
 	case "agent.text_tools.config.get":
@@ -130,6 +152,396 @@ func ValidateActionRequest(action string, params map[string]any) error {
 	default:
 		return nil
 	}
+}
+
+func validateCoreExtensionDiscoverRequest(action string, params map[string]any, kind string) error {
+	if err := rejectUnknownActionFields(action, params, "source", "query", "page_size", "page_token"); err != nil {
+		return err
+	}
+	source := ""
+	if rawSource, present := params["source"]; present {
+		var ok bool
+		source, ok = rawSource.(string)
+		if !ok || source == "" {
+			return invalidActionRequest(action, "source", "must be a non-empty string")
+		}
+	}
+	if source == "" {
+		if kind == "skill" {
+			source = "builtin"
+		} else {
+			source = "official_registry"
+		}
+	}
+	if !validCoreExtensionSource(kind, source) {
+		return invalidActionRequest(action, "source", "must match the action family")
+	}
+	query := ""
+	if rawQuery, present := params["query"]; present {
+		var ok bool
+		query, ok = rawQuery.(string)
+		if !ok {
+			return invalidActionRequest(action, "query", "must be a string")
+		}
+	}
+	if source == "npm" && strings.TrimSpace(query) == "" {
+		return invalidActionRequest(action, "query", "is required for npm discovery")
+	}
+	if pageSize, present := params["page_size"]; present {
+		maximum := int64(100)
+		if source == "npm" {
+			maximum = 10
+		}
+		if !actionIntegerInRange(pageSize, 0, maximum) {
+			return invalidActionRequest(action, "page_size", "is outside the source limit")
+		}
+	}
+	if pageToken, present := params["page_token"]; present {
+		if token, ok := pageToken.(string); !ok || len(token) > 4096 {
+			return invalidActionRequest(action, "page_token", "must be a bounded string")
+		}
+	}
+	return nil
+}
+
+func validateCoreExtensionGetRequest(action string, params map[string]any) error {
+	if err := rejectUnknownActionFields(action, params, "installation_id"); err != nil {
+		return err
+	}
+	if !canonicalActionUUID(params["installation_id"]) {
+		return invalidActionRequest(action, "installation_id", "must be a canonical UUID")
+	}
+	return nil
+}
+
+func validateCoreExtensionListRequest(action string, params map[string]any, kind string) error {
+	if err := rejectUnknownActionFields(action, params, "source", "state", "page_size", "page_token"); err != nil {
+		return err
+	}
+	if source, present := params["source"]; present {
+		value, ok := source.(string)
+		if !ok || value == "" || !validCoreExtensionSource(kind, value) {
+			return invalidActionRequest(action, "source", "must match the action family")
+		}
+	}
+	if state, present := params["state"]; present {
+		value, ok := state.(string)
+		if !ok || !oneOfString(value, "draft", "installing", "installed", "updating", "uninstalling", "removed", "failed") {
+			return invalidActionRequest(action, "state", "must be a current extension state")
+		}
+	}
+	if pageSize, present := params["page_size"]; present && !actionIntegerInRange(pageSize, 0, 100) {
+		return invalidActionRequest(action, "page_size", "is outside the source limit")
+	}
+	if pageToken, present := params["page_token"]; present {
+		if token, ok := pageToken.(string); !ok || len(token) > 4096 {
+			return invalidActionRequest(action, "page_token", "must be a bounded string")
+		}
+	}
+	return nil
+}
+
+func validateCoreExtensionInspectRequest(action string, params map[string]any, kind string) error {
+	if err := rejectUnknownActionFields(action, params, "candidate"); err != nil {
+		return err
+	}
+	_, err := validateCoreExtensionCandidate(action, params["candidate"], kind)
+	return err
+}
+
+func validateCoreExtensionMutationRequest(action string, params map[string]any, kind string) error {
+	fields := []string{"idempotency_key", "candidate", "inspection", "secret_inputs"}
+	if strings.HasSuffix(action, ".update") {
+		fields = append(fields, "installation_id", "expected_revision")
+	}
+	if err := rejectUnknownActionFields(action, params, fields...); err != nil {
+		return err
+	}
+	if !canonicalActionUUID(params["idempotency_key"]) {
+		return invalidActionRequest(action, "idempotency_key", "must be a canonical UUID")
+	}
+	if strings.HasSuffix(action, ".update") && (!canonicalActionUUID(params["installation_id"]) || !actionIntegerInRange(params["expected_revision"], 1, math.MaxInt64)) {
+		return invalidActionRequest(action, "installation_id", "and expected_revision must identify the current installation")
+	}
+	candidate, err := validateCoreExtensionCandidate(action, params["candidate"], kind)
+	if err != nil {
+		return err
+	}
+	inspection, ok := params["inspection"].(map[string]any)
+	if !ok {
+		return invalidActionRequest(action, "inspection", "must be an object")
+	}
+	if err := rejectUnknownActionFields(action, inspection, "candidate", "content_digest", "manifest_digest", "execution_digest", "network_schema_digest", "secret_schema_digest", "execution", "network_grants", "secret_grants"); err != nil {
+		return err
+	}
+	inspectionCandidate, err := validateCoreExtensionCandidate(action, inspection["candidate"], kind)
+	if err != nil || !reflect.DeepEqual(candidate, inspectionCandidate) {
+		return invalidActionRequest(action, "inspection.candidate", "must exactly match candidate")
+	}
+	for _, field := range []string{"content_digest", "manifest_digest", "execution_digest", "network_schema_digest", "secret_schema_digest"} {
+		if !canonicalActionSHA256(inspection[field]) {
+			return invalidActionRequest(action, "inspection."+field, "must be a lowercase SHA-256 digest")
+		}
+	}
+	if _, ok := inspection["network_grants"].([]any); !ok {
+		return invalidActionRequest(action, "inspection.network_grants", "must be an array")
+	}
+	if _, ok := inspection["secret_grants"].([]any); !ok {
+		return invalidActionRequest(action, "inspection.secret_grants", "must be an array")
+	}
+	switch candidate["transport"] {
+	case "stdio_node":
+		if err := validateCoreMCPNodeExecution(action, inspection["execution"]); err != nil {
+			return err
+		}
+		if !emptyActionArray(inspection["network_grants"]) || !emptyActionArray(inspection["secret_grants"]) {
+			return invalidActionRequest(action, "inspection", "managed Node MCP must not request network or secret grants")
+		}
+		if !emptyActionArray(params["secret_inputs"]) {
+			return invalidActionRequest(action, "secret_inputs", "managed Node MCP must not accept client secret material")
+		}
+	case "stdio_static":
+		if !coreExtensionExecutionBranch(inspection["execution"], "stdio") {
+			return invalidActionRequest(action, "inspection.execution", "stdio_static requires exactly one stdio branch")
+		}
+	case "streamable_http":
+		if !coreExtensionExecutionBranch(inspection["execution"], "remote") {
+			return invalidActionRequest(action, "inspection.execution", "streamable_http requires exactly one remote branch")
+		}
+	case "skill_static":
+		if err := validateCoreSkillExecution(action, inspection["execution"]); err != nil {
+			return err
+		}
+	}
+	if secretInputs, present := params["secret_inputs"]; present {
+		if _, ok := secretInputs.([]any); !ok {
+			return invalidActionRequest(action, "secret_inputs", "must be an array")
+		}
+	}
+	return nil
+}
+
+func validateCoreExtensionRemoveRequest(action string, params map[string]any) error {
+	if err := rejectUnknownActionFields(action, params, "idempotency_key", "installation_id", "expected_revision"); err != nil {
+		return err
+	}
+	if !canonicalActionUUID(params["idempotency_key"]) || !canonicalActionUUID(params["installation_id"]) || !actionIntegerInRange(params["expected_revision"], 1, math.MaxInt64) {
+		return invalidActionRequest(action, "installation_id", "must include a canonical idempotency key, installation id, and positive expected_revision")
+	}
+	return nil
+}
+
+func validateCoreExtensionCandidate(action string, raw any, kind string) (map[string]any, error) {
+	candidate, ok := raw.(map[string]any)
+	if !ok {
+		return nil, invalidActionRequest(action, "candidate", "must be an object")
+	}
+	if err := rejectUnknownActionFields(action, candidate, "id", "kind", "source", "name", "description", "pin", "transport"); err != nil {
+		return nil, err
+	}
+	if candidate["kind"] != kind {
+		return nil, invalidActionRequest(action, "candidate.kind", "must match the action family")
+	}
+	source, sourceOK := candidate["source"].(string)
+	transport, transportOK := candidate["transport"].(string)
+	id, idOK := candidate["id"].(string)
+	name, nameOK := candidate["name"].(string)
+	if !sourceOK || !transportOK || !idOK || !nameOK || id == "" || name == "" || !validCoreExtensionSource(kind, source) || !validCoreExtensionTransport(kind, transport) {
+		return nil, invalidActionRequest(action, "candidate", "has an invalid identity, source, or transport for the action family")
+	}
+	if description, present := candidate["description"]; present {
+		if _, ok := description.(string); !ok {
+			return nil, invalidActionRequest(action, "candidate.description", "must be a string")
+		}
+	}
+	if source == "npm" && (transport != "stdio_node" || !validExtensionNPMPackageName(id)) {
+		return nil, invalidActionRequest(action, "candidate", "npm requires a canonical package id and stdio_node")
+	}
+	if transport == "stdio_node" && source != "npm" && source != "github" {
+		return nil, invalidActionRequest(action, "candidate.transport", "stdio_node requires npm or github")
+	}
+	pin, ok := candidate["pin"].(map[string]any)
+	if !ok {
+		return nil, invalidActionRequest(action, "candidate.pin", "must be an object")
+	}
+	if err := rejectUnknownActionFields(action, pin, "registry_version", "registry_sha256", "git_commit", "git_sha256"); err != nil {
+		return nil, err
+	}
+	if source == "github" {
+		commit, commitOK := pin["git_commit"].(string)
+		if !commitOK || len(commit) != 40 || commit != strings.ToLower(commit) || !hexString(commit) || !canonicalActionSHA256(pin["git_sha256"]) || pin["registry_version"] != nil || pin["registry_sha256"] != nil {
+			return nil, invalidActionRequest(action, "candidate.pin", "github requires only git_commit and git_sha256")
+		}
+	} else {
+		version, versionOK := pin["registry_version"].(string)
+		if !versionOK || strings.TrimSpace(version) == "" || strings.EqualFold(version, "latest") || !canonicalActionSHA256(pin["registry_sha256"]) || pin["git_commit"] != nil || pin["git_sha256"] != nil {
+			return nil, invalidActionRequest(action, "candidate.pin", "registry source requires only registry_version and registry_sha256")
+		}
+		if source == "npm" && !validExtensionExactSemver(version) {
+			return nil, invalidActionRequest(action, "candidate.pin.registry_version", "npm requires an exact semantic version")
+		}
+	}
+	return candidate, nil
+}
+
+func validCoreExtensionSource(kind, source string) bool {
+	if kind == "skill" {
+		return oneOfString(source, "builtin", "skills_sh", "github")
+	}
+	return kind == "mcp" && oneOfString(source, "official_registry", "smithery", "glama", "github", "npm")
+}
+
+func validCoreExtensionTransport(kind, transport string) bool {
+	if kind == "skill" {
+		return transport == "skill_static"
+	}
+	return kind == "mcp" && oneOfString(transport, "stdio_static", "streamable_http", "stdio_node")
+}
+
+func coreExtensionExecutionBranch(raw any, branch string) bool {
+	execution, ok := raw.(map[string]any)
+	if !ok || len(execution) != 1 {
+		return false
+	}
+	_, ok = execution[branch].(map[string]any)
+	return ok
+}
+
+func validateCoreSkillExecution(action string, raw any) error {
+	execution, ok := raw.(map[string]any)
+	if !ok || len(execution) != 1 {
+		return invalidActionRequest(action, "inspection.execution", "skill_static requires exactly one skill branch")
+	}
+	skill, ok := execution["skill"].(map[string]any)
+	if !ok {
+		return invalidActionRequest(action, "inspection.execution.skill", "is required for skill_static")
+	}
+	if err := rejectUnknownActionFields(action, skill, "relative_path", "digest", "executable", "argv"); err != nil {
+		return err
+	}
+	path, pathOK := skill["relative_path"].(string)
+	if !pathOK || !validCoreExtensionRelativePath(path) || !canonicalActionSHA256(skill["digest"]) {
+		return invalidActionRequest(action, "inspection.execution.skill", "must be a canonical Skill entry")
+	}
+	executable, executablePresent := skill["executable"]
+	isExecutable := false
+	if executablePresent {
+		var ok bool
+		isExecutable, ok = executable.(bool)
+		if !ok {
+			return invalidActionRequest(action, "inspection.execution.skill.executable", "must be a boolean")
+		}
+	}
+	argv := []any(nil)
+	if rawArgv, present := skill["argv"]; present {
+		var ok bool
+		argv, ok = rawArgv.([]any)
+		if !ok {
+			return invalidActionRequest(action, "inspection.execution.skill.argv", "must be an array")
+		}
+	}
+	if !isExecutable && len(argv) != 0 || isExecutable && (path != "entry" || len(argv) == 0 || len(argv) > 128) {
+		return invalidActionRequest(action, "inspection.execution.skill", "has an invalid executable entry")
+	}
+	for _, rawArg := range argv {
+		arg, ok := rawArg.(string)
+		if !ok || len(arg) > 16<<10 || strings.IndexByte(arg, 0) >= 0 {
+			return invalidActionRequest(action, "inspection.execution.skill.argv", "contains an invalid argument")
+		}
+	}
+	return nil
+}
+
+func validCoreExtensionRelativePath(path string) bool {
+	return path != "" && !strings.HasPrefix(path, "/") && !strings.Contains(path, "..") && !strings.ContainsAny(path, "\\\x00\r\n")
+}
+
+func validateCoreMCPNodeExecution(action string, raw any) error {
+	execution, ok := raw.(map[string]any)
+	if !ok || len(execution) != 1 {
+		return invalidActionRequest(action, "inspection.execution", "stdio_node requires exactly one stdio branch")
+	}
+	stdio, ok := execution["stdio"].(map[string]any)
+	if !ok {
+		return invalidActionRequest(action, "inspection.execution.stdio", "is required for stdio_node")
+	}
+	if err := rejectUnknownActionFields(action, stdio, "relative_path", "digest", "argv", "runtime"); err != nil {
+		return err
+	}
+	path, pathOK := stdio["relative_path"].(string)
+	if !pathOK || !validCoreExtensionRelativePath(path) || !canonicalActionSHA256(stdio["digest"]) || stdio["runtime"] != "node" {
+		return invalidActionRequest(action, "inspection.execution.stdio", "must be a canonical managed Node entry")
+	}
+	argv, ok := stdio["argv"].([]any)
+	if !ok || len(argv) > 128 {
+		return invalidActionRequest(action, "inspection.execution.stdio.argv", "must be an array of at most 128 strings")
+	}
+	for _, rawArg := range argv {
+		arg, ok := rawArg.(string)
+		if !ok || arg == "" || len(arg) > 16<<10 || strings.ContainsAny(arg, "\x00\r\n") {
+			return invalidActionRequest(action, "inspection.execution.stdio.argv", "contains an invalid argument")
+		}
+	}
+	return nil
+}
+
+func validExtensionNPMPackageName(value string) bool {
+	if value == "" || len(value) > 214 || value != strings.ToLower(value) || strings.Contains(value, "..") {
+		return false
+	}
+	if strings.HasPrefix(value, "@") {
+		parts := strings.Split(value[1:], "/")
+		return len(parts) == 2 && extensionNPMNamePartRE.MatchString(parts[0]) && extensionNPMNamePartRE.MatchString(parts[1])
+	}
+	return !strings.Contains(value, "/") && extensionNPMNamePartRE.MatchString(value)
+}
+
+func validExtensionExactSemver(value string) bool {
+	match := extensionExactSemverRE.FindStringSubmatch(value)
+	if match == nil {
+		return false
+	}
+	if match[4] == "" {
+		return true
+	}
+	for _, identifier := range strings.Split(match[4], ".") {
+		if len(identifier) <= 1 || identifier[0] != '0' {
+			continue
+		}
+		numeric := true
+		for _, char := range identifier {
+			if char < '0' || char > '9' {
+				numeric = false
+				break
+			}
+		}
+		if numeric {
+			return false
+		}
+	}
+	return true
+}
+
+func oneOfString(value string, allowed ...string) bool {
+	for _, candidate := range allowed {
+		if value == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func emptyActionArray(value any) bool {
+	if value == nil {
+		return true
+	}
+	array, ok := value.([]any)
+	return ok && len(array) == 0
+}
+
+func hexString(value string) bool {
+	_, err := hex.DecodeString(value)
+	return err == nil
 }
 
 func validateImageToolUploadBeginRequest(action string, params map[string]any) error {
@@ -1173,7 +1585,12 @@ type CapabilityError struct {
 	ClientCode string
 }
 
-const KnowledgeQuotaExceededCode = "knowledge_quota_exceeded"
+const (
+	KnowledgeQuotaExceededCode     = "knowledge_quota_exceeded"
+	ExtensionInstallBusyCode       = "extension_install_busy"
+	ExtensionInstallationLimitCode = "extension_installation_limit"
+	ExtensionNodeStorageQuotaCode  = "extension_node_storage_quota"
+)
 
 func (e *CapabilityError) Error() string {
 	if e == nil {
@@ -1181,6 +1598,14 @@ func (e *CapabilityError) Error() string {
 	}
 	if e.Code == capv1.ErrorCode_ERROR_CODE_RESOURCE_EXHAUSTED && e.ClientCode == KnowledgeQuotaExceededCode {
 		return "knowledge quota exceeded"
+	}
+	switch e.ClientCode {
+	case ExtensionInstallBusyCode:
+		return "another extension installation is already in progress"
+	case ExtensionInstallationLimitCode:
+		return "extension installation limit reached"
+	case ExtensionNodeStorageQuotaCode:
+		return "extension Node storage quota exceeded"
 	}
 	switch e.Code {
 	case capv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT:
@@ -1213,8 +1638,23 @@ func capabilityErrorFromProto(value *capv1.CapabilityError) error {
 		return capabilityError(capv1.ErrorCode_ERROR_CODE_UPSTREAM_FAILED)
 	}
 	clientCode := ""
-	if value.GetCode() == capv1.ErrorCode_ERROR_CODE_RESOURCE_EXHAUSTED && value.GetDetails()["code"] == KnowledgeQuotaExceededCode {
-		clientCode = KnowledgeQuotaExceededCode
+	switch value.GetDetails()["code"] {
+	case KnowledgeQuotaExceededCode:
+		if value.GetCode() == capv1.ErrorCode_ERROR_CODE_RESOURCE_EXHAUSTED {
+			clientCode = KnowledgeQuotaExceededCode
+		}
+	case ExtensionInstallBusyCode:
+		if value.GetCode() == capv1.ErrorCode_ERROR_CODE_PRECONDITION_FAILED {
+			clientCode = ExtensionInstallBusyCode
+		}
+	case ExtensionInstallationLimitCode:
+		if value.GetCode() == capv1.ErrorCode_ERROR_CODE_RESOURCE_EXHAUSTED {
+			clientCode = ExtensionInstallationLimitCode
+		}
+	case ExtensionNodeStorageQuotaCode:
+		if value.GetCode() == capv1.ErrorCode_ERROR_CODE_RESOURCE_EXHAUSTED {
+			clientCode = ExtensionNodeStorageQuotaCode
+		}
 	}
 	return &CapabilityError{Code: value.GetCode(), ClientCode: clientCode}
 }

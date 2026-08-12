@@ -122,6 +122,27 @@ func TestExternalAgentActionErrorMapsKnowledgeQuotaExceeded(t *testing.T) {
 	}
 }
 
+func TestExternalAgentActionErrorMapsSafeExtensionCapacityCodes(t *testing.T) {
+	tests := []struct {
+		code       string
+		capability capv1.ErrorCode
+		status     int
+		message    string
+	}{
+		{agentgateway.ExtensionInstallBusyCode, capv1.ErrorCode_ERROR_CODE_PRECONDITION_FAILED, http.StatusPreconditionFailed, "another extension installation is already in progress"},
+		{agentgateway.ExtensionInstallationLimitCode, capv1.ErrorCode_ERROR_CODE_RESOURCE_EXHAUSTED, http.StatusServiceUnavailable, "extension installation limit reached"},
+		{agentgateway.ExtensionNodeStorageQuotaCode, capv1.ErrorCode_ERROR_CODE_RESOURCE_EXHAUSTED, http.StatusServiceUnavailable, "extension Node storage quota exceeded"},
+	}
+	for _, test := range tests {
+		t.Run(test.code, func(t *testing.T) {
+			err := externalAgentActionError(&agentgateway.CapabilityError{Code: test.capability, ClientCode: test.code})
+			if err == nil || err.Status != test.status || err.Code != test.code || err.Error != test.message {
+				t.Fatalf("extension capacity ProductCore error = %#v", err)
+			}
+		})
+	}
+}
+
 func TestExternalAgentActionErrorMapsInvalidRequestSentinel(t *testing.T) {
 	err := externalAgentActionError(fmt.Errorf("wrapped: %w", agentgateway.ErrInvalidActionRequest))
 	if err == nil || err.Status != http.StatusBadRequest {

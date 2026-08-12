@@ -110,6 +110,10 @@ behind `model_profiles.server` and `model_roles.server`.
 Message Server to Agent uses the versioned Agent Capability gRPC service over
 mTLS plus a deployment-generated service token. Agent to Message Server uses a
 separate Product Capability gRPC service with its own peer identity and grant.
+The private Message Server-to-Agent channel explicitly bypasses process-wide
+HTTP(S) proxy settings and connects only through the capability network. Its
+catalog probe budget exceeds the gRPC minimum connection window so the first
+mTLS connection and authenticated catalog RPC can complete within one probe.
 Both directions enforce:
 
 - authenticated peer instance identity and account generation;

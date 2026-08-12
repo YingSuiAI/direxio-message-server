@@ -47,6 +47,7 @@ old_network=old-message-public
 agent_network=split-agent-private
 old_network_id=old-network-id
 new_network_id=new-network-id
+static_sites_root=$DIREXTALK_MOCK_STATIC_SITES_ROOT
 
 if [ "$1" = compose ]; then
   shift
@@ -69,7 +70,7 @@ if [ "$1" = compose ]; then
             extra) edge_cap_add='["NET_BIND_SERVICE","SYS_ADMIN"]' ;;
           esac
           cat <<JSON
-{"name":"edge-test","services":{"caddy":{"image":"$caddy_image","networks":["message_public"],"ports":[{"published":"80","target":80},{"published":"443","target":443}],"read_only":true,"cap_drop":["ALL"],"cap_add":$edge_cap_add,"security_opt":["no-new-privileges:true"],"healthcheck":{"test":["CMD-SHELL","wget -q -O - http://127.0.0.1:2019/config/ >/dev/null"]},"volumes":[{"type":"volume","source":"caddy_data","target":"/data"},{"type":"volume","source":"caddy_config","target":"/config"}]}},"networks":{"message_public":{"name":"$network","external":true}},"volumes":{"caddy_data":{"name":"caddy-data","external":true},"caddy_config":{"name":"caddy-config","external":true}}}
+{"name":"edge-test","services":{"caddy":{"image":"$caddy_image","networks":["message_public"],"ports":[{"published":"80","target":80},{"published":"443","target":443}],"read_only":true,"cap_drop":["ALL"],"cap_add":$edge_cap_add,"security_opt":["no-new-privileges:true"],"healthcheck":{"test":["CMD-SHELL","wget -q -O - http://127.0.0.1:2019/config/ >/dev/null"]},"volumes":[{"type":"volume","source":"caddy_data","target":"/data"},{"type":"volume","source":"caddy_config","target":"/config"},{"type":"bind","source":"$static_sites_root/public","target":"/srv/dirextalk-sites","read_only":true}]}},"networks":{"message_public":{"name":"$network","external":true}},"volumes":{"caddy_data":{"name":"caddy-data","external":true},"caddy_config":{"name":"caddy-config","external":true}}}
 JSON
           ;;
         *)
@@ -136,7 +137,7 @@ JSON
           extra) new_cap_add='["CAP_NET_BIND_SERVICE","CAP_SYS_ADMIN"]' ;;
         esac
         cat <<JSON
-[{"Id":"$new_id","Image":"$new_image_id","Config":{"Image":"$caddy_image","Healthcheck":{"Test":["CMD-SHELL","wget -q -O - http://127.0.0.1:2019/config/ >/dev/null"]},"Labels":{"com.docker.compose.project":"edge-test","com.docker.compose.service":"caddy"}},"NetworkSettings":{"Networks":{"$network":{}}},"Mounts":[{"Type":"volume","Name":"caddy-data","Destination":"/data"},{"Type":"volume","Name":"caddy-config","Destination":"/config"}],"HostConfig":{"PortBindings":{"80/tcp":[{"HostPort":"80"}],"443/tcp":[{"HostPort":"443"}]},"ReadonlyRootfs":true,"CapDrop":["ALL"],"CapAdd":$new_cap_add,"SecurityOpt":["no-new-privileges:true"]},"State":{"Status":"$status","Health":{"Status":"healthy"}}}]
+[{"Id":"$new_id","Image":"$new_image_id","Config":{"Image":"$caddy_image","Healthcheck":{"Test":["CMD-SHELL","wget -q -O - http://127.0.0.1:2019/config/ >/dev/null"]},"Labels":{"com.docker.compose.project":"edge-test","com.docker.compose.service":"caddy"}},"NetworkSettings":{"Networks":{"$network":{}}},"Mounts":[{"Type":"volume","Name":"caddy-data","Destination":"/data"},{"Type":"volume","Name":"caddy-config","Destination":"/config"},{"Type":"bind","Source":"$static_sites_root/public","Destination":"/srv/dirextalk-sites","RW":false}],"HostConfig":{"PortBindings":{"80/tcp":[{"HostPort":"80"}],"443/tcp":[{"HostPort":"443"}]},"ReadonlyRootfs":true,"CapDrop":["ALL"],"CapAdd":$new_cap_add,"SecurityOpt":["no-new-privileges:true"]},"State":{"Status":"$status","Health":{"Status":"healthy"}}}]
 JSON
         ;;
       *) exit 1 ;;
@@ -245,10 +246,12 @@ stack_env=$tmp_dir/stack.env
 edge_env=$tmp_dir/edge.env
 receipt=$tmp_dir/active.receipt
 caddyfile=$tmp_dir/Caddyfile
+static_sites_root=$tmp_dir/static-sites
 tls_cert=$tmp_dir/message.crt
 test_host_name=$(hostname)
 test_machine_id=$(tr -d '[:space:]' </etc/machine-id)
-printf 'reverse_proxy message-server:8008\n' >"$caddyfile"
+mkdir -p "$static_sites_root/public"
+cp "$script_dir/../Caddyfile.static-sites.example" "$caddyfile"
 : >"$tls_cert"
 cat >"$stack_env" <<EOF
 DIREXTALK_SPLIT_STACK_NAME=message-test
@@ -272,6 +275,7 @@ DIREXTALK_CADDY_IMAGE_IMMUTABLE=$caddy_image
 DIREXTALK_CADDY_DATA_VOLUME=caddy-data
 DIREXTALK_CADDY_CONFIG_VOLUME=caddy-config
 DIREXTALK_CADDYFILE=$caddyfile
+DIREXTALK_STATIC_SITES_ROOT=$static_sites_root
 DIREXTALK_EDGE_COMPOSE_FILE=$script_dir/../edge-compose.yaml
 EOF
 cat >"$receipt" <<EOF
@@ -307,6 +311,7 @@ export PATH="$tmp_dir/bin:$PATH"
 export DIREXTALK_DOCKER_BIN=docker DIREXTALK_CURL_BIN=curl
 export DIREXTALK_MOCK_LOG=$tmp_dir/docker.log DIREXTALK_CURL_LOG=$tmp_dir/curl.log
 export DIREXTALK_MOCK_STATE=$tmp_dir/state
+export DIREXTALK_MOCK_STATIC_SITES_ROOT=$static_sites_root
 
 run_case() {
   : >"$DIREXTALK_MOCK_LOG"

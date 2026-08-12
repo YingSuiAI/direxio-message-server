@@ -250,6 +250,9 @@ func externalAgentActionError(err error) *actionbase.Error {
 		if capabilityErr.Code == capv1.ErrorCode_ERROR_CODE_RESOURCE_EXHAUSTED && capabilityErr.ClientCode == agentgateway.KnowledgeQuotaExceededCode {
 			return actionbase.CodedError(http.StatusRequestEntityTooLarge, agentgateway.KnowledgeQuotaExceededCode, capabilityErr.Error())
 		}
+		if capabilityErr.ClientCode != "" {
+			return actionbase.CodedError(agentgateway.CapabilityHTTPStatus(capabilityErr.Code), capabilityErr.ClientCode, capabilityErr.Error())
+		}
 		return actionbase.StatusError(agentgateway.CapabilityHTTPStatus(capabilityErr.Code), capabilityErr.Error())
 	}
 	message := strings.ToLower(strings.TrimSpace(err.Error()))

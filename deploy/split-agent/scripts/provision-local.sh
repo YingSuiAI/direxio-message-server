@@ -384,7 +384,7 @@ split_deploy_dir=$(cd "$script_dir/.." && pwd -P)
 if [ "$compose_mode" = local ]; then
   message_root=$(cd "$script_dir/../../.." && pwd -P)
   agent_root=$(cd "$message_root/../dirextalk-agent" && pwd -P)
-  agent_build_version=local
+  agent_build_version=dev
   agent_build_revision=working-tree
   message_build_version=local
   message_build_revision=working-tree
@@ -755,7 +755,7 @@ core_fragment_sha256=${DIREXTALK_CORE_RUNNER_FRAGMENT_SHA256:-$(sha256sum -- "$s
 runner_apparmor_profile=${DIREXTALK_RUNNER_APPARMOR_PROFILE:-dirextalk-runner-userns}
 runner_apparmor_profile_path=${DIREXTALK_RUNNER_APPARMOR_PROFILE_PATH:-/etc/apparmor.d/dirextalk-runner-userns}
 runner_apparmor_profile_sha256=${DIREXTALK_RUNNER_APPARMOR_PROFILE_SHA256:-$(sha256sum -- "$split_deploy_dir/apparmor.d/dirextalk-runner-userns" | awk '{print $1}')}
-runner_apparmor_manager_path=${DIREXTALK_RUNNER_APPARMOR_MANAGER_PATH:-$script_dir/manage-runner-apparmor.sh}
+runner_apparmor_manager_path=${DIREXTALK_RUNNER_APPARMOR_MANAGER_PATH:-/usr/local/libexec/dirextalk/split-agent/scripts/manage-runner-apparmor.sh}
 runner_apparmor_manager_sha256=${DIREXTALK_RUNNER_APPARMOR_MANAGER_SHA256:-$(sha256sum -- "$runner_apparmor_manager_path" | awk '{print $1}')}
 runner_prep_helper_path=${DIREXTALK_RUNNER_PREP_HELPER_PATH:-$script_dir/prepare-runner-cgroups.sh}
 runner_prep_helper_sha256=${DIREXTALK_RUNNER_PREP_HELPER_SHA256:-$(sha256sum -- "$runner_prep_helper_path" | awk '{print $1}')}
@@ -779,7 +779,7 @@ if [ "$runner_fixture_mode" = false ]; then
   [ -n "${DIREXTALK_CORE_RUNNER_FRAGMENT_SHA256:-}" ] || die "DIREXTALK_CORE_RUNNER_FRAGMENT_SHA256 must come from prepare-runner-cgroups.sh"
   [ "$runner_apparmor_profile" = dirextalk-runner-userns ] || die "runner AppArmor profile name is not repository-fixed"
   [ "$runner_apparmor_profile_path" = /etc/apparmor.d/dirextalk-runner-userns ] || die "runner AppArmor profile path is not repository-fixed"
-  [ "$runner_apparmor_manager_path" = "$script_dir/manage-runner-apparmor.sh" ] || die "runner AppArmor manager path is not the repository entrypoint"
+  [ "$runner_apparmor_manager_path" = /usr/local/libexec/dirextalk/split-agent/scripts/manage-runner-apparmor.sh ] || die "runner AppArmor manager path is not the fixed root-owned entrypoint"
   printf '%s\n' "$runner_apparmor_profile_sha256" | grep -Eq '^[0-9a-f]{64}$' || die "runner AppArmor profile SHA-256 is invalid"
   printf '%s\n' "$runner_apparmor_manager_sha256" | grep -Eq '^[0-9a-f]{64}$' || die "runner AppArmor manager SHA-256 is invalid"
   validate_root_owned_asset DIREXTALK_RUNNER_APPARMOR_PROFILE_PATH "$runner_apparmor_profile_path"
@@ -840,6 +840,45 @@ if [ "$runner_fixture_mode" = false ]; then
   validate_delegated_cgroup_root DIREXTALK_EXTENSION_CGROUP_ROOT "$extension_cgroup_root" "$stack_name" "$extension_cgroup_parent" "$extension_runner_uid"
   validate_delegated_cgroup_root DIREXTALK_CORE_RUNNER_CGROUP_ROOT "$core_runner_cgroup_root" "$stack_name" "$workload_cgroup_parent" "$workload_runner_uid"
 fi
+
+if [ "$runner_fixture_mode" = true ]; then
+  static_sites_root=${DIREXTALK_STATIC_SITES_ROOT:-$out/static-sites}
+else
+  static_sites_root=${DIREXTALK_STATIC_SITES_ROOT:-/var/lib/dirextalk-static-sites}
+fi
+validate_absolute_path DIREXTALK_STATIC_SITES_ROOT "$static_sites_root"
+if [ ! -e "$static_sites_root" ]; then
+  if [ "$runner_fixture_mode" = true ] || [ "$(id -u)" = 0 ]; then
+    mkdir -p -- "$static_sites_root"
+  else
+    die "DIREXTALK_STATIC_SITES_ROOT must be pre-created by root and owned by Agent UID/GID 65532:65532"
+  fi
+fi
+[ -d "$static_sites_root" ] && [ ! -L "$static_sites_root" ] || die "DIREXTALK_STATIC_SITES_ROOT must be a regular directory"
+static_sites_root=$(readlink -f -- "$static_sites_root")
+if [ "$runner_fixture_mode" = true ]; then
+  chmod 755 "$static_sites_root"
+else
+  if [ "$(id -u)" = 0 ]; then
+    chown 65532:65532 "$static_sites_root"
+    chmod 755 "$static_sites_root"
+  fi
+  [ "$(stat -c '%u:%g' -- "$static_sites_root")" = 65532:65532 ] || die "DIREXTALK_STATIC_SITES_ROOT must be owned by 65532:65532"
+  [ "$(stat -c '%a' -- "$static_sites_root")" = 755 ] || die "DIREXTALK_STATIC_SITES_ROOT must have mode 0755"
+fi
+if [ "$runner_fixture_mode" = false ] && [ "$(id -u)" != 0 ] && { [ ! -d "$static_sites_root/public" ] || [ ! -d "$static_sites_root/.staging" ]; }; then
+  die "static-site public and staging directories must be pre-created by root"
+fi
+mkdir -p -- "$static_sites_root/public" "$static_sites_root/.staging"
+if [ "$runner_fixture_mode" = false ]; then
+  if [ "$(id -u)" = 0 ]; then
+    chown 65532:65532 "$static_sites_root/public" "$static_sites_root/.staging"
+  fi
+  [ "$(stat -c '%u:%g' -- "$static_sites_root/public")" = 65532:65532 ] || die "static-site public directory must be owned by 65532:65532"
+  [ "$(stat -c '%u:%g' -- "$static_sites_root/.staging")" = 65532:65532 ] || die "static-site staging directory must be owned by 65532:65532"
+fi
+chmod 755 "$static_sites_root/public"
+chmod 700 "$static_sites_root/.staging"
 
 require_fresh_docker_namespace \
   "$stack_name-message-private" "$stack_name-message-public" "$stack_name-message-db" \
@@ -1043,6 +1082,8 @@ core_extension_staging_root: /var/lib/dirextalk-agent/extension-staging
 core_extension_workspace_root: /var/lib/dirextalk-agent/extension-workspaces
 core_extension_runner_socket: $extension_runner_socket
 core_extension_runner_uid: $extension_runner_uid
+core_static_sites_enabled: true
+core_static_sites_root: /var/lib/dirextalk-agent/static-sites
 core_workload_enabled: $core_workload_enabled
 core_workload_runner_socket: $workload_runner_socket
 core_workload_runner_uid: $workload_runner_uid
@@ -1143,6 +1184,7 @@ DIREXTALK_MESSAGE_PLUGINS_VOLUME=$stack_name-message-plugins
 DIREXTALK_AGENT_SECRET_VOLUME=$stack_name-agent-secrets
 DIREXTALK_AGENT_CONFIG_VOLUME=$stack_name-agent-config
 DIREXTALK_AGENT_CORE_DATA_VOLUME=$stack_name-agent-core-data
+DIREXTALK_STATIC_SITES_ROOT=$static_sites_root
 DIREXTALK_AGENT_SOCKET_VOLUME=$stack_name-agent-extension-socket
 DIREXTALK_AGENT_INSTALL_VOLUME=$stack_name-agent-extension-install
 DIREXTALK_AGENT_STAGING_VOLUME=$stack_name-agent-extension-staging

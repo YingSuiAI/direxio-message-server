@@ -2990,7 +2990,11 @@
             "type": "string"
           },
           "source": {
-            "type": "string"
+            "type": "string",
+            "presence": {
+              "present": "one_of:official_registry|smithery|glama|github|npm",
+              "empty": "rejected"
+            }
           }
         },
         "response": {
@@ -3001,8 +3005,7 @@
               "required": true,
               "properties": {
                 "description": {
-                  "type": "string",
-                  "required": true
+                  "type": "string"
                 },
                 "id": {
                   "type": "string",
@@ -3010,7 +3013,11 @@
                 },
                 "kind": {
                   "type": "string",
-                  "required": true
+                  "required": true,
+                  "presence": {
+                    "present": "one_of:mcp",
+                    "empty": "rejected"
+                  }
                 },
                 "name": {
                   "type": "string",
@@ -3022,29 +3029,53 @@
                   "properties": {
                     "git_commit": {
                       "type": "string",
-                      "required": true
+                      "presence": {
+                        "omitted": "registry_source",
+                        "present": "required_with_git_sha256;lowercase_40_hex",
+                        "empty": "rejected"
+                      }
                     },
                     "git_sha256": {
                       "type": "string",
-                      "required": true
+                      "presence": {
+                        "omitted": "registry_source",
+                        "present": "required_with_git_commit;lowercase_sha256",
+                        "empty": "rejected"
+                      }
                     },
                     "registry_sha256": {
                       "type": "string",
-                      "required": true
+                      "presence": {
+                        "omitted": "git_source",
+                        "present": "required_with_registry_version;lowercase_sha256",
+                        "empty": "rejected"
+                      }
                     },
                     "registry_version": {
                       "type": "string",
-                      "required": true
+                      "presence": {
+                        "omitted": "git_source",
+                        "present": "required_with_registry_sha256;exact_immutable_version",
+                        "empty": "rejected"
+                      }
                     }
                   }
                 },
                 "source": {
                   "type": "string",
-                  "required": true
+                  "required": true,
+                  "presence": {
+                    "present": "one_of:official_registry|smithery|glama|github|npm",
+                    "empty": "rejected"
+                  }
                 },
                 "transport": {
                   "type": "string",
-                  "required": true
+                  "required": true,
+                  "presence": {
+                    "present": "one_of:stdio_static|streamable_http|stdio_node;npm_requires_stdio_node;stdio_node_requires_npm_or_github",
+                    "empty": "rejected"
+                  }
                 }
               }
             }
@@ -3068,7 +3099,227 @@
         },
         "response": {
           "installation": {
-            "type": "object"
+            "type": "object",
+            "properties": {
+              "versions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "content_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "created_at": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "execution": {
+                      "type": "object",
+                      "required": true,
+                      "properties": {
+                        "remote": {
+                          "type": "object",
+                          "properties": {
+                            "credential_reference_id": {
+                              "type": "string"
+                            },
+                            "url": {
+                              "type": "string",
+                              "required": true
+                            }
+                          }
+                        },
+                        "stdio": {
+                          "type": "object",
+                          "properties": {
+                            "argv": {
+                              "type": "array",
+                              "required": true,
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "digest": {
+                              "type": "string",
+                              "required": true,
+                              "presence": {
+                                "present": "lowercase_sha256"
+                              }
+                            },
+                            "relative_path": {
+                              "type": "string",
+                              "required": true
+                            },
+                            "runtime": {
+                              "type": "string",
+                              "presence": {
+                                "omitted": "stdio_static",
+                                "present": "node_required_for_stdio_node",
+                                "empty": "rejected"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "execution_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "manifest_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "network_grants": {
+                      "type": "array",
+                      "required": true,
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "digest": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "host": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "path_prefix": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "port": {
+                            "type": "integer",
+                            "required": true
+                          },
+                          "scheme": {
+                            "type": "string",
+                            "required": true
+                          }
+                        }
+                      }
+                    },
+                    "network_schema_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "node_artifact": {
+                      "type": "object",
+                      "properties": {
+                        "artifact_bytes": {
+                          "type": "integer",
+                          "required": true
+                        },
+                        "file_count": {
+                          "type": "integer",
+                          "required": true
+                        },
+                        "lifecycle_scripts_disabled": {
+                          "type": "boolean",
+                          "required": true
+                        },
+                        "native_addons_absent": {
+                          "type": "boolean",
+                          "required": true
+                        },
+                        "node_version": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "npm_version": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "package_name": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "package_version": {
+                          "type": "string",
+                          "required": true
+                        }
+                      },
+                      "presence": {
+                        "omitted": "non_node_or_unpublished_version",
+                        "present": "published_stdio_node_version"
+                      }
+                    },
+                    "pin": {
+                      "type": "object",
+                      "required": true,
+                      "properties": {
+                        "git_commit": {
+                          "type": "string",
+                          "presence": {
+                            "omitted": "registry_source",
+                            "present": "required_with_git_sha256;lowercase_40_hex",
+                            "empty": "rejected"
+                          }
+                        },
+                        "git_sha256": {
+                          "type": "string",
+                          "presence": {
+                            "omitted": "registry_source",
+                            "present": "required_with_git_commit;lowercase_sha256",
+                            "empty": "rejected"
+                          }
+                        },
+                        "registry_sha256": {
+                          "type": "string",
+                          "presence": {
+                            "omitted": "git_source",
+                            "present": "required_with_registry_version;lowercase_sha256",
+                            "empty": "rejected"
+                          }
+                        },
+                        "registry_version": {
+                          "type": "string",
+                          "presence": {
+                            "omitted": "git_source",
+                            "present": "required_with_registry_sha256;exact_immutable_version",
+                            "empty": "rejected"
+                          }
+                        }
+                      }
+                    },
+                    "secret_grants": {
+                      "type": "array",
+                      "required": true,
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "binding_digest": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "configured": {
+                            "type": "boolean",
+                            "required": true
+                          },
+                          "purpose": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "reference_id": {
+                            "type": "string",
+                            "required": true
+                          }
+                        }
+                      }
+                    },
+                    "secret_schema_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "version_id": {
+                      "type": "string",
+                      "required": true
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -3092,17 +3343,245 @@
             }
           },
           "source": {
-            "type": "string"
+            "type": "string",
+            "presence": {
+              "present": "one_of:official_registry|smithery|glama|github|npm",
+              "empty": "rejected"
+            }
           },
           "state": {
-            "type": "string"
+            "type": "string",
+            "presence": {
+              "present": "one_of:draft|installing|installed|updating|uninstalling|removed|failed",
+              "empty": "rejected"
+            }
           }
         },
         "response": {
           "installations": {
             "type": "array",
             "items": {
-              "type": "object"
+              "type": "object",
+              "properties": {
+                "versions": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "content_digest": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "created_at": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "execution": {
+                        "type": "object",
+                        "required": true,
+                        "properties": {
+                          "remote": {
+                            "type": "object",
+                            "properties": {
+                              "credential_reference_id": {
+                                "type": "string"
+                              },
+                              "url": {
+                                "type": "string",
+                                "required": true
+                              }
+                            }
+                          },
+                          "stdio": {
+                            "type": "object",
+                            "properties": {
+                              "argv": {
+                                "type": "array",
+                                "required": true,
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "digest": {
+                                "type": "string",
+                                "required": true,
+                                "presence": {
+                                  "present": "lowercase_sha256"
+                                }
+                              },
+                              "relative_path": {
+                                "type": "string",
+                                "required": true
+                              },
+                              "runtime": {
+                                "type": "string",
+                                "presence": {
+                                  "omitted": "stdio_static",
+                                  "present": "node_required_for_stdio_node",
+                                  "empty": "rejected"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "execution_digest": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "manifest_digest": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "network_grants": {
+                        "type": "array",
+                        "required": true,
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "digest": {
+                              "type": "string",
+                              "required": true
+                            },
+                            "host": {
+                              "type": "string",
+                              "required": true
+                            },
+                            "path_prefix": {
+                              "type": "string",
+                              "required": true
+                            },
+                            "port": {
+                              "type": "integer",
+                              "required": true
+                            },
+                            "scheme": {
+                              "type": "string",
+                              "required": true
+                            }
+                          }
+                        }
+                      },
+                      "network_schema_digest": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "node_artifact": {
+                        "type": "object",
+                        "properties": {
+                          "artifact_bytes": {
+                            "type": "integer",
+                            "required": true
+                          },
+                          "file_count": {
+                            "type": "integer",
+                            "required": true
+                          },
+                          "lifecycle_scripts_disabled": {
+                            "type": "boolean",
+                            "required": true
+                          },
+                          "native_addons_absent": {
+                            "type": "boolean",
+                            "required": true
+                          },
+                          "node_version": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "npm_version": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "package_name": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "package_version": {
+                            "type": "string",
+                            "required": true
+                          }
+                        },
+                        "presence": {
+                          "omitted": "non_node_or_unpublished_version",
+                          "present": "published_stdio_node_version"
+                        }
+                      },
+                      "pin": {
+                        "type": "object",
+                        "required": true,
+                        "properties": {
+                          "git_commit": {
+                            "type": "string",
+                            "presence": {
+                              "omitted": "registry_source",
+                              "present": "required_with_git_sha256;lowercase_40_hex",
+                              "empty": "rejected"
+                            }
+                          },
+                          "git_sha256": {
+                            "type": "string",
+                            "presence": {
+                              "omitted": "registry_source",
+                              "present": "required_with_git_commit;lowercase_sha256",
+                              "empty": "rejected"
+                            }
+                          },
+                          "registry_sha256": {
+                            "type": "string",
+                            "presence": {
+                              "omitted": "git_source",
+                              "present": "required_with_registry_version;lowercase_sha256",
+                              "empty": "rejected"
+                            }
+                          },
+                          "registry_version": {
+                            "type": "string",
+                            "presence": {
+                              "omitted": "git_source",
+                              "present": "required_with_registry_sha256;exact_immutable_version",
+                              "empty": "rejected"
+                            }
+                          }
+                        }
+                      },
+                      "secret_grants": {
+                        "type": "array",
+                        "required": true,
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "binding_digest": {
+                              "type": "string",
+                              "required": true
+                            },
+                            "configured": {
+                              "type": "boolean",
+                              "required": true
+                            },
+                            "purpose": {
+                              "type": "string",
+                              "required": true
+                            },
+                            "reference_id": {
+                              "type": "string",
+                              "required": true
+                            }
+                          }
+                        }
+                      },
+                      "secret_schema_digest": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "version_id": {
+                        "type": "string",
+                        "required": true
+                      }
+                    }
+                  }
+                }
+              }
             }
           },
           "next_page_token": {
@@ -3122,8 +3601,7 @@
             "required": true,
             "properties": {
               "description": {
-                "type": "string",
-                "required": true
+                "type": "string"
               },
               "id": {
                 "type": "string",
@@ -3131,7 +3609,11 @@
               },
               "kind": {
                 "type": "string",
-                "required": true
+                "required": true,
+                "presence": {
+                  "present": "one_of:mcp",
+                  "empty": "rejected"
+                }
               },
               "name": {
                 "type": "string",
@@ -3143,29 +3625,53 @@
                 "properties": {
                   "git_commit": {
                     "type": "string",
-                    "required": true
+                    "presence": {
+                      "omitted": "registry_source",
+                      "present": "required_with_git_sha256;lowercase_40_hex",
+                      "empty": "rejected"
+                    }
                   },
                   "git_sha256": {
                     "type": "string",
-                    "required": true
+                    "presence": {
+                      "omitted": "registry_source",
+                      "present": "required_with_git_commit;lowercase_sha256",
+                      "empty": "rejected"
+                    }
                   },
                   "registry_sha256": {
                     "type": "string",
-                    "required": true
+                    "presence": {
+                      "omitted": "git_source",
+                      "present": "required_with_registry_version;lowercase_sha256",
+                      "empty": "rejected"
+                    }
                   },
                   "registry_version": {
                     "type": "string",
-                    "required": true
+                    "presence": {
+                      "omitted": "git_source",
+                      "present": "required_with_registry_sha256;exact_immutable_version",
+                      "empty": "rejected"
+                    }
                   }
                 }
               },
               "source": {
                 "type": "string",
-                "required": true
+                "required": true,
+                "presence": {
+                  "present": "one_of:official_registry|smithery|glama|github|npm",
+                  "empty": "rejected"
+                }
               },
               "transport": {
                 "type": "string",
-                "required": true
+                "required": true,
+                "presence": {
+                  "present": "one_of:stdio_static|streamable_http|stdio_node;npm_requires_stdio_node;stdio_node_requires_npm_or_github",
+                  "empty": "rejected"
+                }
               }
             }
           }
@@ -3180,8 +3686,7 @@
                 "required": true,
                 "properties": {
                   "description": {
-                    "type": "string",
-                    "required": true
+                    "type": "string"
                   },
                   "id": {
                     "type": "string",
@@ -3189,7 +3694,11 @@
                   },
                   "kind": {
                     "type": "string",
-                    "required": true
+                    "required": true,
+                    "presence": {
+                      "present": "one_of:mcp",
+                      "empty": "rejected"
+                    }
                   },
                   "name": {
                     "type": "string",
@@ -3201,29 +3710,53 @@
                     "properties": {
                       "git_commit": {
                         "type": "string",
-                        "required": true
+                        "presence": {
+                          "omitted": "registry_source",
+                          "present": "required_with_git_sha256;lowercase_40_hex",
+                          "empty": "rejected"
+                        }
                       },
                       "git_sha256": {
                         "type": "string",
-                        "required": true
+                        "presence": {
+                          "omitted": "registry_source",
+                          "present": "required_with_git_commit;lowercase_sha256",
+                          "empty": "rejected"
+                        }
                       },
                       "registry_sha256": {
                         "type": "string",
-                        "required": true
+                        "presence": {
+                          "omitted": "git_source",
+                          "present": "required_with_registry_version;lowercase_sha256",
+                          "empty": "rejected"
+                        }
                       },
                       "registry_version": {
                         "type": "string",
-                        "required": true
+                        "presence": {
+                          "omitted": "git_source",
+                          "present": "required_with_registry_sha256;exact_immutable_version",
+                          "empty": "rejected"
+                        }
                       }
                     }
                   },
                   "source": {
                     "type": "string",
-                    "required": true
+                    "required": true,
+                    "presence": {
+                      "present": "one_of:official_registry|smithery|glama|github|npm",
+                      "empty": "rejected"
+                    }
                   },
                   "transport": {
                     "type": "string",
-                    "required": true
+                    "required": true,
+                    "presence": {
+                      "present": "one_of:stdio_static|streamable_http|stdio_node;npm_requires_stdio_node;stdio_node_requires_npm_or_github",
+                      "empty": "rejected"
+                    }
                   }
                 }
               },
@@ -3239,12 +3772,42 @@
                     "type": "object",
                     "properties": {
                       "credential_reference_id": {
-                        "type": "string",
-                        "required": true
+                        "type": "string"
                       },
                       "url": {
                         "type": "string",
                         "required": true
+                      }
+                    }
+                  },
+                  "stdio": {
+                    "type": "object",
+                    "properties": {
+                      "argv": {
+                        "type": "array",
+                        "required": true,
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "digest": {
+                        "type": "string",
+                        "required": true,
+                        "presence": {
+                          "present": "lowercase_sha256"
+                        }
+                      },
+                      "relative_path": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "runtime": {
+                        "type": "string",
+                        "presence": {
+                          "omitted": "stdio_static",
+                          "present": "node_required_for_stdio_node",
+                          "empty": "rejected"
+                        }
                       }
                     }
                   }
@@ -3336,8 +3899,7 @@
             "required": true,
             "properties": {
               "description": {
-                "type": "string",
-                "required": true
+                "type": "string"
               },
               "id": {
                 "type": "string",
@@ -3345,7 +3907,11 @@
               },
               "kind": {
                 "type": "string",
-                "required": true
+                "required": true,
+                "presence": {
+                  "present": "one_of:mcp",
+                  "empty": "rejected"
+                }
               },
               "name": {
                 "type": "string",
@@ -3357,37 +3923,54 @@
                 "properties": {
                   "git_commit": {
                     "type": "string",
-                    "required": true
+                    "presence": {
+                      "omitted": "registry_source",
+                      "present": "required_with_git_sha256;lowercase_40_hex",
+                      "empty": "rejected"
+                    }
                   },
                   "git_sha256": {
                     "type": "string",
-                    "required": true
+                    "presence": {
+                      "omitted": "registry_source",
+                      "present": "required_with_git_commit;lowercase_sha256",
+                      "empty": "rejected"
+                    }
                   },
                   "registry_sha256": {
                     "type": "string",
-                    "required": true
+                    "presence": {
+                      "omitted": "git_source",
+                      "present": "required_with_registry_version;lowercase_sha256",
+                      "empty": "rejected"
+                    }
                   },
                   "registry_version": {
                     "type": "string",
-                    "required": true
+                    "presence": {
+                      "omitted": "git_source",
+                      "present": "required_with_registry_sha256;exact_immutable_version",
+                      "empty": "rejected"
+                    }
                   }
                 }
               },
               "source": {
                 "type": "string",
-                "required": true
+                "required": true,
+                "presence": {
+                  "present": "one_of:official_registry|smithery|glama|github|npm",
+                  "empty": "rejected"
+                }
               },
               "transport": {
                 "type": "string",
-                "required": true
+                "required": true,
+                "presence": {
+                  "present": "one_of:stdio_static|streamable_http|stdio_node;npm_requires_stdio_node;stdio_node_requires_npm_or_github",
+                  "empty": "rejected"
+                }
               }
-            }
-          },
-          "expected_revision": {
-            "type": "integer",
-            "presence": {
-              "omitted": "no_revision_check",
-              "present": "must_match_current_revision"
             }
           },
           "idempotency_key": {
@@ -3403,8 +3986,7 @@
                 "required": true,
                 "properties": {
                   "description": {
-                    "type": "string",
-                    "required": true
+                    "type": "string"
                   },
                   "id": {
                     "type": "string",
@@ -3412,7 +3994,11 @@
                   },
                   "kind": {
                     "type": "string",
-                    "required": true
+                    "required": true,
+                    "presence": {
+                      "present": "one_of:mcp",
+                      "empty": "rejected"
+                    }
                   },
                   "name": {
                     "type": "string",
@@ -3424,29 +4010,53 @@
                     "properties": {
                       "git_commit": {
                         "type": "string",
-                        "required": true
+                        "presence": {
+                          "omitted": "registry_source",
+                          "present": "required_with_git_sha256;lowercase_40_hex",
+                          "empty": "rejected"
+                        }
                       },
                       "git_sha256": {
                         "type": "string",
-                        "required": true
+                        "presence": {
+                          "omitted": "registry_source",
+                          "present": "required_with_git_commit;lowercase_sha256",
+                          "empty": "rejected"
+                        }
                       },
                       "registry_sha256": {
                         "type": "string",
-                        "required": true
+                        "presence": {
+                          "omitted": "git_source",
+                          "present": "required_with_registry_version;lowercase_sha256",
+                          "empty": "rejected"
+                        }
                       },
                       "registry_version": {
                         "type": "string",
-                        "required": true
+                        "presence": {
+                          "omitted": "git_source",
+                          "present": "required_with_registry_sha256;exact_immutable_version",
+                          "empty": "rejected"
+                        }
                       }
                     }
                   },
                   "source": {
                     "type": "string",
-                    "required": true
+                    "required": true,
+                    "presence": {
+                      "present": "one_of:official_registry|smithery|glama|github|npm",
+                      "empty": "rejected"
+                    }
                   },
                   "transport": {
                     "type": "string",
-                    "required": true
+                    "required": true,
+                    "presence": {
+                      "present": "one_of:stdio_static|streamable_http|stdio_node;npm_requires_stdio_node;stdio_node_requires_npm_or_github",
+                      "empty": "rejected"
+                    }
                   }
                 }
               },
@@ -3462,12 +4072,42 @@
                     "type": "object",
                     "properties": {
                       "credential_reference_id": {
-                        "type": "string",
-                        "required": true
+                        "type": "string"
                       },
                       "url": {
                         "type": "string",
                         "required": true
+                      }
+                    }
+                  },
+                  "stdio": {
+                    "type": "object",
+                    "properties": {
+                      "argv": {
+                        "type": "array",
+                        "required": true,
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "digest": {
+                        "type": "string",
+                        "required": true,
+                        "presence": {
+                          "present": "lowercase_sha256"
+                        }
+                      },
+                      "relative_path": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "runtime": {
+                        "type": "string",
+                        "presence": {
+                          "omitted": "stdio_static",
+                          "present": "node_required_for_stdio_node",
+                          "empty": "rejected"
+                        }
                       }
                     }
                   }
@@ -3573,7 +4213,227 @@
             "type": "string"
           },
           "installation": {
-            "type": "object"
+            "type": "object",
+            "properties": {
+              "versions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "content_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "created_at": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "execution": {
+                      "type": "object",
+                      "required": true,
+                      "properties": {
+                        "remote": {
+                          "type": "object",
+                          "properties": {
+                            "credential_reference_id": {
+                              "type": "string"
+                            },
+                            "url": {
+                              "type": "string",
+                              "required": true
+                            }
+                          }
+                        },
+                        "stdio": {
+                          "type": "object",
+                          "properties": {
+                            "argv": {
+                              "type": "array",
+                              "required": true,
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "digest": {
+                              "type": "string",
+                              "required": true,
+                              "presence": {
+                                "present": "lowercase_sha256"
+                              }
+                            },
+                            "relative_path": {
+                              "type": "string",
+                              "required": true
+                            },
+                            "runtime": {
+                              "type": "string",
+                              "presence": {
+                                "omitted": "stdio_static",
+                                "present": "node_required_for_stdio_node",
+                                "empty": "rejected"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "execution_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "manifest_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "network_grants": {
+                      "type": "array",
+                      "required": true,
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "digest": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "host": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "path_prefix": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "port": {
+                            "type": "integer",
+                            "required": true
+                          },
+                          "scheme": {
+                            "type": "string",
+                            "required": true
+                          }
+                        }
+                      }
+                    },
+                    "network_schema_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "node_artifact": {
+                      "type": "object",
+                      "properties": {
+                        "artifact_bytes": {
+                          "type": "integer",
+                          "required": true
+                        },
+                        "file_count": {
+                          "type": "integer",
+                          "required": true
+                        },
+                        "lifecycle_scripts_disabled": {
+                          "type": "boolean",
+                          "required": true
+                        },
+                        "native_addons_absent": {
+                          "type": "boolean",
+                          "required": true
+                        },
+                        "node_version": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "npm_version": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "package_name": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "package_version": {
+                          "type": "string",
+                          "required": true
+                        }
+                      },
+                      "presence": {
+                        "omitted": "non_node_or_unpublished_version",
+                        "present": "published_stdio_node_version"
+                      }
+                    },
+                    "pin": {
+                      "type": "object",
+                      "required": true,
+                      "properties": {
+                        "git_commit": {
+                          "type": "string",
+                          "presence": {
+                            "omitted": "registry_source",
+                            "present": "required_with_git_sha256;lowercase_40_hex",
+                            "empty": "rejected"
+                          }
+                        },
+                        "git_sha256": {
+                          "type": "string",
+                          "presence": {
+                            "omitted": "registry_source",
+                            "present": "required_with_git_commit;lowercase_sha256",
+                            "empty": "rejected"
+                          }
+                        },
+                        "registry_sha256": {
+                          "type": "string",
+                          "presence": {
+                            "omitted": "git_source",
+                            "present": "required_with_registry_version;lowercase_sha256",
+                            "empty": "rejected"
+                          }
+                        },
+                        "registry_version": {
+                          "type": "string",
+                          "presence": {
+                            "omitted": "git_source",
+                            "present": "required_with_registry_sha256;exact_immutable_version",
+                            "empty": "rejected"
+                          }
+                        }
+                      }
+                    },
+                    "secret_grants": {
+                      "type": "array",
+                      "required": true,
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "binding_digest": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "configured": {
+                            "type": "boolean",
+                            "required": true
+                          },
+                          "purpose": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "reference_id": {
+                            "type": "string",
+                            "required": true
+                          }
+                        }
+                      }
+                    },
+                    "secret_schema_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "version_id": {
+                      "type": "string",
+                      "required": true
+                    }
+                  }
+                }
+              }
+            }
           },
           "task_id": {
             "type": "string"
@@ -3592,8 +4452,7 @@
             "required": true,
             "properties": {
               "description": {
-                "type": "string",
-                "required": true
+                "type": "string"
               },
               "id": {
                 "type": "string",
@@ -3601,7 +4460,11 @@
               },
               "kind": {
                 "type": "string",
-                "required": true
+                "required": true,
+                "presence": {
+                  "present": "one_of:mcp",
+                  "empty": "rejected"
+                }
               },
               "name": {
                 "type": "string",
@@ -3613,38 +4476,59 @@
                 "properties": {
                   "git_commit": {
                     "type": "string",
-                    "required": true
+                    "presence": {
+                      "omitted": "registry_source",
+                      "present": "required_with_git_sha256;lowercase_40_hex",
+                      "empty": "rejected"
+                    }
                   },
                   "git_sha256": {
                     "type": "string",
-                    "required": true
+                    "presence": {
+                      "omitted": "registry_source",
+                      "present": "required_with_git_commit;lowercase_sha256",
+                      "empty": "rejected"
+                    }
                   },
                   "registry_sha256": {
                     "type": "string",
-                    "required": true
+                    "presence": {
+                      "omitted": "git_source",
+                      "present": "required_with_registry_version;lowercase_sha256",
+                      "empty": "rejected"
+                    }
                   },
                   "registry_version": {
                     "type": "string",
-                    "required": true
+                    "presence": {
+                      "omitted": "git_source",
+                      "present": "required_with_registry_sha256;exact_immutable_version",
+                      "empty": "rejected"
+                    }
                   }
                 }
               },
               "source": {
                 "type": "string",
-                "required": true
+                "required": true,
+                "presence": {
+                  "present": "one_of:official_registry|smithery|glama|github|npm",
+                  "empty": "rejected"
+                }
               },
               "transport": {
                 "type": "string",
-                "required": true
+                "required": true,
+                "presence": {
+                  "present": "one_of:stdio_static|streamable_http|stdio_node;npm_requires_stdio_node;stdio_node_requires_npm_or_github",
+                  "empty": "rejected"
+                }
               }
             }
           },
           "expected_revision": {
             "type": "integer",
-            "presence": {
-              "omitted": "no_revision_check",
-              "present": "must_match_current_revision"
-            }
+            "required": true
           },
           "idempotency_key": {
             "type": "string",
@@ -3659,8 +4543,7 @@
                 "required": true,
                 "properties": {
                   "description": {
-                    "type": "string",
-                    "required": true
+                    "type": "string"
                   },
                   "id": {
                     "type": "string",
@@ -3668,7 +4551,11 @@
                   },
                   "kind": {
                     "type": "string",
-                    "required": true
+                    "required": true,
+                    "presence": {
+                      "present": "one_of:mcp",
+                      "empty": "rejected"
+                    }
                   },
                   "name": {
                     "type": "string",
@@ -3680,29 +4567,53 @@
                     "properties": {
                       "git_commit": {
                         "type": "string",
-                        "required": true
+                        "presence": {
+                          "omitted": "registry_source",
+                          "present": "required_with_git_sha256;lowercase_40_hex",
+                          "empty": "rejected"
+                        }
                       },
                       "git_sha256": {
                         "type": "string",
-                        "required": true
+                        "presence": {
+                          "omitted": "registry_source",
+                          "present": "required_with_git_commit;lowercase_sha256",
+                          "empty": "rejected"
+                        }
                       },
                       "registry_sha256": {
                         "type": "string",
-                        "required": true
+                        "presence": {
+                          "omitted": "git_source",
+                          "present": "required_with_registry_version;lowercase_sha256",
+                          "empty": "rejected"
+                        }
                       },
                       "registry_version": {
                         "type": "string",
-                        "required": true
+                        "presence": {
+                          "omitted": "git_source",
+                          "present": "required_with_registry_sha256;exact_immutable_version",
+                          "empty": "rejected"
+                        }
                       }
                     }
                   },
                   "source": {
                     "type": "string",
-                    "required": true
+                    "required": true,
+                    "presence": {
+                      "present": "one_of:official_registry|smithery|glama|github|npm",
+                      "empty": "rejected"
+                    }
                   },
                   "transport": {
                     "type": "string",
-                    "required": true
+                    "required": true,
+                    "presence": {
+                      "present": "one_of:stdio_static|streamable_http|stdio_node;npm_requires_stdio_node;stdio_node_requires_npm_or_github",
+                      "empty": "rejected"
+                    }
                   }
                 }
               },
@@ -3718,12 +4629,42 @@
                     "type": "object",
                     "properties": {
                       "credential_reference_id": {
-                        "type": "string",
-                        "required": true
+                        "type": "string"
                       },
                       "url": {
                         "type": "string",
                         "required": true
+                      }
+                    }
+                  },
+                  "stdio": {
+                    "type": "object",
+                    "properties": {
+                      "argv": {
+                        "type": "array",
+                        "required": true,
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "digest": {
+                        "type": "string",
+                        "required": true,
+                        "presence": {
+                          "present": "lowercase_sha256"
+                        }
+                      },
+                      "relative_path": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "runtime": {
+                        "type": "string",
+                        "presence": {
+                          "omitted": "stdio_static",
+                          "present": "node_required_for_stdio_node",
+                          "empty": "rejected"
+                        }
                       }
                     }
                   }
@@ -3833,7 +4774,227 @@
             "type": "string"
           },
           "installation": {
-            "type": "object"
+            "type": "object",
+            "properties": {
+              "versions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "content_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "created_at": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "execution": {
+                      "type": "object",
+                      "required": true,
+                      "properties": {
+                        "remote": {
+                          "type": "object",
+                          "properties": {
+                            "credential_reference_id": {
+                              "type": "string"
+                            },
+                            "url": {
+                              "type": "string",
+                              "required": true
+                            }
+                          }
+                        },
+                        "stdio": {
+                          "type": "object",
+                          "properties": {
+                            "argv": {
+                              "type": "array",
+                              "required": true,
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "digest": {
+                              "type": "string",
+                              "required": true,
+                              "presence": {
+                                "present": "lowercase_sha256"
+                              }
+                            },
+                            "relative_path": {
+                              "type": "string",
+                              "required": true
+                            },
+                            "runtime": {
+                              "type": "string",
+                              "presence": {
+                                "omitted": "stdio_static",
+                                "present": "node_required_for_stdio_node",
+                                "empty": "rejected"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "execution_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "manifest_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "network_grants": {
+                      "type": "array",
+                      "required": true,
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "digest": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "host": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "path_prefix": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "port": {
+                            "type": "integer",
+                            "required": true
+                          },
+                          "scheme": {
+                            "type": "string",
+                            "required": true
+                          }
+                        }
+                      }
+                    },
+                    "network_schema_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "node_artifact": {
+                      "type": "object",
+                      "properties": {
+                        "artifact_bytes": {
+                          "type": "integer",
+                          "required": true
+                        },
+                        "file_count": {
+                          "type": "integer",
+                          "required": true
+                        },
+                        "lifecycle_scripts_disabled": {
+                          "type": "boolean",
+                          "required": true
+                        },
+                        "native_addons_absent": {
+                          "type": "boolean",
+                          "required": true
+                        },
+                        "node_version": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "npm_version": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "package_name": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "package_version": {
+                          "type": "string",
+                          "required": true
+                        }
+                      },
+                      "presence": {
+                        "omitted": "non_node_or_unpublished_version",
+                        "present": "published_stdio_node_version"
+                      }
+                    },
+                    "pin": {
+                      "type": "object",
+                      "required": true,
+                      "properties": {
+                        "git_commit": {
+                          "type": "string",
+                          "presence": {
+                            "omitted": "registry_source",
+                            "present": "required_with_git_sha256;lowercase_40_hex",
+                            "empty": "rejected"
+                          }
+                        },
+                        "git_sha256": {
+                          "type": "string",
+                          "presence": {
+                            "omitted": "registry_source",
+                            "present": "required_with_git_commit;lowercase_sha256",
+                            "empty": "rejected"
+                          }
+                        },
+                        "registry_sha256": {
+                          "type": "string",
+                          "presence": {
+                            "omitted": "git_source",
+                            "present": "required_with_registry_version;lowercase_sha256",
+                            "empty": "rejected"
+                          }
+                        },
+                        "registry_version": {
+                          "type": "string",
+                          "presence": {
+                            "omitted": "git_source",
+                            "present": "required_with_registry_sha256;exact_immutable_version",
+                            "empty": "rejected"
+                          }
+                        }
+                      }
+                    },
+                    "secret_grants": {
+                      "type": "array",
+                      "required": true,
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "binding_digest": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "configured": {
+                            "type": "boolean",
+                            "required": true
+                          },
+                          "purpose": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "reference_id": {
+                            "type": "string",
+                            "required": true
+                          }
+                        }
+                      }
+                    },
+                    "secret_schema_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "version_id": {
+                      "type": "string",
+                      "required": true
+                    }
+                  }
+                }
+              }
+            }
           },
           "task_id": {
             "type": "string"
@@ -3849,6 +5010,7 @@
         "request": {
           "expected_revision": {
             "type": "integer",
+            "required": true,
             "presence": {
               "omitted": "no_revision_check",
               "present": "must_match_current_revision"
@@ -3868,7 +5030,227 @@
             "type": "string"
           },
           "installation": {
-            "type": "object"
+            "type": "object",
+            "properties": {
+              "versions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "content_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "created_at": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "execution": {
+                      "type": "object",
+                      "required": true,
+                      "properties": {
+                        "remote": {
+                          "type": "object",
+                          "properties": {
+                            "credential_reference_id": {
+                              "type": "string"
+                            },
+                            "url": {
+                              "type": "string",
+                              "required": true
+                            }
+                          }
+                        },
+                        "stdio": {
+                          "type": "object",
+                          "properties": {
+                            "argv": {
+                              "type": "array",
+                              "required": true,
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "digest": {
+                              "type": "string",
+                              "required": true,
+                              "presence": {
+                                "present": "lowercase_sha256"
+                              }
+                            },
+                            "relative_path": {
+                              "type": "string",
+                              "required": true
+                            },
+                            "runtime": {
+                              "type": "string",
+                              "presence": {
+                                "omitted": "stdio_static",
+                                "present": "node_required_for_stdio_node",
+                                "empty": "rejected"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "execution_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "manifest_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "network_grants": {
+                      "type": "array",
+                      "required": true,
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "digest": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "host": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "path_prefix": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "port": {
+                            "type": "integer",
+                            "required": true
+                          },
+                          "scheme": {
+                            "type": "string",
+                            "required": true
+                          }
+                        }
+                      }
+                    },
+                    "network_schema_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "node_artifact": {
+                      "type": "object",
+                      "properties": {
+                        "artifact_bytes": {
+                          "type": "integer",
+                          "required": true
+                        },
+                        "file_count": {
+                          "type": "integer",
+                          "required": true
+                        },
+                        "lifecycle_scripts_disabled": {
+                          "type": "boolean",
+                          "required": true
+                        },
+                        "native_addons_absent": {
+                          "type": "boolean",
+                          "required": true
+                        },
+                        "node_version": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "npm_version": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "package_name": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "package_version": {
+                          "type": "string",
+                          "required": true
+                        }
+                      },
+                      "presence": {
+                        "omitted": "non_node_or_unpublished_version",
+                        "present": "published_stdio_node_version"
+                      }
+                    },
+                    "pin": {
+                      "type": "object",
+                      "required": true,
+                      "properties": {
+                        "git_commit": {
+                          "type": "string",
+                          "presence": {
+                            "omitted": "registry_source",
+                            "present": "required_with_git_sha256;lowercase_40_hex",
+                            "empty": "rejected"
+                          }
+                        },
+                        "git_sha256": {
+                          "type": "string",
+                          "presence": {
+                            "omitted": "registry_source",
+                            "present": "required_with_git_commit;lowercase_sha256",
+                            "empty": "rejected"
+                          }
+                        },
+                        "registry_sha256": {
+                          "type": "string",
+                          "presence": {
+                            "omitted": "git_source",
+                            "present": "required_with_registry_version;lowercase_sha256",
+                            "empty": "rejected"
+                          }
+                        },
+                        "registry_version": {
+                          "type": "string",
+                          "presence": {
+                            "omitted": "git_source",
+                            "present": "required_with_registry_sha256;exact_immutable_version",
+                            "empty": "rejected"
+                          }
+                        }
+                      }
+                    },
+                    "secret_grants": {
+                      "type": "array",
+                      "required": true,
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "binding_digest": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "configured": {
+                            "type": "boolean",
+                            "required": true
+                          },
+                          "purpose": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "reference_id": {
+                            "type": "string",
+                            "required": true
+                          }
+                        }
+                      }
+                    },
+                    "secret_schema_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "version_id": {
+                      "type": "string",
+                      "required": true
+                    }
+                  }
+                }
+              }
+            }
           },
           "task_id": {
             "type": "string"
@@ -3973,7 +5355,11 @@
             "type": "string"
           },
           "source": {
-            "type": "string"
+            "type": "string",
+            "presence": {
+              "present": "one_of:builtin|skills_sh|github",
+              "empty": "rejected"
+            }
           }
         },
         "response": {
@@ -3984,8 +5370,7 @@
               "required": true,
               "properties": {
                 "description": {
-                  "type": "string",
-                  "required": true
+                  "type": "string"
                 },
                 "id": {
                   "type": "string",
@@ -3993,7 +5378,11 @@
                 },
                 "kind": {
                   "type": "string",
-                  "required": true
+                  "required": true,
+                  "presence": {
+                    "present": "one_of:skill",
+                    "empty": "rejected"
+                  }
                 },
                 "name": {
                   "type": "string",
@@ -4005,29 +5394,53 @@
                   "properties": {
                     "git_commit": {
                       "type": "string",
-                      "required": true
+                      "presence": {
+                        "omitted": "registry_source",
+                        "present": "required_with_git_sha256;lowercase_40_hex",
+                        "empty": "rejected"
+                      }
                     },
                     "git_sha256": {
                       "type": "string",
-                      "required": true
+                      "presence": {
+                        "omitted": "registry_source",
+                        "present": "required_with_git_commit;lowercase_sha256",
+                        "empty": "rejected"
+                      }
                     },
                     "registry_sha256": {
                       "type": "string",
-                      "required": true
+                      "presence": {
+                        "omitted": "git_source",
+                        "present": "required_with_registry_version;lowercase_sha256",
+                        "empty": "rejected"
+                      }
                     },
                     "registry_version": {
                       "type": "string",
-                      "required": true
+                      "presence": {
+                        "omitted": "git_source",
+                        "present": "required_with_registry_sha256;exact_immutable_version",
+                        "empty": "rejected"
+                      }
                     }
                   }
                 },
                 "source": {
                   "type": "string",
-                  "required": true
+                  "required": true,
+                  "presence": {
+                    "present": "one_of:builtin|skills_sh|github",
+                    "empty": "rejected"
+                  }
                 },
                 "transport": {
                   "type": "string",
-                  "required": true
+                  "required": true,
+                  "presence": {
+                    "present": "one_of:skill_static",
+                    "empty": "rejected"
+                  }
                 }
               }
             }
@@ -4051,7 +5464,168 @@
         },
         "response": {
           "installation": {
-            "type": "object"
+            "type": "object",
+            "properties": {
+              "versions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "content_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "created_at": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "execution": {
+                      "type": "object",
+                      "required": true,
+                      "properties": {
+                        "skill": {
+                          "type": "object",
+                          "properties": {
+                            "argv": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "digest": {
+                              "type": "string",
+                              "required": true,
+                              "presence": {
+                                "present": "lowercase_sha256"
+                              }
+                            },
+                            "executable": {
+                              "type": "boolean"
+                            },
+                            "relative_path": {
+                              "type": "string",
+                              "required": true
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "execution_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "manifest_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "network_grants": {
+                      "type": "array",
+                      "required": true,
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "digest": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "host": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "path_prefix": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "port": {
+                            "type": "integer",
+                            "required": true
+                          },
+                          "scheme": {
+                            "type": "string",
+                            "required": true
+                          }
+                        }
+                      }
+                    },
+                    "network_schema_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "pin": {
+                      "type": "object",
+                      "required": true,
+                      "properties": {
+                        "git_commit": {
+                          "type": "string",
+                          "presence": {
+                            "omitted": "registry_source",
+                            "present": "required_with_git_sha256;lowercase_40_hex",
+                            "empty": "rejected"
+                          }
+                        },
+                        "git_sha256": {
+                          "type": "string",
+                          "presence": {
+                            "omitted": "registry_source",
+                            "present": "required_with_git_commit;lowercase_sha256",
+                            "empty": "rejected"
+                          }
+                        },
+                        "registry_sha256": {
+                          "type": "string",
+                          "presence": {
+                            "omitted": "git_source",
+                            "present": "required_with_registry_version;lowercase_sha256",
+                            "empty": "rejected"
+                          }
+                        },
+                        "registry_version": {
+                          "type": "string",
+                          "presence": {
+                            "omitted": "git_source",
+                            "present": "required_with_registry_sha256;exact_immutable_version",
+                            "empty": "rejected"
+                          }
+                        }
+                      }
+                    },
+                    "secret_grants": {
+                      "type": "array",
+                      "required": true,
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "binding_digest": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "configured": {
+                            "type": "boolean",
+                            "required": true
+                          },
+                          "purpose": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "reference_id": {
+                            "type": "string",
+                            "required": true
+                          }
+                        }
+                      }
+                    },
+                    "secret_schema_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "version_id": {
+                      "type": "string",
+                      "required": true
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -4075,17 +5649,186 @@
             }
           },
           "source": {
-            "type": "string"
+            "type": "string",
+            "presence": {
+              "present": "one_of:builtin|skills_sh|github",
+              "empty": "rejected"
+            }
           },
           "state": {
-            "type": "string"
+            "type": "string",
+            "presence": {
+              "present": "one_of:draft|installing|installed|updating|uninstalling|removed|failed",
+              "empty": "rejected"
+            }
           }
         },
         "response": {
           "installations": {
             "type": "array",
             "items": {
-              "type": "object"
+              "type": "object",
+              "properties": {
+                "versions": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "content_digest": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "created_at": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "execution": {
+                        "type": "object",
+                        "required": true,
+                        "properties": {
+                          "skill": {
+                            "type": "object",
+                            "properties": {
+                              "argv": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "digest": {
+                                "type": "string",
+                                "required": true,
+                                "presence": {
+                                  "present": "lowercase_sha256"
+                                }
+                              },
+                              "executable": {
+                                "type": "boolean"
+                              },
+                              "relative_path": {
+                                "type": "string",
+                                "required": true
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "execution_digest": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "manifest_digest": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "network_grants": {
+                        "type": "array",
+                        "required": true,
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "digest": {
+                              "type": "string",
+                              "required": true
+                            },
+                            "host": {
+                              "type": "string",
+                              "required": true
+                            },
+                            "path_prefix": {
+                              "type": "string",
+                              "required": true
+                            },
+                            "port": {
+                              "type": "integer",
+                              "required": true
+                            },
+                            "scheme": {
+                              "type": "string",
+                              "required": true
+                            }
+                          }
+                        }
+                      },
+                      "network_schema_digest": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "pin": {
+                        "type": "object",
+                        "required": true,
+                        "properties": {
+                          "git_commit": {
+                            "type": "string",
+                            "presence": {
+                              "omitted": "registry_source",
+                              "present": "required_with_git_sha256;lowercase_40_hex",
+                              "empty": "rejected"
+                            }
+                          },
+                          "git_sha256": {
+                            "type": "string",
+                            "presence": {
+                              "omitted": "registry_source",
+                              "present": "required_with_git_commit;lowercase_sha256",
+                              "empty": "rejected"
+                            }
+                          },
+                          "registry_sha256": {
+                            "type": "string",
+                            "presence": {
+                              "omitted": "git_source",
+                              "present": "required_with_registry_version;lowercase_sha256",
+                              "empty": "rejected"
+                            }
+                          },
+                          "registry_version": {
+                            "type": "string",
+                            "presence": {
+                              "omitted": "git_source",
+                              "present": "required_with_registry_sha256;exact_immutable_version",
+                              "empty": "rejected"
+                            }
+                          }
+                        }
+                      },
+                      "secret_grants": {
+                        "type": "array",
+                        "required": true,
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "binding_digest": {
+                              "type": "string",
+                              "required": true
+                            },
+                            "configured": {
+                              "type": "boolean",
+                              "required": true
+                            },
+                            "purpose": {
+                              "type": "string",
+                              "required": true
+                            },
+                            "reference_id": {
+                              "type": "string",
+                              "required": true
+                            }
+                          }
+                        }
+                      },
+                      "secret_schema_digest": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "version_id": {
+                        "type": "string",
+                        "required": true
+                      }
+                    }
+                  }
+                }
+              }
             }
           },
           "next_page_token": {
@@ -4105,8 +5848,7 @@
             "required": true,
             "properties": {
               "description": {
-                "type": "string",
-                "required": true
+                "type": "string"
               },
               "id": {
                 "type": "string",
@@ -4114,7 +5856,11 @@
               },
               "kind": {
                 "type": "string",
-                "required": true
+                "required": true,
+                "presence": {
+                  "present": "one_of:skill",
+                  "empty": "rejected"
+                }
               },
               "name": {
                 "type": "string",
@@ -4126,29 +5872,53 @@
                 "properties": {
                   "git_commit": {
                     "type": "string",
-                    "required": true
+                    "presence": {
+                      "omitted": "registry_source",
+                      "present": "required_with_git_sha256;lowercase_40_hex",
+                      "empty": "rejected"
+                    }
                   },
                   "git_sha256": {
                     "type": "string",
-                    "required": true
+                    "presence": {
+                      "omitted": "registry_source",
+                      "present": "required_with_git_commit;lowercase_sha256",
+                      "empty": "rejected"
+                    }
                   },
                   "registry_sha256": {
                     "type": "string",
-                    "required": true
+                    "presence": {
+                      "omitted": "git_source",
+                      "present": "required_with_registry_version;lowercase_sha256",
+                      "empty": "rejected"
+                    }
                   },
                   "registry_version": {
                     "type": "string",
-                    "required": true
+                    "presence": {
+                      "omitted": "git_source",
+                      "present": "required_with_registry_sha256;exact_immutable_version",
+                      "empty": "rejected"
+                    }
                   }
                 }
               },
               "source": {
                 "type": "string",
-                "required": true
+                "required": true,
+                "presence": {
+                  "present": "one_of:builtin|skills_sh|github",
+                  "empty": "rejected"
+                }
               },
               "transport": {
                 "type": "string",
-                "required": true
+                "required": true,
+                "presence": {
+                  "present": "one_of:skill_static",
+                  "empty": "rejected"
+                }
               }
             }
           }
@@ -4163,8 +5933,7 @@
                 "required": true,
                 "properties": {
                   "description": {
-                    "type": "string",
-                    "required": true
+                    "type": "string"
                   },
                   "id": {
                     "type": "string",
@@ -4172,7 +5941,11 @@
                   },
                   "kind": {
                     "type": "string",
-                    "required": true
+                    "required": true,
+                    "presence": {
+                      "present": "one_of:skill",
+                      "empty": "rejected"
+                    }
                   },
                   "name": {
                     "type": "string",
@@ -4184,29 +5957,53 @@
                     "properties": {
                       "git_commit": {
                         "type": "string",
-                        "required": true
+                        "presence": {
+                          "omitted": "registry_source",
+                          "present": "required_with_git_sha256;lowercase_40_hex",
+                          "empty": "rejected"
+                        }
                       },
                       "git_sha256": {
                         "type": "string",
-                        "required": true
+                        "presence": {
+                          "omitted": "registry_source",
+                          "present": "required_with_git_commit;lowercase_sha256",
+                          "empty": "rejected"
+                        }
                       },
                       "registry_sha256": {
                         "type": "string",
-                        "required": true
+                        "presence": {
+                          "omitted": "git_source",
+                          "present": "required_with_registry_version;lowercase_sha256",
+                          "empty": "rejected"
+                        }
                       },
                       "registry_version": {
                         "type": "string",
-                        "required": true
+                        "presence": {
+                          "omitted": "git_source",
+                          "present": "required_with_registry_sha256;exact_immutable_version",
+                          "empty": "rejected"
+                        }
                       }
                     }
                   },
                   "source": {
                     "type": "string",
-                    "required": true
+                    "required": true,
+                    "presence": {
+                      "present": "one_of:builtin|skills_sh|github",
+                      "empty": "rejected"
+                    }
                   },
                   "transport": {
                     "type": "string",
-                    "required": true
+                    "required": true,
+                    "presence": {
+                      "present": "one_of:skill_static",
+                      "empty": "rejected"
+                    }
                   }
                 }
               },
@@ -4218,14 +6015,26 @@
                 "type": "object",
                 "required": true,
                 "properties": {
-                  "remote": {
+                  "skill": {
                     "type": "object",
                     "properties": {
-                      "credential_reference_id": {
-                        "type": "string",
-                        "required": true
+                      "argv": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
                       },
-                      "url": {
+                      "digest": {
+                        "type": "string",
+                        "required": true,
+                        "presence": {
+                          "present": "lowercase_sha256"
+                        }
+                      },
+                      "executable": {
+                        "type": "boolean"
+                      },
+                      "relative_path": {
                         "type": "string",
                         "required": true
                       }
@@ -4319,8 +6128,7 @@
             "required": true,
             "properties": {
               "description": {
-                "type": "string",
-                "required": true
+                "type": "string"
               },
               "id": {
                 "type": "string",
@@ -4328,7 +6136,11 @@
               },
               "kind": {
                 "type": "string",
-                "required": true
+                "required": true,
+                "presence": {
+                  "present": "one_of:skill",
+                  "empty": "rejected"
+                }
               },
               "name": {
                 "type": "string",
@@ -4340,37 +6152,54 @@
                 "properties": {
                   "git_commit": {
                     "type": "string",
-                    "required": true
+                    "presence": {
+                      "omitted": "registry_source",
+                      "present": "required_with_git_sha256;lowercase_40_hex",
+                      "empty": "rejected"
+                    }
                   },
                   "git_sha256": {
                     "type": "string",
-                    "required": true
+                    "presence": {
+                      "omitted": "registry_source",
+                      "present": "required_with_git_commit;lowercase_sha256",
+                      "empty": "rejected"
+                    }
                   },
                   "registry_sha256": {
                     "type": "string",
-                    "required": true
+                    "presence": {
+                      "omitted": "git_source",
+                      "present": "required_with_registry_version;lowercase_sha256",
+                      "empty": "rejected"
+                    }
                   },
                   "registry_version": {
                     "type": "string",
-                    "required": true
+                    "presence": {
+                      "omitted": "git_source",
+                      "present": "required_with_registry_sha256;exact_immutable_version",
+                      "empty": "rejected"
+                    }
                   }
                 }
               },
               "source": {
                 "type": "string",
-                "required": true
+                "required": true,
+                "presence": {
+                  "present": "one_of:builtin|skills_sh|github",
+                  "empty": "rejected"
+                }
               },
               "transport": {
                 "type": "string",
-                "required": true
+                "required": true,
+                "presence": {
+                  "present": "one_of:skill_static",
+                  "empty": "rejected"
+                }
               }
-            }
-          },
-          "expected_revision": {
-            "type": "integer",
-            "presence": {
-              "omitted": "no_revision_check",
-              "present": "must_match_current_revision"
             }
           },
           "idempotency_key": {
@@ -4386,8 +6215,7 @@
                 "required": true,
                 "properties": {
                   "description": {
-                    "type": "string",
-                    "required": true
+                    "type": "string"
                   },
                   "id": {
                     "type": "string",
@@ -4395,7 +6223,11 @@
                   },
                   "kind": {
                     "type": "string",
-                    "required": true
+                    "required": true,
+                    "presence": {
+                      "present": "one_of:skill",
+                      "empty": "rejected"
+                    }
                   },
                   "name": {
                     "type": "string",
@@ -4407,29 +6239,53 @@
                     "properties": {
                       "git_commit": {
                         "type": "string",
-                        "required": true
+                        "presence": {
+                          "omitted": "registry_source",
+                          "present": "required_with_git_sha256;lowercase_40_hex",
+                          "empty": "rejected"
+                        }
                       },
                       "git_sha256": {
                         "type": "string",
-                        "required": true
+                        "presence": {
+                          "omitted": "registry_source",
+                          "present": "required_with_git_commit;lowercase_sha256",
+                          "empty": "rejected"
+                        }
                       },
                       "registry_sha256": {
                         "type": "string",
-                        "required": true
+                        "presence": {
+                          "omitted": "git_source",
+                          "present": "required_with_registry_version;lowercase_sha256",
+                          "empty": "rejected"
+                        }
                       },
                       "registry_version": {
                         "type": "string",
-                        "required": true
+                        "presence": {
+                          "omitted": "git_source",
+                          "present": "required_with_registry_sha256;exact_immutable_version",
+                          "empty": "rejected"
+                        }
                       }
                     }
                   },
                   "source": {
                     "type": "string",
-                    "required": true
+                    "required": true,
+                    "presence": {
+                      "present": "one_of:builtin|skills_sh|github",
+                      "empty": "rejected"
+                    }
                   },
                   "transport": {
                     "type": "string",
-                    "required": true
+                    "required": true,
+                    "presence": {
+                      "present": "one_of:skill_static",
+                      "empty": "rejected"
+                    }
                   }
                 }
               },
@@ -4441,14 +6297,26 @@
                 "type": "object",
                 "required": true,
                 "properties": {
-                  "remote": {
+                  "skill": {
                     "type": "object",
                     "properties": {
-                      "credential_reference_id": {
-                        "type": "string",
-                        "required": true
+                      "argv": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
                       },
-                      "url": {
+                      "digest": {
+                        "type": "string",
+                        "required": true,
+                        "presence": {
+                          "present": "lowercase_sha256"
+                        }
+                      },
+                      "executable": {
+                        "type": "boolean"
+                      },
+                      "relative_path": {
                         "type": "string",
                         "required": true
                       }
@@ -4556,7 +6424,168 @@
             "type": "string"
           },
           "installation": {
-            "type": "object"
+            "type": "object",
+            "properties": {
+              "versions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "content_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "created_at": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "execution": {
+                      "type": "object",
+                      "required": true,
+                      "properties": {
+                        "skill": {
+                          "type": "object",
+                          "properties": {
+                            "argv": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "digest": {
+                              "type": "string",
+                              "required": true,
+                              "presence": {
+                                "present": "lowercase_sha256"
+                              }
+                            },
+                            "executable": {
+                              "type": "boolean"
+                            },
+                            "relative_path": {
+                              "type": "string",
+                              "required": true
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "execution_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "manifest_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "network_grants": {
+                      "type": "array",
+                      "required": true,
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "digest": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "host": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "path_prefix": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "port": {
+                            "type": "integer",
+                            "required": true
+                          },
+                          "scheme": {
+                            "type": "string",
+                            "required": true
+                          }
+                        }
+                      }
+                    },
+                    "network_schema_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "pin": {
+                      "type": "object",
+                      "required": true,
+                      "properties": {
+                        "git_commit": {
+                          "type": "string",
+                          "presence": {
+                            "omitted": "registry_source",
+                            "present": "required_with_git_sha256;lowercase_40_hex",
+                            "empty": "rejected"
+                          }
+                        },
+                        "git_sha256": {
+                          "type": "string",
+                          "presence": {
+                            "omitted": "registry_source",
+                            "present": "required_with_git_commit;lowercase_sha256",
+                            "empty": "rejected"
+                          }
+                        },
+                        "registry_sha256": {
+                          "type": "string",
+                          "presence": {
+                            "omitted": "git_source",
+                            "present": "required_with_registry_version;lowercase_sha256",
+                            "empty": "rejected"
+                          }
+                        },
+                        "registry_version": {
+                          "type": "string",
+                          "presence": {
+                            "omitted": "git_source",
+                            "present": "required_with_registry_sha256;exact_immutable_version",
+                            "empty": "rejected"
+                          }
+                        }
+                      }
+                    },
+                    "secret_grants": {
+                      "type": "array",
+                      "required": true,
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "binding_digest": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "configured": {
+                            "type": "boolean",
+                            "required": true
+                          },
+                          "purpose": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "reference_id": {
+                            "type": "string",
+                            "required": true
+                          }
+                        }
+                      }
+                    },
+                    "secret_schema_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "version_id": {
+                      "type": "string",
+                      "required": true
+                    }
+                  }
+                }
+              }
+            }
           },
           "task_id": {
             "type": "string"
@@ -4575,8 +6604,7 @@
             "required": true,
             "properties": {
               "description": {
-                "type": "string",
-                "required": true
+                "type": "string"
               },
               "id": {
                 "type": "string",
@@ -4584,7 +6612,11 @@
               },
               "kind": {
                 "type": "string",
-                "required": true
+                "required": true,
+                "presence": {
+                  "present": "one_of:skill",
+                  "empty": "rejected"
+                }
               },
               "name": {
                 "type": "string",
@@ -4596,38 +6628,59 @@
                 "properties": {
                   "git_commit": {
                     "type": "string",
-                    "required": true
+                    "presence": {
+                      "omitted": "registry_source",
+                      "present": "required_with_git_sha256;lowercase_40_hex",
+                      "empty": "rejected"
+                    }
                   },
                   "git_sha256": {
                     "type": "string",
-                    "required": true
+                    "presence": {
+                      "omitted": "registry_source",
+                      "present": "required_with_git_commit;lowercase_sha256",
+                      "empty": "rejected"
+                    }
                   },
                   "registry_sha256": {
                     "type": "string",
-                    "required": true
+                    "presence": {
+                      "omitted": "git_source",
+                      "present": "required_with_registry_version;lowercase_sha256",
+                      "empty": "rejected"
+                    }
                   },
                   "registry_version": {
                     "type": "string",
-                    "required": true
+                    "presence": {
+                      "omitted": "git_source",
+                      "present": "required_with_registry_sha256;exact_immutable_version",
+                      "empty": "rejected"
+                    }
                   }
                 }
               },
               "source": {
                 "type": "string",
-                "required": true
+                "required": true,
+                "presence": {
+                  "present": "one_of:builtin|skills_sh|github",
+                  "empty": "rejected"
+                }
               },
               "transport": {
                 "type": "string",
-                "required": true
+                "required": true,
+                "presence": {
+                  "present": "one_of:skill_static",
+                  "empty": "rejected"
+                }
               }
             }
           },
           "expected_revision": {
             "type": "integer",
-            "presence": {
-              "omitted": "no_revision_check",
-              "present": "must_match_current_revision"
-            }
+            "required": true
           },
           "idempotency_key": {
             "type": "string",
@@ -4642,8 +6695,7 @@
                 "required": true,
                 "properties": {
                   "description": {
-                    "type": "string",
-                    "required": true
+                    "type": "string"
                   },
                   "id": {
                     "type": "string",
@@ -4651,7 +6703,11 @@
                   },
                   "kind": {
                     "type": "string",
-                    "required": true
+                    "required": true,
+                    "presence": {
+                      "present": "one_of:skill",
+                      "empty": "rejected"
+                    }
                   },
                   "name": {
                     "type": "string",
@@ -4663,29 +6719,53 @@
                     "properties": {
                       "git_commit": {
                         "type": "string",
-                        "required": true
+                        "presence": {
+                          "omitted": "registry_source",
+                          "present": "required_with_git_sha256;lowercase_40_hex",
+                          "empty": "rejected"
+                        }
                       },
                       "git_sha256": {
                         "type": "string",
-                        "required": true
+                        "presence": {
+                          "omitted": "registry_source",
+                          "present": "required_with_git_commit;lowercase_sha256",
+                          "empty": "rejected"
+                        }
                       },
                       "registry_sha256": {
                         "type": "string",
-                        "required": true
+                        "presence": {
+                          "omitted": "git_source",
+                          "present": "required_with_registry_version;lowercase_sha256",
+                          "empty": "rejected"
+                        }
                       },
                       "registry_version": {
                         "type": "string",
-                        "required": true
+                        "presence": {
+                          "omitted": "git_source",
+                          "present": "required_with_registry_sha256;exact_immutable_version",
+                          "empty": "rejected"
+                        }
                       }
                     }
                   },
                   "source": {
                     "type": "string",
-                    "required": true
+                    "required": true,
+                    "presence": {
+                      "present": "one_of:builtin|skills_sh|github",
+                      "empty": "rejected"
+                    }
                   },
                   "transport": {
                     "type": "string",
-                    "required": true
+                    "required": true,
+                    "presence": {
+                      "present": "one_of:skill_static",
+                      "empty": "rejected"
+                    }
                   }
                 }
               },
@@ -4697,14 +6777,26 @@
                 "type": "object",
                 "required": true,
                 "properties": {
-                  "remote": {
+                  "skill": {
                     "type": "object",
                     "properties": {
-                      "credential_reference_id": {
-                        "type": "string",
-                        "required": true
+                      "argv": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
                       },
-                      "url": {
+                      "digest": {
+                        "type": "string",
+                        "required": true,
+                        "presence": {
+                          "present": "lowercase_sha256"
+                        }
+                      },
+                      "executable": {
+                        "type": "boolean"
+                      },
+                      "relative_path": {
                         "type": "string",
                         "required": true
                       }
@@ -4816,7 +6908,168 @@
             "type": "string"
           },
           "installation": {
-            "type": "object"
+            "type": "object",
+            "properties": {
+              "versions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "content_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "created_at": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "execution": {
+                      "type": "object",
+                      "required": true,
+                      "properties": {
+                        "skill": {
+                          "type": "object",
+                          "properties": {
+                            "argv": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "digest": {
+                              "type": "string",
+                              "required": true,
+                              "presence": {
+                                "present": "lowercase_sha256"
+                              }
+                            },
+                            "executable": {
+                              "type": "boolean"
+                            },
+                            "relative_path": {
+                              "type": "string",
+                              "required": true
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "execution_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "manifest_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "network_grants": {
+                      "type": "array",
+                      "required": true,
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "digest": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "host": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "path_prefix": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "port": {
+                            "type": "integer",
+                            "required": true
+                          },
+                          "scheme": {
+                            "type": "string",
+                            "required": true
+                          }
+                        }
+                      }
+                    },
+                    "network_schema_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "pin": {
+                      "type": "object",
+                      "required": true,
+                      "properties": {
+                        "git_commit": {
+                          "type": "string",
+                          "presence": {
+                            "omitted": "registry_source",
+                            "present": "required_with_git_sha256;lowercase_40_hex",
+                            "empty": "rejected"
+                          }
+                        },
+                        "git_sha256": {
+                          "type": "string",
+                          "presence": {
+                            "omitted": "registry_source",
+                            "present": "required_with_git_commit;lowercase_sha256",
+                            "empty": "rejected"
+                          }
+                        },
+                        "registry_sha256": {
+                          "type": "string",
+                          "presence": {
+                            "omitted": "git_source",
+                            "present": "required_with_registry_version;lowercase_sha256",
+                            "empty": "rejected"
+                          }
+                        },
+                        "registry_version": {
+                          "type": "string",
+                          "presence": {
+                            "omitted": "git_source",
+                            "present": "required_with_registry_sha256;exact_immutable_version",
+                            "empty": "rejected"
+                          }
+                        }
+                      }
+                    },
+                    "secret_grants": {
+                      "type": "array",
+                      "required": true,
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "binding_digest": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "configured": {
+                            "type": "boolean",
+                            "required": true
+                          },
+                          "purpose": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "reference_id": {
+                            "type": "string",
+                            "required": true
+                          }
+                        }
+                      }
+                    },
+                    "secret_schema_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "version_id": {
+                      "type": "string",
+                      "required": true
+                    }
+                  }
+                }
+              }
+            }
           },
           "task_id": {
             "type": "string"
@@ -4832,6 +7085,7 @@
         "request": {
           "expected_revision": {
             "type": "integer",
+            "required": true,
             "presence": {
               "omitted": "no_revision_check",
               "present": "must_match_current_revision"
@@ -4851,7 +7105,168 @@
             "type": "string"
           },
           "installation": {
-            "type": "object"
+            "type": "object",
+            "properties": {
+              "versions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "content_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "created_at": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "execution": {
+                      "type": "object",
+                      "required": true,
+                      "properties": {
+                        "skill": {
+                          "type": "object",
+                          "properties": {
+                            "argv": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "digest": {
+                              "type": "string",
+                              "required": true,
+                              "presence": {
+                                "present": "lowercase_sha256"
+                              }
+                            },
+                            "executable": {
+                              "type": "boolean"
+                            },
+                            "relative_path": {
+                              "type": "string",
+                              "required": true
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "execution_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "manifest_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "network_grants": {
+                      "type": "array",
+                      "required": true,
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "digest": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "host": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "path_prefix": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "port": {
+                            "type": "integer",
+                            "required": true
+                          },
+                          "scheme": {
+                            "type": "string",
+                            "required": true
+                          }
+                        }
+                      }
+                    },
+                    "network_schema_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "pin": {
+                      "type": "object",
+                      "required": true,
+                      "properties": {
+                        "git_commit": {
+                          "type": "string",
+                          "presence": {
+                            "omitted": "registry_source",
+                            "present": "required_with_git_sha256;lowercase_40_hex",
+                            "empty": "rejected"
+                          }
+                        },
+                        "git_sha256": {
+                          "type": "string",
+                          "presence": {
+                            "omitted": "registry_source",
+                            "present": "required_with_git_commit;lowercase_sha256",
+                            "empty": "rejected"
+                          }
+                        },
+                        "registry_sha256": {
+                          "type": "string",
+                          "presence": {
+                            "omitted": "git_source",
+                            "present": "required_with_registry_version;lowercase_sha256",
+                            "empty": "rejected"
+                          }
+                        },
+                        "registry_version": {
+                          "type": "string",
+                          "presence": {
+                            "omitted": "git_source",
+                            "present": "required_with_registry_sha256;exact_immutable_version",
+                            "empty": "rejected"
+                          }
+                        }
+                      }
+                    },
+                    "secret_grants": {
+                      "type": "array",
+                      "required": true,
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "binding_digest": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "configured": {
+                            "type": "boolean",
+                            "required": true
+                          },
+                          "purpose": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "reference_id": {
+                            "type": "string",
+                            "required": true
+                          }
+                        }
+                      }
+                    },
+                    "secret_schema_digest": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "version_id": {
+                      "type": "string",
+                      "required": true
+                    }
+                  }
+                }
+              }
+            }
           },
           "task_id": {
             "type": "string"

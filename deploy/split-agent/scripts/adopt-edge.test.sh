@@ -34,6 +34,7 @@ network=legacy-message-public
 network_id=net-legacy-123
 data_volume=caddy-data
 config_volume=caddy-config
+static_sites_root=$DIREXTALK_MOCK_STATIC_SITES_ROOT
 legacy_image_id=sha256:1111111111111111111111111111111111111111111111111111111111111111
 candidate_image_id=sha256:2222222222222222222222222222222222222222222222222222222222222222
 legacy_repo_digest=caddy@sha256:3333333333333333333333333333333333333333333333333333333333333333
@@ -51,7 +52,7 @@ if [ "$1" = compose ]; then
         extra) candidate_cap_add='["NET_BIND_SERVICE","SYS_ADMIN"]' ;;
       esac
       cat <<JSON
-{"name":"edge-new","services":{"caddy":{"image":"$candidate_image","read_only":true,"cap_drop":["ALL"],"cap_add":$candidate_cap_add,"security_opt":["no-new-privileges:true"],"ports":[{"published":"80","target":80},{"published":"443","target":443}],"healthcheck":{"test":["CMD-SHELL","wget -q -O - http://127.0.0.1:2019/config/ >/dev/null"]},"networks":["message_public"],"volumes":[{"type":"volume","source":"caddy_data","target":"/data"},{"type":"volume","source":"caddy_config","target":"/config"}]}},"networks":{"message_public":{"name":"$network","external":true}},"volumes":{"caddy_data":{"name":"$data_volume","external":true},"caddy_config":{"name":"$config_volume","external":true}}}
+{"name":"edge-new","services":{"caddy":{"image":"$candidate_image","read_only":true,"cap_drop":["ALL"],"cap_add":$candidate_cap_add,"security_opt":["no-new-privileges:true"],"ports":[{"published":"80","target":80},{"published":"443","target":443}],"healthcheck":{"test":["CMD-SHELL","wget -q -O - http://127.0.0.1:2019/config/ >/dev/null"]},"networks":["message_public"],"volumes":[{"type":"volume","source":"caddy_data","target":"/data"},{"type":"volume","source":"caddy_config","target":"/config"},{"type":"bind","source":"$static_sites_root/public","target":"/srv/dirextalk-sites","read_only":true}]}},"networks":{"message_public":{"name":"$network","external":true}},"volumes":{"caddy_data":{"name":"$data_volume","external":true},"caddy_config":{"name":"$config_volume","external":true}}}
 JSON
       exit 0
       ;;
@@ -105,7 +106,7 @@ JSON
           extra) candidate_cap_add='["CAP_NET_BIND_SERVICE","CAP_SYS_ADMIN"]' ;;
         esac
         cat <<JSON
-[{"Id":"$candidate_id","Image":"$candidate_image_id","Config":{"Image":"$candidate_image","Labels":{"com.docker.compose.project":"edge-new","com.docker.compose.service":"caddy"}$candidate_healthcheck},"NetworkSettings":{"Networks":{"$network":{}}},"Mounts":[{"Type":"volume","Name":"$data_volume","Destination":"/data"},{"Type":"volume","Name":"$config_volume","Destination":"/config"}],"HostConfig":{"PortBindings":{"80/tcp":[{"HostPort":"80"}],"443/tcp":[{"HostPort":"443"}]},"ReadonlyRootfs":true,"CapDrop":["ALL"],"CapAdd":$candidate_cap_add,"SecurityOpt":["no-new-privileges:true"]},"State":$candidate_state}]
+[{"Id":"$candidate_id","Image":"$candidate_image_id","Config":{"Image":"$candidate_image","Labels":{"com.docker.compose.project":"edge-new","com.docker.compose.service":"caddy"}$candidate_healthcheck},"NetworkSettings":{"Networks":{"$network":{}}},"Mounts":[{"Type":"volume","Name":"$data_volume","Destination":"/data"},{"Type":"volume","Name":"$config_volume","Destination":"/config"},{"Type":"bind","Source":"$static_sites_root/public","Destination":"/srv/dirextalk-sites","RW":false}],"HostConfig":{"PortBindings":{"80/tcp":[{"HostPort":"80"}],"443/tcp":[{"HostPort":"443"}]},"ReadonlyRootfs":true,"CapDrop":["ALL"],"CapAdd":$candidate_cap_add,"SecurityOpt":["no-new-privileges:true"]},"State":$candidate_state}]
 JSON
         ;;
       *3333333333333333333333333333333333333333333333333333333333333333) printf '[{"Id":"%s","RepoDigests":["%s"]}]\n' "$legacy_image_id" "$legacy_repo_digest" ;;
@@ -191,7 +192,9 @@ chmod 755 "$tmp_dir/bin/curl"
 
 caddyfile=$tmp_dir/Caddyfile
 edge_compose=$tmp_dir/edge-compose.yaml
-printf 'reverse_proxy message-server:8008\n' >"$caddyfile"
+static_sites_root=$tmp_dir/static-sites
+mkdir -p "$static_sites_root/public"
+cp "$script_dir/../Caddyfile.static-sites.example" "$caddyfile"
 printf 'name: edge-new\n' >"$edge_compose"
 chmod 400 "$caddyfile" "$edge_compose"
 
@@ -205,6 +208,7 @@ DIREXTALK_CADDY_IMAGE_IMMUTABLE=$candidate_image
 DIREXTALK_CADDY_DATA_VOLUME=$data_volume
 DIREXTALK_CADDY_CONFIG_VOLUME=$config_volume
 DIREXTALK_CADDYFILE=$caddyfile
+DIREXTALK_STATIC_SITES_ROOT=$static_sites_root
 DIREXTALK_EDGE_COMPOSE_FILE=$edge_compose
 DIREXTALK_LEGACY_MESSAGE_STACK_NAME=legacy-message
 EOF
@@ -213,6 +217,7 @@ chmod 400 "$edge_env"
 export PATH="$tmp_dir/bin:$PATH"
 export DIREXTALK_DOCKER_BIN=docker DIREXTALK_CURL_BIN=curl
 export DIREXTALK_MOCK_LOG=$tmp_dir/docker.log DIREXTALK_CURL_LOG=$tmp_dir/curl.log DIREXTALK_MOCK_STATE=$tmp_dir/state
+export DIREXTALK_MOCK_STATIC_SITES_ROOT=$static_sites_root
 
 run_probe() {
   rm -f -- "$DIREXTALK_MOCK_LOG" "$DIREXTALK_CURL_LOG"

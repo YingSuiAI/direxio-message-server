@@ -252,7 +252,7 @@ jq -e '
     "--http-bind-address", ":8008"
   ]) and
   (.services["message-server"].healthcheck.test == [
-    "CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8008/_p2p/health"
+    "CMD", "wget", "-Y", "off", "-q", "-O", "-", "http://127.0.0.1:8008/_p2p/health"
   ]) and
   ([.services["message-server"].configs[] | select(.target == "/usr/local/bin/message-server-entrypoint")] | length) == 1 and
   ([.services["message-server"].secrets[] | select(.target == "/run/secrets/message_database_url")] | length) == 1 and
@@ -309,6 +309,8 @@ jq -e '
   .services["core-runner"].user == "65530:65530" and
   .services["extension-runner"].read_only == true and
   .services["core-runner"].read_only == true and
+  (.services["extension-runner"].tmpfs | any(. == "/tmp:rw,noexec,nosuid,nodev,mode=1777")) and
+  (.services["core-runner"].tmpfs | any(. == "/tmp:rw,noexec,nosuid,nodev,mode=1777")) and
   .services["extension-runner"].cap_drop == ["ALL"] and
   .services["core-runner"].cap_drop == ["ALL"] and
   ([.services["extension-runner"].security_opt[], .services["core-runner"].security_opt[]] | map(select(. == "apparmor=dirextalk-runner-userns")) | length) == 2 and

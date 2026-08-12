@@ -5,7 +5,13 @@ import (
 	"context"
 	"errors"
 	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -91,6 +97,139 @@ func (c *closingWatchClient) Recv() (*capv1.WatchOperationEvent, error) {
 type terminalWatchServer struct {
 	capv1.UnimplementedAgentCapabilityServiceServer
 	cancelled chan struct{}
+}
+
+type proxyBypassCapabilityServer struct {
+	capv1.UnimplementedAgentCapabilityServiceServer
+}
+
+func (s *proxyBypassCapabilityServer) DescribeCapabilities(context.Context, *capv1.DescribeCapabilitiesRequest) (*capv1.DescribeCapabilitiesResponse, error) {
+	return &capv1.DescribeCapabilitiesResponse{CatalogVersion: 1}, nil
+}
+
+func TestAgentCapabilityDialBypassesEnvironmentProxy(t *testing.T) {
+	const helperEnv = "DIREXTALK_AGENTGATEWAY_PROXY_TEST_HELPER"
+	if os.Getenv(helperEnv) == "1" {
+		runAgentCapabilityProxyBypassHelper(t)
+		return
+	}
+
+	var proxyCalls atomic.Int64
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		proxyCalls.Add(1)
+		http.Error(w, "private capability traffic must not use this proxy", http.StatusBadGateway)
+	}))
+	t.Cleanup(proxy.Close)
+
+	command := exec.Command(os.Args[0], "-test.run=^TestAgentCapabilityDialBypassesEnvironmentProxy$", "-test.count=1")
+	command.Env = proxyBypassHelperEnv(os.Environ(), helperEnv, proxy.URL)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("proxy bypass helper failed: %v\n%s", err, output)
+	}
+	if proxyCalls.Load() == 0 {
+		t.Fatal("proxy control did not reach the configured environment proxy")
+	}
+}
+
+func runAgentCapabilityProxyBypassHelper(t *testing.T) {
+	listener, err := net.Listen("tcp4", "0.0.0.0:0")
+	if err != nil {
+		t.Fatalf("listen for capability backend: %v", err)
+	}
+	grpcServer := grpc.NewServer()
+	capv1.RegisterAgentCapabilityServiceServer(grpcServer, &proxyBypassCapabilityServer{})
+	go func() { _ = grpcServer.Serve(listener) }()
+	t.Cleanup(func() {
+		grpcServer.Stop()
+		_ = listener.Close()
+	})
+
+	_, port, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatalf("parse capability backend address: %v", err)
+	}
+	target := net.JoinHostPort(proxyBypassTargetHost(t), port)
+
+	// Prove the fixture routes this private endpoint through the environment
+	// configured proxy when the production no-proxy option is absent.
+	controlConn, err := grpc.NewClient(
+		target,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("create proxy control client: %v", err)
+	}
+	controlCtx, controlCancel := context.WithTimeout(context.Background(), time.Second)
+	_, controlErr := capv1.NewAgentCapabilityServiceClient(controlConn).DescribeCapabilities(controlCtx, &capv1.DescribeCapabilitiesRequest{})
+	controlCancel()
+	_ = controlConn.Close()
+	if controlErr == nil {
+		t.Fatal("proxy control unexpectedly reached the private capability backend")
+	}
+
+	options := agentCapabilityDialOptions(insecure.NewCredentials())
+	conn, err := grpc.NewClient(target, options...)
+	if err != nil {
+		t.Fatalf("create private capability client: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	catalog, err := capv1.NewAgentCapabilityServiceClient(conn).DescribeCapabilities(ctx, &capv1.DescribeCapabilitiesRequest{})
+	if err != nil {
+		t.Fatalf("direct capability request failed: %v", err)
+	}
+	if catalog.GetCatalogVersion() != 1 {
+		t.Fatalf("catalog version = %d, want 1", catalog.GetCatalogVersion())
+	}
+}
+
+func proxyBypassTargetHost(t *testing.T) string {
+	t.Helper()
+	hostname, err := os.Hostname()
+	if err == nil && hostname != "" && hostname != "localhost" {
+		addresses, lookupErr := net.LookupIP(hostname)
+		for _, address := range addresses {
+			if lookupErr == nil && address.To4() != nil {
+				return hostname
+			}
+		}
+	}
+	addresses, err := net.InterfaceAddrs()
+	if err != nil {
+		t.Fatalf("list local interfaces: %v", err)
+	}
+	for _, address := range addresses {
+		ip, _, parseErr := net.ParseCIDR(address.String())
+		if parseErr == nil && ip.To4() != nil && !ip.IsLoopback() {
+			return ip.String()
+		}
+	}
+	t.Fatal("no proxy-eligible local IPv4 endpoint")
+	return ""
+}
+
+func proxyBypassHelperEnv(base []string, helperEnv, proxyURL string) []string {
+	blocked := map[string]struct{}{
+		helperEnv: {}, "HTTP_PROXY": {}, "http_proxy": {}, "HTTPS_PROXY": {}, "https_proxy": {}, "NO_PROXY": {}, "no_proxy": {},
+	}
+	environment := make([]string, 0, len(base)+7)
+	for _, entry := range base {
+		name, _, _ := strings.Cut(entry, "=")
+		if _, drop := blocked[name]; !drop {
+			environment = append(environment, entry)
+		}
+	}
+	return append(environment,
+		helperEnv+"=1",
+		"HTTP_PROXY="+proxyURL,
+		"http_proxy="+proxyURL,
+		"HTTPS_PROXY="+proxyURL,
+		"https_proxy="+proxyURL,
+		"NO_PROXY=",
+		"no_proxy=",
+	)
 }
 
 func (s *terminalWatchServer) WatchOperation(_ *capv1.WatchOperationRequest, stream capv1.AgentCapabilityService_WatchOperationServer) error {

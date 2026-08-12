@@ -258,6 +258,11 @@ services:
       - agent_knowledge_content:/var/lib/dirextalk-agent/knowledge-content
       - agent_knowledge_mount:/var/lib/dirextalk-agent/knowledge-mount:ro
       - agent_core_data:/var/lib/dirextalk-agent/core-data
+      - type: bind
+        source: ${DIREXTALK_STATIC_SITES_ROOT:?set the Agent-owned static-site host root}
+        target: /var/lib/dirextalk-agent/static-sites
+        bind:
+          create_host_path: false
     networks: [agent_private, agent_database, agent_caller, agent_egress]
     depends_on:
       agent-migrate:
@@ -292,6 +297,10 @@ services:
       - "65532"
       - --install-root
       - /var/lib/dirextalk-agent/extension-install
+      - --prepared-root
+      - /var/lib/dirextalk-agent/extension-install/.prepared
+      - --node-runtime-root
+      - /usr/local/libexec/dirextalk-node-runtime
       - --workspace-root
       - /var/lib/dirextalk-agent/extension-workspaces
       - --cgroup-root
@@ -350,9 +359,13 @@ services:
       - >-
         chown 65531:65531 /install /state;
         chmod 0700 /install /state;
+        mkdir -p /install/.prepared;
+        chown 65531:65531 /install/.prepared;
+        chmod 0700 /install/.prepared;
         chown 65531:65532 /workspace;
         chmod 0770 /workspace;
         test "$$(stat -c '%u:%g:%a' /install)" = 65531:65531:700;
+        test "$$(stat -c '%u:%g:%a' /install/.prepared)" = 65531:65531:700;
         test "$$(stat -c '%u:%g:%a' /state)" = 65531:65531:700;
         test "$$(stat -c '%u:%g:%a' /workspace)" = 65531:65532:770
     volumes:
@@ -540,7 +553,7 @@ services:
       agent:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8008/_p2p/health"]
+      test: ["CMD", "wget", "-Y", "off", "-q", "-O", "-", "http://127.0.0.1:8008/_p2p/health"]
       interval: 10s
       timeout: 5s
       retries: 30

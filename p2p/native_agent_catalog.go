@@ -13,7 +13,10 @@ import (
 )
 
 const (
-	nativeAgentCatalogProbeTimeout = 2 * time.Second
+	// Leave time for the initial gRPC connection window plus the authenticated
+	// DescribeCapabilities RPC. A shorter probe deadline can fail before the
+	// transport's minimum connection attempt has completed.
+	nativeAgentCatalogProbeTimeout = agentgateway.AgentCapabilityMinConnectTimeout + 2*time.Second
 	nativeAgentCatalogTTL          = 20 * time.Second
 	nativeAgentCatalogProbeEvery   = 5 * time.Second
 )

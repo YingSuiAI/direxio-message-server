@@ -35,6 +35,10 @@ const (
 	maxTextToolSourceTitleBytes         = 512
 	maxTextToolSourceURLBytes           = 8 << 10
 	maxTextToolSourceSnippetBytes       = 4 << 10
+	maxNodeArtifactBytes          int64 = 64 << 20
+	maxNodeArtifactFiles          int64 = 8192
+	managedNodeVersion                  = "v24.18.1"
+	managedNPMVersion                   = "11.16.0"
 )
 
 // actionResultAuthority is captured once by Runner.prepare and travels with
@@ -215,6 +219,8 @@ func validateActionResult(action string, request, output map[string]any, authori
 		return validateTurnSteerResult(request, output)
 	case "agent.chat.turns.list":
 		return validateTurnsListResult(output)
+	case "agent.core.mcp.get", "agent.core.mcp.list", "agent.core.mcp.install", "agent.core.mcp.update", "agent.core.mcp.remove":
+		return validateCoreMCPNodeReceipts(action, output)
 	case "agent.knowledge.status":
 		return validateKnowledgeStatusResult(output)
 	case "agent.chat":
@@ -222,6 +228,111 @@ func validateActionResult(action string, request, output map[string]any, authori
 	default:
 		return nil
 	}
+}
+
+func validateCoreMCPNodeReceipts(action string, output map[string]any) error {
+	installations := make([]map[string]any, 0, 1)
+	switch action {
+	case "agent.core.mcp.list":
+		for _, raw := range anySlice(output["installations"]) {
+			installation, ok := raw.(map[string]any)
+			if !ok {
+				return fmt.Errorf("%w: MCP installation list contains a non-object item", ErrInvalidActionResult)
+			}
+			installations = append(installations, installation)
+		}
+	case "agent.core.mcp.install", "agent.core.mcp.update", "agent.core.mcp.remove":
+		installation, ok := output["installation"].(map[string]any)
+		if !ok {
+			return fmt.Errorf("%w: MCP mutation installation is missing", ErrInvalidActionResult)
+		}
+		installations = append(installations, installation)
+	default:
+		installation := output
+		if wrapped, ok := output["installation"].(map[string]any); ok {
+			installation = wrapped
+		}
+		installations = append(installations, installation)
+	}
+	for _, installation := range installations {
+		if err := validateCoreMCPInstallationNodeReceipts(installation); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateCoreMCPInstallationNodeReceipts(installation map[string]any) error {
+	transport, _ := installation["transport"].(string)
+	source, _ := installation["source"].(string)
+	candidateID, _ := installation["candidate_id"].(string)
+	activeVersionID, _ := installation["active_version_id"].(string)
+	activeReceipt := false
+	for _, raw := range anySlice(installation["versions"]) {
+		version, ok := raw.(map[string]any)
+		if !ok {
+			return fmt.Errorf("%w: MCP installation version is invalid", ErrInvalidActionResult)
+		}
+		if !onlyResultFields(version, "version_id", "pin", "content_digest", "manifest_digest", "execution_digest", "network_schema_digest", "secret_schema_digest", "execution", "created_at", "network_grants", "secret_grants", "node_artifact") {
+			return fmt.Errorf("%w: MCP installation version contains a non-public field", ErrInvalidActionResult)
+		}
+		versionID, _ := version["version_id"].(string)
+		receiptRaw, present := version["node_artifact"]
+		if !present || receiptRaw == nil {
+			continue
+		}
+		if transport != "stdio_node" {
+			return fmt.Errorf("%w: Node receipt is attached to a non-Node extension", ErrInvalidActionResult)
+		}
+		receipt, ok := receiptRaw.(map[string]any)
+		if !ok || !exactResultFields(receipt, "package_name", "package_version", "artifact_bytes", "file_count", "node_version", "npm_version", "lifecycle_scripts_disabled", "native_addons_absent") {
+			return fmt.Errorf("%w: Node receipt shape is invalid", ErrInvalidActionResult)
+		}
+		packageName, packageNameOK := receipt["package_name"].(string)
+		packageVersion, packageVersionOK := receipt["package_version"].(string)
+		if !packageNameOK || !validExtensionNPMPackageName(packageName) || !packageVersionOK || !validExtensionExactSemver(packageVersion) || !actionIntegerInRange(receipt["artifact_bytes"], 1, maxNodeArtifactBytes) || !actionIntegerInRange(receipt["file_count"], 1, maxNodeArtifactFiles) || receipt["node_version"] != managedNodeVersion || receipt["npm_version"] != managedNPMVersion || receipt["lifecycle_scripts_disabled"] != true || receipt["native_addons_absent"] != true {
+			return fmt.Errorf("%w: Node receipt values are invalid", ErrInvalidActionResult)
+		}
+		if source == "npm" {
+			pin, pinOK := version["pin"].(map[string]any)
+			registryVersion, versionOK := pin["registry_version"].(string)
+			if !pinOK || candidateID == "" || packageName != candidateID || !versionOK || packageVersion != registryVersion {
+				return fmt.Errorf("%w: Node receipt does not match its immutable npm source", ErrInvalidActionResult)
+			}
+		}
+		if versionID != "" && versionID == activeVersionID {
+			activeReceipt = true
+		}
+	}
+	if transport == "stdio_node" && activeVersionID != "" && !activeReceipt {
+		return fmt.Errorf("%w: published Node active version receipt is missing", ErrInvalidActionResult)
+	}
+	return nil
+}
+
+func exactResultFields(value map[string]any, fields ...string) bool {
+	if len(value) != len(fields) {
+		return false
+	}
+	for _, field := range fields {
+		if _, present := value[field]; !present {
+			return false
+		}
+	}
+	return true
+}
+
+func onlyResultFields(value map[string]any, fields ...string) bool {
+	allowed := make(map[string]struct{}, len(fields))
+	for _, field := range fields {
+		allowed[field] = struct{}{}
+	}
+	for field := range value {
+		if _, ok := allowed[field]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func validateToolModelDefaultResult(output map[string]any) error {
@@ -1927,10 +2038,31 @@ func normalizeInstallation(value map[string]any) map[string]any {
 			aliases = append(aliases, strings.ToUpper(key[:1])+key[1:])
 		}
 		if value := valueByKey(value, aliases...); value != nil {
-			result[key] = value
+			if key == "versions" {
+				result[key] = normalizeExtensionVersions(value)
+			} else {
+				result[key] = value
+			}
 		}
 	}
 	return result
+}
+
+func normalizeExtensionVersions(value any) []any {
+	rawVersions := anySlice(value)
+	versions := make([]any, 0, len(rawVersions))
+	for _, raw := range rawVersions {
+		version, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		normalized := mapProjection(version, []string{"version_id", "pin", "content_digest", "manifest_digest", "execution_digest", "network_schema_digest", "secret_schema_digest", "execution", "created_at", "network_grants", "secret_grants", "node_artifact"}, nil)
+		if receipt, ok := normalized["node_artifact"].(map[string]any); ok {
+			normalized["node_artifact"] = mapProjection(receipt, []string{"package_name", "package_version", "artifact_bytes", "file_count", "node_version", "npm_version", "lifecycle_scripts_disabled", "native_addons_absent"}, nil)
+		}
+		versions = append(versions, normalized)
+	}
+	return versions
 }
 
 func normalizeSource(value map[string]any) map[string]any {

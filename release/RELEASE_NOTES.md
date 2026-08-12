@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## v1.1.29
+
+1. Complete the Agent Core MCP and Skills lifecycle with strict, separated ProductCore schemas for built-in, GitHub, skills.sh, registry, and managed Node/npm sources.
+2. Add immutable single-file static-site publication behind the node-owned `/.sites` route without exposing host paths or private artifact metadata.
+3. Stream durable Native Agent turns without a fixed model/tool round limit, preserve progress and terminal identity across reconnects, and keep ambiguous mutations fail-closed.
+4. Enforce three concurrent local sandbox slots, bounded Node artifact quotas, script-disabled offline installs, and receipt-bound runner isolation.
+5. Publish only redacted extension receipts and complete version-level network and secret grant projections for supported clients.
+
 ## v1.1.6
 
 1. Inject one deployment-owned release catalog origin and derive the fixed Server and Agent channels from it.

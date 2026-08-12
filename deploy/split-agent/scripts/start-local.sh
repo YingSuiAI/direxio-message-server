@@ -512,7 +512,7 @@ extension_parent_procs_mode=$(bind_runner_manifest_value DIREXTALK_EXTENSION_CGR
 core_parent_procs_mode=$(bind_runner_manifest_value DIREXTALK_CORE_RUNNER_CGROUP_PARENT_PROCS_MODE runner.core.parent_procs_mode)
 [ "$runner_apparmor_profile" = dirextalk-runner-userns ] || die "runner AppArmor profile name is not repository-fixed"
 [ "$runner_apparmor_profile_path" = /etc/apparmor.d/dirextalk-runner-userns ] || die "runner AppArmor profile path is not repository-fixed"
-[ "$runner_apparmor_manager_path" = "$script_dir/manage-runner-apparmor.sh" ] || die "runner AppArmor manager path is not the repository entrypoint"
+[ "$runner_apparmor_manager_path" = /usr/local/libexec/dirextalk/split-agent/scripts/manage-runner-apparmor.sh ] || die "runner AppArmor manager path is not the fixed root-owned entrypoint"
 printf '%s\n' "$runner_apparmor_profile_sha256" | grep -Eq '^[0-9a-f]{64}$' || die "runner AppArmor profile SHA-256 is invalid"
 printf '%s\n' "$runner_apparmor_manager_sha256" | grep -Eq '^[0-9a-f]{64}$' || die "runner AppArmor manager SHA-256 is invalid"
 for runner_apparmor_asset in "$runner_apparmor_profile_path" "$runner_apparmor_manager_path"; do
@@ -807,10 +807,47 @@ on_start_failure() {
   exit "$status"
 }
 trap on_start_failure EXIT
+
+run_with_heartbeat() {
+  local stage=$1 heartbeat_seconds=$2
+  shift 2
+  local started_seconds=$SECONDS heartbeat_pid status elapsed_seconds
+
+  printf '[split-stack.start] stage=%s state=starting elapsed_seconds=0\n' "$stage" >&2
+  (
+    while sleep "$heartbeat_seconds"; do
+      elapsed_seconds=$((SECONDS - started_seconds))
+      printf '[split-stack.start] stage=%s state=running elapsed_seconds=%s\n' \
+        "$stage" "$elapsed_seconds" >&2
+    done
+  ) &
+  heartbeat_pid=$!
+
+  if "$@"; then
+    status=0
+  else
+    status=$?
+  fi
+  kill "$heartbeat_pid" 2>/dev/null || true
+  wait "$heartbeat_pid" 2>/dev/null || true
+
+  elapsed_seconds=$((SECONDS - started_seconds))
+  if [ "$status" -eq 0 ]; then
+    printf '[split-stack.start] stage=%s state=succeeded elapsed_seconds=%s\n' \
+      "$stage" "$elapsed_seconds" >&2
+  else
+    printf '[split-stack.start] stage=%s state=failed elapsed_seconds=%s exit_status=%s\n' \
+      "$stage" "$elapsed_seconds" "$status" >&2
+  fi
+  return "$status"
+}
+
 if [ "$compose_mode" = production ]; then
-  "${compose[@]}" up -d --no-build --pull never --wait message-server
+  run_with_heartbeat compose_wait 10 \
+    "${compose[@]}" up -d --no-build --pull never --wait message-server
 else
-  "${compose[@]}" up -d --no-build --wait message-server
+  run_with_heartbeat compose_wait 10 \
+    "${compose[@]}" up -d --no-build --wait message-server
 fi
 
 verify_control_identity

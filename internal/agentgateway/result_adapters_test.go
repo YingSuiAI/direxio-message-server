@@ -711,6 +711,116 @@ func TestKnowledgeStatusResultAdapterRequiresCanonicalQuotaCounters(t *testing.T
 	}
 }
 
+func TestCoreMCPNodeReceiptUsesOnlyPublishedProtoContract(t *testing.T) {
+	valid := validManagedNodeMCPInstallationResult(true)
+	projected, err := adaptActionResult("agent.core.mcp.get", valid)
+	if err != nil {
+		t.Fatalf("valid managed Node MCP installation rejected: %v", err)
+	}
+	installation := projected["installation"].(map[string]any)
+	version := installation["versions"].([]any)[0].(map[string]any)
+	receipt := version["node_artifact"].(map[string]any)
+	if len(receipt) != 8 || receipt["node_version"] != managedNodeVersion || receipt["npm_version"] != managedNPMVersion {
+		t.Fatalf("public Node receipt = %#v", receipt)
+	}
+	for _, internal := range []string{"input_digest", "artifact_digest", "entry_path", "entry_sha256", "lock_sha256"} {
+		if _, leaked := receipt[internal]; leaked {
+			t.Fatalf("internal Node receipt field %q escaped projection: %#v", internal, receipt)
+		}
+	}
+	for _, internal := range []string{"artifact_path", "artifact_digest", "artifact_cleanup_token", "published_at"} {
+		if _, leaked := version[internal]; leaked {
+			t.Fatalf("internal extension version field %q escaped projection: %#v", internal, version)
+		}
+	}
+
+	unpublished := validManagedNodeMCPInstallationResult(false)
+	if _, err := adaptActionResult("agent.core.mcp.get", unpublished); err != nil {
+		t.Fatalf("unpublished proposed Node version without receipt rejected: %v", err)
+	}
+
+	invalid := map[string]func(map[string]any){
+		"internal version artifact digest": func(value map[string]any) {
+			value["versions"].([]any)[0].(map[string]any)["artifact_digest"] = strings.Repeat("b", 64)
+		},
+		"internal publication timestamp": func(value map[string]any) {
+			value["versions"].([]any)[0].(map[string]any)["published_at"] = "2026-08-11T00:01:00Z"
+		},
+		"internal digest field": func(value map[string]any) {
+			nodeReceiptFromInstallation(value)["artifact_digest"] = strings.Repeat("b", 64)
+		},
+		"scripts not proven disabled": func(value map[string]any) {
+			nodeReceiptFromInstallation(value)["lifecycle_scripts_disabled"] = false
+		},
+		"legacy scripts absent field": func(value map[string]any) {
+			receipt := nodeReceiptFromInstallation(value)
+			delete(receipt, "lifecycle_scripts_disabled")
+			receipt["lifecycle_scripts_absent"] = true
+		},
+		"package version mismatch": func(value map[string]any) {
+			nodeReceiptFromInstallation(value)["package_version"] = "1.2.4"
+		},
+		"wrong managed Node version": func(value map[string]any) {
+			nodeReceiptFromInstallation(value)["node_version"] = "v22.0.0"
+		},
+		"single artifact exceeds limit": func(value map[string]any) {
+			nodeReceiptFromInstallation(value)["artifact_bytes"] = float64((64 << 20) + 1)
+		},
+		"single artifact file count exceeds limit": func(value map[string]any) {
+			nodeReceiptFromInstallation(value)["file_count"] = float64(8193)
+		},
+		"receipt on static MCP": func(value map[string]any) { value["transport"] = "stdio_static" },
+		"active receipt missing": func(value map[string]any) {
+			delete(value["versions"].([]any)[0].(map[string]any), "node_artifact")
+		},
+	}
+	for name, mutate := range invalid {
+		t.Run(name, func(t *testing.T) {
+			value := validManagedNodeMCPInstallationResult(true)
+			mutate(value)
+			if _, err := adaptActionResult("agent.core.mcp.get", value); !errors.Is(err, ErrInvalidActionResult) {
+				t.Fatalf("invalid Node receipt error = %v, want ErrInvalidActionResult", err)
+			}
+		})
+	}
+}
+
+func validManagedNodeMCPInstallationResult(published bool) map[string]any {
+	digest := strings.Repeat("a", 64)
+	versionID := "33333333-3333-4333-8333-333333333333"
+	version := map[string]any{
+		"version_id":     versionID,
+		"pin":            map[string]any{"registry_version": "1.2.3", "registry_sha256": digest},
+		"content_digest": digest, "manifest_digest": digest, "execution_digest": digest,
+		"network_schema_digest": digest, "secret_schema_digest": digest,
+		"execution":  map[string]any{"stdio": map[string]any{"relative_path": "node_modules/@modelcontextprotocol/server-filesystem/dist/index.js", "digest": digest, "argv": []any{}, "runtime": "node"}},
+		"created_at": "2026-08-11T00:00:00Z",
+	}
+	installation := map[string]any{
+		"id": "22222222-2222-4222-8222-222222222222", "kind": "mcp", "source": "npm",
+		"candidate_id": "@modelcontextprotocol/server-filesystem", "name": "Filesystem MCP", "transport": "stdio_node",
+		"revision": float64(2), "state": "installing", "enabled": false, "proposed_version_id": versionID,
+		"versions": []any{version}, "created_at": "2026-08-11T00:00:00Z", "updated_at": "2026-08-11T00:00:00Z",
+	}
+	if published {
+		installation["state"] = "installed"
+		installation["enabled"] = true
+		installation["active_version_id"] = versionID
+		delete(installation, "proposed_version_id")
+		version["node_artifact"] = map[string]any{
+			"package_name": "@modelcontextprotocol/server-filesystem", "package_version": "1.2.3",
+			"artifact_bytes": float64(4096), "file_count": float64(12),
+			"node_version": managedNodeVersion, "npm_version": managedNPMVersion,
+			"lifecycle_scripts_disabled": true, "native_addons_absent": true,
+		}
+	}
+	return installation
+}
+
+func nodeReceiptFromInstallation(value map[string]any) map[string]any {
+	return value["versions"].([]any)[0].(map[string]any)["node_artifact"].(map[string]any)
+}
+
 func sortedMapKeys(value map[string]any) []string {
 	keys := make([]string, 0, len(value))
 	for key := range value {

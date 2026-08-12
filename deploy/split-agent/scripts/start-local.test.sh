@@ -5,6 +5,11 @@ script_dir=$(cd "$(dirname "$0")" && pwd -P)
 script=$script_dir/start-local.sh
 [ -x "$script" ] || { echo "start-local.sh must be executable" >&2; exit 1; }
 bash -n "$script"
+grep -Fq "[ \"\$runner_apparmor_manager_path\" = /usr/local/libexec/dirextalk/split-agent/scripts/manage-runner-apparmor.sh ]" "$script"
+if grep -Fq "[ \"\$runner_apparmor_manager_path\" = \"\$script_dir/manage-runner-apparmor.sh\" ]" "$script"; then
+  echo "production start must not bind the root receipt to a user-owned repository manager" >&2
+  exit 1
+fi
 if grep -Fq -- "[ -w \"\$value/cgroup.subtree_control\" ]" "$script" || \
    grep -Fq -- "[ -w \"\$value/cgroup.procs\" ]" "$script"; then
   echo "start-local.sh must not test cgroup writability as the current user" >&2
@@ -102,6 +107,76 @@ if PATH="$runner_test_path" DIREXTALK_FAKE_CGROUPNS_INSPECT_FAILURE=true \
   exit 1
 fi
 grep -Fq 'core-runner cgroup namespace inspection failed (status 42)' "$tmp_dir/cgroupns-failure.stderr"
+
+# Exercise the exact production heartbeat wrapper with a fake Docker consumer.
+# Compose output must remain live, a normal wait is observable, and a command
+# failure must reach the existing caller trap with its original exit status.
+cat >"$tmp_dir/heartbeat-wrapper.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+EOF
+sed -n '/^run_with_heartbeat() {/,/^}$/p' "$script" >>"$tmp_dir/heartbeat-wrapper.sh"
+cat >>"$tmp_dir/heartbeat-wrapper.sh" <<'EOF'
+trap 'status=$?; printf "wrapper-trap status=%s\n" "$status" >&2; exit "$status"' EXIT
+run_with_heartbeat compose_wait 1 docker compose up -d --wait message-server
+trap - EXIT
+EOF
+chmod 755 "$tmp_dir/heartbeat-wrapper.sh"
+
+mkdir "$tmp_dir/heartbeat-bin"
+cat >"$tmp_dir/heartbeat-bin/docker" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$DIREXTALK_HEARTBEAT_DOCKER_LOG"
+sleep 2
+case "${DIREXTALK_HEARTBEAT_DOCKER_RESULT:-success}" in
+  success) printf 'fake compose ready\n' >&2 ;;
+  failure)
+    printf 'fake compose infrastructure failure\n' >&2
+    exit 42
+    ;;
+  *) exit 43 ;;
+esac
+EOF
+chmod 755 "$tmp_dir/heartbeat-bin/docker"
+heartbeat_docker_log=$tmp_dir/heartbeat-docker.log
+export DIREXTALK_HEARTBEAT_DOCKER_LOG=$heartbeat_docker_log
+
+: >"$heartbeat_docker_log"
+PATH="$tmp_dir/heartbeat-bin:$PATH" "$tmp_dir/heartbeat-wrapper.sh" \
+  >"$tmp_dir/heartbeat-success.stdout" 2>"$tmp_dir/heartbeat-success.stderr"
+grep -Fqx 'compose up -d --wait message-server' "$heartbeat_docker_log"
+grep -Fq '[split-stack.start] stage=compose_wait state=starting elapsed_seconds=0' "$tmp_dir/heartbeat-success.stderr"
+grep -Eq '^\[split-stack\.start\] stage=compose_wait state=running elapsed_seconds=[1-9][0-9]*$' "$tmp_dir/heartbeat-success.stderr"
+grep -Eq '^\[split-stack\.start\] stage=compose_wait state=succeeded elapsed_seconds=[1-9][0-9]*$' "$tmp_dir/heartbeat-success.stderr"
+grep -Fq 'fake compose ready' "$tmp_dir/heartbeat-success.stderr"
+if grep -Fq 'wrapper-trap' "$tmp_dir/heartbeat-success.stderr"; then
+  echo "heartbeat success unexpectedly reached the failure trap" >&2
+  exit 1
+fi
+
+: >"$heartbeat_docker_log"
+if PATH="$tmp_dir/heartbeat-bin:$PATH" DIREXTALK_HEARTBEAT_DOCKER_RESULT=failure \
+    "$tmp_dir/heartbeat-wrapper.sh" >"$tmp_dir/heartbeat-failure.stdout" \
+    2>"$tmp_dir/heartbeat-failure.stderr"; then
+  echo "heartbeat wrapper unexpectedly hid the fake Compose failure" >&2
+  exit 1
+else
+  status=$?
+fi
+[ "$status" -eq 42 ] || {
+  echo "heartbeat wrapper changed Compose status 42 to $status" >&2
+  exit 1
+}
+grep -Fq 'fake compose infrastructure failure' "$tmp_dir/heartbeat-failure.stderr"
+grep -Eq '^\[split-stack\.start\] stage=compose_wait state=failed elapsed_seconds=[1-9][0-9]* exit_status=42$' "$tmp_dir/heartbeat-failure.stderr"
+grep -Fq 'wrapper-trap status=42' "$tmp_dir/heartbeat-failure.stderr"
+failure_line=$(grep -n -F 'fake compose infrastructure failure' "$tmp_dir/heartbeat-failure.stderr" | cut -d: -f1)
+status_line=$(grep -n -F 'state=failed' "$tmp_dir/heartbeat-failure.stderr" | cut -d: -f1)
+[ "$failure_line" -lt "$status_line" ] || {
+  echo "heartbeat wrapper delayed or reordered the original Compose error" >&2
+  exit 1
+}
 
 # Exercise the production receipt writer through its real function body. Docker
 # must be asked for untruncated IDs, reject an expected short-ID negative, and
@@ -355,7 +430,7 @@ if output=$("$script" "$env_file" 2>&1); then
   echo "missing host AppArmor profile was unexpectedly accepted" >&2
   exit 1
 fi
-printf '%s\n' "$output" | grep -Fq 'runner AppArmor asset is missing or symlinked'
+printf '%s\n' "$output" | grep -Eq 'runner AppArmor (asset is missing or symlinked|loaded-profile verification failed)'
 if grep -Eq '^compose .* (build|up) ' "$docker_log"; then
   echo "AppArmor preflight failure mutated Docker state" >&2
   exit 1

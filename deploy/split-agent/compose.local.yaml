@@ -6,7 +6,7 @@ services:
       context: ${DIREXTALK_AGENT_BUILD_CONTEXT:?set the sibling dirextalk-agent source path}
       dockerfile: deploy/container/agent.Containerfile
       args:
-        VERSION: ${DIREXTALK_AGENT_BUILD_VERSION:-local}
+        VERSION: ${DIREXTALK_AGENT_BUILD_VERSION:-dev}
         REVISION: ${DIREXTALK_AGENT_BUILD_REVISION:-working-tree}
     image: ${DIREXTALK_AGENT_IMAGE_LOCAL:-dirextalk-agent:split-local}
 
@@ -15,7 +15,7 @@ services:
       context: ${DIREXTALK_AGENT_BUILD_CONTEXT:?set the sibling dirextalk-agent source path}
       dockerfile: deploy/container/agent.Containerfile
       args:
-        VERSION: ${DIREXTALK_AGENT_BUILD_VERSION:-local}
+        VERSION: ${DIREXTALK_AGENT_BUILD_VERSION:-dev}
         REVISION: ${DIREXTALK_AGENT_BUILD_REVISION:-working-tree}
     image: ${DIREXTALK_AGENT_IMAGE_LOCAL:-dirextalk-agent:split-local}
 

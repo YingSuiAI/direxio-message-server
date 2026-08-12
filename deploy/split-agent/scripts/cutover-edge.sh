@@ -379,9 +379,20 @@ verify_old_identity() {
     ' "$file" >/dev/null 2>&1
 }
 
+verify_static_site_mount() {
+  local file=$1 root=$2
+  "$jq_bin" -e --arg source "$root/public" '
+    ([.[0].Mounts[] | select(
+      .Type == "bind" and .Source == $source and
+      .Destination == "/srv/dirextalk-sites" and .RW == false
+    )] | length) == 1
+  ' "$file" >/dev/null 2>&1
+}
+
 verify_new_identity() {
   local file=$1 expected_id=$2 project=$3 image=$4 network=$5 data_volume=$6 config_volume=$7
-  verify_old_identity "$file" "$expected_id" "$project" "$image" "$network" "$data_volume" "$config_volume"
+  verify_old_identity "$file" "$expected_id" "$project" "$image" "$network" "$data_volume" "$config_volume" &&
+    verify_static_site_mount "$file" "$static_sites_root"
 }
 
 verify_new_identity_without_health() {
@@ -398,7 +409,7 @@ verify_new_identity_without_health() {
       ([.[0].Mounts[] | select(.Destination == "/config" and .Type == "volume" and .Name == $config)] | length) == 1 and
       ([.[0].HostConfig.PortBindings["80/tcp"][]?.HostPort] | sort | unique) == ["80"] and
       ([.[0].HostConfig.PortBindings["443/tcp"][]?.HostPort] | sort | unique) == ["443"]
-    ' "$file" >/dev/null 2>&1
+    ' "$file" >/dev/null 2>&1 && verify_static_site_mount "$file" "$static_sites_root"
 }
 
 compose_stack() {
@@ -443,6 +454,7 @@ read_and_validate_inputs() {
   caddy_data_volume=$(read_kv "$edge_env" DIREXTALK_CADDY_DATA_VOLUME) || return 1
   caddy_config_volume=$(read_kv "$edge_env" DIREXTALK_CADDY_CONFIG_VOLUME) || return 1
   caddyfile=$(read_kv "$edge_env" DIREXTALK_CADDYFILE) || return 1
+  static_sites_root=$(read_kv "$edge_env" DIREXTALK_STATIC_SITES_ROOT) || return 1
   edge_compose=$(optional_kv "$edge_env" DIREXTALK_EDGE_COMPOSE_FILE) || return 1
   [ -n "${edge_compose:-}" ] || edge_compose=$default_edge_compose
   public_ca=$(optional_kv "$edge_env" DIREXTALK_CADDY_CA_FILE) || return 1
@@ -473,12 +485,17 @@ read_and_validate_inputs() {
   require_regular_owned "$stack_compose" || return 1
   require_regular_owned "$edge_compose" || return 1
   require_regular_owned "$caddyfile" || return 1
+  [ -d "$static_sites_root" ] && [ ! -L "$static_sites_root" ] && [ "$(readlink -f -- "$static_sites_root")" = "$static_sites_root" ] || fail "static-site root must be a canonical directory" || return 1
+  [ -d "$static_sites_root/public" ] && [ ! -L "$static_sites_root/public" ] || fail "static-site public directory is missing or symlinked" || return 1
   [ -f "$message_tls_cert" ] && [ ! -L "$message_tls_cert" ] || fail "message TLS certificate must be a regular non-symlink file" || return 1
   [ "$(stat -c '%u' "$message_tls_cert")" = "$(id -u)" ] || fail "message TLS certificate owner mismatch" || return 1
   if [ -n "${public_ca:-}" ]; then
     require_regular_owned "$public_ca" || return 1
   fi
   grep -Eq '(^|[[:space:]])reverse_proxy[[:space:]]+message-server:8008([[:space:]]|$)' "$caddyfile" || fail "edge-terminated Caddyfile must proxy to message-server:8008" || return 1
+  grep -Eq 'handle_path[[:space:]]+/\.sites/\*' "$caddyfile" || fail "Caddyfile must reserve /.sites/* before the backend proxy" || return 1
+  grep -Eq 'root[[:space:]]+\*[[:space:]]+/srv/dirextalk-sites' "$caddyfile" || fail "Caddyfile must serve the reviewed static-site mount" || return 1
+  grep -Eq "Content-Security-Policy.*sandbox;.*script-src 'none';.*connect-src 'none';.*form-action 'none'" "$caddyfile" || fail "Caddyfile static sites require the reviewed sandbox CSP" || return 1
   ! grep -Eq '(^|[[:space:]])reverse_proxy[[:space:]]+message-server:8448([[:space:]]|$)' "$caddyfile" || fail "edge-terminated Caddyfile must not proxy to message-server:8448" || return 1
 
   [ "$(sed -n '1p' "$active_receipt")" = '# dirextalk-edge-receipt-v1' ] || fail "active receipt header is invalid" || return 1

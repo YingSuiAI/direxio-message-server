@@ -14,4 +14,4 @@ services:
     ports:
       - "127.0.0.1:${DIREXTALK_MESSAGE_HTTPS_BIND:?set DIREXTALK_MESSAGE_HTTPS_BIND in the protected stack .env}:8448"
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8008/_p2p/health >/dev/null && wget --no-check-certificate -q -O - https://127.0.0.1:8448/_p2p/health >/dev/null"]
+      test: ["CMD-SHELL", "wget -Y off -q -O - http://127.0.0.1:8008/_p2p/health >/dev/null && wget -Y off --no-check-certificate -q -O - https://127.0.0.1:8448/_p2p/health >/dev/null"]

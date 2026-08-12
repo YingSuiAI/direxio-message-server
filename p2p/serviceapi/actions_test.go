@@ -2,6 +2,7 @@ package serviceapi
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -212,9 +213,76 @@ func TestAgentCoreFamilySchemaDrift(t *testing.T) {
 	if candidate.Type != "object" || !candidate.Required || !candidate.Properties["pin"].Required || candidate.Properties["pin"].Properties["git_sha256"].Type != "string" {
 		t.Fatal("inspect candidate schema must publish the immutable pin")
 	}
+	if kind := candidate.Properties["kind"].Presence; kind == nil || kind.Present != "one_of:mcp" {
+		t.Fatal("MCP candidate schema must publish only kind=mcp")
+	}
+	if source := candidate.Properties["source"].Presence; source == nil || source.Present != "one_of:official_registry|smithery|glama|github|npm" {
+		t.Fatal("MCP candidate source schema drifted")
+	}
+	if transport := candidate.Properties["transport"].Presence; transport == nil || transport.Present != "one_of:stdio_static|streamable_http|stdio_node;npm_requires_stdio_node;stdio_node_requires_npm_or_github" {
+		t.Fatal("MCP candidate transport schema drifted")
+	}
+	pin := candidate.Properties["pin"].Properties
+	if pin["registry_version"].Required || pin["registry_sha256"].Required || pin["git_commit"].Required || pin["git_sha256"].Required {
+		t.Fatal("immutable source pin must require exactly its registry or git pair, not both pairs")
+	}
 	installation := i.Schema.Request["inspection"]
 	if installation.Type != "object" || !installation.Required || installation.Properties["execution"].Properties["remote"].Properties["url"].Type != "string" || installation.Properties["network_grants"].Items.Properties["port"].Type != "integer" || installation.Properties["secret_grants"].Items.Properties["configured"].Type != "boolean" {
 		t.Fatal("extension inspection schema is incomplete")
+	}
+	stdio := installation.Properties["execution"].Properties["stdio"]
+	if stdio.Properties["relative_path"].Type != "string" || stdio.Properties["argv"].Items == nil || stdio.Properties["runtime"].Presence == nil || !strings.Contains(stdio.Properties["runtime"].Presence.Present, "node") {
+		t.Fatal("extension inspection schema must publish managed Node stdio execution")
+	}
+	if _, leaked := installation.Properties["execution"].Properties["skill"]; leaked {
+		t.Fatal("MCP inspection schema published a Skill execution branch")
+	}
+	skillInspect, _ := ActionSpecFor("agent.core.skills.inspect")
+	skillCandidate := skillInspect.Schema.Request["candidate"]
+	if kind := skillCandidate.Properties["kind"].Presence; kind == nil || kind.Present != "one_of:skill" {
+		t.Fatal("Skill candidate schema must publish only kind=skill")
+	}
+	if source := skillCandidate.Properties["source"].Presence; source == nil || source.Present != "one_of:builtin|skills_sh|github" {
+		t.Fatal("Skill candidate source schema drifted")
+	}
+	if transport := skillCandidate.Properties["transport"].Presence; transport == nil || transport.Present != "one_of:skill_static" {
+		t.Fatal("Skill candidate transport schema drifted")
+	}
+	skillExecution := skillInspect.Schema.Response["inspection"].Properties["execution"].Properties
+	if skillExecution["skill"].Properties["relative_path"].Type != "string" {
+		t.Fatal("Skill inspection schema is missing its static Skill entry")
+	}
+	if _, leaked := skillExecution["stdio"]; leaked {
+		t.Fatal("Skill inspection schema published an MCP stdio branch")
+	}
+	if _, leaked := skillExecution["remote"]; leaked {
+		t.Fatal("Skill inspection schema published an MCP remote branch")
+	}
+	if _, leaked := i.Schema.Request["expected_revision"]; leaked {
+		t.Fatal("MCP install must not publish an update-only expected_revision")
+	}
+	get, _ := ActionSpecFor("agent.core.mcp.get")
+	nodeReceipt := get.Schema.Response["installation"].Properties["versions"].Items.Properties["node_artifact"]
+	if nodeReceipt.Type != "object" || len(nodeReceipt.Properties) != 8 || !nodeReceipt.Properties["package_name"].Required || !nodeReceipt.Properties["lifecycle_scripts_disabled"].Required || !nodeReceipt.Properties["native_addons_absent"].Required {
+		t.Fatalf("published Node artifact receipt schema must expose exactly the proto fields: %#v", nodeReceipt)
+	}
+	if _, legacy := nodeReceipt.Properties["lifecycle_scripts_absent"]; legacy {
+		t.Fatal("published Node artifact receipt schema must not preserve the superseded lifecycle_scripts_absent field")
+	}
+	for _, internal := range []string{"input_digest", "artifact_digest", "entry_path", "entry_sha256", "lock_sha256"} {
+		if _, leaked := nodeReceipt.Properties[internal]; leaked {
+			t.Fatalf("internal Node receipt field %q escaped public schema", internal)
+		}
+	}
+	skillGet, _ := ActionSpecFor("agent.core.skills.get")
+	if _, leaked := skillGet.Schema.Response["installation"].Properties["versions"].Items.Properties["node_artifact"]; leaked {
+		t.Fatal("Skill installation schema published a managed Node receipt")
+	}
+	mcpDiscover, _ := ActionSpecFor("agent.core.mcp.discover")
+	skillDiscover, _ := ActionSpecFor("agent.core.skills.discover")
+	if mcpDiscover.Schema.Request["source"].Presence.Present != "one_of:official_registry|smithery|glama|github|npm" ||
+		skillDiscover.Schema.Request["source"].Presence.Present != "one_of:builtin|skills_sh|github" {
+		t.Fatal("extension discovery source schemas are not action-family specific")
 	}
 	secret := i.Schema.Request["secret_inputs"].Items.Properties["secret_value"]
 	if !secret.Required || !secret.WriteOnly {

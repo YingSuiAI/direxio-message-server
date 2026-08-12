@@ -1,0 +1,19 @@
+{$DIREXTALK_PUBLIC_DOMAIN} {
+	handle_path /.sites/* {
+		root * /srv/dirextalk-sites
+		header {
+			Content-Security-Policy "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; media-src data:; script-src 'none'; connect-src 'none'; object-src 'none'; frame-src 'none'; child-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'"
+			X-Content-Type-Options "nosniff"
+			X-Frame-Options "DENY"
+			Referrer-Policy "no-referrer"
+			Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+			Cross-Origin-Resource-Policy "same-origin"
+			Cache-Control "public, max-age=31536000, immutable"
+		}
+		file_server
+	}
+
+	handle {
+		reverse_proxy message-server:8008
+	}
+}

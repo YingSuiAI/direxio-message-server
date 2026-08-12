@@ -7,7 +7,13 @@ set -euo pipefail
 # helper instead of letting it consume the container PID limit.
 script_dir=$(cd "$(dirname "$0")" && pwd -P)
 compose_file=$script_dir/../compose.yaml
+direct_tls_file=$script_dir/../compose.direct-tls.yaml
+bootstrap_script=$script_dir/bootstrap-local-account.sh
 grep -Fqx '    init: true' <(sed -n '/^  message-server:/,/^  [a-zA-Z].*:/p' "$compose_file")
+grep -Fq 'test: ["CMD", "wget", "-Y", "off", "-q", "-O", "-", "http://127.0.0.1:8008/_p2p/health"]' "$compose_file"
+grep -Fq 'wget -Y off -q -O - http://127.0.0.1:8008/_p2p/health' "$direct_tls_file"
+grep -Fq 'wget -Y off --no-check-certificate -q -O - https://127.0.0.1:8448/_p2p/health' "$direct_tls_file"
+grep -Fq 'wget -Y off -q -O - http://127.0.0.1:8008/_p2p/health' "$bootstrap_script"
 
 # This is intentionally a real Docker process test, not a shell-only fixture.
 # Do not pull or build anything here; the standard Alpine utility image is the

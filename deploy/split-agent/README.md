@@ -9,6 +9,8 @@ This directory is the fresh-data deployment boundary for the split architecture:
   binding (the local acceptance example uses 18008/18448).
 - message-server owns Matrix/ProductCore, the public action envelope, the
   external Native Agent facade, and Product Capability on private port 50053.
+- Container-local health probes explicitly disable ambient HTTP(S) proxy use;
+  loopback readiness must never be redirected to an outbound proxy.
 - dirextalk-agent owns Native Agent Core on private port 9443 and Agent
   Capability on private port 50052.
 - Agent and message-server share one PostgreSQL container, cluster, and data
@@ -410,9 +412,12 @@ or ownership differ.
     sudo install -d -o root -g root -m 0755 /usr/local/libexec/dirextalk/split-agent/scripts
     sudo install -d -o root -g root -m 0755 /usr/local/libexec/dirextalk/split-agent/systemd
     sudo install -d -o root -g root -m 0755 /usr/local/libexec/dirextalk/split-agent/sysusers.d
+    sudo install -d -o root -g root -m 0755 /usr/local/libexec/dirextalk/split-agent/apparmor.d
     sudo install -o root -g root -m 0755 deploy/split-agent/scripts/prepare-runner-cgroups.sh /usr/local/libexec/dirextalk/split-agent/scripts/prepare-runner-cgroups.sh
+    sudo install -o root -g root -m 0755 deploy/split-agent/scripts/manage-runner-apparmor.sh /usr/local/libexec/dirextalk/split-agent/scripts/manage-runner-apparmor.sh
     sudo install -o root -g root -m 0644 deploy/split-agent/systemd/*.service /usr/local/libexec/dirextalk/split-agent/systemd/
     sudo install -o root -g root -m 0644 deploy/split-agent/sysusers.d/dirextalk-split-agent.conf /usr/local/libexec/dirextalk/split-agent/sysusers.d/
+    sudo install -o root -g root -m 0644 deploy/split-agent/apparmor.d/dirextalk-runner-userns /usr/local/libexec/dirextalk/split-agent/apparmor.d/dirextalk-runner-userns
     sudo /usr/local/libexec/dirextalk/split-agent/scripts/prepare-runner-cgroups.sh "$STACK" > /tmp/dirextalk-runner-cgroups.env
     chmod 400 /tmp/dirextalk-runner-cgroups.env
     # Inspect the generated env file, then load it for provisioning.
@@ -755,14 +760,23 @@ enabled, and joins only the fresh message-server `message_public` network.
 Caddy data
 and config are explicitly named external volumes. The Caddyfile is a reviewed,
 mode-0400 regular file and, for the canonical edge-terminated contract, must
-reverse-proxy only to `message-server:8008`.
+reserve `/.sites/*` before the backend proxy, serve the Agent-owned
+`DIREXTALK_STATIC_SITES_ROOT/public` subtree from `/srv/dirextalk-sites`
+read-only with the fixed sandbox CSP, and reverse-proxy all remaining traffic
+only to `message-server:8008`. `Caddyfile.static-sites.example` is the current
+reviewed shape. The default host root is `/var/lib/dirextalk-static-sites`;
+it and its `public`/`.staging` children are owned by Agent UID/GID 65532.
+Single-file HTML is stored directly as `index.html`; no archive is created.
+The current contract does not accept multi-file bundles.
 
 `adopt-edge.sh` is the one-shot first-edge adoption procedure. It is followed
 by `cutover-edge.sh` for later fresh-stack switches; adoption is not a
 cutover compatibility fallback. Prepare a mode-0400 edge environment with
 `DIREXTALK_MESSAGE_TLS_MODE=edge-terminated` and a mode-0700 receipt directory,
 then probe the exact full legacy Caddy ID. Adoption fails closed unless the
-reviewed Caddyfile proxies exactly to `message-server:8008`:
+reviewed Caddyfile serves the fixed `/.sites/*` route and otherwise proxies
+exactly to `message-server:8008`. The edge environment must include the same
+canonical `DIREXTALK_STATIC_SITES_ROOT` bound by the Agent stack:
 
     deploy/split-agent/scripts/adopt-edge.sh probe \
       /absolute/path/.run/legacy-edge.env \

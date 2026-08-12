@@ -23,6 +23,10 @@ const (
 	defaultWatchIdleTimeout  = 30 * time.Minute
 )
 
+// AgentCapabilityMinConnectTimeout is the minimum initial transport
+// connection window that readiness probes must cover.
+const AgentCapabilityMinConnectTimeout = 3 * time.Second
+
 // ErrWatchIdleTimeout ends only the current observation attachment after a
 // prolonged period without persisted events. The durable Agent operation is
 // not cancelled and can be observed again from its last sequence cursor.
@@ -133,10 +137,7 @@ func New(config *Config) (*Client, error) {
 	creds := credentials.NewTLS(tlsConfig)
 	conn, err := grpc.NewClient(
 		config.ServerAddr,
-		grpc.WithTransportCredentials(creds),
-		grpc.WithConnectParams(grpc.ConnectParams{
-			MinConnectTimeout: 3 * time.Second,
-		}),
+		agentCapabilityDialOptions(creds)...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create gRPC client: %w", err)
@@ -146,6 +147,20 @@ func New(config *Config) (*Client, error) {
 	c.client = capv1.NewAgentCapabilityServiceClient(conn)
 
 	return c, nil
+}
+
+// agentCapabilityDialOptions keeps the private service-to-service channel
+// independent of process-wide HTTP(S) proxy settings. The Agent endpoint is
+// reachable only on the deployment's capability network; sending its mTLS
+// handshake through an ambient egress proxy is both invalid and unsafe.
+func agentCapabilityDialOptions(creds credentials.TransportCredentials) []grpc.DialOption {
+	return []grpc.DialOption{
+		grpc.WithTransportCredentials(creds),
+		grpc.WithNoProxy(),
+		grpc.WithConnectParams(grpc.ConnectParams{
+			MinConnectTimeout: AgentCapabilityMinConnectTimeout,
+		}),
+	}
 }
 
 // SetAccountGeneration updates the outbound fence without rebuilding the

@@ -103,7 +103,7 @@ healthy=false
 for _ in $(seq 1 30); do
   if docker compose --project-name "$stack_name" --env-file "$env_file" \
     -f "$compose_file" -f "$local_override" exec -T message-server \
-    wget -q -O - http://127.0.0.1:8008/_p2p/health >/dev/null 2>&1; then
+    wget -Y off -q -O - http://127.0.0.1:8008/_p2p/health >/dev/null 2>&1; then
     healthy=true
     break
   fi

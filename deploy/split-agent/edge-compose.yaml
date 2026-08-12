@@ -21,6 +21,8 @@ services:
     <<: [*caddy-image, *caddy-hardening]
     restart: unless-stopped
     command: ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+    environment:
+      DIREXTALK_PUBLIC_DOMAIN: ${DIREXTALK_PUBLIC_DOMAIN:?set the reviewed public domain}
     ports:
       - "80:80"
       - "443:443"
@@ -35,10 +37,14 @@ services:
         source: ${DIREXTALK_CADDYFILE:?set the reviewed Caddyfile path}
         target: /etc/caddy/Caddyfile
         read_only: true
+      - type: bind
+        source: ${DIREXTALK_STATIC_SITES_ROOT:?set the Agent-owned static-site host root}/public
+        target: /srv/dirextalk-sites
+        read_only: true
     networks:
       - message_public
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:2019/config/ >/dev/null 2>&1"]
+      test: ["CMD-SHELL", "wget -Y off -q -O - http://127.0.0.1:2019/config/ >/dev/null 2>&1"]
       interval: 5s
       timeout: 5s
       retries: 12
