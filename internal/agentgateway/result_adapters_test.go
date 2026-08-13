@@ -40,8 +40,9 @@ func TestPublicResultAdaptersPreserveLegacyEnvelopes(t *testing.T) {
 				t.Fatalf("conversation get = %#v", got)
 			}
 		}},
-		{"conversation list", "agent.chat.conversations.list", map[string]any{"Conversations": []any{}, "next_page_token": "p"}, func(t *testing.T, got map[string]any) {
-			if _, ok := got["conversations"]; !ok || got["next_cursor"] != "p" {
+		{"conversation list", "agent.chat.conversations.list", map[string]any{"Conversations": []any{map[string]any{"conversation_id": "c1", "message_count": float64(7)}}, "next_page_token": "p"}, func(t *testing.T, got map[string]any) {
+			conversations, ok := got["conversations"].([]any)
+			if !ok || len(conversations) != 1 || conversations[0].(map[string]any)["message_count"] != float64(7) || got["next_cursor"] != "p" {
 				t.Fatalf("conversation list = %#v", got)
 			}
 		}},
