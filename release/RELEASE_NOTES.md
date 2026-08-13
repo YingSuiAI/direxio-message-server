@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v1.1.42
+
+1. Accept additive internal memory fields while projecting only the stable public memory contract.
+2. Project Agent task identities into the public task envelope so task reads no longer return HTTP 502.
+
 ## v1.1.41
 
 1. Keep memory-fact replay transport metadata outside the closed public mutation receipt so successful edits no longer return HTTP 502.
