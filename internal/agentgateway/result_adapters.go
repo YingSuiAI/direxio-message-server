@@ -300,7 +300,7 @@ func validateCurrentAgentResultShape(action string, output map[string]any) error
 		}
 		return requireObject("source")
 	case "agent.core.tasks.get", "agent.core.tasks.cancel", "agent.core.tasks.retry":
-		return rejectObject("task", "task_id")
+		return rejectObject("task", "id")
 	case "agent.core.schedules.create", "agent.core.schedules.get", "agent.core.schedules.update", "agent.core.schedules.pause", "agent.core.schedules.resume":
 		return requireObject("schedule")
 	case "agent.core.schedules.trigger":
@@ -2078,7 +2078,12 @@ func taskResult(value map[string]any) map[string]any {
 }
 
 func normalizeTask(value map[string]any) map[string]any {
-	return cloneParams(value)
+	result := cloneParams(value)
+	if id, ok := result["id"].(string); ok && strings.TrimSpace(id) != "" {
+		result["task_id"] = id
+		delete(result, "id")
+	}
+	return result
 }
 
 func eventsResult(value map[string]any) map[string]any {

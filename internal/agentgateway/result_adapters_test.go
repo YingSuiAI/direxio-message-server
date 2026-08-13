@@ -121,9 +121,13 @@ func TestPublicResultAdaptersProjectCanonicalCapabilityResults(t *testing.T) {
 				t.Fatalf("knowledge status counters were inferred/changed: %#v", got)
 			}
 		}},
-		{"task get", "agent.core.tasks.get", map[string]any{"task_id": "t1", "status": "queued"}, func(t *testing.T, got map[string]any) {
-			if _, ok := got["task"]; !ok {
+		{"task get", "agent.core.tasks.get", map[string]any{"id": "11111111-1111-4111-8111-111111111111", "status": "queued"}, func(t *testing.T, got map[string]any) {
+			task, ok := got["task"].(map[string]any)
+			if !ok || task["task_id"] != "11111111-1111-4111-8111-111111111111" {
 				t.Fatalf("task get = %#v", got)
+			}
+			if _, present := task["id"]; present {
+				t.Fatalf("task get retained Agent identity: %#v", got)
 			}
 		}},
 		{"schedule list", "agent.core.schedules.list", map[string]any{"schedules": []any{}, "next_page_token": "p"}, func(t *testing.T, got map[string]any) {
@@ -172,6 +176,31 @@ func TestPublicResultAdaptersProjectCanonicalCapabilityResults(t *testing.T) {
 	}
 }
 
+func TestTaskActionsValidateAgentShapeAndProjectProductEnvelope(t *testing.T) {
+	const taskID = "11111111-1111-4111-8111-111111111111"
+	for _, action := range []string{
+		"agent.core.tasks.get",
+		"agent.core.tasks.cancel",
+		"agent.core.tasks.retry",
+	} {
+		t.Run(action, func(t *testing.T) {
+			got, err := adaptActionResult(action, map[string]any{
+				"id": taskID, "status": "succeeded", "revision": float64(3),
+			})
+			if err != nil {
+				t.Fatalf("valid unwrapped Agent task rejected: %v", err)
+			}
+			task, ok := got["task"].(map[string]any)
+			if !ok || task["task_id"] != taskID || task["status"] != "succeeded" || task["revision"] != float64(3) {
+				t.Fatalf("public task envelope = %#v", got)
+			}
+			if _, present := task["id"]; present {
+				t.Fatalf("Agent task id escaped public projection: %#v", got)
+			}
+		})
+	}
+}
+
 func TestCurrentAgentResultShapesRejectAlternateEnvelopes(t *testing.T) {
 	validSource := map[string]any{"source_id": "source", "kind": "text", "status": "ready"}
 	tests := []struct {
@@ -182,7 +211,7 @@ func TestCurrentAgentResultShapesRejectAlternateEnvelopes(t *testing.T) {
 		{"agent.model_profiles.delete", map[string]any{"profile": map[string]any{"id": "profile"}}},
 		{"agent.knowledge.sources.delete", validSource},
 		{"agent.knowledge.upload.finish", map[string]any{"source": validSource}},
-		{"agent.core.tasks.get", map[string]any{"task": map[string]any{"task_id": "task"}}},
+		{"agent.core.tasks.get", map[string]any{"task": map[string]any{"id": "task"}}},
 		{"agent.core.schedules.get", map[string]any{"schedule_id": "schedule"}},
 		{"agent.core.schedules.trigger", map[string]any{"schedule": map[string]any{}, "occurrence_id": "occurrence", "task_id": "task"}},
 		{"agent.core.skills.get", map[string]any{"installation": map[string]any{"id": "installation"}}},
