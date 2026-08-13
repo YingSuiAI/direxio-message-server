@@ -569,24 +569,16 @@ func validateMemoryResult(action string, output map[string]any) error {
 		return fmt.Errorf("%w: %s response is missing", ErrInvalidActionResult, action)
 	}
 	if strings.HasSuffix(action, ".facts.update") {
-		if !exactResultFields(output, "id", "subject", "predicate", "value", "kind", "confidence", "valid_from", "last_confirmed_at") || !validMemoryFact(output) {
+		if !validMemoryFact(output) {
 			return fmt.Errorf("%w: updated memory fact is invalid", ErrInvalidActionResult)
 		}
 		return nil
 	}
 	if strings.HasSuffix(action, ".facts.delete") {
-		if !exactResultFields(output, "fact_id", "deleted") || !canonicalTurnUUID(output["fact_id"]) || output["deleted"] != true {
+		if !canonicalTurnUUID(output["fact_id"]) || output["deleted"] != true {
 			return fmt.Errorf("%w: deleted memory fact result is invalid", ErrInvalidActionResult)
 		}
 		return nil
-	}
-	configFields := []string{"enabled", "embedding_configured", "embedding_profile_id", "embedding_model", "revision", "updated_at"}
-	allowedFields := configFields
-	if strings.HasSuffix(action, ".status") {
-		allowedFields = append(append([]string{}, configFields...), "active_fact_count", "timeline_event_count", "pending_observation_count", "failed_observation_count", "facts", "timeline")
-	}
-	if !onlyResultFields(output, allowedFields...) {
-		return fmt.Errorf("%w: memory response contains an unexpected field", ErrInvalidActionResult)
 	}
 	for _, field := range []string{"enabled", "embedding_configured"} {
 		if _, ok := output[field].(bool); !ok {
@@ -623,7 +615,7 @@ func validateMemoryResult(action string, output map[string]any) error {
 			return fmt.Errorf("%w: memory facts must be an array", ErrInvalidActionResult)
 		}
 		for _, fact := range facts {
-			if !exactResultFields(fact, "id", "subject", "predicate", "value", "kind", "confidence", "valid_from", "last_confirmed_at") || !validMemoryFact(fact) {
+			if !validMemoryFact(fact) {
 				return fmt.Errorf("%w: memory fact is invalid", ErrInvalidActionResult)
 			}
 		}
@@ -632,7 +624,7 @@ func validateMemoryResult(action string, output map[string]any) error {
 			return fmt.Errorf("%w: memory timeline must be an array", ErrInvalidActionResult)
 		}
 		for _, event := range timeline {
-			if !exactResultFields(event, "kind", "summary", "effective_at", "observed_at") || !validMemoryTimelineEvent(event) {
+			if !validMemoryTimelineEvent(event) {
 				return fmt.Errorf("%w: memory timeline event is invalid", ErrInvalidActionResult)
 			}
 		}

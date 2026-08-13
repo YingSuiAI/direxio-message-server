@@ -526,20 +526,9 @@ func operationStateError(state capv1.OperationState) error {
 	}
 }
 
-func actionSupportsReplay(action string) bool {
-	switch strings.TrimSpace(action) {
-	case "agent.chat.conversations.create", "agent.chat.conversations.rename", "agent.chat.conversations.delete",
-		"agent.knowledge.sources.delete", "agent.knowledge.upload.start",
-		"agent.memory.facts.update", "agent.memory.facts.delete":
-		return true
-	default:
-		return false
-	}
-}
-
-// actionPublishesReplay is narrower than transport replay support. Memory fact
-// mutations are idempotently replayable, but their public result schemas are
-// the exact fact/deletion receipts and do not expose transport metadata.
+// actionPublishesReplay identifies public receipts which include StartOperation
+// transport metadata. Other mutations may still be idempotently replayable;
+// their public projections simply do not expose that transport detail.
 func actionPublishesReplay(action string) bool {
 	switch strings.TrimSpace(action) {
 	case "agent.chat.conversations.create", "agent.chat.conversations.rename", "agent.chat.conversations.delete",

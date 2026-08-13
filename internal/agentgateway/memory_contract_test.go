@@ -89,7 +89,7 @@ func TestMemoryFactMutationRequestValidationIsClosed(t *testing.T) {
 	}
 }
 
-func TestMemoryResultValidationAndProjectionAreClosed(t *testing.T) {
+func TestMemoryResultValidationAndProjectionIgnoreUnpublishedFields(t *testing.T) {
 	valid := map[string]any{
 		"enabled": true, "embedding_configured": true,
 		"embedding_profile_id": "22222222-2222-4222-8222-222222222222", "embedding_model": "text-embedding-3-small",
@@ -106,11 +106,8 @@ func TestMemoryResultValidationAndProjectionAreClosed(t *testing.T) {
 		t.Fatalf("valid memory status rejected: result=%#v err=%v", projected, err)
 	}
 	for name, mutate := range map[string]func(map[string]any){
-		"top-level extra":        func(value map[string]any) { value["credential"] = "drop" },
 		"malformed fact":         func(value map[string]any) { value["facts"] = []any{map[string]any{"id": "bad"}} },
-		"fact extra":             func(value map[string]any) { value["facts"].([]any)[0].(map[string]any)["internal"] = true },
 		"malformed timeline":     func(value map[string]any) { value["timeline"] = []any{map[string]any{"kind": "other"}} },
-		"timeline extra":         func(value map[string]any) { value["timeline"].([]any)[0].(map[string]any)["internal"] = true },
 		"inconsistent embedding": func(value map[string]any) { value["embedding_configured"] = false },
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -121,9 +118,26 @@ func TestMemoryResultValidationAndProjectionAreClosed(t *testing.T) {
 			}
 		})
 	}
+	withExtras := cloneParams(valid)
+	withExtras["credential"] = "drop"
+	withExtras["facts"].([]any)[0].(map[string]any)["internal"] = true
+	withExtras["timeline"].([]any)[0].(map[string]any)["internal"] = true
+	projected, err = adaptActionResult("agent.memory.status", withExtras)
+	if err != nil {
+		t.Fatalf("memory status with unpublished Agent fields rejected: %v", err)
+	}
+	if _, present := projected["credential"]; present {
+		t.Fatal("unpublished top-level field escaped the public projection")
+	}
+	if _, present := projected["facts"].([]any)[0].(map[string]any)["internal"]; present {
+		t.Fatal("unpublished fact field escaped the public projection")
+	}
+	if _, present := projected["timeline"].([]any)[0].(map[string]any)["internal"]; present {
+		t.Fatal("unpublished timeline field escaped the public projection")
+	}
 }
 
-func TestMemoryFactMutationResultValidationAndProjectionAreClosed(t *testing.T) {
+func TestMemoryFactMutationResultValidationAndProjectionIgnoreTransportMetadata(t *testing.T) {
 	fact := map[string]any{
 		"id": "33333333-3333-4333-8333-333333333333", "subject": "user", "predicate": "occupation", "value": "architect", "kind": "identity", "confidence": float64(.9),
 		"valid_from": "2026-08-12T07:00:00Z", "last_confirmed_at": "2026-08-12T08:00:00Z",
@@ -134,10 +148,21 @@ func TestMemoryFactMutationResultValidationAndProjectionAreClosed(t *testing.T) 
 	if got, err := adaptActionResult("agent.memory.facts.delete", map[string]any{"fact_id": fact["id"], "deleted": true}); err != nil || got["deleted"] != true {
 		t.Fatalf("valid fact delete result rejected: result=%#v err=%v", got, err)
 	}
-	invalidFact := cloneParams(fact)
-	invalidFact["internal"] = true
-	if _, err := adaptActionResult("agent.memory.facts.update", invalidFact); !errors.Is(err, ErrInvalidActionResult) {
-		t.Fatalf("fact update retained unknown result field: %v", err)
+	withTransportMetadata := cloneParams(fact)
+	withTransportMetadata["replayed"] = true
+	projected, err := adaptActionResult("agent.memory.facts.update", withTransportMetadata)
+	if err != nil {
+		t.Fatalf("fact update rejected transport metadata: %v", err)
+	}
+	if _, present := projected["replayed"]; present {
+		t.Fatal("transport metadata escaped the public fact projection")
+	}
+	deleteResult, err := adaptActionResult("agent.memory.facts.delete", map[string]any{"fact_id": fact["id"], "deleted": true, "replayed": true})
+	if err != nil {
+		t.Fatalf("fact delete rejected transport metadata: %v", err)
+	}
+	if _, present := deleteResult["replayed"]; present {
+		t.Fatal("transport metadata escaped the public delete projection")
 	}
 	if _, err := adaptActionResult("agent.memory.facts.delete", map[string]any{"fact_id": fact["id"], "deleted": false}); !errors.Is(err, ErrInvalidActionResult) {
 		t.Fatalf("fact delete accepted deleted=false: %v", err)

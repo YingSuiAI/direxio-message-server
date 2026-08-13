@@ -63,9 +63,6 @@ func TestMemoryFactReplayMetadataStaysOutsideClosedBusinessResult(t *testing.T) 
 		"agent.memory.facts.delete": {"fact_id": factID, "deleted": true},
 	}
 	for action, output := range results {
-		if !actionSupportsReplay(action) {
-			t.Fatalf("%s must retain idempotent transport replay", action)
-		}
 		if actionPublishesReplay(action) {
 			t.Fatalf("%s must not publish transport replay metadata", action)
 		}
@@ -74,7 +71,7 @@ func TestMemoryFactReplayMetadataStaysOutsideClosedBusinessResult(t *testing.T) 
 		}
 	}
 	for _, action := range []string{"agent.chat.conversations.create", "agent.knowledge.upload.start"} {
-		if !actionSupportsReplay(action) || !actionPublishesReplay(action) {
+		if !actionPublishesReplay(action) {
 			t.Fatalf("%s must retain its public replay receipt", action)
 		}
 	}
