@@ -126,6 +126,10 @@ turn_secret=$(tr -d '\n' <"$generated_dir/turn-shared-secret")
 printf '%s\n' "$turn_secret" | grep -Eq '^[0-9a-f]{64}$'
 [ "$(stat -c '%a' "$generated_dir/turn-shared-secret")" = 400 ]
 [ "$(stat -c '%a' "$generated_dir/turnserver.conf")" = 400 ]
+if grep -Fqx 'no-sqlite' "$generated_dir/turnserver.conf"; then
+  echo 'coturn 4.6.3 does not accept the no-sqlite configuration option' >&2
+  exit 1
+fi
 config_turn_secret=
 while IFS= read -r line; do
   case "$line" in static-auth-secret=*) config_turn_secret=${line#static-auth-secret=} ;; esac

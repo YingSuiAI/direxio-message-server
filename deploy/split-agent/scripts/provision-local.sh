@@ -973,7 +973,6 @@ umask 077
     'no-multicast-peers' \
     'no-tls' \
     'no-dtls' \
-    'no-sqlite' \
     'pidfile=/tmp/turnserver.pid'
 } >"$out/turnserver.conf"
 chmod 400 "$out/turnserver.conf"

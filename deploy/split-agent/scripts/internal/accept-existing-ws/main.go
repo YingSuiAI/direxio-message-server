@@ -15,15 +15,17 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
+	"github.com/google/uuid"
 )
 
 type config struct {
-	HTTPBase    string         `json:"http_base"`
-	SessionFile string         `json:"session_file"`
-	Params      map[string]any `json:"params"`
-	Expect      string         `json:"expect"`
-	Reconnect   bool           `json:"reconnect"`
-	OutputFile  string         `json:"output_file"`
+	HTTPBase          string         `json:"http_base"`
+	SessionFile       string         `json:"session_file"`
+	Params            map[string]any `json:"params"`
+	Expect            string         `json:"expect"`
+	Reconnect         bool           `json:"reconnect"`
+	StopAfterAccepted bool           `json:"stop_after_accepted"`
+	OutputFile        string         `json:"output_file"`
 }
 
 type session struct {
@@ -104,6 +106,7 @@ func runConnection(ctx context.Context, cfg config, token string, after int64, d
 		return 0, err
 	}
 	maxSeq := after
+	stopRequested := false
 	for {
 		var frame map[string]any
 		if err = wsjson.Read(ctx, conn, &frame); err != nil {
@@ -118,6 +121,12 @@ func runConnection(ctx context.Context, cfg config, token string, after int64, d
 		seq := integer(frame["seq"])
 		typeName, _ := frame["type"].(string)
 		event, _ := frame["event"].(string)
+		if cfg.StopAfterAccepted && !stopRequested && typeName == "server.native_agent_stream.accepted" {
+			if err = stopDurableTurn(ctx, cfg.HTTPBase, token, frame); err != nil {
+				return maxSeq, err
+			}
+			stopRequested = true
+		}
 		if typeName == "server.native_agent_stream.error" || event == "error" {
 			if cfg.Expect != "error" {
 				return maxSeq, fmt.Errorf("unexpected stream error: %v", frame["error"])
@@ -144,6 +153,44 @@ func runConnection(ctx context.Context, cfg config, token string, after int64, d
 			return maxSeq, nil
 		}
 	}
+}
+
+func stopDurableTurn(ctx context.Context, base, token string, accepted map[string]any) error {
+	turnID, _ := accepted["turn_id"].(string)
+	conversationID, _ := accepted["conversation_id"].(string)
+	revision := integer(accepted["revision"])
+	if uuid.Validate(turnID) != nil || uuid.Validate(conversationID) != nil || revision <= 0 {
+		return errors.New("accepted stream frame has invalid turn identity")
+	}
+	return postAction(ctx, base, token, "agent.chat.turn.stop", map[string]any{
+		"idempotency_key": uuid.NewString(), "turn_id": turnID, "expected_revision": revision,
+	}, nil)
+}
+
+func postAction(ctx context.Context, base, token, action string, params map[string]any, target any) error {
+	body, err := json.Marshal(map[string]any{"action": action, "params": params})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(base, "/")+"/_p2p/query", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("%s returned HTTP %d", action, resp.StatusCode)
+	}
+	if target == nil {
+		_, err = io.Copy(io.Discard, resp.Body)
+		return err
+	}
+	return json.NewDecoder(resp.Body).Decode(target)
 }
 
 func issueTicket(ctx context.Context, base, token string) (string, error) {

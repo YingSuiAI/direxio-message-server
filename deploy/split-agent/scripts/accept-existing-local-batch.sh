@@ -18,8 +18,8 @@ mkdir -m 700 -- "$out" || exit 2
 summary=$out/summary.tsv
 : >"$summary"; chmod 600 "$summary"
 timeout_seconds=${DIREXTALK_BATCH_TIMEOUT_SECONDS:-180}
-chat_model=${DIREXTALK_BATCH_CHAT_MODEL:-qwen/qwen3-32b}
-failure_model=${DIREXTALK_BATCH_FAILURE_MODEL:-openai/gpt-4o-mini}
+chat_model=${DIREXTALK_BATCH_CHAT_MODEL:-}
+failure_model=${DIREXTALK_BATCH_FAILURE_MODEL:-$chat_model}
 case "$timeout_seconds" in ''|*[!0-9]*) echo "batch acceptance: invalid timeout" >&2; exit 2 ;; esac
 [ "$timeout_seconds" -ge 30 ] && [ "$timeout_seconds" -le 600 ] || { echo "batch acceptance: timeout must be 30..600" >&2; exit 2; }
 
@@ -88,7 +88,7 @@ bootstrap() {
 profile_json() {
   local model=$1
   call_http agent.model_profiles.list '{"page_size":100}' model-profiles || return 1
-  jq -c --arg model "$model" '[.profiles[]? | select(.model==$model and .model_kind=="conversation" and .api_key_configured==true)] | first // empty' "$last_response"
+  jq -c --arg model "$model" '[.profiles[]? | select(.model_kind=="conversation" and .api_key_configured==true) | select($model=="" or .model==$model)] | first // empty' "$last_response"
 }
 chat_params() {
   local profile=$1 conversation=$2 idem=$3 message=$4
@@ -187,18 +187,19 @@ failed_history_group() {
   local profile conversation params config frames
   profile=$(profile_json "$failure_model"); [ -n "$profile" ] || return 1
   conversation=$(uuid4); owned_conversations+=("$conversation")
-  create_conversation "$conversation" "Batch durable failure" || return 1
-  params=$(chat_params "$profile" "$conversation" "$(uuid4)" 'Reply with exactly BATCH_FAILURE_SHOULD_NOT_COMPLETE')
+  create_conversation "$conversation" "Batch durable cancellation" || return 1
+  params=$(chat_params "$profile" "$conversation" "$(uuid4)" 'Write a detailed response until this acceptance run cancels the durable turn.')
   config=$out/ws-failure-config.json; frames=$out/ws-failure.frames.jsonl
   jq -n --arg base "$http_base" --arg session "$session" --argjson params "$params" --arg output "$frames" \
-    '{http_base:$base,session_file:$session,params:$params,expect:"error",reconnect:false,output_file:$output}' >"$config"
+    '{http_base:$base,session_file:$session,params:$params,expect:"error",reconnect:false,stop_after_accepted:true,output_file:$output}' >"$config"
   seal "$config"
   go run "$script_dir/internal/accept-existing-ws" "$config" || return 1
   seal "$frames"
+  jq -s -e 'any(.[]; .event=="error" and .error_code=="canceled")' "$frames" >/dev/null || return 1
   call_http agent.chat.conversations.get "$(jq -cn --arg id "$conversation" '{conversation_id:$id,message_limit:100}')" failed-conversation-get || return 1
   jq -e --arg id "$conversation" '.conversation.conversation_id==$id' "$last_response" >/dev/null || return 1
   call_http agent.chat.turns.list "$(jq -cn --arg id "$conversation" '{conversation_id:$id,limit:100}')" failed-turns-list || return 1
-  jq -e 'any(.turns[]?; .state=="failed" and (.terminal_code|length>0))' "$last_response" >/dev/null
+  jq -e 'any(.turns[]?; .state=="canceled" and .last_sequence>0)' "$last_response" >/dev/null
 }
 
 memory_readback_group() {

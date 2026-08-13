@@ -16,7 +16,8 @@ for required in \
   'run_group durable_failed_history' \
   'run_group memory_ambiguous_readback' \
   'run_group static_site_lifecycle' \
-  'qwen/qwen3-32b' \
+  'DIREXTALK_BATCH_CHAT_MODEL' \
+  'DIREXTALK_BATCH_FAILURE_MODEL' \
   'agent.core.mcp.list' \
   'agent.core.skills.list' \
   'agent.chat.turns.list' \
@@ -24,6 +25,13 @@ for required in \
   'agent.static_sites.delete'; do
   grep -Fq -- "$required" "$script"
 done
+[ "$(grep -Fc 'stop_after_accepted:true' "$script")" -eq 1 ]
+[ "$(grep -Fc 'agent.chat.turn.stop' "$helper")" -eq 1 ]
+profile_filter='[.profiles[]? | select(.model_kind=="conversation" and .api_key_configured==true) | select($model=="" or .model==$model)] | first // empty'
+profiles='{"profiles":[{"model":"embedding","model_kind":"embedding","api_key_configured":true},{"model":"configured-chat","model_kind":"conversation","api_key_configured":true}]}'
+[ "$(jq -cr --arg model '' "$profile_filter" <<<"$profiles" | jq -r '.model')" = configured-chat ]
+[ "$(jq -cr --arg model configured-chat "$profile_filter" <<<"$profiles" | jq -r '.model')" = configured-chat ]
+[ -z "$(jq -cr --arg model missing "$profile_filter" <<<"$profiles")" ]
 [ "$(grep -Fc 'run_group static_site_lifecycle static_site_group' "$script")" -eq 1 ]
 grep -Fq 'client.native_agent_stream' "$helper"
 grep -Fq 'after_seq' "$helper"
