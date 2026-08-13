@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v1.1.43
+
+1. Expose owner actions to list, inspect, and destroy persistent AWS Workers.
+2. Add optional Route 53 domain binding and removal for Worker services using their ordinary public IPv4 address.
+
 ## v1.1.42
 
 1. Accept additive internal memory fields while projecting only the stable public memory contract.
