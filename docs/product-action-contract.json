@@ -8699,6 +8699,13 @@
             "items": {
               "type": "object",
               "properties": {
+                "availability": {
+                  "type": "string",
+                  "required": true,
+                  "presence": {
+                    "present": "one_of:available|unavailable"
+                  }
+                },
                 "current_task": {
                   "type": "object",
                   "properties": {
@@ -8715,6 +8722,9 @@
                 "ec2_state": {
                   "type": "string",
                   "required": true
+                },
+                "error": {
+                  "type": "string"
                 },
                 "hourly_quote": {
                   "type": "object",
@@ -8923,6 +8933,13 @@
             "type": "object",
             "required": true,
             "properties": {
+              "availability": {
+                "type": "string",
+                "required": true,
+                "presence": {
+                  "present": "one_of:available|unavailable"
+                }
+              },
               "current_task": {
                 "type": "object",
                 "properties": {
@@ -8939,6 +8956,9 @@
               "ec2_state": {
                 "type": "string",
                 "required": true
+              },
+              "error": {
+                "type": "string"
               },
               "hourly_quote": {
                 "type": "object",

@@ -124,7 +124,9 @@ contains `list_workers`, `get_worker`, `destroy_worker`, `bind_domain`, and
 `agent.workers.unbind_domain`. Worker identity and the explicit mutation
 confirmation are forwarded unchanged; AWS ownership and Route 53 read-back
 remain Agent responsibilities. Domains use the Worker's ordinary public IPv4
-and do not require an EIP.
+and do not require an EIP. Every listed or fetched Worker status includes
+`availability=available|unavailable`; an unavailable status may include a
+sanitized `error`. The public Worker identity remains the same eight fields.
 
 The model-profile sync/list contract includes
 `default_tool_client_profile_id`. An empty value means no tool default; a

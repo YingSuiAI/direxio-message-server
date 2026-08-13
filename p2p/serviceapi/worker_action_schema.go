@@ -37,7 +37,12 @@ func workerStatusSchema() ActionFieldSchema {
 		"domain":       domain,
 	}}
 	return ActionFieldSchema{Type: "object", Required: true, Properties: map[string]ActionFieldSchema{
-		"identity":     workerIdentitySchema(),
+		"identity": workerIdentitySchema(),
+		"availability": {
+			Type: "string", Required: true,
+			Presence: &ActionPresenceSchema{Present: "one_of:available|unavailable"},
+		},
+		"error":        {Type: "string"},
 		"ec2_state":    {Type: "string", Required: true},
 		"worker_phase": {Type: "string", Required: true},
 		"observed_at":  {Type: "string", Required: true},

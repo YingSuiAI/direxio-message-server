@@ -19,6 +19,7 @@ import (
 //   - dirextalk-agent/internal/agentcapability/aws_adapter.go
 //   - dirextalk-agent/internal/agentcapability/voice_adapter.go
 //   - dirextalk-agent/internal/agentcapability/executionv2/capability.go
+//   - dirextalk-agent/internal/agentcapability/worker/capability.go
 //
 // Keep this table in lockstep with the Agent descriptor constructors. A
 // catalog drift test exercises the table through ValidateCatalog so changing
@@ -169,11 +170,11 @@ var expectedCatalogSchemaDigests = map[string]catalogSchemaDigest{
 	},
 	"agent.workers.list": {
 		inputHex:  "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
-		resultHex: "ba13cb6240219be69f0c7e267852f7dcb0219c149b6926c765f971d701d5da38",
+		resultHex: "b44bf36e0040385df8c7e544247e03de988fe3cd2375a847260003592e023811",
 	},
 	"agent.workers.get": {
 		inputHex:  "61aaf9903d0fef539355ab96ae6e6e88b945233daefcc9d5cdf62f4f6067491e",
-		resultHex: "8b1616d0ccfb134c616694ff3abfe31de88d8b29006c7e31fee373bceeb931d8",
+		resultHex: "f209ff208373abb943e361d405b203d8cf32686b0d1155d229b4ced7a0928af3",
 	},
 	"agent.workers.destroy": {
 		inputHex:  "d9c08f60d341bc5bb00f1f173c4424486fe124e968a933c895f3d07350cda261",
