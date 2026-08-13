@@ -185,7 +185,8 @@ Native Agent 当前边界：
 - Matrix `m.room.member membership=join` 是最终 joined 事实。
 - 普通 Matrix timeline 不复制到 P2P 普通消息表；普通消息读写走 Matrix
   Client-Server API。Online Agent 使用真实 `agent_room_id` timeline；Native
-  Agent 使用 owner-authenticated `agent.*` actions 和 Native Agent WS frames。
+  Agent 文本 turn 使用 owner-authenticated HTTP POST 创建并通过独立 SSE
+  读取持久事件；语音等非文本实时流仍使用其当前专用传输。
   两者不共享消息存储，也不把 prompt 复制到 ProductCore 消息表。
 
 ## 5. 用户请求生命周期

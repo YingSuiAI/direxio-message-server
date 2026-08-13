@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/YingSuiAI/dirextalk-message-server/internal/agentgateway"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/agentstream"
 	actionbase "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/action"
 	agentmodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agent"
@@ -53,50 +52,6 @@ func (agentStreamPortStub) Stream(
 	return emit(agentstream.Event{Event: "delta", Data: map[string]any{"text": "agent"}})
 }
 
-type sequencedDurableAgent struct {
-	params chan map[string]any
-}
-
-type waitingConfirmationDurableAgent struct{}
-
-type terminalErrorDurableAgent struct{}
-
-type identityFreeCapabilityErrorDurableAgent struct{}
-
-type observationInterruptedDurableAgent struct{}
-
-func (terminalErrorDurableAgent) Stream(context.Context, string, map[string]any, func(agentstream.Event) error) error {
-	return nil
-}
-
-func (identityFreeCapabilityErrorDurableAgent) Stream(context.Context, string, map[string]any, func(agentstream.Event) error) error {
-	return nil
-}
-
-func (observationInterruptedDurableAgent) Stream(context.Context, string, map[string]any, func(agentstream.Event) error) error {
-	return nil
-}
-
-func (identityFreeCapabilityErrorDurableAgent) DurableStream(context.Context, string, string, map[string]any, func(agentstream.StreamEvent) error) error {
-	return errors.New("external native agent operation outcome is uncertain")
-}
-
-func (observationInterruptedDurableAgent) DurableStream(_ context.Context, _ string, _ string, params map[string]any, emit func(agentstream.StreamEvent) error) error {
-	startID := actionbase.String(params["idempotency_key"])
-	conversationID := actionbase.String(params["conversation_id"])
-	turnID := "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
-	if err := emit(agentstream.StreamEvent{
-		Kind: agentstream.EventAccepted, TurnID: turnID, IdempotencyKey: startID,
-		ConversationID: conversationID, Revision: 3, Seq: 11, Event: "accepted",
-	}); err != nil {
-		return err
-	}
-	return &agentgateway.ObservationInterruptedError{
-		IdempotencyKey: startID, ConversationID: conversationID, TurnID: turnID,
-		Revision: 4, Sequence: 12, Cause: agentgateway.ErrWatchIdleTimeout,
-	}
-}
-
 type terminalErrorAgent struct{}
 
 func (terminalErrorAgent) Stream(_ context.Context, _ string, _ map[string]any, emit func(agentstream.Event) error) error {
@@ -106,124 +61,8 @@ func (terminalErrorAgent) Stream(_ context.Context, _ string, _ map[string]any, 
 	return errors.New("gateway terminal error")
 }
 
-func (terminalErrorDurableAgent) DurableStream(_ context.Context, _ string, _ string, params map[string]any, emit func(agentstream.StreamEvent) error) error {
-	startID := actionbase.String(params["idempotency_key"])
-	conversationID := actionbase.String(params["conversation_id"])
-	turnID := "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
-	err := errors.New("gateway terminal error")
-	if emitErr := emit(agentstream.StreamEvent{
-		Kind: agentstream.EventError, TurnID: turnID, IdempotencyKey: startID,
-		ConversationID: conversationID, Revision: 1, Seq: 1, Event: "error",
-		Data: map[string]any{"error_code": "provider_uncertain", "error_summary": "model dispatch outcome is unknown"},
-	}); emitErr != nil {
-		return emitErr
-	}
-	return err
-}
-
-func (sequencedDurableAgent) Stream(context.Context, string, map[string]any, func(agentstream.Event) error) error {
-	return nil
-}
-
-func (waitingConfirmationDurableAgent) Stream(context.Context, string, map[string]any, func(agentstream.Event) error) error {
-	return nil
-}
-
-func (waitingConfirmationDurableAgent) DurableStream(_ context.Context, _ string, _ string, params map[string]any, emit func(agentstream.StreamEvent) error) error {
-	startID := actionbase.String(params["idempotency_key"])
-	conversationID := actionbase.String(params["conversation_id"])
-	turnID := "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
-	data := map[string]any{
-		"kind": "waiting_confirmation", "idempotency_key": startID,
-		"conversation_id": conversationID, "turn_id": turnID, "revision": float64(3),
-		"confirmation_id": "11111111-1111-4111-8111-111111111111",
-		"execution_id":    "33333333-3333-4333-8333-333333333333",
-		"status":          "waiting_confirmation",
-	}
-	return emit(agentstream.StreamEvent{
-		Kind: agentstream.EventRuntime, TurnID: turnID, IdempotencyKey: startID,
-		ConversationID: conversationID, Revision: 3, Seq: 4,
-		Event: "waiting_confirmation", Data: data,
-	})
-}
-
-func (a sequencedDurableAgent) DurableStream(_ context.Context, _ string, _ string, params map[string]any, emit func(agentstream.StreamEvent) error) error {
-	if a.params != nil {
-		a.params <- cloneMap(params)
-	}
-	startID := actionbase.String(params["idempotency_key"])
-	conversationID := actionbase.String(params["conversation_id"])
-	turnID := "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
-	turn := agentstream.Turn{State: agentstream.StateAccepted, IdempotencyKey: startID, TurnID: turnID, ConversationID: conversationID, Revision: 1}
-	if err := emit(agentstream.StreamEvent{Kind: agentstream.EventAccepted, Turn: turn, IdempotencyKey: startID, TurnID: turnID, ConversationID: conversationID, Revision: 1, Seq: 41, Event: "accepted"}); err != nil {
-		return err
-	}
-	turn.State = agentstream.StateSucceeded
-	return emit(agentstream.StreamEvent{Kind: agentstream.EventRuntime, Turn: turn, IdempotencyKey: startID, TurnID: turnID, ConversationID: conversationID, Revision: 1, Seq: 42, Event: "done", Data: map[string]any{"done": true}})
-}
-
-func (agentStreamPortStub) DurableStream(
-	_ context.Context,
-	ownerID string,
-	_ string,
-	params map[string]any,
-	emit func(agentstream.StreamEvent) error,
-) error {
-	startID := actionbase.String(params["idempotency_key"])
-	conversationID := actionbase.String(params["conversation_id"])
-	turnID := "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
-	revision := int64(1)
-	identity := map[string]any{
-		"idempotency_key": startID, "conversation_id": conversationID,
-		"turn_id": turnID, "revision": float64(revision),
-	}
-	turn := agentstream.Turn{OwnerID: ownerID, TurnID: turnID, IdempotencyKey: startID, ConversationID: conversationID, Revision: revision}
-	accepted := cloneMap(identity)
-	accepted["kind"] = "accepted"
-	if err := emit(agentstream.StreamEvent{Kind: agentstream.EventAccepted, Turn: turn, TurnID: turnID, IdempotencyKey: startID, ConversationID: conversationID, Revision: revision, Seq: 1, Event: "accepted", Data: accepted}); err != nil {
-		return err
-	}
-	delta := cloneMap(identity)
-	delta["kind"], delta["text"] = "delta", "agent"
-	if err := emit(agentstream.StreamEvent{Kind: agentstream.EventRuntime, Turn: turn, TurnID: turnID, IdempotencyKey: startID, ConversationID: conversationID, Revision: revision, Seq: 2, Event: "delta", Data: delta}); err != nil {
-		return err
-	}
-	done := cloneMap(identity)
-	done["kind"] = "done"
-	return emit(agentstream.StreamEvent{Kind: agentstream.EventRuntime, Turn: turn, TurnID: turnID, IdempotencyKey: startID, ConversationID: conversationID, Revision: revision, Seq: 3, Event: "done", Data: done})
-}
-
 type validatingNativeAgentRunner struct {
 	streamCalls int
-}
-
-type cancelTrackingAgent struct {
-	streamCalls        int
-	durableStreamCalls int
-	cancelCalls        int
-	cancelParams       map[string]any
-	started            chan struct{}
-	startOnce          sync.Once
-}
-
-func (a *cancelTrackingAgent) Stream(context.Context, string, map[string]any, func(agentstream.Event) error) error {
-	a.streamCalls++
-	return nil
-}
-
-func (a *cancelTrackingAgent) DurableStream(ctx context.Context, _ string, _ string, _ map[string]any, _ func(agentstream.StreamEvent) error) error {
-	a.durableStreamCalls++
-	if a.started != nil {
-		a.startOnce.Do(func() { close(a.started) })
-	}
-	<-ctx.Done()
-	return ctx.Err()
-}
-
-func (a *cancelTrackingAgent) CancelExternal(_ context.Context, _ string, params map[string]any) (map[string]any, error) {
-	a.cancelCalls++
-	a.cancelParams = cloneMap(params)
-	return map[string]any{"ok": true}, nil
 }
 
 func (r *validatingNativeAgentRunner) Apply(context.Context, string) error { return nil }
@@ -237,7 +76,7 @@ func (r *validatingNativeAgentRunner) Stream(context.Context, string, map[string
 	return nil
 }
 
-func TestPluginAndAgentStreamsPreserveFramesAndSharedIDNamespace(t *testing.T) {
+func TestPluginAndVoiceStreamsPreserveFramesAndSharedIDNamespace(t *testing.T) {
 	pluginPort := &pluginStreamPortStub{started: make(chan struct{})}
 	module := New(Dependencies{Plugins: pluginPort, Agent: agentStreamPortStub{}}, Config{})
 	connection := newConnection("session", Ticket{Role: "owner"}, MaxInFlightRequests)
@@ -251,32 +90,6 @@ func TestPluginAndAgentStreamsPreserveFramesAndSharedIDNamespace(t *testing.T) {
 	pluginDone := nextOutbound(t, connection)
 	if pluginDelta["type"] != "server.plugin_stream.event" || pluginDelta["event"] != "delta" || pluginDone["event"] != "done" {
 		t.Fatalf("plugin frames = %#v / %#v", pluginDelta, pluginDone)
-	}
-
-	module.startNativeAgentStream(ctx, connection, map[string]any{
-		"id": "agent-happy", "action": "agent.chat", "params": map[string]any{
-			"idempotency_key": "11111111-1111-4111-8111-111111111111",
-			"conversation_id": "22222222-2222-4222-8222-222222222222",
-			"message":         "hello", "model_profile_id": "profile-id",
-			"model_profile_revision": int64(1), "credential_version": int64(1),
-		},
-	})
-	agentAccepted := nextOutbound(t, connection)
-	agentDelta := nextOutbound(t, connection)
-	agentDone := nextOutbound(t, connection)
-	if agentAccepted["type"] != "server.native_agent_stream.accepted" ||
-		agentAccepted["idempotency_key"] != "11111111-1111-4111-8111-111111111111" ||
-		agentAccepted["turn_id"] != "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" ||
-		agentAccepted["revision"] != int64(1) {
-		t.Fatalf("agent accepted frame did not preserve distinct identities: %#v", agentAccepted)
-	}
-	if agentDelta["type"] != "server.native_agent_stream.event" || agentDelta["event"] != "delta" || agentDelta["action"] != "agent.chat" || agentDone["event"] != "done" || agentDone["action"] != "agent.chat" {
-		t.Fatalf("agent frames = %#v / %#v", agentDelta, agentDone)
-	}
-	for _, frame := range []map[string]any{agentDelta, agentDone} {
-		if frame["idempotency_key"] != "11111111-1111-4111-8111-111111111111" || frame["turn_id"] != "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" || frame["revision"] != int64(1) {
-			t.Fatalf("agent event frame identity drifted: %#v", frame)
-		}
 	}
 
 	module.startNativeAgentStream(ctx, connection, map[string]any{
@@ -305,8 +118,8 @@ func TestPluginAndAgentStreamsPreserveFramesAndSharedIDNamespace(t *testing.T) {
 		},
 	})
 	conflict := nextOutbound(t, connection)
-	if conflict["type"] != "server.native_agent_stream.error" || conflict["status"] != http.StatusConflict {
-		t.Fatalf("shared ID conflict = %#v", conflict)
+	if conflict["type"] != "server.native_agent_stream.error" || conflict["status"] != http.StatusBadRequest || conflict["error"] != "text turns use the HTTP/SSE transport" {
+		t.Fatalf("retired text WS result = %#v", conflict)
 	}
 	module.cancelPluginStream(connection, map[string]any{"id": "shared"})
 	cancelled := nextOutbound(t, connection)
@@ -334,7 +147,7 @@ func TestNativeAgentStreamRejectsSensitiveKeysBeforeForwardAndReplay(t *testing.
 	})
 
 	frame := nextOutbound(t, connection)
-	if frame["type"] != "server.native_agent_stream.error" || frame["status"] != http.StatusBadRequest {
+	if frame["type"] != "server.native_agent_stream.error" || frame["status"] != http.StatusBadRequest || frame["error"] != "text turns use the HTTP/SSE transport" {
 		t.Fatalf("sensitive stream frame = %#v, want HTTP 400 error", frame)
 	}
 	if strings.Contains(fmt.Sprint(frame), "stream-secret-canary") {
@@ -345,8 +158,8 @@ func TestNativeAgentStreamRejectsSensitiveKeysBeforeForwardAndReplay(t *testing.
 	}
 }
 
-func TestNativeAgentStreamValidatesImmediatelyAndDetachesDurableTurn(t *testing.T) {
-	agent := &cancelTrackingAgent{started: make(chan struct{})}
+func TestNativeAgentTextStreamIsRetiredBeforeForward(t *testing.T) {
+	agent := &validatingNativeAgentRunner{}
 	module := New(Dependencies{Agent: agent}, Config{})
 	connection := newConnection("session", Ticket{Role: "owner", UserID: "@owner:example.test"}, MaxInFlightRequests)
 	invalid := map[string]any{
@@ -362,7 +175,7 @@ func TestNativeAgentStreamValidatesImmediatelyAndDetachesDurableTurn(t *testing.
 		"id": "invalid", "action": "agent.chat", "params": invalid,
 	})
 	frame := nextOutbound(t, connection)
-	if frame["type"] != "server.native_agent_stream.error" || frame["status"] != http.StatusBadRequest {
+	if frame["type"] != "server.native_agent_stream.error" || frame["status"] != http.StatusBadRequest || frame["error"] != "text turns use the HTTP/SSE transport" {
 		t.Fatalf("invalid immediate frame = %#v, want HTTP 400", frame)
 	}
 	if strings.Contains(fmt.Sprint(frame), "immediate-secret") {
@@ -372,158 +185,8 @@ func TestNativeAgentStreamValidatesImmediatelyAndDetachesDurableTurn(t *testing.
 	if cancelFrame := nextOutbound(t, connection); cancelFrame["status"] != http.StatusNotFound {
 		t.Fatalf("invalid stream cancel frame = %#v, want not found", cancelFrame)
 	}
-	if agent.streamCalls != 0 || agent.durableStreamCalls != 0 || agent.cancelCalls != 0 {
-		t.Fatalf("invalid request reached agent: stream=%d durable=%d cancel=%d", agent.streamCalls, agent.durableStreamCalls, agent.cancelCalls)
-	}
-
-	valid := map[string]any{
-		"idempotency_key":        "33333333-3333-4333-8333-333333333333",
-		"conversation_id":        "22222222-2222-4222-8222-222222222222",
-		"message":                "hello",
-		"model_profile_id":       "profile-id",
-		"model_profile_revision": int64(2),
-		"credential_version":     int64(3),
-	}
-	module.startNativeAgentStream(context.Background(), connection, map[string]any{
-		"id": "valid", "action": "agent.chat", "params": valid,
-	})
-	select {
-	case <-agent.started:
-	case <-time.After(time.Second):
-		t.Fatal("valid durable stream did not reach agent")
-	}
-	module.cancelNativeAgentStream(connection, map[string]any{"id": "valid"})
-	cancelled := nextOutbound(t, connection)
-	if cancelled["type"] != "server.native_agent_stream.cancelled" || cancelled["ok"] != true || cancelled["execution_continues"] != true {
-		t.Fatalf("valid stream cancel frame = %#v", cancelled)
-	}
-	if agent.cancelCalls != 0 {
-		t.Fatalf("attachment detach stopped durable turn: params=%#v calls=%d", agent.cancelParams, agent.cancelCalls)
-	}
-}
-
-func TestNativeAgentDurableFramesExposeSequenceCursor(t *testing.T) {
-	receivedParams := make(chan map[string]any, 1)
-	module := New(Dependencies{Agent: sequencedDurableAgent{params: receivedParams}}, Config{})
-	connection := newConnection("session", Ticket{Role: "owner", UserID: "@owner:example.test"}, MaxInFlightRequests)
-	module.startNativeAgentStream(context.Background(), connection, map[string]any{
-		"id": "sequenced", "action": "agent.chat", "params": map[string]any{
-			"idempotency_key": "11111111-1111-4111-8111-111111111111",
-			"message":         "hello", "model_profile_id": "profile-id",
-			"model_profile_revision": int64(1), "credential_version": int64(1),
-			"conversation_id": "22222222-2222-4222-8222-222222222222", "after_seq": int64(40),
-		},
-	})
-	params := <-receivedParams
-	if params["after_seq"] != int64(40) {
-		t.Fatalf("durable stream after_seq = %#v, want 40", params["after_seq"])
-	}
-
-	accepted := nextOutbound(t, connection)
-	if accepted["type"] != "server.native_agent_stream.accepted" || accepted["seq"] != int64(41) || accepted["idempotency_key"] != "11111111-1111-4111-8111-111111111111" || accepted["revision"] != int64(1) {
-		t.Fatalf("accepted frame = %#v, want seq 41", accepted)
-	}
-	done := nextOutbound(t, connection)
-	if done["type"] != "server.native_agent_stream.event" || done["event"] != "done" || done["seq"] != int64(42) {
-		t.Fatalf("done frame = %#v, want seq 42", done)
-	}
-}
-
-func TestNativeAgentDurableWaitingConfirmationExposesAuthority(t *testing.T) {
-	module := New(Dependencies{Agent: waitingConfirmationDurableAgent{}}, Config{})
-	connection := newConnection("session", Ticket{Role: "owner", UserID: "@owner:example.test"}, MaxInFlightRequests)
-	module.startNativeAgentStream(context.Background(), connection, map[string]any{
-		"id": "waiting", "action": "agent.chat", "params": map[string]any{
-			"idempotency_key": "44444444-4444-4444-8444-444444444444",
-			"message":         "create html", "model_profile_id": "profile-id",
-			"model_profile_revision": int64(1), "credential_version": int64(1),
-			"conversation_id": "55555555-5555-4555-8555-555555555555",
-		},
-	})
-
-	frame := nextOutbound(t, connection)
-	if frame["type"] != "server.native_agent_stream.event" || frame["event"] != "waiting_confirmation" || frame["seq"] != int64(4) {
-		t.Fatalf("waiting confirmation frame = %#v", frame)
-	}
-	data, ok := frame["data"].(map[string]any)
-	if !ok || data["confirmation_id"] != "11111111-1111-4111-8111-111111111111" ||
-		data["execution_id"] != "33333333-3333-4333-8333-333333333333" ||
-		data["status"] != "waiting_confirmation" {
-		t.Fatalf("waiting confirmation authority = %#v", frame)
-	}
-	if _, legacy := data["attempt_id"]; legacy {
-		t.Fatalf("waiting confirmation exposed superseded attempt authority: %#v", frame)
-	}
-}
-
-func TestNativeAgentDurableTerminalErrorIsSentOnce(t *testing.T) {
-	module := New(Dependencies{Agent: terminalErrorDurableAgent{}}, Config{})
-	connection := newConnection("session", Ticket{Role: "owner", UserID: "@owner:example.test"}, MaxInFlightRequests)
-	module.startNativeAgentStream(context.Background(), connection, map[string]any{
-		"id": "terminal", "action": "agent.chat", "params": map[string]any{
-			"idempotency_key": "11111111-1111-4111-8111-111111111111",
-			"conversation_id": "22222222-2222-4222-8222-222222222222",
-			"message":         "hello", "model_profile_id": "profile-id",
-			"model_profile_revision": int64(1), "credential_version": int64(1),
-		},
-	})
-	frame := nextOutbound(t, connection)
-	if frame["type"] != "server.native_agent_stream.error" || frame["event"] != "error" || frame["status"] != http.StatusBadGateway {
-		t.Fatalf("terminal error frame = %#v", frame)
-	}
-	if frame["code"] != "provider_uncertain" || frame["error_code"] != "provider_uncertain" || frame["error"] != "model dispatch outcome is unknown" {
-		t.Fatalf("terminal failure authority = %#v", frame)
-	}
-	select {
-	case duplicate := <-connection.outbound:
-		t.Fatalf("terminal gateway error was duplicated: %#v", duplicate)
-	case <-time.After(50 * time.Millisecond):
-	}
-}
-
-func TestNativeAgentIdentityFreeCapabilityErrorDoesNotBecomeBadRequest(t *testing.T) {
-	module := New(Dependencies{Agent: identityFreeCapabilityErrorDurableAgent{}}, Config{})
-	connection := newConnection("session", Ticket{Role: "owner", UserID: "@owner:example.test"}, MaxInFlightRequests)
-	module.startNativeAgentStream(context.Background(), connection, map[string]any{
-		"id": "capability-terminal", "action": "agent.chat", "params": map[string]any{
-			"idempotency_key": "11111111-1111-4111-8111-111111111111",
-			"conversation_id": "22222222-2222-4222-8222-222222222222",
-			"message":         "hello", "model_profile_id": "profile-id",
-			"model_profile_revision": int64(1), "credential_version": int64(1), "after_seq": int64(16),
-		},
-	})
-	frame := nextOutbound(t, connection)
-	if frame["type"] != "server.native_agent_stream.error" || frame["status"] != http.StatusBadGateway {
-		t.Fatalf("identity-free capability terminal = %#v", frame)
-	}
-	if message := actionbase.String(frame["error"]); message != "external native agent operation outcome is uncertain" || strings.Contains(message, "identity is invalid") {
-		t.Fatalf("identity-free capability failure was misclassified: %#v", frame)
-	}
-}
-
-func TestNativeAgentObservationInterruptionKeepsExecutionAttachable(t *testing.T) {
-	module := New(Dependencies{Agent: observationInterruptedDurableAgent{}}, Config{})
-	connection := newConnection("session", Ticket{Role: "owner", UserID: "@owner:example.test"}, MaxInFlightRequests)
-	module.startNativeAgentStream(context.Background(), connection, map[string]any{
-		"id": "observation", "action": "agent.chat", "params": map[string]any{
-			"idempotency_key": "11111111-1111-4111-8111-111111111111",
-			"conversation_id": "22222222-2222-4222-8222-222222222222",
-			"message":         "hello", "model_profile_id": "profile-id",
-			"model_profile_revision": int64(1), "credential_version": int64(1),
-		},
-	})
-	accepted := nextOutbound(t, connection)
-	if accepted["type"] != "server.native_agent_stream.accepted" {
-		t.Fatalf("accepted frame = %#v", accepted)
-	}
-	interrupted := nextOutbound(t, connection)
-	if interrupted["type"] != "server.native_agent_stream.error" || interrupted["status"] != http.StatusServiceUnavailable ||
-		interrupted["event"] != "observation_interrupted" || interrupted["execution_continues"] != true ||
-		interrupted["error_code"] != "observation_interrupted" {
-		t.Fatalf("observation frame = %#v", interrupted)
-	}
-	if interrupted["turn_id"] != "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" || interrupted["revision"] != int64(4) || interrupted["seq"] != int64(12) {
-		t.Fatalf("observation cursor = %#v", interrupted)
+	if agent.streamCalls != 0 {
+		t.Fatalf("retired text WS reached agent %d time(s)", agent.streamCalls)
 	}
 }
 
@@ -541,26 +204,6 @@ func TestNativeAgentNonDurableTerminalErrorIsSentOnce(t *testing.T) {
 	case duplicate := <-connection.outbound:
 		t.Fatalf("non-durable terminal gateway error was duplicated: %#v", duplicate)
 	case <-time.After(50 * time.Millisecond):
-	}
-}
-
-func TestNativeAgentStreamFailsClosedWhenCatalogLeaseExpires(t *testing.T) {
-	module := New(Dependencies{
-		Agent:                agentStreamPortStub{},
-		NativeAgentReadiness: func() error { return errors.New("lease expired") },
-	}, Config{})
-	connection := newConnection("session", Ticket{Role: "owner", UserID: "@owner:example.test"}, MaxInFlightRequests)
-	module.startNativeAgentStream(context.Background(), connection, map[string]any{
-		"id": "expired", "action": "agent.chat", "params": map[string]any{
-			"idempotency_key": "11111111-1111-4111-8111-111111111111",
-			"conversation_id": "22222222-2222-4222-8222-222222222222",
-			"message":         "hello", "model_profile_id": "profile-id",
-			"model_profile_revision": int64(1), "credential_version": int64(1),
-		},
-	})
-	frame := nextOutbound(t, connection)
-	if frame["type"] != "server.native_agent_stream.error" || frame["status"] != http.StatusServiceUnavailable {
-		t.Fatalf("expired catalog stream frame = %#v, want HTTP 503", frame)
 	}
 }
 

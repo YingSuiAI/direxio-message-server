@@ -14,7 +14,7 @@ override narrative documentation.
   `access_token`. It never receives an Agent service address, service token,
   client certificate, database credential, or direct upload endpoint.
 - `dirextalk-message-server` owns ProductCore authentication, the public
-  `agent.*` action envelope, Native Agent WebSocket stream frames, product
+  `agent.*` action envelope, Native Agent text HTTP/SSE transport, product
   policy, Matrix state, and product capabilities.
 - `dirextalk-agent` is the only Native Agent runtime. It owns conversations,
   model profiles and provider credentials, knowledge and long-term memory,
@@ -29,9 +29,28 @@ override narrative documentation.
 
 ## 2. Public client contract
 
-The existing owner-authenticated ProductCore action names and WebSocket frames
-remain the Flutter contract. Message Server maps those actions to the external
-Agent Capability gRPC catalog and never exposes a second client-facing API.
+Native Agent text turns use one owner-authenticated HTTP mutation followed by
+one read-only SSE attachment. Message Server maps both to the external Agent
+Capability gRPC catalog and does not keep a second turn/event store.
+
+`POST /_p2p/agent/chat/conversations/{conversation_id}/turns` accepts the
+closed `agent.chat.stream` business request without `conversation_id` in the
+body. It returns `202 Accepted`, a stable turn receipt, and a `Location` header
+only after Agent has persisted the accepted event. The UUID
+`idempotency_key` is the durable capability operation identity, so replaying
+the exact request cannot create a second turn and a conflicting request is
+`409`.
+
+`GET /_p2p/agent/chat/conversations/{conversation_id}/turns/{turn_id}` reads
+the exact Agent-owned turn ledger entry. Its `/events` child is
+`text/event-stream`: durable positive sequence is the SSE `id`, `after_seq` or
+`Last-Event-ID` resumes after that sequence, and both cursors must agree when
+sent together. Every `data` object carries `action`, the exact Agent-authored
+event name/data, turn/idempotency/conversation identity, revision, and `seq`.
+The stream sends 15-second comment heartbeats and closes after `done`, `error`,
+or `cancelled`. Disconnect detaches only that Watch and never cancels or
+re-admits the durable operation. Turn stop and confirmations remain separate
+HTTP mutations.
 
 `agent.backends.get` keeps the current response envelope:
 

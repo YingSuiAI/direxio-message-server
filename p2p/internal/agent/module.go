@@ -25,6 +25,21 @@ type Runner interface {
 	Stream(context.Context, string, map[string]any, func(agentstream.Event) error) error
 }
 
+type durableChatWatcher interface {
+	WatchDurableChat(context.Context, string, string, int64, func(agentstream.Event) error) error
+}
+
+// TurnReceipt is the stable identity returned after Agent has durably accepted
+// a text turn. Sequence is the cursor of that persisted accepted event.
+type TurnReceipt struct {
+	TurnID         string            `json:"turn_id"`
+	IdempotencyKey string            `json:"idempotency_key"`
+	ConversationID string            `json:"conversation_id"`
+	State          agentstream.State `json:"state"`
+	Revision       int64             `json:"revision"`
+	Seq            int64             `json:"seq"`
+}
+
 type Config struct {
 	Runner  Runner
 	Account AccountPort
@@ -98,53 +113,155 @@ func (m *Module) DurableStream(ctx context.Context, ownerID, action string, para
 	params = cloneMap(params)
 	params["idempotency_key"] = startID
 	params["conversation_id"] = conversationID
-	authoredTurnID := ""
-	var authoredRevision int64
+	projection := durableProjection{ownerID: strings.TrimSpace(ownerID), action: action, startID: startID, conversationID: conversationID}
 	return m.runner.Stream(ctx, action, params, func(event agentstream.Event) error {
-		eventStartID := strings.TrimSpace(actionbase.String(event.Data["idempotency_key"]))
-		eventConversationID := strings.TrimSpace(actionbase.String(event.Data["conversation_id"]))
-		eventTurnID := strings.TrimSpace(actionbase.String(event.Data["turn_id"]))
-		revision, ok := streamPositiveInt64(event.Data["revision"])
-		if eventStartID != startID || eventConversationID != conversationID || !canonicalStreamUUID(eventTurnID) || !ok {
-			return fmt.Errorf("%w: native agent stream identity is invalid", agentgateway.ErrInvalidActionResult)
+		projected, err := projection.project(event)
+		if err != nil {
+			return err
 		}
-		if authoredTurnID == "" {
-			authoredTurnID, authoredRevision = eventTurnID, revision
-		} else if eventTurnID != authoredTurnID || revision < authoredRevision {
-			return fmt.Errorf("%w: native agent stream identity drifted", agentgateway.ErrInvalidActionResult)
-		} else {
-			authoredRevision = revision
-		}
-		sequence := event.Seq
-		if sequence < 0 {
-			return fmt.Errorf("%w: native agent stream sequence is invalid", agentgateway.ErrInvalidActionResult)
-		}
-		state := agentstream.StateRunning
-		kind := agentstream.EventRuntime
-		switch strings.TrimSpace(event.Event) {
-		case "accepted":
-			state = agentstream.StateAccepted
-			kind = agentstream.EventAccepted
-		case "done":
-			state = agentstream.StateSucceeded
-		case "error":
-			state = agentstream.StateFailed
-			kind = agentstream.EventError
-		case "cancelled":
-			state = agentstream.StateStopped
-			kind = agentstream.EventError
-		}
-		turn := agentstream.Turn{
-			OwnerID: strings.TrimSpace(ownerID), TurnID: eventTurnID,
-			IdempotencyKey: startID, ConversationID: conversationID,
-			Action: action, State: state, Revision: revision, UpdatedAt: time.Now().UTC(),
-		}
-		return emit(agentstream.StreamEvent{
-			Kind: kind, Turn: turn, TurnID: eventTurnID, IdempotencyKey: startID,
-			ConversationID: conversationID, Revision: revision, Seq: sequence,
-			Event: event.Event, Data: event.Data,
-		})
+		return emit(projected)
 	})
+}
+
+var errTurnAccepted = errors.New("turn accepted")
+
+// StartTurn performs exactly one idempotent admission and returns only after
+// the accepted event is persisted. Stopping this observation does not cancel
+// the durable Agent operation.
+func (m *Module) StartTurn(ctx context.Context, ownerID string, params map[string]any) (TurnReceipt, *actionbase.Error) {
+	var receipt TurnReceipt
+	err := m.DurableStream(ctx, ownerID, "agent.chat.stream", params, func(event agentstream.StreamEvent) error {
+		if event.Kind != agentstream.EventAccepted {
+			return nil
+		}
+		receipt = TurnReceipt{
+			TurnID: event.TurnID, IdempotencyKey: event.IdempotencyKey,
+			ConversationID: event.ConversationID, State: event.Turn.State,
+			Revision: event.Revision, Seq: event.Seq,
+		}
+		return errTurnAccepted
+	})
+	if errors.Is(err, errTurnAccepted) {
+		if receipt.Seq <= 0 {
+			return TurnReceipt{}, actionbase.StatusError(http.StatusBadGateway, "external native agent returned an invalid accepted cursor")
+		}
+		return receipt, nil
+	}
+	return TurnReceipt{}, externalAgentActionError(err)
+}
+
+// WatchTurn is a read-only durable event attachment. It never calls
+// StartOperation and therefore cannot repeat the text mutation.
+func (m *Module) WatchTurn(ctx context.Context, ownerID, conversationID, turnID, operationID string, afterSeq int64, emit func(agentstream.StreamEvent) error) error {
+	if m == nil || m.runner == nil {
+		return fmt.Errorf("external native agent gateway is not configured")
+	}
+	if err := m.readinessError(); err != nil {
+		return err
+	}
+	watcher, ok := m.runner.(durableChatWatcher)
+	if !ok {
+		return fmt.Errorf("native agent durable watch is not configured")
+	}
+	if !canonicalStreamUUID(turnID) || !canonicalStreamUUID(operationID) || !canonicalStreamUUID(conversationID) || afterSeq < 0 || emit == nil {
+		return fmt.Errorf("native agent durable watch identity is invalid")
+	}
+	projection := durableProjection{
+		ownerID: strings.TrimSpace(ownerID), action: "agent.chat.stream",
+		startID: operationID, conversationID: conversationID, authoredTurnID: turnID,
+	}
+	return watcher.WatchDurableChat(ctx, operationID, conversationID, afterSeq, func(event agentstream.Event) error {
+		projected, err := projection.project(event)
+		if err != nil {
+			return err
+		}
+		return emit(projected)
+	})
+}
+
+// GetTurn reads the Agent-owned authoritative turn ledger and selects the
+// exact turn under the path-bound conversation.
+func (m *Module) GetTurn(ctx context.Context, conversationID, turnID string) (map[string]any, *actionbase.Error) {
+	if m == nil || m.runner == nil {
+		return nil, actionbase.StatusError(http.StatusBadGateway, "external native agent gateway is not configured")
+	}
+	if err := m.readinessError(); err != nil {
+		return nil, actionbase.StatusError(http.StatusServiceUnavailable, "external native agent capability catalog is not ready")
+	}
+	if !canonicalStreamUUID(turnID) || !canonicalStreamUUID(conversationID) {
+		return nil, actionbase.BadRequest("turn identity is invalid")
+	}
+	pageToken := ""
+	for {
+		params := map[string]any{"conversation_id": conversationID, "limit": int64(1000)}
+		if pageToken != "" {
+			params["page_token"] = pageToken
+		}
+		result, err := m.runner.Invoke(ctx, "agent.chat.turns.list", params)
+		if err != nil {
+			return nil, externalAgentActionError(err)
+		}
+		turns, _ := result["turns"].([]any)
+		for _, raw := range turns {
+			turn, ok := raw.(map[string]any)
+			if ok && actionbase.String(turn["turn_id"]) == turnID && actionbase.String(turn["conversation_id"]) == conversationID {
+				return turn, nil
+			}
+		}
+		next := strings.TrimSpace(actionbase.String(result["next_cursor"]))
+		if next == "" || next == pageToken {
+			break
+		}
+		pageToken = next
+	}
+	return nil, actionbase.StatusError(http.StatusNotFound, "native agent turn was not found")
+}
+
+type durableProjection struct {
+	ownerID, action, startID, conversationID string
+	authoredTurnID                           string
+	authoredRevision                         int64
+}
+
+func (p *durableProjection) project(event agentstream.Event) (agentstream.StreamEvent, error) {
+	eventStartID := strings.TrimSpace(actionbase.String(event.Data["idempotency_key"]))
+	eventConversationID := strings.TrimSpace(actionbase.String(event.Data["conversation_id"]))
+	eventTurnID := strings.TrimSpace(actionbase.String(event.Data["turn_id"]))
+	revision, ok := streamPositiveInt64(event.Data["revision"])
+	if eventStartID != p.startID || eventConversationID != p.conversationID || !canonicalStreamUUID(eventTurnID) || !ok {
+		return agentstream.StreamEvent{}, fmt.Errorf("%w: native agent stream identity is invalid", agentgateway.ErrInvalidActionResult)
+	}
+	if p.authoredTurnID == "" {
+		p.authoredTurnID, p.authoredRevision = eventTurnID, revision
+	} else if eventTurnID != p.authoredTurnID || revision < p.authoredRevision {
+		return agentstream.StreamEvent{}, fmt.Errorf("%w: native agent stream identity drifted", agentgateway.ErrInvalidActionResult)
+	} else {
+		p.authoredRevision = revision
+	}
+	if event.Seq < 0 {
+		return agentstream.StreamEvent{}, fmt.Errorf("%w: native agent stream sequence is invalid", agentgateway.ErrInvalidActionResult)
+	}
+	state, kind := agentstream.StateRunning, agentstream.EventRuntime
+	switch strings.TrimSpace(event.Event) {
+	case "accepted":
+		state, kind = agentstream.StateAccepted, agentstream.EventAccepted
+	case "done":
+		state = agentstream.StateSucceeded
+	case "error":
+		state, kind = agentstream.StateFailed, agentstream.EventError
+	case "cancelled":
+		state, kind = agentstream.StateStopped, agentstream.EventError
+	}
+	turn := agentstream.Turn{
+		OwnerID: p.ownerID, TurnID: eventTurnID, IdempotencyKey: p.startID,
+		ConversationID: p.conversationID, Action: p.action, State: state,
+		Revision: revision, UpdatedAt: time.Now().UTC(),
+	}
+	return agentstream.StreamEvent{
+		Kind: kind, Turn: turn, TurnID: eventTurnID, IdempotencyKey: p.startID,
+		ConversationID: p.conversationID, Revision: revision, Seq: event.Seq,
+		Event: event.Event, Data: event.Data,
+	}, nil
 }
 
 func canonicalStreamUUID(value string) bool {

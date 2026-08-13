@@ -144,12 +144,56 @@ func (r *Runner) Stream(ctx context.Context, action string, params map[string]an
 	if err := operationStateError(response.GetState()); err != nil {
 		return err
 	}
+	return r.watchDurableChat(ctx, operationID, conversationID, afterSequence(params), permission, callCtx, authority, emit)
+}
+
+// WatchDurableChat attaches to an already admitted chat operation without
+// replaying its mutation. The operation id is the public turn/idempotency id;
+// Agent remains the durable event source and applies the owner/generation
+// fence to this fresh read-only control grant.
+func (r *Runner) WatchDurableChat(ctx context.Context, operationID, conversationID string, afterSeq int64, emit func(agentstream.Event) error) error {
+	if emit == nil {
+		return fmt.Errorf("native agent stream callback is required")
+	}
+	if r == nil || r.client == nil {
+		return fmt.Errorf("agent gateway is not configured")
+	}
+	if !canonicalTurnUUID(operationID) || !canonicalTurnUUID(conversationID) || afterSeq < 0 {
+		return fmt.Errorf("%w: durable chat watch identity is invalid", ErrInvalidActionRequest)
+	}
+	owner := ""
+	if r.config.OwnerID != nil {
+		owner = strings.TrimSpace(r.config.OwnerID())
+	}
+	generation := int64(0)
+	if r.config.AccountGeneration != nil {
+		generation = r.config.AccountGeneration()
+	}
+	if owner == "" || generation <= 0 {
+		return fmt.Errorf("authenticated owner is unavailable")
+	}
+	permission := &capv1.PermissionContext{AuthenticatedOwnerId: owner, AccountGeneration: generation}
+	r.syncPeerGeneration(generation)
+	callCtx := r.client.createCallContext(operationID)
+	authority := actionResultAuthority{ownerID: owner, accountGeneration: generation}
+	return r.watchDurableChat(ctx, operationID, conversationID, afterSeq, permission, callCtx, authority, emit)
+}
+
+func (r *Runner) watchDurableChat(
+	ctx context.Context,
+	operationID, conversationID string,
+	afterSeq int64,
+	permission *capv1.PermissionContext,
+	callCtx *capv1.CallContext,
+	authority actionResultAuthority,
+	emit func(agentstream.Event) error,
+) error {
 	watchCallCtx := r.client.refreshCallContext(callCtx)
 	controlPermission, err := r.operationControlPermission(watchCallCtx, operationID, "watch", permission)
 	if err != nil {
 		return err
 	}
-	stream, err := r.client.WatchOperation(ctx, operationID, afterSequence(params), controlPermission, watchCallCtx)
+	stream, err := r.client.WatchOperation(ctx, operationID, afterSeq, controlPermission, watchCallCtx)
 	if err != nil {
 		return err
 	}

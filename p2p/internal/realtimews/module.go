@@ -70,10 +70,6 @@ type AgentStreamPort interface {
 	Stream(context.Context, string, map[string]any, func(agentstream.Event) error) error
 }
 
-type DurableAgentStreamPort interface {
-	DurableStream(context.Context, string, string, map[string]any, func(agentstream.StreamEvent) error) error
-}
-
 type Dependencies struct {
 	Actions  ActionPort
 	Events   EventPort
