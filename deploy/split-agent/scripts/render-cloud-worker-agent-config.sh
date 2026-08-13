@@ -114,7 +114,7 @@ cat <<EOF
   worker_control_tls_key_file: /run/cloud-worker/worker-control-key.pem
   worker_control_max_concurrent_rpc: 64
   model_relay_listen: ":11443"
-  model_relay_endpoint: https://$DIREXTALK_CLOUD_WORKER_MODEL_RELAY_HOSTNAME:443
+  model_relay_endpoint: https://$DIREXTALK_CLOUD_WORKER_MODEL_RELAY_HOSTNAME:443/v1
   model_relay_server_name: $DIREXTALK_CLOUD_WORKER_MODEL_RELAY_HOSTNAME
   model_relay_tls_cert_file: /run/cloud-worker/model-relay-cert.pem
   model_relay_tls_key_file: /run/cloud-worker/model-relay-key.pem

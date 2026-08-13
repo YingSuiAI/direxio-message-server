@@ -47,6 +47,11 @@ grep -Fq -- 'agent.chat.conversations.get' "$script"
 grep -Fq -- 'any(.messages[]?; (.content // "") | contains($marker))' "$script"
 grep -Fq -- 'history-context-after-restart' "$script"
 grep -Fq -- 'Native Agent did not preserve multi-turn conversation context after restart' "$script"
+grep -Fq -- 'SELECT revision FROM core_knowledge_uploads WHERE upload_id=' "$script"
+grep -Fq -- 'expected_revision:$revision' "$script"
+grep -Fq -- '\''^CREATE TABLE (public\.)?(core_|agent_)'\'' "$script"
+grep -Fq -- '(.api_key_configured | type == "boolean")' "$script"
+grep -Fq -- '((has("api_key") | not))' "$script"
 grep -Fq -- 'DIREXTALK_TAVILY_API_KEY_FILE' "$script"
 grep -Fq -- 'agent.web_search.config.get' "$script"
 grep -Fq -- 'agent.web_search.config.update' "$script"
@@ -82,7 +87,7 @@ grep -Fq -- '"$tmp/request-model-sync.json"|"$tmp/request-model-catalog.json") c
 # documented chat fields; request-scoped history, profiles, and credentials
 # must not reappear.
 chat_builder=$(sed -n '/^write_chat_params() {/,/^}/p' "$script")
-for required_chat_field in model_profile_id model_profile_revision credential_version turn_id message; do
+for required_chat_field in model_profile_id model_profile_revision credential_version idempotency_key message; do
   grep -Fq -- "$required_chat_field" <<<"$chat_builder"
 done
 grep -Fq -- 'conversation_id' <<<"$chat_builder"
@@ -113,10 +118,10 @@ if grep -Fq -- '$new_memory_phrase' <<<"$memory_recall_builder"; then
 fi
 
 # The post-restart second turn must use the same durable conversation with a
-# fresh turn id, while omitting the first-turn marker from its request.
+# fresh idempotency key, while omitting the first-turn marker from its request.
 history_context_builder=$(sed -n '/^write_chat_params "$history_context_chat"/,/^call agent\.chat "$history_context_chat"/p' "$script")
 grep -Fq -- '"$history_conversation_id"' <<<"$history_context_builder"
-grep -Fq -- '"$history_context_turn_id"' <<<"$history_context_builder"
+grep -Fq -- '"$history_context_idempotency_key"' <<<"$history_context_builder"
 grep -Fq -- 'Recall the unique marker from the first turn of this conversation.' <<<"$history_context_builder"
 if grep -Fq -- '$history_marker' <<<"$history_context_builder"; then
   echo "multi-turn continuation request leaks the first-turn marker" >&2

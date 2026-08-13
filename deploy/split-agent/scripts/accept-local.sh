@@ -213,19 +213,19 @@ uuid4() {
   fi
 }
 write_chat_params() {
-  local file=$1 conversation_id=$2 turn_id=$3 message=$4
+  local file=$1 conversation_id=$2 idempotency_key=$3 message=$4
   new_file "$file"
   if [ -n "$conversation_id" ]; then
-    jq -n --arg conversation "$conversation_id" --arg turn "$turn_id" --arg message "$message" \
+    jq -n --arg conversation "$conversation_id" --arg idem "$idempotency_key" --arg message "$message" \
       --arg profile "$chat_model_profile_id" --argjson revision "$chat_model_profile_revision" \
       --argjson credential "$chat_credential_version" \
-      '{conversation_id:$conversation,turn_id:$turn,model_profile_id:$profile,model_profile_revision:$revision,credential_version:$credential,message:$message}' \
+      '{conversation_id:$conversation,idempotency_key:$idem,model_profile_id:$profile,model_profile_revision:$revision,credential_version:$credential,message:$message}' \
       >"$file"
   else
-    jq -n --arg turn "$turn_id" --arg message "$message" \
+    jq -n --arg idem "$idempotency_key" --arg message "$message" \
       --arg profile "$chat_model_profile_id" --argjson revision "$chat_model_profile_revision" \
       --argjson credential "$chat_credential_version" \
-      '{turn_id:$turn,model_profile_id:$profile,model_profile_revision:$revision,credential_version:$credential,message:$message}' \
+      '{idempotency_key:$idem,model_profile_id:$profile,model_profile_revision:$revision,credential_version:$credential,message:$message}' \
       >"$file"
   fi
   chmod 400 "$file"
@@ -464,8 +464,9 @@ call agent.backends.get "$params" backends
 jq -e 'type=="object"' "$last_response" >/dev/null || die "Agent status response is not an object"
 
 call agent.web_search.config.get "$params" web-search-config-get
-jq -e '.provider == "tavily" and (.api_key_configured // false) == false and ((.revision // -1) >= 0)' "$last_response" >/dev/null || \
-  die "web search config.get did not return the fresh unconfigured Tavily state"
+jq -e '.provider == "tavily" and (.api_key_configured | type == "boolean") and
+  ((.revision // -1) >= 0) and ((has("api_key") | not))' "$last_response" >/dev/null || \
+  die "web search config.get did not return the current safe Tavily state"
 web_search_revision=$(jq -r '.revision' "$last_response")
 web_search_update=$tmp/web-search-config-update.params.json
 web_search_update_key=$(uuid4)
@@ -585,9 +586,9 @@ jq -e --arg embed "$embed_internal" --argjson dimension "$embedding_dimension" \
   '.embedding_profile_id == $embed and .dimension == $dimension' "$last_response" >/dev/null || \
   die "knowledge embedding profile/dimension does not match the fresh stack configuration"
 
-turn_id=$(uuid4)
+chat_idempotency_key=$(uuid4)
 chat_params=$tmp/chat.params.json
-write_chat_params "$chat_params" '' "$turn_id" 'Reply with exactly ACCEPT_CHAT_OK'
+write_chat_params "$chat_params" '' "$chat_idempotency_key" 'Reply with exactly ACCEPT_CHAT_OK'
 call agent.chat "$chat_params" chat-first
 jq -e '.text|type=="string" and length>0' "$last_response" >/dev/null || die "Native Agent chat returned no text"
 jq -r '.text' "$last_response" >"$tmp/chat-text-1"
@@ -610,9 +611,9 @@ jq -e --arg id "$history_conversation_id" \
   "$last_response" >/dev/null || die "conversation.create did not return the active acceptance conversation"
 
 history_marker=ACCEPT_HISTORY_$(date +%s)_$(od -An -N3 -tx1 /dev/urandom | tr -d '[:space:]')
-history_turn_id=$(uuid4)
+history_idempotency_key=$(uuid4)
 history_chat=$tmp/history-chat.params.json
-write_chat_params "$history_chat" "$history_conversation_id" "$history_turn_id" \
+write_chat_params "$history_chat" "$history_conversation_id" "$history_idempotency_key" \
   "Reply with exactly ACCEPT_HISTORY_OK and include this marker: $history_marker"
 call agent.chat "$history_chat" history-chat
 jq -e --arg marker "$history_marker" '.text|type=="string" and contains("ACCEPT_HISTORY_OK") and contains($marker)' "$last_response" >/dev/null || die "history conversation chat did not return its marker"
@@ -637,9 +638,9 @@ db_query agent-postgres dirextalk_agent dirextalk_agent \
   "$tmp/web-search-tool-before.count"
 web_search_tool_before=$(tr -d '[:space:]' <"$tmp/web-search-tool-before.count")
 case "$web_search_tool_before" in ''|*[!0-9]*) die "could not read the pre-chat Web Search tool count" ;; esac
-web_search_turn_id=$(uuid4)
+web_search_idempotency_key=$(uuid4)
 web_search_chat_params=$tmp/web-search-chat.params.json
-write_chat_params "$web_search_chat_params" '' "$web_search_turn_id" \
+write_chat_params "$web_search_chat_params" '' "$web_search_idempotency_key" \
   'You must use the web_search tool to search the live web for the official OpenAI homepage. Do not answer from memory. After the tool succeeds, reply with ACCEPT_WEB_SEARCH_OK followed by one https:// source URL from the tool result.'
 call agent.chat "$web_search_chat_params" web-search-chat
 jq -e '.text|type=="string" and contains("ACCEPT_WEB_SEARCH_OK")' "$last_response" >/dev/null || \
@@ -721,10 +722,16 @@ jq -n --rawfile data "$knowledge_b64" --arg upload "$upload_id" --arg sha "$chun
   --argjson size "$size" '{upload_id:$upload,offset:0,data:($data|rtrimstr("\n")|rtrimstr("\r")),chunk_sha256:$sha,idempotency_key:$idem}' >"$upload_chunk"
 chmod 400 "$upload_chunk"
 call agent.knowledge.upload.chunk "$upload_chunk" knowledge-upload-chunk
+db_query agent-postgres dirextalk_agent dirextalk_agent \
+  "SELECT revision FROM core_knowledge_uploads WHERE upload_id=CAST('$upload_id' AS uuid);" \
+  "$tmp/knowledge-upload-revision.out"
+upload_revision=$(tr -d '[:space:]' <"$tmp/knowledge-upload-revision.out")
+case "$upload_revision" in ''|0|*[!0-9]*) die "knowledge upload.chunk returned no positive revision" ;; esac
 upload_finish=$tmp/upload-finish.params.json
 upload_finish_key=$(uuid4)
 jq -n --arg upload "$upload_id" --arg sha "$content_sha" --arg idem "$upload_finish_key" \
-  '{upload_id:$upload,content_sha256:$sha,title:"Split acceptance knowledge",idempotency_key:$idem}' >"$upload_finish"
+  --argjson revision "$upload_revision" \
+  '{upload_id:$upload,expected_revision:$revision,content_sha256:$sha,idempotency_key:$idem}' >"$upload_finish"
 chmod 400 "$upload_finish"
 call agent.knowledge.upload.finish "$upload_finish" knowledge-upload-finish
 finished_source=$(jq -r '.source_id // .source.source_id // .source.id // empty' "$last_response")
@@ -768,9 +775,9 @@ call agent.backends.get "$params" backends-after-restart
 # Continue the pre-restart conversation with a fresh turn. The second prompt
 # deliberately omits history_marker, so the only production path that can
 # return it is Agent-owned durable conversation context loaded after restart.
-history_context_turn_id=$(uuid4)
+history_context_idempotency_key=$(uuid4)
 history_context_chat=$tmp/history-context-chat.params.json
-write_chat_params "$history_context_chat" "$history_conversation_id" "$history_context_turn_id" \
+write_chat_params "$history_context_chat" "$history_conversation_id" "$history_context_idempotency_key" \
   'Recall the unique marker from the first turn of this conversation. Reply with ACCEPT_CONTEXT_OK followed by that exact marker, and nothing else.'
 call agent.chat "$history_context_chat" history-context-after-restart
 jq -e --arg marker "$history_marker" \
@@ -881,10 +888,10 @@ if run_compose exec -T postgres sh -ec 'password=$(cat /run/dirextalk-postgres-s
 else
   die "Agent PostgreSQL dump failed"
 fi
-if grep -Eiq 'CREATE TABLE[^;]*(core_|agent_)' "$message_dump"; then
+if grep -Eiq '^CREATE TABLE (public\.)?(core_|agent_)' "$message_dump"; then
   die "message-server database contains Agent/Core tables"
 fi
-grep -Eiq 'CREATE TABLE[^;]*agent_' "$agent_dump" || die "Agent database dump has no Agent-owned tables"
+grep -Eiq '^CREATE TABLE (public\.)?agent_' "$agent_dump" || die "Agent database dump has no Agent-owned tables"
 
 run_compose logs --no-color --timestamps message-server >"$tmp/message-server.log" 2>"$tmp/message-server-log.err" || true
 run_compose logs --no-color --timestamps agent >"$tmp/agent.log" 2>"$tmp/agent-log.err" || true
