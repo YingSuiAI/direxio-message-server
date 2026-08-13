@@ -137,9 +137,10 @@ services:
     read_only: true
     cap_drop: ["ALL"]
     # The official Alpine image marks turnserver with file capability
-    # cap_net_bind_service; retain only that capability so exec remains valid
-    # under no-new-privileges (all configured TURN ports are still unprivileged).
-    cap_add: ["NET_BIND_SERVICE"]
+    # cap_net_bind_service; retain it so exec remains valid under
+    # no-new-privileges. DAC_READ_SEARCH is required for the root process to
+    # read the host-UID-owned 0400 Compose secret.
+    cap_add: ["DAC_READ_SEARCH", "NET_BIND_SERVICE"]
     security_opt: ["no-new-privileges:true"]
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,mode=0700
@@ -148,7 +149,7 @@ services:
         target: /run/secrets/turnserver.conf
         mode: 0400
     healthcheck:
-      test: ["CMD-SHELL", "kill -0 1"]
+      test: ["CMD-SHELL", "grep -Fqx 'listening-port=3478' /run/secrets/turnserver.conf && kill -0 1"]
       interval: 10s
       timeout: 5s
       retries: 12

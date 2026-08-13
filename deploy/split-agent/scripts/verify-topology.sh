@@ -266,8 +266,9 @@ jq -e '
   and (.services.coturn.environment == null)
   and (.services.coturn.read_only == true)
   and (.services.coturn.cap_drop == ["ALL"])
-  and (.services.coturn.cap_add == ["NET_BIND_SERVICE"])
+  and ((.services.coturn.cap_add | sort) == (["DAC_READ_SEARCH", "NET_BIND_SERVICE"] | sort))
   and ([.services.coturn.secrets[] | select(.source == "coturn_config" and .target == "/run/secrets/turnserver.conf" and .mode == "0400")] | length) == 1 and
+  (.services.coturn.healthcheck.test == ["CMD-SHELL", "grep -Fqx '\''listening-port=3478'\'' /run/secrets/turnserver.conf && kill -0 1"]) and
   ([.services["agent-secret-init"].secrets[] | select(.source == "core_secret_master_key" and .target == "core_secret_master_key")] | length) == 1 and
   ([.services | to_entries[] | select(.key != "agent-secret-init") | .value.secrets // [] | .[] | select(.source == "core_secret_master_key" or (.target // "" | test("core_secret_master_key")))] | length) == 0
 ' "$production_rendered" >/dev/null

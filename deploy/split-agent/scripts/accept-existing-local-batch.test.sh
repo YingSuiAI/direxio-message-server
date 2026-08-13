@@ -24,6 +24,7 @@ for required in \
   'agent.static_sites.delete'; do
   grep -Fq -- "$required" "$script"
 done
+[ "$(grep -Fc 'run_group static_site_lifecycle static_site_group' "$script")" -eq 1 ]
 grep -Fq 'client.native_agent_stream' "$helper"
 grep -Fq 'after_seq' "$helper"
 static_group=$(sed -n '/^static_site_group() {/,/^}/p' "$script")

@@ -28,6 +28,13 @@ grep -Fq -- 'validate_target_write_access' "$script"
 grep -Fq -- 'getfacl -cp' "$script"
 message_server_contract=$(sed -n '/^  message-server:/,/^networks:/p' "$script_dir/../compose.yaml")
 grep -A2 -F '      coturn:' <<<"$message_server_contract" | grep -Fq 'condition: service_healthy'
+coturn_contract=$(sed -n '/^  coturn:/,/^  postgres:/p' "$script_dir/../compose.yaml")
+grep -Fq 'cap_add: ["DAC_READ_SEARCH", "NET_BIND_SERVICE"]' <<<"$coturn_contract"
+grep -Fq "grep -Fqx 'listening-port=3478' /run/secrets/turnserver.conf && kill -0 1" <<<"$coturn_contract"
+if grep -Fq 'test: ["CMD-SHELL", "kill -0 1"]' <<<"$coturn_contract"; then
+  echo 'coturn healthcheck can pass without reading its protected configuration' >&2
+  exit 1
+fi
 
 # cgroup-v2 controller pseudo-files report stat size zero even when readable
 # controller content is present. Exercise the real filesystem semantic that
