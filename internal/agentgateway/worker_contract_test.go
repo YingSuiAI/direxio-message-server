@@ -22,7 +22,7 @@ func workerIdentityFixture() map[string]any {
 func TestWorkerActionBindingsAndSchemaPins(t *testing.T) {
 	listInput := `{"additionalProperties":false,"properties":{},"type":"object"}`
 	for _, test := range []struct{ action, operation, input, result string }{
-		{"agent.workers.list", "list_workers", listInput, `{"additionalProperties":false,"properties":{"workers":{"items":` + workerStatusSchema + `,"maxItems":5,"type":"array"}},"required":["workers"],"type":"object"}`},
+		{"agent.workers.list", "list_workers", listInput, `{"additionalProperties":false,"properties":{"workers":{"items":` + workerStatusSchema + `,"type":"array"}},"required":["workers"],"type":"object"}`},
 		{"agent.workers.get", "get_worker", `{"additionalProperties":false,"properties":{"identity":` + workerIdentitySchema + `},"required":["identity"],"type":"object"}`, `{"additionalProperties":false,"properties":{"worker":` + workerStatusSchema + `},"required":["worker"],"type":"object"}`},
 		{"agent.workers.destroy", "destroy_worker", `{"additionalProperties":false,"properties":{"confirmation":{"const":"destroy_worker","type":"string"},"identity":` + workerIdentitySchema + `},"required":["identity","confirmation"],"type":"object"}`, `{"additionalProperties":false,"properties":{"destroyed":{"const":true,"type":"boolean"},"identity":` + workerIdentitySchema + `},"required":["identity","destroyed"],"type":"object"}`},
 		{"agent.workers.bind_domain", "bind_domain", `{"additionalProperties":false,"properties":{"confirmation":{"const":"bind_domain","type":"string"},"hostname":{"type":"string"},"ttl":{"type":"integer"},"worker_identity":` + workerIdentitySchema + `,"workload_id":{"type":"string"},"zone_id":{"type":"string"}},"required":["worker_identity","workload_id","zone_id","hostname","ttl","confirmation"],"type":"object"}`, `{"additionalProperties":false,"properties":{"domain":` + workerDomainSchema + `,"worker_identity":` + workerIdentitySchema + `,"workload_id":{"type":"string"}},"required":["worker_identity","workload_id","domain"],"type":"object"}`},
@@ -69,6 +69,35 @@ func TestWorkerRequestsRequireExactIdentityAndConfirmation(t *testing.T) {
 	} {
 		if err := ValidateActionRequest(test.action, test.params); !errors.Is(err, ErrInvalidActionRequest) {
 			t.Errorf("%s invalid request error = %v", test.action, err)
+		}
+	}
+}
+
+func TestWorkerRequestsAllowPartialProvisioningIdentity(t *testing.T) {
+	partial := workerIdentityFixture()
+	for _, field := range []string{"instance_id", "key_pair_id", "security_group_id"} {
+		partial[field] = ""
+	}
+	if err := ValidateActionRequest("agent.workers.destroy", map[string]any{"identity": partial, "confirmation": "destroy_worker"}); err != nil {
+		t.Fatalf("partially provisioned Worker destroy rejected: %v", err)
+	}
+
+	for _, field := range []string{"worker_id", "credential_id", "account_id", "region"} {
+		invalid := workerIdentityFixture()
+		invalid[field] = ""
+		if err := ValidateActionRequest("agent.workers.destroy", map[string]any{"identity": invalid, "confirmation": "destroy_worker"}); !errors.Is(err, ErrInvalidActionRequest) {
+			t.Errorf("empty identity.%s error = %v", field, err)
+		}
+	}
+	for _, field := range []string{"instance_id", "key_pair_id", "security_group_id"} {
+		invalid := workerIdentityFixture()
+		invalid[field] = " "
+		if err := ValidateActionRequest("agent.workers.destroy", map[string]any{"identity": invalid, "confirmation": "destroy_worker"}); !errors.Is(err, ErrInvalidActionRequest) {
+			t.Errorf("non-canonical identity.%s error = %v", field, err)
+		}
+		delete(invalid, field)
+		if err := ValidateActionRequest("agent.workers.destroy", map[string]any{"identity": invalid, "confirmation": "destroy_worker"}); !errors.Is(err, ErrInvalidActionRequest) {
+			t.Errorf("missing identity.%s error = %v", field, err)
 		}
 	}
 }

@@ -170,7 +170,7 @@ var expectedCatalogSchemaDigests = map[string]catalogSchemaDigest{
 	},
 	"agent.workers.list": {
 		inputHex:  "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
-		resultHex: "b44bf36e0040385df8c7e544247e03de988fe3cd2375a847260003592e023811",
+		resultHex: "5c221f9891273445bfa07008f06906e6dc2c2e4aa71b23161dfcf49bc49d4734",
 	},
 	"agent.workers.get": {
 		inputHex:  "61aaf9903d0fef539355ab96ae6e6e88b945233daefcc9d5cdf62f4f6067491e",

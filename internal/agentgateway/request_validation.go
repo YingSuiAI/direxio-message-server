@@ -243,7 +243,10 @@ func validateWorkerIdentity(action, field string, value any) error {
 			continue
 		}
 		text, ok := value.(string)
-		if !ok || text == "" || text != strings.TrimSpace(text) {
+		if !ok || text != strings.TrimSpace(text) {
+			return invalidActionRequest(action, field+"."+name, "must be a canonical string")
+		}
+		if text == "" && name != "instance_id" && name != "key_pair_id" && name != "security_group_id" {
 			return invalidActionRequest(action, field+"."+name, "must be a non-empty trimmed string")
 		}
 	}
