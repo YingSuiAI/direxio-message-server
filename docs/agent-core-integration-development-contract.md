@@ -76,6 +76,7 @@ model_roles.server
 knowledge
 memory.server
 static_sites.server
+workers.server
 task
 schedules.server
 confirmation
@@ -115,6 +116,15 @@ and observation counters.
 token. Its only public ProductCore actions are `agent.static_sites.list` and
 `agent.static_sites.delete`; static HTML publication remains an Agent tool
 operation rather than a second Message Server action.
+
+`workers.server` is published only when the ready `agent.worker.v1` descriptor
+contains `list_workers`, `get_worker`, `destroy_worker`, `bind_domain`, and
+`unbind_domain`. The matching owner actions are `agent.workers.list`,
+`agent.workers.get`, `agent.workers.destroy`, `agent.workers.bind_domain`, and
+`agent.workers.unbind_domain`. Worker identity and the explicit mutation
+confirmation are forwarded unchanged; AWS ownership and Route 53 read-back
+remain Agent responsibilities. Domains use the Worker's ordinary public IPv4
+and do not require an EIP.
 
 The model-profile sync/list contract includes
 `default_tool_client_profile_id`. An empty value means no tool default; a

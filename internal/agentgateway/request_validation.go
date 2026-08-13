@@ -151,6 +151,16 @@ func ValidateActionRequest(action string, params map[string]any) error {
 		return validateStaticSiteListRequest(action, params)
 	case "agent.static_sites.delete":
 		return validateStaticSiteDeleteRequest(action, params)
+	case "agent.workers.list":
+		return rejectUnknownActionFields(action, params)
+	case "agent.workers.get":
+		return validateWorkerIdentityRequest(action, params, "identity")
+	case "agent.workers.destroy":
+		return validateWorkerMutationRequest(action, params, "destroy_worker", false)
+	case "agent.workers.bind_domain":
+		return validateWorkerMutationRequest(action, params, "bind_domain", true)
+	case "agent.workers.unbind_domain":
+		return validateWorkerMutationRequest(action, params, "unbind_domain", true)
 	case "agent.text_tools.config.update":
 		return validateTextToolsConfigUpdateRequest(action, params)
 	case "agent.text_tools.execute":
@@ -168,6 +178,76 @@ func ValidateActionRequest(action string, params map[string]any) error {
 	default:
 		return nil
 	}
+}
+
+var workerIdentityFields = []string{
+	"worker_id", "instance_id", "key_pair_id", "security_group_id",
+	"credential_id", "credential_revision", "account_id", "region",
+}
+
+func validateWorkerIdentityRequest(action string, params map[string]any, field string) error {
+	if err := rejectUnknownActionFields(action, params, field); err != nil {
+		return err
+	}
+	return validateWorkerIdentity(action, field, params[field])
+}
+
+func validateWorkerMutationRequest(action string, params map[string]any, confirmation string, domain bool) error {
+	identityField := "identity"
+	allowed := []string{identityField, "confirmation"}
+	if domain {
+		identityField = "worker_identity"
+		allowed = []string{identityField, "workload_id", "zone_id", "hostname", "ttl", "confirmation"}
+	}
+	if err := rejectUnknownActionFields(action, params, allowed...); err != nil {
+		return err
+	}
+	if err := validateWorkerIdentity(action, identityField, params[identityField]); err != nil {
+		return err
+	}
+	if params["confirmation"] != confirmation {
+		return invalidActionRequest(action, "confirmation", "must equal "+confirmation)
+	}
+	if !domain {
+		return nil
+	}
+	for _, field := range []string{"workload_id", "zone_id", "hostname"} {
+		value, ok := params[field].(string)
+		if !ok || value == "" || value != strings.TrimSpace(value) {
+			return invalidActionRequest(action, field, "must be a non-empty trimmed string")
+		}
+	}
+	if !actionIntegerInRange(params["ttl"], 1, math.MaxUint32) {
+		return invalidActionRequest(action, "ttl", "must be a positive integer")
+	}
+	return nil
+}
+
+func validateWorkerIdentity(action, field string, value any) error {
+	identity, ok := value.(map[string]any)
+	if !ok {
+		return invalidActionRequest(action, field, "must be an object")
+	}
+	if err := rejectUnknownActionFields(action, identity, workerIdentityFields...); err != nil {
+		return invalidActionRequest(action, field, "contains an unsupported field")
+	}
+	for _, name := range workerIdentityFields {
+		value, present := identity[name]
+		if !present {
+			return invalidActionRequest(action, field+"."+name, "is required")
+		}
+		if name == "credential_revision" {
+			if !positiveInteger(value) {
+				return invalidActionRequest(action, field+"."+name, "must be a positive integer")
+			}
+			continue
+		}
+		text, ok := value.(string)
+		if !ok || text == "" || text != strings.TrimSpace(text) {
+			return invalidActionRequest(action, field+"."+name, "must be a non-empty trimmed string")
+		}
+	}
+	return nil
 }
 
 func validateStaticSiteListRequest(action string, params map[string]any) error {

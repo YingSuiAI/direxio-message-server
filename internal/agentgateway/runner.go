@@ -810,6 +810,14 @@ var actionBindings = map[string]actionBinding{
 	"agent.static_sites.list":   {"agent.static_sites.v1", "list_releases"},
 	"agent.static_sites.delete": {"agent.static_sites.v1", "delete_release"},
 
+	// Persistent SSH Worker management. The capability is optional and appears
+	// only after the Agent has one current verified AWS credential.
+	"agent.workers.list":          {"agent.worker.v1", "list_workers"},
+	"agent.workers.get":           {"agent.worker.v1", "get_worker"},
+	"agent.workers.destroy":       {"agent.worker.v1", "destroy_worker"},
+	"agent.workers.bind_domain":   {"agent.worker.v1", "bind_domain"},
+	"agent.workers.unbind_domain": {"agent.worker.v1", "unbind_domain"},
+
 	// Core Skill/MCP lifecycle operations keep their typed operation IDs and
 	// confirmation fences.
 	"agent.core.mcp.discover":    {"agent.skills.v1", "discover_mcp"},

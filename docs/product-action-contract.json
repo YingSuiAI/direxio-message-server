@@ -8688,6 +8688,805 @@
       }
     },
     {
+      "name": "agent.workers.list",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "response": {
+          "workers": {
+            "type": "array",
+            "required": true,
+            "items": {
+              "type": "object",
+              "properties": {
+                "current_task": {
+                  "type": "object",
+                  "properties": {
+                    "execution_id": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "phase": {
+                      "type": "string",
+                      "required": true
+                    }
+                  }
+                },
+                "ec2_state": {
+                  "type": "string",
+                  "required": true
+                },
+                "hourly_quote": {
+                  "type": "object",
+                  "properties": {
+                    "currency": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "expires_at": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "micros_per_hour": {
+                      "type": "integer",
+                      "required": true
+                    },
+                    "observed_at": {
+                      "type": "string",
+                      "required": true
+                    }
+                  }
+                },
+                "identity": {
+                  "type": "object",
+                  "required": true,
+                  "properties": {
+                    "account_id": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "credential_id": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "credential_revision": {
+                      "type": "integer",
+                      "required": true
+                    },
+                    "instance_id": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "key_pair_id": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "region": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "security_group_id": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "worker_id": {
+                      "type": "string",
+                      "required": true
+                    }
+                  }
+                },
+                "observed_at": {
+                  "type": "string",
+                  "required": true
+                },
+                "public_ipv4": {
+                  "type": "string"
+                },
+                "server": {
+                  "type": "object",
+                  "properties": {
+                    "last_seen": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "load_1": {
+                      "type": "number",
+                      "required": true
+                    },
+                    "load_15": {
+                      "type": "number",
+                      "required": true
+                    },
+                    "load_5": {
+                      "type": "number",
+                      "required": true
+                    }
+                  }
+                },
+                "worker_phase": {
+                  "type": "string",
+                  "required": true
+                },
+                "workloads": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "active_state": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "domain": {
+                        "type": "object",
+                        "properties": {
+                          "hostname": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "mode": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "record_status": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "target_ipv4": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "ttl": {
+                            "type": "integer",
+                            "required": true
+                          },
+                          "zone_id": {
+                            "type": "string",
+                            "required": true
+                          }
+                        }
+                      },
+                      "health": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "kind": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "phase": {
+                        "type": "string",
+                        "required": true
+                      },
+                      "port": {
+                        "type": "integer"
+                      },
+                      "workload_id": {
+                        "type": "string",
+                        "required": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.workers.get",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "identity": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "account_id": {
+                "type": "string",
+                "required": true
+              },
+              "credential_id": {
+                "type": "string",
+                "required": true
+              },
+              "credential_revision": {
+                "type": "integer",
+                "required": true
+              },
+              "instance_id": {
+                "type": "string",
+                "required": true
+              },
+              "key_pair_id": {
+                "type": "string",
+                "required": true
+              },
+              "region": {
+                "type": "string",
+                "required": true
+              },
+              "security_group_id": {
+                "type": "string",
+                "required": true
+              },
+              "worker_id": {
+                "type": "string",
+                "required": true
+              }
+            }
+          }
+        },
+        "response": {
+          "worker": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "current_task": {
+                "type": "object",
+                "properties": {
+                  "execution_id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "phase": {
+                    "type": "string",
+                    "required": true
+                  }
+                }
+              },
+              "ec2_state": {
+                "type": "string",
+                "required": true
+              },
+              "hourly_quote": {
+                "type": "object",
+                "properties": {
+                  "currency": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "expires_at": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "micros_per_hour": {
+                    "type": "integer",
+                    "required": true
+                  },
+                  "observed_at": {
+                    "type": "string",
+                    "required": true
+                  }
+                }
+              },
+              "identity": {
+                "type": "object",
+                "required": true,
+                "properties": {
+                  "account_id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "credential_id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "credential_revision": {
+                    "type": "integer",
+                    "required": true
+                  },
+                  "instance_id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "key_pair_id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "region": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "security_group_id": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "worker_id": {
+                    "type": "string",
+                    "required": true
+                  }
+                }
+              },
+              "observed_at": {
+                "type": "string",
+                "required": true
+              },
+              "public_ipv4": {
+                "type": "string"
+              },
+              "server": {
+                "type": "object",
+                "properties": {
+                  "last_seen": {
+                    "type": "string",
+                    "required": true
+                  },
+                  "load_1": {
+                    "type": "number",
+                    "required": true
+                  },
+                  "load_15": {
+                    "type": "number",
+                    "required": true
+                  },
+                  "load_5": {
+                    "type": "number",
+                    "required": true
+                  }
+                }
+              },
+              "worker_phase": {
+                "type": "string",
+                "required": true
+              },
+              "workloads": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "active_state": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "domain": {
+                      "type": "object",
+                      "properties": {
+                        "hostname": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "mode": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "record_status": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "target_ipv4": {
+                          "type": "string",
+                          "required": true
+                        },
+                        "ttl": {
+                          "type": "integer",
+                          "required": true
+                        },
+                        "zone_id": {
+                          "type": "string",
+                          "required": true
+                        }
+                      }
+                    },
+                    "health": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "kind": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "phase": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "port": {
+                      "type": "integer"
+                    },
+                    "workload_id": {
+                      "type": "string",
+                      "required": true
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.workers.destroy",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "confirmation": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "exact:destroy_worker"
+            }
+          },
+          "identity": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "account_id": {
+                "type": "string",
+                "required": true
+              },
+              "credential_id": {
+                "type": "string",
+                "required": true
+              },
+              "credential_revision": {
+                "type": "integer",
+                "required": true
+              },
+              "instance_id": {
+                "type": "string",
+                "required": true
+              },
+              "key_pair_id": {
+                "type": "string",
+                "required": true
+              },
+              "region": {
+                "type": "string",
+                "required": true
+              },
+              "security_group_id": {
+                "type": "string",
+                "required": true
+              },
+              "worker_id": {
+                "type": "string",
+                "required": true
+              }
+            }
+          }
+        },
+        "response": {
+          "destroyed": {
+            "type": "boolean",
+            "required": true
+          },
+          "identity": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "account_id": {
+                "type": "string",
+                "required": true
+              },
+              "credential_id": {
+                "type": "string",
+                "required": true
+              },
+              "credential_revision": {
+                "type": "integer",
+                "required": true
+              },
+              "instance_id": {
+                "type": "string",
+                "required": true
+              },
+              "key_pair_id": {
+                "type": "string",
+                "required": true
+              },
+              "region": {
+                "type": "string",
+                "required": true
+              },
+              "security_group_id": {
+                "type": "string",
+                "required": true
+              },
+              "worker_id": {
+                "type": "string",
+                "required": true
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.workers.bind_domain",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "confirmation": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "exact:bind_domain"
+            }
+          },
+          "hostname": {
+            "type": "string",
+            "required": true
+          },
+          "ttl": {
+            "type": "integer",
+            "required": true
+          },
+          "worker_identity": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "account_id": {
+                "type": "string",
+                "required": true
+              },
+              "credential_id": {
+                "type": "string",
+                "required": true
+              },
+              "credential_revision": {
+                "type": "integer",
+                "required": true
+              },
+              "instance_id": {
+                "type": "string",
+                "required": true
+              },
+              "key_pair_id": {
+                "type": "string",
+                "required": true
+              },
+              "region": {
+                "type": "string",
+                "required": true
+              },
+              "security_group_id": {
+                "type": "string",
+                "required": true
+              },
+              "worker_id": {
+                "type": "string",
+                "required": true
+              }
+            }
+          },
+          "workload_id": {
+            "type": "string",
+            "required": true
+          },
+          "zone_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "domain": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "hostname": {
+                "type": "string",
+                "required": true
+              },
+              "mode": {
+                "type": "string",
+                "required": true
+              },
+              "record_status": {
+                "type": "string",
+                "required": true
+              },
+              "target_ipv4": {
+                "type": "string",
+                "required": true
+              },
+              "ttl": {
+                "type": "integer",
+                "required": true
+              },
+              "zone_id": {
+                "type": "string",
+                "required": true
+              }
+            }
+          },
+          "worker_identity": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "account_id": {
+                "type": "string",
+                "required": true
+              },
+              "credential_id": {
+                "type": "string",
+                "required": true
+              },
+              "credential_revision": {
+                "type": "integer",
+                "required": true
+              },
+              "instance_id": {
+                "type": "string",
+                "required": true
+              },
+              "key_pair_id": {
+                "type": "string",
+                "required": true
+              },
+              "region": {
+                "type": "string",
+                "required": true
+              },
+              "security_group_id": {
+                "type": "string",
+                "required": true
+              },
+              "worker_id": {
+                "type": "string",
+                "required": true
+              }
+            }
+          },
+          "workload_id": {
+            "type": "string",
+            "required": true
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.workers.unbind_domain",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "confirmation": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "exact:unbind_domain"
+            }
+          },
+          "hostname": {
+            "type": "string",
+            "required": true
+          },
+          "ttl": {
+            "type": "integer",
+            "required": true
+          },
+          "worker_identity": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "account_id": {
+                "type": "string",
+                "required": true
+              },
+              "credential_id": {
+                "type": "string",
+                "required": true
+              },
+              "credential_revision": {
+                "type": "integer",
+                "required": true
+              },
+              "instance_id": {
+                "type": "string",
+                "required": true
+              },
+              "key_pair_id": {
+                "type": "string",
+                "required": true
+              },
+              "region": {
+                "type": "string",
+                "required": true
+              },
+              "security_group_id": {
+                "type": "string",
+                "required": true
+              },
+              "worker_id": {
+                "type": "string",
+                "required": true
+              }
+            }
+          },
+          "workload_id": {
+            "type": "string",
+            "required": true
+          },
+          "zone_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "response": {
+          "domain": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "hostname": {
+                "type": "string",
+                "required": true
+              },
+              "mode": {
+                "type": "string",
+                "required": true
+              },
+              "record_status": {
+                "type": "string",
+                "required": true
+              },
+              "target_ipv4": {
+                "type": "string",
+                "required": true
+              },
+              "ttl": {
+                "type": "integer",
+                "required": true
+              },
+              "zone_id": {
+                "type": "string",
+                "required": true
+              }
+            }
+          },
+          "unbound": {
+            "type": "boolean",
+            "required": true
+          },
+          "worker_identity": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "account_id": {
+                "type": "string",
+                "required": true
+              },
+              "credential_id": {
+                "type": "string",
+                "required": true
+              },
+              "credential_revision": {
+                "type": "integer",
+                "required": true
+              },
+              "instance_id": {
+                "type": "string",
+                "required": true
+              },
+              "key_pair_id": {
+                "type": "string",
+                "required": true
+              },
+              "region": {
+                "type": "string",
+                "required": true
+              },
+              "security_group_id": {
+                "type": "string",
+                "required": true
+              },
+              "worker_id": {
+                "type": "string",
+                "required": true
+              }
+            }
+          },
+          "workload_id": {
+            "type": "string",
+            "required": true
+          }
+        }
+      }
+    },
+    {
       "name": "agent.text_tools.config.get",
       "auth": "owner",
       "transport": "http_and_ws_request",
