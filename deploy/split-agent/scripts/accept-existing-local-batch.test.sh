@@ -26,6 +26,26 @@ for required in \
 done
 grep -Fq 'client.native_agent_stream' "$helper"
 grep -Fq 'after_seq' "$helper"
+static_group=$(sed -n '/^static_site_group() {/,/^}/p' "$script")
+for required in \
+  'static-publish-config.json' \
+  'static-publish.frames.jsonl' \
+  'expect:"done",reconnect:false' \
+  'select(.event=="done")' \
+  '.data.text' \
+  'agent.static_sites.list' \
+  'agent.static_sites.delete'; do
+  grep -Fq -- "$required" <<<"$static_group"
+done
+if grep -Fq 'call_http agent.chat ' <<<"$static_group"; then
+  echo 'static-site acceptance bypasses the durable Native WS helper' >&2
+  exit 1
+fi
+terminal_text_filter='[.[] | select(.event=="done") | (.data.text // empty) | select(type=="string" and length>0)] | last // empty'
+missing_terminal_text=$(printf '%s\n' '{"event":"done","data":{}}' | jq -rs "$terminal_text_filter")
+[ -z "$missing_terminal_text" ]
+published_terminal_text=$(printf '%s\n' '{"event":"done","data":{"text":"https://example.test/site"}}' | jq -rs "$terminal_text_filter")
+[ "$published_terminal_text" = 'https://example.test/site' ]
 if grep -Eq 'docker compose .*\b(restart|up|down|create|pull)\b|aws[[:space:]]' "$script"; then
   echo 'existing-stack batch acceptance contains infrastructure mutation' >&2
   exit 1

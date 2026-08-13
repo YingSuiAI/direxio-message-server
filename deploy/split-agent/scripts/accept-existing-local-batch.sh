@@ -233,17 +233,24 @@ memory_readback_group() {
 }
 
 static_site_group() {
-  local profile conversation before marker params published after release url body status
+  local profile conversation before marker params config frames published_text after release url body status
   profile=$(profile_json "$chat_model"); [ -n "$profile" ] || return 1
   call_http agent.static_sites.list '{"page_size":100}' static-list-before || return 1; before=$last_response
   conversation=$(uuid4); owned_conversations+=("$conversation")
   create_conversation "$conversation" "Batch static site" || return 1
   marker=BATCH_STATIC_SITE_$stamp
   params=$(chat_params "$profile" "$conversation" "$(uuid4)" "Use static_site_publish to publish one complete HTML page whose visible body contains $marker. After publishing, reply with the complete public URL.")
-  call_http agent.chat "$params" static-publish-chat || return 1; published=$last_response
+  config=$out/static-publish-config.json; frames=$out/static-publish.frames.jsonl
+  jq -n --arg base "$http_base" --arg session "$session" --argjson params "$params" --arg output "$frames" \
+    '{http_base:$base,session_file:$session,params:$params,expect:"done",reconnect:false,output_file:$output}' >"$config" || return 1
+  seal "$config"
+  go run "$script_dir/internal/accept-existing-ws" "$config" || return 1
+  seal "$frames"
+  published_text=$(jq -rs '[.[] | select(.event=="done") | (.data.text // empty) | select(type=="string" and length>0)] | last // empty' "$frames")
+  [ -n "$published_text" ] || return 1
   call_http agent.static_sites.list '{"page_size":100}' static-list-after || return 1; after=$last_response
-  release=$(jq -r --slurpfile before "$before" --slurpfile published "$published" \
-    '[.releases[]? | select(.release_id as $id | ([ $before[0].releases[]?.release_id ] | index($id) | not)) | select(.public_url as $url | (($published[0].text // "") | contains($url)))] | first.release_id // empty' "$after")
+  release=$(jq -r --slurpfile before "$before" --arg published "$published_text" \
+    '[.releases[]? | select(.release_id as $id | ([ $before[0].releases[]?.release_id ] | index($id) | not)) | select(.public_url as $url | ($published | contains($url)))] | first.release_id // empty' "$after")
   [ -n "$release" ] || return 1
   url=$(jq -r --arg id "$release" '.releases[] | select(.release_id==$id) | .public_url' "$after")
   owned_releases+=("$release")
