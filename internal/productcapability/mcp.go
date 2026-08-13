@@ -138,8 +138,8 @@ func NewRegistryWithInvokerAndOptionsChecked(invoker ProductInvoker, options Reg
 		{operation: "search", action: dirextalkmcp.ActionContactsSearch, operationType: capv1.OperationType_OPERATION_TYPE_READ, scope: "product:contacts:read", displayName: "Search contacts", schema: objectSchema(`"query":{"type":"string"},"limit":{"type":"number"}`)},
 	})
 	register("product.rooms.v1", "Rooms", "Joined Matrix/ProductCore rooms visible to the owner.", []operationBinding{
-		{operation: "list", action: dirextalkmcp.ActionRoomsSearch, operationType: capv1.OperationType_OPERATION_TYPE_READ, scope: "product:rooms:read", displayName: "List rooms", schema: objectSchema(`"query":{"type":"string"},"type":{"type":"string"},"limit":{"type":"number"}`)},
-		{operation: "search", action: dirextalkmcp.ActionRoomsSearch, operationType: capv1.OperationType_OPERATION_TYPE_READ, scope: "product:rooms:read", displayName: "Search rooms", schema: objectSchema(`"query":{"type":"string"},"type":{"type":"string"},"limit":{"type":"number"}`)},
+		{operation: "list", action: dirextalkmcp.ActionRoomsSearch, operationType: capv1.OperationType_OPERATION_TYPE_READ, scope: "product:rooms:read", displayName: "List rooms", schema: objectSchema(`"query":{"type":"string"},"type":{"type":"string","enum":["all","contact","group","channel"]},"limit":{"type":"number"}`)},
+		{operation: "search", action: dirextalkmcp.ActionRoomsSearch, operationType: capv1.OperationType_OPERATION_TYPE_READ, scope: "product:rooms:read", displayName: "Search rooms", schema: objectSchema(`"query":{"type":"string"},"type":{"type":"string","enum":["all","contact","group","channel"]},"limit":{"type":"number"}`)},
 	})
 	messagesOperations := []operationBinding{
 		{operation: "list", action: dirextalkmcp.ActionMessagesList, operationType: capv1.OperationType_OPERATION_TYPE_READ, scope: "product:messages:read", displayName: "List messages", schema: objectSchema(`"room_id":{"type":"string"},"from_time":{"type":"string"},"to_time":{"type":"string"},"cursor":{"type":"string"},"limit":{"type":"number"}`, "room_id")},
@@ -153,7 +153,7 @@ func NewRegistryWithInvokerAndOptionsChecked(invoker ProductInvoker, options Reg
 		{operation: "get", action: dirextalkmcp.ActionRoomMembersList, operationType: capv1.OperationType_OPERATION_TYPE_READ, scope: "product:members:read", displayName: "Get member", schema: objectSchema(`"room_id":{"type":"string"},"user_id":{"type":"string"}`, "room_id", "user_id")},
 	})
 	register("product.channels.v1", "Channels", "Unified channel posts backed by ProductCore and Matrix.", []operationBinding{
-		{operation: "list", action: dirextalkmcp.ActionRoomsSearch, operationType: capv1.OperationType_OPERATION_TYPE_READ, scope: "product:channels:read", displayName: "List channels", schema: objectSchema(`"query":{"type":"string"},"type":{"type":"string"},"limit":{"type":"number"}`)},
+		{operation: "list", action: dirextalkmcp.ActionRoomsSearch, operationType: capv1.OperationType_OPERATION_TYPE_READ, scope: "product:channels:read", displayName: "List channels", schema: objectSchema(`"query":{"type":"string"},"type":{"type":"string","enum":["all","contact","group","channel"]},"limit":{"type":"number"}`)},
 		{operation: "get_posts", action: dirextalkmcp.ActionChannelPostsList, operationType: capv1.OperationType_OPERATION_TYPE_READ, scope: "product:channels:read", displayName: "List channel posts", schema: objectSchema(`"room_id":{"type":"string"},"from_time":{"type":"string"},"to_time":{"type":"string"},"cursor":{"type":"string"},"limit":{"type":"number"}`, "room_id")},
 	})
 	commentOperations := []operationBinding{

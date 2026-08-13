@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v1.1.41
+
+1. Keep memory-fact replay transport metadata outside the closed public mutation receipt so successful edits no longer return HTTP 502.
+2. Restrict Native Agent room-tool type inputs to the room kinds accepted by ProductCore.
+
 ## v1.1.40
 
 1. Accept the Agent's ordinary built-in MCP installation source in owner action schemas, request validation, and task result projection.

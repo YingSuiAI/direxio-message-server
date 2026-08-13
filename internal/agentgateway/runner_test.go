@@ -53,6 +53,33 @@ func TestActionBindingIsExplicit(t *testing.T) {
 	}
 }
 
+func TestMemoryFactReplayMetadataStaysOutsideClosedBusinessResult(t *testing.T) {
+	factID := "33333333-3333-4333-8333-333333333333"
+	results := map[string]map[string]any{
+		"agent.memory.facts.update": {
+			"id": factID, "subject": "user", "predicate": "occupation", "value": "architect", "kind": "identity", "confidence": float64(.9),
+			"valid_from": "2026-08-12T07:00:00Z", "last_confirmed_at": "2026-08-12T08:00:00Z",
+		},
+		"agent.memory.facts.delete": {"fact_id": factID, "deleted": true},
+	}
+	for action, output := range results {
+		if !actionSupportsReplay(action) {
+			t.Fatalf("%s must retain idempotent transport replay", action)
+		}
+		if actionPublishesReplay(action) {
+			t.Fatalf("%s must not publish transport replay metadata", action)
+		}
+		if _, err := adaptActionResult(action, output); err != nil {
+			t.Fatalf("%s closed business result rejected after replay: %v", action, err)
+		}
+	}
+	for _, action := range []string{"agent.chat.conversations.create", "agent.knowledge.upload.start"} {
+		if !actionSupportsReplay(action) || !actionPublishesReplay(action) {
+			t.Fatalf("%s must retain its public replay receipt", action)
+		}
+	}
+}
+
 func TestActionBindingsExcludeUnpublishedModelAndKnowledgeActions(t *testing.T) {
 	for _, action := range []string{
 		"agent.core.model_profiles.sync", "agent.core.model_profiles.list", "agent.core.model_profiles.get", "agent.core.model_profiles.delete", "agent.core.model_profiles.create", "agent.core.model_profiles.update", "agent.core.model_profiles.test",

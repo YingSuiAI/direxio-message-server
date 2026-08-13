@@ -58,7 +58,7 @@ func (r *Runner) Invoke(ctx context.Context, action string, params map[string]an
 	var output map[string]any
 	if len(result) == 0 {
 		output = map[string]any{}
-		if actionSupportsReplay(strings.TrimSpace(action)) {
+		if actionPublishesReplay(strings.TrimSpace(action)) {
 			output["replayed"] = replayed
 		}
 		return adaptActionResultForRequestWithAuthority(strings.TrimSpace(action), params, output, authority)
@@ -66,7 +66,7 @@ func (r *Runner) Invoke(ctx context.Context, action string, params map[string]an
 	if err := json.Unmarshal(result, &output); err != nil {
 		return nil, fmt.Errorf("agent operation returned invalid JSON: %w", err)
 	}
-	if actionSupportsReplay(strings.TrimSpace(action)) {
+	if actionPublishesReplay(strings.TrimSpace(action)) {
 		// Replay is StartOperation transport metadata, not part of the durable
 		// Core business receipt. Overlay it only on mutations whose
 		// public schema explicitly defines the field.
@@ -531,6 +531,19 @@ func actionSupportsReplay(action string) bool {
 	case "agent.chat.conversations.create", "agent.chat.conversations.rename", "agent.chat.conversations.delete",
 		"agent.knowledge.sources.delete", "agent.knowledge.upload.start",
 		"agent.memory.facts.update", "agent.memory.facts.delete":
+		return true
+	default:
+		return false
+	}
+}
+
+// actionPublishesReplay is narrower than transport replay support. Memory fact
+// mutations are idempotently replayable, but their public result schemas are
+// the exact fact/deletion receipts and do not expose transport metadata.
+func actionPublishesReplay(action string) bool {
+	switch strings.TrimSpace(action) {
+	case "agent.chat.conversations.create", "agent.chat.conversations.rename", "agent.chat.conversations.delete",
+		"agent.knowledge.sources.delete", "agent.knowledge.upload.start":
 		return true
 	default:
 		return false

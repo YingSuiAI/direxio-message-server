@@ -59,6 +59,32 @@ func TestRegistryWithInvokerPublishesMCPToolsAsFixedCapabilities(t *testing.T) {
 	}
 }
 
+func TestRoomsCapabilityPublishesOnlySupportedRoomTypes(t *testing.T) {
+	registry, err := NewRegistryWithInvokerChecked(func(context.Context, string, map[string]any) (any, error) {
+		return map[string]any{}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, operationID := range []string{"list", "search"} {
+		operation, ok := registry.Operation("product.rooms.v1", operationID)
+		if !ok {
+			t.Fatalf("product.rooms.v1/%s is missing", operationID)
+		}
+		var schema struct {
+			Properties map[string]struct {
+				Enum []string `json:"enum"`
+			} `json:"properties"`
+		}
+		if err := json.Unmarshal([]byte(operation.GetInputSchemaJson()), &schema); err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Join(schema.Properties["type"].Enum, ","); got != "all,contact,group,channel" {
+			t.Fatalf("product.rooms.v1/%s type enum=%q", operationID, got)
+		}
+	}
+}
+
 func TestMemberGetAllowsTargetUserButRejectsOwnerSpoofing(t *testing.T) {
 	var got map[string]any
 	registry, err := NewRegistryWithInvokerChecked(func(_ context.Context, _ string, params map[string]any) (any, error) {
