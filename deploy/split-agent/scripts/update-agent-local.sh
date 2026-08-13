@@ -25,6 +25,9 @@ lock=$out/.agent-update.lock; umask 077; : >>"$lock"; chmod 600 "$lock"; exec 9<
 [ "$(read_pair "$receipt" state)" = complete ] || die 'cleanup receipt is incomplete'
 stack=$(read_pair "$manifest" stack_name); image=$(read_pair "$env_file" DIREXTALK_AGENT_IMAGE)
 [ "$image" = docker.io/dirextalk/agent:latest ] || die 'Agent must use the latest release channel'
+local_image_ref=${DIREXTALK_AGENT_LOCAL_IMAGE_REF:-}
+[ "$(id -u)" -eq 0 ] || [ -z "$local_image_ref" ] || [ "${DIREXTALK_AGENT_UPDATE_TEST_FIXTURE:-false}" = true ] || die 'local image apply requires root'
+[[ "$local_image_ref" != *$'\n'* ]] || die 'local image ref contains a newline'
 
 container_count=$(read_pair "$receipt" container.count); message_id=
 declare -A old_ids=() indexes=()
@@ -43,14 +46,54 @@ done
 current_version=$(docker image inspect "$old_image_id" --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null) || die 'running Agent version inspection failed'
 semver_ge "$current_version" "$target_version" && negative "Agent $target_version is not newer than running $current_version"
 
-docker pull "$image" >/dev/null || die 'Agent latest pull failed'
-identity=$(docker image inspect "$image" --format '{{index .Config.Labels "org.opencontainers.image.version"}}|{{.Id}}|{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null) || die 'Agent latest inspection failed'
+if [ -n "$local_image_ref" ]; then
+  identity=$(docker image inspect "$local_image_ref" --format '{{index .Config.Labels "org.opencontainers.image.version"}}|{{.Id}}|{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null) || die 'local Agent image is unavailable'
+else
+  docker pull "$image" >/dev/null || die 'Agent latest pull failed'
+  identity=$(docker image inspect "$image" --format '{{index .Config.Labels "org.opencontainers.image.version"}}|{{.Id}}|{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null) || die 'Agent latest inspection failed'
+fi
 IFS='|' read -r pulled_version target_image_id target_revision <<<"$identity"
-[ "$pulled_version" = "$target_version" ] || die "latest is $pulled_version, expected $target_version"
-printf '%s\n' "$target_revision" | grep -Eq '^[0-9a-f]{40}$' || die 'latest revision label is invalid'
-for binary in /usr/local/bin/dirextalk-agent /usr/local/bin/dirextalk-extension-runner /usr/local/bin/dirextalk-core-runner; do [ "$(docker run --rm --entrypoint "$binary" "$image" --version)" = "$target_version" ] || die "$binary version mismatch"; done
+[ "$pulled_version" = "$target_version" ] || die "target image is $pulled_version, expected $target_version"
+printf '%s\n' "$target_revision" | grep -Eq '^[0-9a-f]{40}$' || die 'target revision label is invalid'
+for binary in /usr/local/bin/dirextalk-agent /usr/local/bin/dirextalk-extension-runner /usr/local/bin/dirextalk-core-runner; do [ "$(docker run --rm --entrypoint "$binary" "$target_image_id" --version)" = "$target_version" ] || die "$binary version mismatch"; done
 
 compose=(docker compose --env-file "$env_file" -f "$stack_dir/compose.yaml" -f "$stack_dir/compose.production.yaml" --project-name "$stack")
+rollback_needed=false
+rollback_agent() {
+  local status=$? rollback_receipt rollback_agent_id rollback_extension_id rollback_core_id id data attempts rollback_ready
+  [ "$rollback_needed" = true ] || return "$status"
+  trap - EXIT
+  printf 'split-agent update: restoring previous local image after failed apply\n' >&2
+  if docker image tag "$old_image_id" "$image" >/dev/null 2>&1 &&
+      "${compose[@]}" up -d --no-deps --force-recreate --no-build --pull never extension-runner core-runner agent >/dev/null 2>&1; then
+    attempts=${DIREXTALK_AGENT_UPDATE_HEALTH_ATTEMPTS:-60}
+    while [ "$attempts" -gt 0 ]; do
+      rollback_agent_id=$("${compose[@]}" ps -q agent 2>/dev/null || true)
+      rollback_extension_id=$("${compose[@]}" ps -q extension-runner 2>/dev/null || true)
+      rollback_core_id=$("${compose[@]}" ps -q core-runner 2>/dev/null || true)
+      rollback_ready=true
+      for id in "$rollback_agent_id" "$rollback_extension_id" "$rollback_core_id"; do
+        data=$(docker inspect "$id" 2>/dev/null || true)
+        [ "$(jq -r '.[0].Image // empty' <<<"$data")" = "$old_image_id" ] && [ "$(jq -r '.[0].State.Health.Status // empty' <<<"$data")" = healthy ] || rollback_ready=false
+      done
+      if [ "$rollback_ready" = true ]; then
+        rollback_receipt=$(mktemp "$out/.cleanup-receipt.XXXXXX")
+        awk -F= -v ai="${indexes[agent]}" -v aid="$rollback_agent_id" -v ei="${indexes[extension-runner]}" -v eid="$rollback_extension_id" -v ci="${indexes[core-runner]}" -v cid="$rollback_core_id" \
+          '$1==("container." ai ".id") {$0=$1 "=" aid} $1==("container." ei ".id") {$0=$1 "=" eid} $1==("container." ci ".id") {$0=$1 "=" cid} {print}' "$receipt" >"$rollback_receipt" &&
+          chmod 400 "$rollback_receipt" && mv -f "$rollback_receipt" "$receipt"
+        return "$status"
+      fi
+      attempts=$((attempts-1)); [ "$attempts" -gt 0 ] && sleep 1
+    done
+  fi
+  printf 'split-agent update: previous local image restoration failed\n' >&2
+  return 1
+}
+trap rollback_agent EXIT
+if [ -n "$local_image_ref" ]; then
+  docker image tag "$target_image_id" "$image" >/dev/null || die 'could not bind local Agent image to the receipt channel'
+  rollback_needed=true
+fi
 "${compose[@]}" run --rm --no-deps --pull never -T --interactive=false agent-migrate >/dev/null || die 'Agent storage migration failed'
 "${compose[@]}" up -d --no-deps --force-recreate --no-build --pull never extension-runner core-runner agent >/dev/null || die 'Agent recreate failed'
 declare -A new_ids=()
@@ -67,5 +110,7 @@ chmod 400 "$new_env"; new_env_identity=$(stat -c '%d:%i:%u' "$new_env"); new_env
 new_receipt=$(mktemp "$out/.cleanup-receipt.XXXXXX")
 awk -F= -v identity="$new_env_identity" -v digest="$new_env_sha" -v ai="${indexes[agent]}" -v aid="${new_ids[agent]}" -v ei="${indexes[extension-runner]}" -v eid="${new_ids[extension-runner]}" -v ci="${indexes[core-runner]}" -v cid="${new_ids[core-runner]}" '$1=="control.env_identity" {$0=$1 "=" identity} $1=="control.env_sha256" {$0=$1 "=" digest} $1==("container." ai ".id") {$0=$1 "=" aid} $1==("container." ei ".id") {$0=$1 "=" eid} $1==("container." ci ".id") {$0=$1 "=" cid} {print}' "$receipt" >"$new_receipt"
 chmod 400 "$new_receipt"; mv -f "$new_env" "$env_file"; mv -f "$new_receipt" "$receipt"
+rollback_needed=false
+trap - EXIT
 if [ "$old_image_id" != "$target_image_id" ] && ! docker ps -aq --filter "ancestor=$old_image_id" | grep -q .; then docker image rm "$old_image_id" >/dev/null 2>&1 || true; fi
 printf 'split-agent update passed: version=%s image=%s revision=%s\n' "$target_version" "$image" "$target_revision"

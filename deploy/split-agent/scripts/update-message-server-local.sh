@@ -43,6 +43,9 @@ umask 077
 stack=$(read_pair "$manifest" stack_name)
 image=$(read_pair "$env_file" DIREXTALK_MESSAGE_SERVER_IMAGE)
 [ "$image" = docker.io/dirextalk/message-server:latest ] || die 'message-server must use the latest release channel'
+local_image_ref=${DIREXTALK_MESSAGE_SERVER_LOCAL_IMAGE_REF:-}
+[ "$(id -u)" -eq 0 ] || [ -z "$local_image_ref" ] || [ "${DIREXTALK_MESSAGE_SERVER_UPDATE_TEST_FIXTURE:-false}" = true ] || die 'local image apply requires root'
+[[ "$local_image_ref" != *$'\n'* ]] || die 'local image ref contains a newline'
 
 container_count=$(read_pair "$receipt" container.count)
 message_id=
@@ -60,14 +63,48 @@ current_version=$(docker image inspect "$old_image_id" --format '{{index .Config
 canonical_version "$current_version" || die 'running message-server version is invalid'
 semver_ge "$current_version" "$target_version" && negative "message-server $target_version is not newer than running $current_version"
 
-docker pull "$image" >/dev/null || die 'message-server latest pull failed'
-target_identity=$(docker image inspect "$image" --format '{{index .Config.Labels "org.opencontainers.image.version"}}|{{.Id}}|{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null) || die 'message-server latest inspection failed'
+if [ -n "$local_image_ref" ]; then
+  target_identity=$(docker image inspect "$local_image_ref" --format '{{index .Config.Labels "org.opencontainers.image.version"}}|{{.Id}}|{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null) || die 'local message-server image is unavailable'
+else
+  docker pull "$image" >/dev/null || die 'message-server latest pull failed'
+  target_identity=$(docker image inspect "$image" --format '{{index .Config.Labels "org.opencontainers.image.version"}}|{{.Id}}|{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null) || die 'message-server latest inspection failed'
+fi
 IFS='|' read -r pulled_version target_image_id target_revision <<<"$target_identity"
-[ "$pulled_version" = "$target_version" ] || die "latest is $pulled_version, expected $target_version"
-printf '%s\n' "$target_revision" | grep -Eq '^[0-9a-f]{40}$' || die 'latest revision label is invalid'
-[ "$(docker run --rm --entrypoint /usr/bin/dirextalk-message-server "$image" --version)" = "$target_version" ] || die 'message-server binary version mismatch'
+[ "$pulled_version" = "$target_version" ] || die "target image is $pulled_version, expected $target_version"
+printf '%s\n' "$target_revision" | grep -Eq '^[0-9a-f]{40}$' || die 'target revision label is invalid'
+[ "$(docker run --rm --entrypoint /usr/bin/dirextalk-message-server "$target_image_id" --version)" = "$target_version" ] || die 'message-server binary version mismatch'
 
 compose=(docker compose --env-file "$env_file" -f "$stack_dir/compose.yaml" -f "$stack_dir/compose.production.yaml" --project-name "$stack")
+rollback_needed=false
+rollback_message_server() {
+  local status=$? rollback_id rollback_receipt attempts data
+  [ "$rollback_needed" = true ] || return "$status"
+  trap - EXIT
+  printf 'split message-server update: restoring previous local image after failed apply\n' >&2
+  if docker image tag "$old_image_id" "$image" >/dev/null 2>&1 &&
+      "${compose[@]}" up -d --no-deps --force-recreate --no-build --pull never message-server >/dev/null 2>&1; then
+    attempts=${DIREXTALK_MESSAGE_SERVER_UPDATE_HEALTH_ATTEMPTS:-60}
+    while [ "$attempts" -gt 0 ]; do
+      rollback_id=$("${compose[@]}" ps -q message-server 2>/dev/null || true)
+      data=$(docker inspect "$rollback_id" 2>/dev/null || true)
+      if [ "$(jq -r '.[0].Image // empty' <<<"$data")" = "$old_image_id" ] && [ "$(jq -r '.[0].State.Health.Status // empty' <<<"$data")" = healthy ]; then
+        rollback_receipt=$(mktemp "$out/.cleanup-receipt.XXXXXX")
+        awk -F= -v service_index="$message_index" -v id="$rollback_id" \
+          '$1==("container." service_index ".id") {$0=$1 "=" id} {print}' "$receipt" >"$rollback_receipt" &&
+          chmod 400 "$rollback_receipt" && mv -f "$rollback_receipt" "$receipt"
+        return "$status"
+      fi
+      attempts=$((attempts-1)); [ "$attempts" -gt 0 ] && sleep 1
+    done
+  fi
+  printf 'split message-server update: previous local image restoration failed\n' >&2
+  return 1
+}
+trap rollback_message_server EXIT
+if [ -n "$local_image_ref" ]; then
+  docker image tag "$target_image_id" "$image" >/dev/null || die 'could not bind local message-server image to the receipt channel'
+  rollback_needed=true
+fi
 "${compose[@]}" up -d --no-deps --force-recreate --no-build --pull never message-server >/dev/null || die 'message-server recreate failed'
 attempts=${DIREXTALK_MESSAGE_SERVER_UPDATE_HEALTH_ATTEMPTS:-60}
 while [ "$attempts" -gt 0 ]; do
@@ -100,5 +137,7 @@ awk -F= -v service_index="$message_index" -v id="$new_id" -v identity="$new_env_
 chmod 400 "$new_receipt"
 mv -f "$new_env" "$env_file"
 mv -f "$new_receipt" "$receipt"
+rollback_needed=false
+trap - EXIT
 if [ "$old_image_id" != "$target_image_id" ] && ! docker ps -aq --filter "ancestor=$old_image_id" | grep -q .; then docker image rm "$old_image_id" >/dev/null 2>&1 || true; fi
 printf 'split message-server update passed: version=%s image=%s revision=%s\n' "$target_version" "$image" "$target_revision"

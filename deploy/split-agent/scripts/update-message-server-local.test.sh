@@ -10,6 +10,10 @@ if grep -Eq -- '-v[[:space:]]+index=' "$script"; then
 fi
 grep -Fq 'docker.io/dirextalk/message-server:latest' "$script"
 grep -Fq '/usr/bin/dirextalk-message-server --version' "$script"
+grep -Fq 'DIREXTALK_MESSAGE_SERVER_LOCAL_IMAGE_REF' "$script"
+grep -Fq 'docker image tag "$target_image_id" "$image"' "$script"
+grep -Fq 'docker image tag "$old_image_id" "$image"' "$script"
+grep -Fq 'rollback_message_server' "$script"
 if grep -Eq 'attestation|RepoDigests|@sha256' "$script"; then
   echo 'superseded message-server image attestation contract remains' >&2
   exit 1
