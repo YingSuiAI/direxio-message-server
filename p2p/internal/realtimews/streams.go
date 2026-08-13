@@ -421,6 +421,21 @@ func (m *Module) startNativeAgentStream(ctx context.Context, client *connection,
 			if err == nil || streamCtx.Err() != nil || terminalErrorSent {
 				return
 			}
+			var observationErr *agentgateway.ObservationInterruptedError
+			if errors.As(err, &observationErr) {
+				frame := nativeAgentStreamError(id, action, http.StatusServiceUnavailable, observationErr.Error())
+				frame["code"] = "observation_interrupted"
+				frame["error_code"] = "observation_interrupted"
+				frame["event"] = "observation_interrupted"
+				frame["execution_continues"] = true
+				frame["idempotency_key"] = observationErr.IdempotencyKey
+				frame["conversation_id"] = observationErr.ConversationID
+				frame["turn_id"] = observationErr.TurnID
+				frame["revision"] = observationErr.Revision
+				frame["seq"] = observationErr.Sequence
+				_ = client.sendBlocking(ctx, frame)
+				return
+			}
 			status := http.StatusBadGateway
 			code := ""
 			if errors.Is(err, agentstream.ErrTurnIDReused) {

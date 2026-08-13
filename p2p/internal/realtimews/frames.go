@@ -47,6 +47,7 @@ func (m *Module) readFrames(ctx context.Context, conn *websocket.Conn, client *c
 			})
 		case "client.ping":
 			m.touchSession(sessionID)
+			_ = client.sendBlocking(ctx, pongFrame(frame))
 		case "client.request":
 			m.startRequest(ctx, client, frame)
 		case "client.command":
@@ -72,6 +73,14 @@ func (m *Module) readFrames(ctx context.Context, conn *websocket.Conn, client *c
 			m.touchSession(sessionID)
 		}
 	}
+}
+
+func pongFrame(ping map[string]any) map[string]any {
+	pong := map[string]any{"type": "server.pong"}
+	if id := actionbase.String(ping["id"]); id != "" {
+		pong["id"] = id
+	}
+	return pong
 }
 
 func (m *Module) startRequest(ctx context.Context, client *connection, frame map[string]any) {

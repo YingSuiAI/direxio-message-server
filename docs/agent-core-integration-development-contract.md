@@ -159,7 +159,10 @@ control grant after Start succeeds. The live Watch is then owned by the client
 WebSocket lifecycle and may outlive that admission deadline. A Watch is
 detached after 30 consecutive minutes without a persisted event, on client
 disconnect, or on explicit stream cancellation; detaching never cancels the
-durable operation, and observation resumes from the persisted sequence cursor.
+durable operation. Message Server reports an observation-only interruption with
+`execution_continues=true` plus the exact turn identity, revision, and sequence;
+observation resumes from that persisted sequence cursor. This interruption is
+not a terminal turn failure.
 
 Product Capability handlers must never synchronously call Agent. When a
 workflow needs asynchronous follow-up, it records an event or durable callback

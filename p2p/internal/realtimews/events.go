@@ -52,6 +52,14 @@ func (m *Module) streamEvents(
 				}
 				since = event.Seq
 			}
+			// Agent streams share the one WebSocket writer with ProductCore
+			// events. Drain one bounded snapshot between event pages so a busy
+			// event timeline cannot indefinitely block durable Agent progress.
+			for _, frame := range queuedOutbound(outbound, cap(outbound)) {
+				if err := wsjson.Write(ctx, conn, frame); err != nil {
+					return
+				}
+			}
 			continue
 		}
 
@@ -70,6 +78,25 @@ func (m *Module) streamEvents(
 		case <-waitForEvent:
 		}
 	}
+}
+
+func queuedOutbound(outbound <-chan map[string]any, limit int) []map[string]any {
+	if limit <= 0 {
+		limit = 1
+	}
+	frames := make([]map[string]any, 0, limit)
+	for len(frames) < limit {
+		select {
+		case frame, ok := <-outbound:
+			if !ok {
+				return frames
+			}
+			frames = append(frames, frame)
+		default:
+			return frames
+		}
+	}
+	return frames
 }
 
 func eventVisible(string, dirextalkdomain.Event) bool { return true }

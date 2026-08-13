@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/YingSuiAI/dirextalk-message-server/internal/agentgateway"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/agentstream"
 	actionbase "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/action"
 	agentmodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agent"
@@ -62,6 +63,8 @@ type terminalErrorDurableAgent struct{}
 
 type identityFreeCapabilityErrorDurableAgent struct{}
 
+type observationInterruptedDurableAgent struct{}
+
 func (terminalErrorDurableAgent) Stream(context.Context, string, map[string]any, func(agentstream.Event) error) error {
 	return nil
 }
@@ -70,8 +73,28 @@ func (identityFreeCapabilityErrorDurableAgent) Stream(context.Context, string, m
 	return nil
 }
 
+func (observationInterruptedDurableAgent) Stream(context.Context, string, map[string]any, func(agentstream.Event) error) error {
+	return nil
+}
+
 func (identityFreeCapabilityErrorDurableAgent) DurableStream(context.Context, string, string, map[string]any, func(agentstream.StreamEvent) error) error {
 	return errors.New("external native agent operation outcome is uncertain")
+}
+
+func (observationInterruptedDurableAgent) DurableStream(_ context.Context, _ string, _ string, params map[string]any, emit func(agentstream.StreamEvent) error) error {
+	startID := actionbase.String(params["idempotency_key"])
+	conversationID := actionbase.String(params["conversation_id"])
+	turnID := "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	if err := emit(agentstream.StreamEvent{
+		Kind: agentstream.EventAccepted, TurnID: turnID, IdempotencyKey: startID,
+		ConversationID: conversationID, Revision: 3, Seq: 11, Event: "accepted",
+	}); err != nil {
+		return err
+	}
+	return &agentgateway.ObservationInterruptedError{
+		IdempotencyKey: startID, ConversationID: conversationID, TurnID: turnID,
+		Revision: 4, Sequence: 12, Cause: agentgateway.ErrWatchIdleTimeout,
+	}
 }
 
 type terminalErrorAgent struct{}
@@ -475,6 +498,32 @@ func TestNativeAgentIdentityFreeCapabilityErrorDoesNotBecomeBadRequest(t *testin
 	}
 	if message := actionbase.String(frame["error"]); message != "external native agent operation outcome is uncertain" || strings.Contains(message, "identity is invalid") {
 		t.Fatalf("identity-free capability failure was misclassified: %#v", frame)
+	}
+}
+
+func TestNativeAgentObservationInterruptionKeepsExecutionAttachable(t *testing.T) {
+	module := New(Dependencies{Agent: observationInterruptedDurableAgent{}}, Config{})
+	connection := newConnection("session", Ticket{Role: "owner", UserID: "@owner:example.test"}, MaxInFlightRequests)
+	module.startNativeAgentStream(context.Background(), connection, map[string]any{
+		"id": "observation", "action": "agent.chat", "params": map[string]any{
+			"idempotency_key": "11111111-1111-4111-8111-111111111111",
+			"conversation_id": "22222222-2222-4222-8222-222222222222",
+			"message":         "hello", "model_profile_id": "profile-id",
+			"model_profile_revision": int64(1), "credential_version": int64(1),
+		},
+	})
+	accepted := nextOutbound(t, connection)
+	if accepted["type"] != "server.native_agent_stream.accepted" {
+		t.Fatalf("accepted frame = %#v", accepted)
+	}
+	interrupted := nextOutbound(t, connection)
+	if interrupted["type"] != "server.native_agent_stream.error" || interrupted["status"] != http.StatusServiceUnavailable ||
+		interrupted["event"] != "observation_interrupted" || interrupted["execution_continues"] != true ||
+		interrupted["error_code"] != "observation_interrupted" {
+		t.Fatalf("observation frame = %#v", interrupted)
+	}
+	if interrupted["turn_id"] != "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" || interrupted["revision"] != int64(4) || interrupted["seq"] != int64(12) {
+		t.Fatalf("observation cursor = %#v", interrupted)
 	}
 }
 

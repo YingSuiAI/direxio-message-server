@@ -6,11 +6,15 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 	"time"
 
 	capv1 "github.com/YingSuiAI/dirextalk-capability-api/gen/go/dirextalk/capability/v1"
+	"github.com/YingSuiAI/dirextalk-message-server/internal/agentstream"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestActionBindingIsExplicit(t *testing.T) {
@@ -525,6 +529,60 @@ func TestTerminalChatErrorRejectsMissingFailureAuthority(t *testing.T) {
 	}
 	if event, err := terminalChatErrorFromTurn(turn, 17); !errors.Is(err, ErrInvalidActionResult) || event != nil {
 		t.Fatalf("missing failure authority = event %#v err %v", event, err)
+	}
+}
+
+func TestDurableObservationPreservesLastAuthoritativeCursor(t *testing.T) {
+	observation := durableChatObservation{}
+	observation.captureEvent(&agentstream.Event{Seq: 7, Data: map[string]any{
+		"idempotency_key": durableTestStartID, "conversation_id": durableTestConversationID,
+		"turn_id": durableTestTurnID, "revision": float64(2),
+	}})
+	observation.captureTurn(map[string]any{
+		"turn_id": durableTestTurnID, "idempotency_key": durableTestStartID,
+		"conversation_id": durableTestConversationID, "state": "running",
+		"revision": float64(4), "last_sequence": float64(9), "terminal_code": "", "terminal_summary": "",
+		"created_at": "2026-08-11T10:24:42.331Z", "updated_at": "2026-08-11T10:26:44.558Z",
+	})
+	err := observation.interrupted(ErrWatchIdleTimeout)
+	var interrupted *ObservationInterruptedError
+	if !errors.As(err, &interrupted) || !errors.Is(err, ErrWatchIdleTimeout) {
+		t.Fatalf("observation error = %#v", err)
+	}
+	if interrupted.IdempotencyKey != durableTestStartID || interrupted.ConversationID != durableTestConversationID ||
+		interrupted.TurnID != durableTestTurnID || interrupted.Revision != 4 || interrupted.Sequence != 9 {
+		t.Fatalf("observation authority = %#v", interrupted)
+	}
+}
+
+func TestObservationAttachmentLossClassification(t *testing.T) {
+	for _, err := range []error{
+		ErrWatchIdleTimeout,
+		io.EOF,
+		status.Error(codes.Unavailable, "connection lost"),
+		status.Error(codes.DeadlineExceeded, "watch timeout"),
+		status.Error(codes.ResourceExhausted, "stream limit"),
+	} {
+		if !observationAttachmentLoss(err) {
+			t.Errorf("observation loss %v was treated as a task failure", err)
+		}
+	}
+	for _, err := range []error{errors.New("invalid result"), status.Error(codes.InvalidArgument, "bad request")} {
+		if observationAttachmentLoss(err) {
+			t.Errorf("deterministic failure %v was treated as an observation loss", err)
+		}
+	}
+}
+
+func TestNonterminalLedgerTurnIsNotProjectedAsTaskFailure(t *testing.T) {
+	turn := map[string]any{
+		"turn_id": durableTestTurnID, "idempotency_key": durableTestStartID,
+		"conversation_id": durableTestConversationID, "state": "waiting_confirmation",
+		"revision": float64(5), "last_sequence": float64(16), "terminal_code": "", "terminal_summary": "",
+		"created_at": "2026-08-11T10:24:42.331Z", "updated_at": "2026-08-11T10:26:44.558Z",
+	}
+	if event := terminalChatEventFromTurn(turn, 17); event != nil {
+		t.Fatalf("nonterminal ledger turn became a terminal event: %#v", event)
 	}
 }
 

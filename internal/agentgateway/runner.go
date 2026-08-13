@@ -7,12 +7,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 
 	capv1 "github.com/YingSuiAI/dirextalk-capability-api/gen/go/dirextalk/capability/v1"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/agentstream"
 	"github.com/google/uuid"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // ErrUnsupportedAction is returned before any capability RPC is attempted
@@ -20,6 +23,29 @@ import (
 // sentinel lets the HTTP/WS facade expose a stable not-implemented response
 // instead of misclassifying a contract gap as a transient gateway failure.
 var ErrUnsupportedAction = errors.New("native agent action is unsupported")
+
+// ObservationInterruptedError means only the live Watch attachment ended.
+// The durable turn remains authoritative and can be observed again from
+// Sequence with the same immutable turn identity.
+type ObservationInterruptedError struct {
+	IdempotencyKey string
+	ConversationID string
+	TurnID         string
+	Revision       int64
+	Sequence       int64
+	Cause          error
+}
+
+func (e *ObservationInterruptedError) Error() string {
+	return "native agent observation was interrupted; execution continues"
+}
+
+func (e *ObservationInterruptedError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
 
 // RunnerConfig contains only server-derived identity data. No caller/model
 // parameter is allowed to override OwnerID or AccountGeneration.
@@ -132,14 +158,22 @@ func (r *Runner) Stream(ctx context.Context, action string, params map[string]an
 			closer.Close()
 		}
 	}()
+	var observed durableChatObservation
 	for {
 		event, recvErr := stream.Recv()
 		if recvErr != nil {
 			if errors.Is(recvErr, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
 				return ctx.Err()
 			}
-			// A completed operation may close the stream after its terminal
-			// event; otherwise surface the transport error to the caller.
+			if turn := r.lookupDurableChatTurn(ctx, operationID, conversationID); turn != nil {
+				if terminal := terminalChatEventFromTurn(turn, observed.sequence); terminal != nil {
+					return emit(*terminal)
+				}
+				observed.captureTurn(turn)
+			}
+			if observed.valid() && observationAttachmentLoss(recvErr) {
+				return observed.interrupted(recvErr)
+			}
 			return recvErr
 		}
 		if event == nil {
@@ -160,13 +194,21 @@ func (r *Runner) Stream(ctx context.Context, action string, params map[string]an
 		nativeEvent, terminal, terminalErr := nativeEventFromProto(event, authority)
 		if nativeEvent == nil && terminal {
 			if _, isCapabilityError := event.Event.(*capv1.WatchOperationEvent_Error); isCapabilityError {
-				nativeEvent = r.reconcileDurableChatTerminalError(ctx, operationID, conversationID, event.Sequence)
+				turn := r.lookupDurableChatTurn(ctx, operationID, conversationID)
+				nativeEvent = terminalChatEventFromTurn(turn, event.Sequence)
+				if nativeEvent == nil {
+					observed.captureTurn(turn)
+					if observed.valid() {
+						return observed.interrupted(terminalErr)
+					}
+				}
 			}
 		}
 		if nativeEvent != nil {
 			if err := emit(*nativeEvent); err != nil {
 				return err
 			}
+			observed.captureEvent(nativeEvent)
 		}
 		if terminal {
 			if terminalErr != nil {
@@ -174,6 +216,77 @@ func (r *Runner) Stream(ctx context.Context, action string, params map[string]an
 			}
 			return nil
 		}
+	}
+}
+
+type durableChatObservation struct {
+	idempotencyKey string
+	conversationID string
+	turnID         string
+	revision       int64
+	sequence       int64
+}
+
+func (o *durableChatObservation) captureEvent(event *agentstream.Event) {
+	if o == nil || event == nil || event.Data == nil {
+		return
+	}
+	turnID, _ := event.Data["turn_id"].(string)
+	idempotencyKey, _ := event.Data["idempotency_key"].(string)
+	conversationID, _ := event.Data["conversation_id"].(string)
+	revision, revisionOK := turnInt64(event.Data["revision"])
+	if !canonicalTurnUUID(turnID) || !canonicalTurnUUID(idempotencyKey) || !canonicalTurnUUID(conversationID) || !revisionOK || revision <= 0 {
+		return
+	}
+	o.idempotencyKey, o.conversationID, o.turnID = idempotencyKey, conversationID, turnID
+	o.revision = revision
+	if event.Seq > o.sequence {
+		o.sequence = event.Seq
+	}
+}
+
+func (o *durableChatObservation) captureTurn(turn map[string]any) {
+	if o == nil || !validCanonicalTurn(turn) {
+		return
+	}
+	revision, revisionOK := turnInt64(turn["revision"])
+	sequence, sequenceOK := turnInt64(turn["last_sequence"])
+	if !revisionOK || !sequenceOK {
+		return
+	}
+	o.idempotencyKey = turn["idempotency_key"].(string)
+	o.conversationID = turn["conversation_id"].(string)
+	o.turnID = turn["turn_id"].(string)
+	o.revision = revision
+	if sequence > o.sequence {
+		o.sequence = sequence
+	}
+}
+
+func (o durableChatObservation) valid() bool {
+	return canonicalTurnUUID(o.idempotencyKey) && canonicalTurnUUID(o.conversationID) &&
+		canonicalTurnUUID(o.turnID) && o.revision > 0 && o.sequence >= 0
+}
+
+func (o durableChatObservation) interrupted(cause error) error {
+	return &ObservationInterruptedError{
+		IdempotencyKey: o.idempotencyKey, ConversationID: o.conversationID,
+		TurnID: o.turnID, Revision: o.revision, Sequence: o.sequence, Cause: cause,
+	}
+}
+
+func observationAttachmentLoss(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrWatchIdleTimeout) || errors.Is(err, io.EOF) {
+		return true
+	}
+	switch status.Code(err) {
+	case codes.Unavailable, codes.DeadlineExceeded, codes.ResourceExhausted:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -664,13 +777,9 @@ func nativeEventFromProto(event *capv1.WatchOperationEvent, authority actionResu
 	}
 }
 
-// reconcileDurableChatTerminalError reconstructs only an exact, authoritative
-// failed-turn event. A capability ErrorEvent does not carry the complete
-// business identity, revision, or terminal details, so the operation id alone
-// cannot authorize a synthesized event. Reading one bounded page from the
-// existing turn ledger keeps reconnects that receive only the terminal event
-// safe without inferring identity or failure details from error text.
-func (r *Runner) reconcileDurableChatTerminalError(ctx context.Context, operationID, conversationID string, sequence int64) *agentstream.Event {
+// lookupDurableChatTurn reads the exact turn ledger entry for an observation
+// that ended without a complete business terminal event.
+func (r *Runner) lookupDurableChatTurn(ctx context.Context, operationID, conversationID string) map[string]any {
 	if r == nil || !canonicalTurnUUID(operationID) || !canonicalTurnUUID(conversationID) {
 		return nil
 	}
@@ -687,16 +796,23 @@ func (r *Runner) reconcileDurableChatTerminalError(ctx context.Context, operatio
 	}
 	for _, raw := range turns {
 		turn, ok := raw.(map[string]any)
-		if !ok || turn["idempotency_key"] != operationID || turn["conversation_id"] != conversationID || turn["state"] != "failed" {
+		if !ok || turn["idempotency_key"] != operationID || turn["conversation_id"] != conversationID {
 			continue
 		}
-		event, err := terminalChatErrorFromTurn(turn, sequence)
-		if err != nil {
-			return nil
-		}
-		return event
+		return turn
 	}
 	return nil
+}
+
+func terminalChatEventFromTurn(turn map[string]any, sequence int64) *agentstream.Event {
+	if turn == nil || turn["state"] != "failed" {
+		return nil
+	}
+	event, err := terminalChatErrorFromTurn(turn, sequence)
+	if err != nil {
+		return nil
+	}
+	return event
 }
 
 func terminalChatErrorFromTurn(turn map[string]any, sequence int64) (*agentstream.Event, error) {
