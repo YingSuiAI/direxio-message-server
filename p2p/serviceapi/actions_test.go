@@ -215,7 +215,7 @@ func TestAgentCoreFamilySchemaDrift(t *testing.T) {
 	if kind := candidate.Properties["kind"].Presence; kind == nil || kind.Present != "one_of:mcp" {
 		t.Fatal("MCP candidate schema must publish only kind=mcp")
 	}
-	if source := candidate.Properties["source"].Presence; source == nil || source.Present != "one_of:official_registry|smithery|glama|github|npm" {
+	if source := candidate.Properties["source"].Presence; source == nil || source.Present != "one_of:builtin|official_registry|smithery|glama|github|npm" {
 		t.Fatal("MCP candidate source schema drifted")
 	}
 	if transport := candidate.Properties["transport"].Presence; transport == nil || transport.Present != "one_of:stdio_static|streamable_http|stdio_node;npm_requires_stdio_node;stdio_node_requires_npm_or_github" {
@@ -279,7 +279,7 @@ func TestAgentCoreFamilySchemaDrift(t *testing.T) {
 	}
 	mcpDiscover, _ := ActionSpecFor("agent.core.mcp.discover")
 	skillDiscover, _ := ActionSpecFor("agent.core.skills.discover")
-	if mcpDiscover.Schema.Request["source"].Presence.Present != "one_of:official_registry|smithery|glama|github|npm" ||
+	if mcpDiscover.Schema.Request["source"].Presence.Present != "one_of:builtin|official_registry|smithery|glama|github|npm" ||
 		skillDiscover.Schema.Request["source"].Presence.Present != "one_of:builtin|skills_sh|github" {
 		t.Fatal("extension discovery source schemas are not action-family specific")
 	}

@@ -663,7 +663,6 @@ func TestValidateCoreExtensionFamiliesStayDisjoint(t *testing.T) {
 		t.Fatalf("skills.sh discovery rejected: %v", err)
 	}
 	for action, params := range map[string]map[string]any{
-		"agent.core.mcp.discover":    {"source": "builtin"},
 		"agent.core.skills.discover": {"source": "npm", "query": "calculator"},
 		"agent.core.mcp.list":        {"source": "skills_sh"},
 		"agent.core.skills.list":     {"source": "official_registry"},
@@ -673,6 +672,12 @@ func TestValidateCoreExtensionFamiliesStayDisjoint(t *testing.T) {
 		if err := ValidateActionRequest(action, params); !errors.Is(err, ErrInvalidActionRequest) {
 			t.Errorf("cross-family %s request error = %v, want ErrInvalidActionRequest", action, err)
 		}
+	}
+	if err := ValidateActionRequest("agent.core.mcp.discover", map[string]any{"source": "builtin"}); err != nil {
+		t.Fatalf("built-in MCP discovery rejected: %v", err)
+	}
+	if err := ValidateActionRequest("agent.core.mcp.list", map[string]any{"source": "builtin"}); err != nil {
+		t.Fatalf("built-in MCP list rejected: %v", err)
 	}
 
 	valid := validManagedSkillMutation()

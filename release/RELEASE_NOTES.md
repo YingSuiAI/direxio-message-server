@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v1.1.40
+
+1. Accept the Agent's ordinary built-in MCP installation source in owner action schemas, request validation, and task result projection.
+
 ## v1.1.39
 
 1. Remove the retired Cloud Worker completion result-message identity from the current Agent callback and ProductCore invalidation.

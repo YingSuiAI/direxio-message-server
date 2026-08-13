@@ -532,7 +532,7 @@ func validCoreExtensionSource(kind, source string) bool {
 	if kind == "skill" {
 		return oneOfString(source, "builtin", "skills_sh", "github")
 	}
-	return kind == "mcp" && oneOfString(source, "official_registry", "smithery", "glama", "github", "npm")
+	return kind == "mcp" && oneOfString(source, "builtin", "official_registry", "smithery", "glama", "github", "npm")
 }
 
 func validCoreExtensionTransport(kind, transport string) bool {

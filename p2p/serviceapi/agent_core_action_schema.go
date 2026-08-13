@@ -187,7 +187,7 @@ func coreConfirmationExtensionUncertainAcknowledgeSchema() *ActionSchema {
 
 const (
 	coreMCPKind        = "mcp"
-	coreMCPSources     = "official_registry|smithery|glama|github|npm"
+	coreMCPSources     = "builtin|official_registry|smithery|glama|github|npm"
 	coreMCPTransports  = "stdio_static|streamable_http|stdio_node"
 	coreSkillKind      = "skill"
 	coreSkillSources   = "builtin|skills_sh|github"
