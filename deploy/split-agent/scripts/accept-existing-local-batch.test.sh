@@ -26,6 +26,7 @@ for required in \
   grep -Fq -- "$required" "$script"
 done
 [ "$(grep -Fc 'stop_after_accepted:true' "$script")" -eq 1 ]
+[ "$(grep -Fc 'stop_after_reconnect:true' "$script")" -eq 1 ]
 [ "$(grep -Fc 'agent.chat.turn.stop' "$helper")" -eq 1 ]
 profile_filter='[.profiles[]? | select(.model_kind=="conversation" and .api_key_configured==true) | select($model=="" or .model==$model)] | first // empty'
 profiles='{"profiles":[{"model":"embedding","model_kind":"embedding","api_key_configured":true},{"model":"configured-chat","model_kind":"conversation","api_key_configured":true}]}'

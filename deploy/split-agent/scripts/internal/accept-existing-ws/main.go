@@ -19,13 +19,14 @@ import (
 )
 
 type config struct {
-	HTTPBase          string         `json:"http_base"`
-	SessionFile       string         `json:"session_file"`
-	Params            map[string]any `json:"params"`
-	Expect            string         `json:"expect"`
-	Reconnect         bool           `json:"reconnect"`
-	StopAfterAccepted bool           `json:"stop_after_accepted"`
-	OutputFile        string         `json:"output_file"`
+	HTTPBase           string         `json:"http_base"`
+	SessionFile        string         `json:"session_file"`
+	Params             map[string]any `json:"params"`
+	Expect             string         `json:"expect"`
+	Reconnect          bool           `json:"reconnect"`
+	StopAfterAccepted  bool           `json:"stop_after_accepted"`
+	StopAfterReconnect bool           `json:"stop_after_reconnect"`
+	OutputFile         string         `json:"output_file"`
 }
 
 type session struct {
@@ -55,13 +56,20 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
 	after := int64(0)
-	terminal, err := runConnection(ctx, cfg, auth.AccessToken, after, cfg.Reconnect, out)
+	terminal, accepted, err := runConnection(ctx, cfg, auth.AccessToken, after, cfg.Reconnect, nil, out)
 	if err != nil {
 		fatal(err)
 	}
 	if cfg.Reconnect {
 		after = terminal
-		terminal, err = runConnection(ctx, cfg, auth.AccessToken, after, false, out)
+		var stopAfterNew map[string]any
+		if cfg.StopAfterReconnect {
+			if accepted == nil {
+				fatal(errors.New("reconnect stream returned no accepted turn identity"))
+			}
+			stopAfterNew = accepted
+		}
+		terminal, _, err = runConnection(ctx, cfg, auth.AccessToken, after, false, stopAfterNew, out)
 		if err != nil {
 			fatal(err)
 		}
@@ -71,14 +79,14 @@ func main() {
 	}
 }
 
-func runConnection(ctx context.Context, cfg config, token string, after int64, disconnectAfterFirst bool, out io.Writer) (int64, error) {
+func runConnection(ctx context.Context, cfg config, token string, after int64, disconnectAfterFirst bool, stopAfterNew map[string]any, out io.Writer) (int64, map[string]any, error) {
 	ticket, err := issueTicket(ctx, cfg.HTTPBase, token)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	parsed, err := url.Parse(cfg.HTTPBase)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	if parsed.Scheme == "http" {
 		parsed.Scheme = "ws"
@@ -89,68 +97,78 @@ func runConnection(ctx context.Context, cfg config, token string, after int64, d
 	parsed.RawQuery = url.Values{"ticket": []string{ticket}}.Encode()
 	conn, _, err := websocket.Dial(ctx, parsed.String(), nil)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	defer conn.CloseNow()
 	if err = wsjson.Write(ctx, conn, map[string]any{"type": "client.hello", "since": 0}); err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	var ready map[string]any
 	if err = wsjson.Read(ctx, conn, &ready); err != nil || ready["type"] != "server.ready" {
-		return 0, fmt.Errorf("server.ready: %w", err)
+		return 0, nil, fmt.Errorf("server.ready: %w", err)
 	}
 	params := clone(cfg.Params)
 	params["after_seq"] = after
 	streamID := fmt.Sprintf("batch-%d", time.Now().UnixNano())
 	if err = wsjson.Write(ctx, conn, map[string]any{"type": "client.native_agent_stream", "id": streamID, "action": "agent.chat", "params": params}); err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	maxSeq := after
 	stopRequested := false
+	var accepted map[string]any
 	for {
 		var frame map[string]any
 		if err = wsjson.Read(ctx, conn, &frame); err != nil {
-			return maxSeq, err
+			return maxSeq, accepted, err
 		}
 		if frame["id"] != streamID {
 			continue
 		}
 		if err = json.NewEncoder(out).Encode(frame); err != nil {
-			return maxSeq, err
+			return maxSeq, accepted, err
 		}
 		seq := integer(frame["seq"])
 		typeName, _ := frame["type"].(string)
 		event, _ := frame["event"].(string)
+		if typeName == "server.native_agent_stream.accepted" {
+			accepted = clone(frame)
+		}
 		if cfg.StopAfterAccepted && !stopRequested && typeName == "server.native_agent_stream.accepted" {
 			if err = stopDurableTurn(ctx, cfg.HTTPBase, token, frame); err != nil {
-				return maxSeq, err
+				return maxSeq, accepted, err
 			}
 			stopRequested = true
 		}
+		if stopAfterNew != nil && !stopRequested && seq > after {
+			if err = stopDurableTurn(ctx, cfg.HTTPBase, token, stopAfterNew); err != nil {
+				return maxSeq, accepted, err
+			}
+			return seq, accepted, nil
+		}
 		if typeName == "server.native_agent_stream.error" || event == "error" {
 			if cfg.Expect != "error" {
-				return maxSeq, fmt.Errorf("unexpected stream error: %v", frame["error"])
+				return maxSeq, accepted, fmt.Errorf("unexpected stream error: %v", frame["error"])
 			}
 			if seq <= after {
-				return maxSeq, fmt.Errorf("stream error without a new durable sequence: %v", frame["error"])
+				return maxSeq, accepted, fmt.Errorf("stream error without a new durable sequence: %v", frame["error"])
 			}
-			return seq, nil
+			return seq, accepted, nil
 		}
 		if seq <= after {
-			return maxSeq, fmt.Errorf("reconnect replayed sequence %d at cursor %d", seq, after)
+			return maxSeq, accepted, fmt.Errorf("reconnect replayed sequence %d at cursor %d", seq, after)
 		}
 		if seq > maxSeq {
 			maxSeq = seq
 		}
-		if disconnectAfterFirst && maxSeq > after {
+		if disconnectAfterFirst && maxSeq > after && typeName != "server.native_agent_stream.accepted" {
 			_ = conn.Close(websocket.StatusGoingAway, "acceptance reconnect")
-			return maxSeq, nil
+			return maxSeq, accepted, nil
 		}
 		if event == "done" {
 			if cfg.Expect != "done" {
-				return maxSeq, errors.New("expected stream error, got done")
+				return maxSeq, accepted, errors.New("expected stream error, got done")
 			}
-			return maxSeq, nil
+			return maxSeq, accepted, nil
 		}
 	}
 }

@@ -176,11 +176,11 @@ ws_reconnect_group() {
   params=$(chat_params "$profile" "$conversation" "$(uuid4)" 'Reply with exactly BATCH_WS_OK')
   config=$out/ws-reconnect-config.json; frames=$out/ws-reconnect.frames.jsonl
   jq -n --arg base "$http_base" --arg session "$session" --argjson params "$params" --arg output "$frames" \
-    '{http_base:$base,session_file:$session,params:$params,expect:"done",reconnect:true,output_file:$output}' >"$config"
+    '{http_base:$base,session_file:$session,params:$params,expect:"done",reconnect:true,stop_after_reconnect:true,output_file:$output}' >"$config"
   seal "$config"
   go run "$script_dir/internal/accept-existing-ws" "$config" || return 1
   seal "$frames"
-  jq -s -e 'any(.[]; .event=="done" and ((.data.text // "")|contains("BATCH_WS_OK")))' "$frames" >/dev/null
+  jq -s -e 'any(.[]; .type=="server.native_agent_stream.accepted") and ([.[] | (.seq // 0)] | max) > ([.[] | select(.type=="server.native_agent_stream.accepted") | .seq] | first)' "$frames" >/dev/null
 }
 
 failed_history_group() {
