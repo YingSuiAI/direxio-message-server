@@ -80,6 +80,19 @@ func TestStaticSiteListResultProjectsExactPublicRelease(t *testing.T) {
 	}
 }
 
+func TestStaticSiteListResultAcceptsLocalHTTPOrigin(t *testing.T) {
+	release := staticSiteTestRelease()
+	release["public_url"] = "http://localhost:28108" + release["public_path"].(string)
+	if _, err := adaptActionResultForRequest("agent.static_sites.list", map[string]any{}, map[string]any{"releases": []any{release}, "next_page_token": ""}); err != nil {
+		t.Fatalf("localhost HTTP static-site response rejected: %v", err)
+	}
+
+	release["public_url"] = "http://localhost.example:28108" + release["public_path"].(string)
+	if _, err := adaptActionResultForRequest("agent.static_sites.list", map[string]any{}, map[string]any{"releases": []any{release}, "next_page_token": ""}); !errors.Is(err, ErrInvalidActionResult) {
+		t.Fatalf("localhost-like HTTP host error = %v", err)
+	}
+}
+
 func TestStaticSiteResultsRejectForeignLocationAndDeleteIdentity(t *testing.T) {
 	for name, mutate := range map[string]func(map[string]any){
 		"http URL": func(release map[string]any) {

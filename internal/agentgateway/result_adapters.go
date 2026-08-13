@@ -693,7 +693,10 @@ func validStaticSitePublicLocation(release map[string]any) bool {
 		return false
 	}
 	parsed, err := url.Parse(publicURL)
-	return err == nil && parsed.Scheme == "https" && parsed.Host != "" && parsed.RawQuery == "" && parsed.Fragment == "" && parsed.EscapedPath() == publicPath
+	if err != nil || parsed.Host == "" || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.EscapedPath() != publicPath {
+		return false
+	}
+	return parsed.Scheme == "https" || parsed.Scheme == "http" && parsed.Hostname() == "localhost"
 }
 
 func validMemoryFact(fact map[string]any) bool {
