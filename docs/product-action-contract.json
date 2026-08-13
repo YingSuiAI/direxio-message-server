@@ -2497,7 +2497,7 @@
           "source": {
             "type": "string",
             "presence": {
-              "present": "one_of:official_registry|smithery|glama|github|npm",
+              "present": "one_of:builtin|official_registry|smithery|glama|github|npm",
               "empty": "rejected"
             }
           }
@@ -2570,7 +2570,7 @@
                   "type": "string",
                   "required": true,
                   "presence": {
-                    "present": "one_of:official_registry|smithery|glama|github|npm",
+                    "present": "one_of:builtin|official_registry|smithery|glama|github|npm",
                     "empty": "rejected"
                   }
                 },
@@ -2850,7 +2850,7 @@
           "source": {
             "type": "string",
             "presence": {
-              "present": "one_of:official_registry|smithery|glama|github|npm",
+              "present": "one_of:builtin|official_registry|smithery|glama|github|npm",
               "empty": "rejected"
             }
           },
@@ -3166,7 +3166,7 @@
                 "type": "string",
                 "required": true,
                 "presence": {
-                  "present": "one_of:official_registry|smithery|glama|github|npm",
+                  "present": "one_of:builtin|official_registry|smithery|glama|github|npm",
                   "empty": "rejected"
                 }
               },
@@ -3251,7 +3251,7 @@
                     "type": "string",
                     "required": true,
                     "presence": {
-                      "present": "one_of:official_registry|smithery|glama|github|npm",
+                      "present": "one_of:builtin|official_registry|smithery|glama|github|npm",
                       "empty": "rejected"
                     }
                   },
@@ -3464,7 +3464,7 @@
                 "type": "string",
                 "required": true,
                 "presence": {
-                  "present": "one_of:official_registry|smithery|glama|github|npm",
+                  "present": "one_of:builtin|official_registry|smithery|glama|github|npm",
                   "empty": "rejected"
                 }
               },
@@ -3551,7 +3551,7 @@
                     "type": "string",
                     "required": true,
                     "presence": {
-                      "present": "one_of:official_registry|smithery|glama|github|npm",
+                      "present": "one_of:builtin|official_registry|smithery|glama|github|npm",
                       "empty": "rejected"
                     }
                   },
@@ -4017,7 +4017,7 @@
                 "type": "string",
                 "required": true,
                 "presence": {
-                  "present": "one_of:official_registry|smithery|glama|github|npm",
+                  "present": "one_of:builtin|official_registry|smithery|glama|github|npm",
                   "empty": "rejected"
                 }
               },
@@ -4108,7 +4108,7 @@
                     "type": "string",
                     "required": true,
                     "presence": {
-                      "present": "one_of:official_registry|smithery|glama|github|npm",
+                      "present": "one_of:builtin|official_registry|smithery|glama|github|npm",
                       "empty": "rejected"
                     }
                   },
