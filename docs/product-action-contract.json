@@ -11116,520 +11116,6 @@
       "transport": "http_only"
     },
     {
-      "name": "agent.execution.v2.projects.analyze",
-      "auth": "owner",
-      "transport": "http_only",
-      "schema": {
-        "request": {
-          "idempotency_key": {
-            "type": "string",
-            "required": true,
-            "presence": {
-              "present": "canonical_uuid"
-            }
-          },
-          "project_id": {
-            "type": "string",
-            "required": true,
-            "presence": {
-              "present": "canonical_uuid"
-            }
-          },
-          "source": {
-            "type": "object",
-            "required": true,
-            "properties": {
-              "artifact_id": {
-                "type": "string"
-              },
-              "commit": {
-                "type": "string"
-              },
-              "credential_ref": {
-                "type": "string"
-              },
-              "credential_revision": {
-                "type": "integer"
-              },
-              "immutable": {
-                "type": "boolean",
-                "required": true
-              },
-              "kind": {
-                "type": "string",
-                "required": true
-              },
-              "location": {
-                "type": "string"
-              }
-            }
-          }
-        },
-        "response": {
-          "analysis": {
-            "type": "object",
-            "required": true,
-            "properties": {
-              "owner_id": {
-                "type": "string",
-                "required": true
-              }
-            }
-          }
-        }
-      }
-    },
-    {
-      "name": "agent.execution.v2.analyses.get",
-      "auth": "owner",
-      "transport": "http_only",
-      "schema": {
-        "request": {
-          "analysis_id": {
-            "type": "string",
-            "required": true,
-            "presence": {
-              "present": "canonical_uuid"
-            }
-          }
-        },
-        "response": {
-          "analysis": {
-            "type": "object",
-            "required": true,
-            "properties": {
-              "owner_id": {
-                "type": "string",
-                "required": true
-              }
-            }
-          }
-        }
-      }
-    },
-    {
-      "name": "agent.execution.v2.targets.list",
-      "auth": "owner",
-      "transport": "http_only",
-      "schema": {
-        "request": {
-          "page_size": {
-            "type": "integer",
-            "presence": {
-              "omitted": "server_default_100",
-              "present": "integer_1_to_200"
-            }
-          },
-          "page_token": {
-            "type": "string",
-            "presence": {
-              "omitted": "first_page"
-            }
-          }
-        },
-        "response": {
-          "next_page_token": {
-            "type": "string",
-            "required": true
-          },
-          "targets": {
-            "type": "array",
-            "required": true,
-            "items": {
-              "type": "object",
-              "properties": {
-                "owner_id": {
-                  "type": "string",
-                  "required": true
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    {
-      "name": "agent.execution.v2.targets.get",
-      "auth": "owner",
-      "transport": "http_only",
-      "schema": {
-        "request": {
-          "revision": {
-            "type": "integer"
-          },
-          "target_id": {
-            "type": "string",
-            "required": true
-          }
-        },
-        "response": {
-          "target": {
-            "type": "object",
-            "required": true,
-            "properties": {
-              "owner_id": {
-                "type": "string",
-                "required": true
-              }
-            }
-          }
-        }
-      }
-    },
-    {
-      "name": "agent.execution.v2.targets.import",
-      "auth": "owner",
-      "transport": "http_only",
-      "schema": {
-        "request": {
-          "credential_id": {
-            "type": "string",
-            "required": true,
-            "presence": {
-              "present": "canonical_uuid"
-            }
-          },
-          "credential_revision": {
-            "type": "integer",
-            "required": true,
-            "presence": {
-              "present": "positive_integer"
-            }
-          },
-          "idempotency_key": {
-            "type": "string",
-            "required": true,
-            "presence": {
-              "present": "canonical_uuid"
-            }
-          },
-          "instance_id": {
-            "type": "string",
-            "required": true,
-            "presence": {
-              "present": "aws_ec2_instance_id"
-            }
-          }
-        },
-        "response": {
-          "observation": {
-            "type": "object",
-            "required": true,
-            "properties": {
-              "owner_id": {
-                "type": "string",
-                "required": true
-              }
-            }
-          },
-          "observation_id": {
-            "type": "string",
-            "required": true,
-            "presence": {
-              "present": "canonical_uuid"
-            }
-          },
-          "target": {
-            "type": "object",
-            "required": true,
-            "properties": {
-              "owner_id": {
-                "type": "string",
-                "required": true
-              }
-            }
-          }
-        }
-      }
-    },
-    {
-      "name": "agent.execution.v2.targets.reserve",
-      "auth": "owner",
-      "transport": "http_only",
-      "schema": {
-        "request": {
-          "credential_id": {
-            "type": "string",
-            "required": true,
-            "presence": {
-              "present": "canonical_uuid"
-            }
-          },
-          "credential_revision": {
-            "type": "integer",
-            "required": true,
-            "presence": {
-              "present": "positive_integer"
-            }
-          },
-          "idempotency_key": {
-            "type": "string",
-            "required": true,
-            "presence": {
-              "present": "canonical_uuid"
-            }
-          },
-          "instance_type": {
-            "type": "string",
-            "required": true,
-            "presence": {
-              "present": "aws_instance_type"
-            }
-          },
-          "volume_gib": {
-            "type": "integer",
-            "required": true,
-            "presence": {
-              "present": "range_8_16384"
-            }
-          }
-        },
-        "response": {
-          "target": {
-            "type": "object",
-            "required": true,
-            "properties": {
-              "owner_id": {
-                "type": "string",
-                "required": true
-              }
-            }
-          }
-        }
-      }
-    },
-    {
-      "name": "agent.execution.v2.targets.observe",
-      "auth": "owner",
-      "transport": "http_only",
-      "schema": {
-        "request": {
-          "idempotency_key": {
-            "type": "string",
-            "required": true,
-            "presence": {
-              "present": "canonical_uuid"
-            }
-          },
-          "target_id": {
-            "type": "string",
-            "required": true
-          },
-          "target_revision": {
-            "type": "integer",
-            "required": true
-          }
-        },
-        "response": {
-          "observation": {
-            "type": "object",
-            "required": true,
-            "properties": {
-              "owner_id": {
-                "type": "string",
-                "required": true
-              }
-            }
-          }
-        }
-      }
-    },
-    {
-      "name": "agent.execution.v2.plans.create",
-      "auth": "owner",
-      "transport": "http_only",
-      "schema": {
-        "request": {
-          "ai_configuration": {
-            "type": "object",
-            "properties": {
-              "mode": {
-                "type": "string",
-                "required": true,
-                "presence": {
-                  "present": "one_of:api_key|auth_gate"
-                }
-              },
-              "provider": {
-                "type": "string",
-                "required": true
-              },
-              "secret_binding_digest": {
-                "type": "string"
-              },
-              "secret_purpose": {
-                "type": "string"
-              },
-              "secret_ref": {
-                "type": "string"
-              },
-              "secret_revision": {
-                "type": "integer"
-              },
-              "status": {
-                "type": "string"
-              }
-            }
-          },
-          "analysis_id": {
-            "type": "string",
-            "required": true
-          },
-          "idempotency_key": {
-            "type": "string",
-            "required": true,
-            "presence": {
-              "present": "canonical_uuid"
-            }
-          },
-          "intent": {
-            "type": "string",
-            "required": true
-          },
-          "project_id": {
-            "type": "string",
-            "required": true
-          },
-          "purpose": {
-            "type": "string",
-            "required": true,
-            "presence": {
-              "present": "one_of:service|job"
-            }
-          },
-          "recipe_id": {
-            "type": "string",
-            "required": true
-          },
-          "target_id": {
-            "type": "string",
-            "required": true,
-            "presence": {
-              "present": "canonical_uuid"
-            }
-          },
-          "target_revision": {
-            "type": "integer",
-            "required": true,
-            "presence": {
-              "present": "positive_integer"
-            }
-          }
-        },
-        "response": {
-          "plan": {
-            "type": "object",
-            "required": true,
-            "properties": {
-              "owner_id": {
-                "type": "string",
-                "required": true
-              }
-            }
-          }
-        }
-      }
-    },
-    {
-      "name": "agent.execution.v2.plans.revise",
-      "auth": "owner",
-      "transport": "http_only",
-      "schema": {
-        "request": {
-          "ai_configuration": {
-            "type": "object",
-            "properties": {
-              "mode": {
-                "type": "string",
-                "required": true,
-                "presence": {
-                  "present": "one_of:api_key|auth_gate"
-                }
-              },
-              "provider": {
-                "type": "string",
-                "required": true
-              },
-              "secret_binding_digest": {
-                "type": "string"
-              },
-              "secret_purpose": {
-                "type": "string"
-              },
-              "secret_ref": {
-                "type": "string"
-              },
-              "secret_revision": {
-                "type": "integer"
-              },
-              "status": {
-                "type": "string"
-              }
-            }
-          },
-          "expected_revision": {
-            "type": "integer",
-            "required": true,
-            "presence": {
-              "present": "positive_integer"
-            }
-          },
-          "idempotency_key": {
-            "type": "string",
-            "required": true,
-            "presence": {
-              "present": "canonical_uuid"
-            }
-          },
-          "intent": {
-            "type": "string",
-            "required": true
-          },
-          "plan_id": {
-            "type": "string",
-            "required": true
-          },
-          "purpose": {
-            "type": "string",
-            "required": true,
-            "presence": {
-              "present": "one_of:service|job"
-            }
-          },
-          "recipe_id": {
-            "type": "string",
-            "required": true
-          },
-          "target_id": {
-            "type": "string",
-            "required": true,
-            "presence": {
-              "present": "canonical_uuid"
-            }
-          },
-          "target_revision": {
-            "type": "integer",
-            "required": true,
-            "presence": {
-              "present": "positive_integer"
-            }
-          }
-        },
-        "response": {
-          "plan": {
-            "type": "object",
-            "required": true,
-            "properties": {
-              "owner_id": {
-                "type": "string",
-                "required": true
-              }
-            }
-          }
-        }
-      }
-    },
-    {
       "name": "agent.execution.v2.plans.get",
       "auth": "owner",
       "transport": "http_only",
@@ -11641,8 +11127,8 @@
           },
           "record_kind": {
             "type": "string",
+            "required": true,
             "presence": {
-              "omitted": "generic_execution_v2_authority",
               "present": "exact:cloud_worker"
             }
           },
@@ -11658,8 +11144,7 @@
               "account_generation": {
                 "type": "integer",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;positive_integer_equal_to_prepared_permission_generation"
+                  "present": "positive_integer_equal_to_prepared_permission_generation"
                 }
               },
               "aws": {
@@ -11681,8 +11166,7 @@
                   }
                 },
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;strict_aws_binding"
+                  "present": "strict_aws_binding"
                 }
               },
               "compute": {
@@ -11739,36 +11223,31 @@
                   }
                 },
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;strict_worker_compute"
+                  "present": "strict_worker_compute"
                 }
               },
               "confirmation_id": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                  "present": "canonical_uuid"
                 }
               },
               "conversation_id": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                  "present": "canonical_uuid"
                 }
               },
               "created_at": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;rfc3339_nano"
+                  "present": "rfc3339_nano"
                 }
               },
               "execution_id": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                  "present": "canonical_uuid"
                 }
               },
               "limits": {
@@ -11783,44 +11262,37 @@
                   }
                 },
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;strict_hard_limits"
+                  "present": "strict_hard_limits"
                 }
               },
               "objective_summary": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;nonempty_redacted_summary"
+                  "present": "nonempty_redacted_summary"
                 }
               },
               "owner_id": {
                 "type": "string",
-                "required": true,
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;exact_prepared_permission_owner"
+                  "present": "exact_prepared_permission_owner"
                 }
               },
               "persistent_worker_reuse": {
                 "type": "boolean",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;authoritative_reuse_preference"
+                  "present": "authoritative_reuse_preference"
                 }
               },
               "plan_id": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                  "present": "canonical_uuid"
                 }
               },
               "proposal_reason": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;nonempty_redacted_reason"
+                  "present": "nonempty_redacted_reason"
                 }
               },
               "quote": {
@@ -11870,50 +11342,43 @@
                   }
                 },
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;strict_quote_and_owner_hard_limit"
+                  "present": "strict_quote_and_owner_hard_limit"
                 }
               },
               "revision": {
                 "type": "integer",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;positive_integer"
+                  "present": "positive_integer"
                 }
               },
               "status": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;exact:waiting_user"
+                  "present": "exact:waiting_user"
                 }
               },
               "task_id": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                  "present": "canonical_uuid"
                 }
               },
               "turn_id": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                  "present": "canonical_uuid"
                 }
               },
               "updated_at": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;rfc3339_nano_not_before_created_at"
+                  "present": "rfc3339_nano_not_before_created_at"
                 }
               },
               "workspace_mode": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;one_of:none|read_only|write"
+                  "present": "one_of:none|read_only|write"
                 }
               }
             }
@@ -11942,8 +11407,8 @@
           },
           "record_kind": {
             "type": "string",
+            "required": true,
             "presence": {
-              "omitted": "generic_execution_v2_authority",
               "present": "exact:cloud_worker"
             }
           }
@@ -11962,8 +11427,7 @@
                 "account_generation": {
                   "type": "integer",
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;positive_integer_equal_to_prepared_permission_generation"
+                    "present": "positive_integer_equal_to_prepared_permission_generation"
                   }
                 },
                 "aws": {
@@ -11985,8 +11449,7 @@
                     }
                   },
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;strict_aws_binding"
+                    "present": "strict_aws_binding"
                   }
                 },
                 "compute": {
@@ -12043,36 +11506,31 @@
                     }
                   },
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;strict_worker_compute"
+                    "present": "strict_worker_compute"
                   }
                 },
                 "confirmation_id": {
                   "type": "string",
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                    "present": "canonical_uuid"
                   }
                 },
                 "conversation_id": {
                   "type": "string",
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                    "present": "canonical_uuid"
                   }
                 },
                 "created_at": {
                   "type": "string",
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;rfc3339_nano"
+                    "present": "rfc3339_nano"
                   }
                 },
                 "execution_id": {
                   "type": "string",
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                    "present": "canonical_uuid"
                   }
                 },
                 "limits": {
@@ -12087,43 +11545,37 @@
                     }
                   },
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;strict_hard_limits"
+                    "present": "strict_hard_limits"
                   }
                 },
                 "objective_summary": {
                   "type": "string",
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;nonempty_redacted_summary"
+                    "present": "nonempty_redacted_summary"
                   }
                 },
                 "owner_id": {
                   "type": "string",
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;exact_prepared_permission_owner"
+                    "present": "exact_prepared_permission_owner"
                   }
                 },
                 "persistent_worker_reuse": {
                   "type": "boolean",
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;authoritative_reuse_preference"
+                    "present": "authoritative_reuse_preference"
                   }
                 },
                 "plan_id": {
                   "type": "string",
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                    "present": "canonical_uuid"
                   }
                 },
                 "proposal_reason": {
                   "type": "string",
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;nonempty_redacted_reason"
+                    "present": "nonempty_redacted_reason"
                   }
                 },
                 "quote": {
@@ -12173,203 +11625,46 @@
                     }
                   },
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;strict_quote_and_owner_hard_limit"
+                    "present": "strict_quote_and_owner_hard_limit"
                   }
                 },
                 "revision": {
                   "type": "integer",
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;positive_integer"
+                    "present": "positive_integer"
                   }
                 },
                 "status": {
                   "type": "string",
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;exact:waiting_user"
+                    "present": "exact:waiting_user"
                   }
                 },
                 "task_id": {
                   "type": "string",
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                    "present": "canonical_uuid"
                   }
                 },
                 "turn_id": {
                   "type": "string",
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                    "present": "canonical_uuid"
                   }
                 },
                 "updated_at": {
                   "type": "string",
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;rfc3339_nano_not_before_created_at"
+                    "present": "rfc3339_nano_not_before_created_at"
                   }
                 },
                 "workspace_mode": {
                   "type": "string",
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;one_of:none|read_only|write"
+                    "present": "one_of:none|read_only|write"
                   }
                 }
               }
-            }
-          }
-        }
-      }
-    },
-    {
-      "name": "agent.execution.v2.deployments.list",
-      "auth": "owner",
-      "transport": "http_only",
-      "schema": {
-        "request": {
-          "page_size": {
-            "type": "integer",
-            "presence": {
-              "omitted": "server_default_100",
-              "present": "integer_1_to_200"
-            }
-          },
-          "page_token": {
-            "type": "string",
-            "presence": {
-              "omitted": "first_page"
-            }
-          },
-          "project_id": {
-            "type": "string"
-          }
-        },
-        "response": {
-          "deployments": {
-            "type": "array",
-            "required": true,
-            "items": {
-              "type": "object"
-            }
-          },
-          "next_page_token": {
-            "type": "string",
-            "required": true
-          }
-        }
-      }
-    },
-    {
-      "name": "agent.execution.v2.deployments.get",
-      "auth": "owner",
-      "transport": "http_only",
-      "schema": {
-        "request": {
-          "deployment_id": {
-            "type": "string",
-            "required": true,
-            "presence": {
-              "present": "canonical_uuid"
-            }
-          }
-        },
-        "response": {
-          "deployment": {
-            "type": "object",
-            "required": true
-          }
-        }
-      }
-    },
-    {
-      "name": "agent.execution.v2.deployments.events",
-      "auth": "owner",
-      "transport": "http_only",
-      "schema": {
-        "request": {
-          "after_sequence": {
-            "type": "integer",
-            "presence": {
-              "omitted": "from_beginning",
-              "present": "nonnegative_integer"
-            }
-          },
-          "deployment_id": {
-            "type": "string",
-            "required": true,
-            "presence": {
-              "present": "canonical_uuid"
-            }
-          },
-          "limit": {
-            "type": "integer",
-            "presence": {
-              "omitted": "server_default_100",
-              "present": "integer_1_to_200"
-            }
-          }
-        },
-        "response": {
-          "events": {
-            "type": "array",
-            "required": true,
-            "items": {
-              "type": "object"
-            }
-          },
-          "next_sequence": {
-            "type": "integer",
-            "required": true
-          }
-        }
-      }
-    },
-    {
-      "name": "agent.execution.v2.runs.create",
-      "auth": "owner",
-      "transport": "http_only",
-      "schema": {
-        "request": {
-          "idempotency_key": {
-            "type": "string",
-            "required": true,
-            "presence": {
-              "present": "canonical_uuid"
-            }
-          },
-          "operation": {
-            "type": "string",
-            "required": true
-          },
-          "plan_id": {
-            "type": "string",
-            "required": true
-          },
-          "plan_revision": {
-            "type": "integer",
-            "required": true
-          },
-          "rollback_of_run_id": {
-            "type": "string"
-          },
-          "trigger_kind": {
-            "type": "string"
-          }
-        },
-        "response": {
-          "run": {
-            "type": "object",
-            "required": true
-          },
-          "stages": {
-            "type": "array",
-            "required": true,
-            "items": {
-              "type": "object"
             }
           }
         }
@@ -12383,8 +11678,8 @@
         "request": {
           "record_kind": {
             "type": "string",
+            "required": true,
             "presence": {
-              "omitted": "generic_execution_v2_authority",
               "present": "exact:cloud_worker"
             }
           },
@@ -12401,8 +11696,7 @@
               "account_generation": {
                 "type": "integer",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;positive_integer_equal_to_prepared_permission_generation"
+                  "present": "positive_integer_equal_to_prepared_permission_generation"
                 }
               },
               "artifact_ids": {
@@ -12415,139 +11709,111 @@
                   }
                 },
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;canonical_uuid_array"
+                  "present": "canonical_uuid_array"
                 }
               },
               "confirmation_id": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                  "present": "canonical_uuid"
                 }
               },
               "conversation_id": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                  "present": "canonical_uuid"
                 }
               },
               "created_at": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;rfc3339_nano"
+                  "present": "rfc3339_nano"
                 }
               },
               "execution_id": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                  "present": "canonical_uuid"
                 }
               },
               "failure_code": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;redacted_failure_code_or_empty"
+                  "present": "redacted_failure_code_or_empty"
                 }
               },
               "failure_summary": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;redacted_failure_summary_or_empty"
+                  "present": "redacted_failure_summary_or_empty"
                 }
               },
               "owner_id": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;exact_prepared_permission_owner"
+                  "present": "exact_prepared_permission_owner"
                 }
               },
               "persistent_worker": {
                 "type": "boolean",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;authoritative_worker_lifecycle_flag"
+                  "present": "authoritative_worker_lifecycle_flag"
                 }
               },
               "plan_id": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                  "present": "canonical_uuid"
                 }
               },
               "plan_revision": {
                 "type": "integer",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;positive_integer"
+                  "present": "positive_integer"
                 }
               },
               "revision": {
                 "type": "integer",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;positive_integer"
+                  "present": "positive_integer"
                 }
               },
               "run_id": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                  "present": "canonical_uuid"
                 }
               },
               "status": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;cloud_worker_execution_state"
+                  "present": "cloud_worker_execution_state"
                 }
               },
               "task_id": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                  "present": "canonical_uuid"
                 }
               },
               "turn_id": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                  "present": "canonical_uuid"
                 }
               },
               "updated_at": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;rfc3339_nano_not_before_created_at"
+                  "present": "rfc3339_nano_not_before_created_at"
                 }
               },
               "worker_id": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;empty_until_worker_assigned"
+                  "present": "empty_until_worker_assigned"
                 }
               }
-            }
-          },
-          "stages": {
-            "type": "array",
-            "items": {
-              "type": "object"
-            },
-            "presence": {
-              "omitted": "record_kind=cloud_worker",
-              "present": "generic_execution_v2_stage_projection"
             }
           }
         }
@@ -12559,9 +11825,6 @@
       "transport": "http_only",
       "schema": {
         "request": {
-          "deployment_id": {
-            "type": "string"
-          },
           "page_size": {
             "type": "integer",
             "presence": {
@@ -12575,13 +11838,10 @@
               "omitted": "first_page"
             }
           },
-          "project_id": {
-            "type": "string"
-          },
           "record_kind": {
             "type": "string",
+            "required": true,
             "presence": {
-              "omitted": "generic_execution_v2_authority",
               "present": "exact:cloud_worker"
             }
           }
@@ -12600,8 +11860,7 @@
                 "account_generation": {
                   "type": "integer",
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;positive_integer_equal_to_prepared_permission_generation"
+                    "present": "positive_integer_equal_to_prepared_permission_generation"
                   }
                 },
                 "artifact_ids": {
@@ -12614,127 +11873,109 @@
                     }
                   },
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;canonical_uuid_array"
+                    "present": "canonical_uuid_array"
                   }
                 },
                 "confirmation_id": {
                   "type": "string",
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                    "present": "canonical_uuid"
                   }
                 },
                 "conversation_id": {
                   "type": "string",
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                    "present": "canonical_uuid"
                   }
                 },
                 "created_at": {
                   "type": "string",
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;rfc3339_nano"
+                    "present": "rfc3339_nano"
                   }
                 },
                 "execution_id": {
                   "type": "string",
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                    "present": "canonical_uuid"
                   }
                 },
                 "failure_code": {
                   "type": "string",
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;redacted_failure_code_or_empty"
+                    "present": "redacted_failure_code_or_empty"
                   }
                 },
                 "failure_summary": {
                   "type": "string",
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;redacted_failure_summary_or_empty"
+                    "present": "redacted_failure_summary_or_empty"
                   }
                 },
                 "owner_id": {
                   "type": "string",
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;exact_prepared_permission_owner"
+                    "present": "exact_prepared_permission_owner"
                   }
                 },
                 "persistent_worker": {
                   "type": "boolean",
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;authoritative_worker_lifecycle_flag"
+                    "present": "authoritative_worker_lifecycle_flag"
                   }
                 },
                 "plan_id": {
                   "type": "string",
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                    "present": "canonical_uuid"
                   }
                 },
                 "plan_revision": {
                   "type": "integer",
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;positive_integer"
+                    "present": "positive_integer"
                   }
                 },
                 "revision": {
                   "type": "integer",
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;positive_integer"
+                    "present": "positive_integer"
                   }
                 },
                 "run_id": {
                   "type": "string",
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                    "present": "canonical_uuid"
                   }
                 },
                 "status": {
                   "type": "string",
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;cloud_worker_execution_state"
+                    "present": "cloud_worker_execution_state"
                   }
                 },
                 "task_id": {
                   "type": "string",
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                    "present": "canonical_uuid"
                   }
                 },
                 "turn_id": {
                   "type": "string",
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                    "present": "canonical_uuid"
                   }
                 },
                 "updated_at": {
                   "type": "string",
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;rfc3339_nano_not_before_created_at"
+                    "present": "rfc3339_nano_not_before_created_at"
                   }
                 },
                 "worker_id": {
                   "type": "string",
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;empty_until_worker_assigned"
+                    "present": "empty_until_worker_assigned"
                   }
                 }
               }
@@ -12765,8 +12006,8 @@
           },
           "record_kind": {
             "type": "string",
+            "required": true,
             "presence": {
-              "omitted": "generic_execution_v2_authority",
               "present": "exact:cloud_worker"
             }
           },
@@ -12783,8 +12024,7 @@
               "account_generation": {
                 "type": "integer",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;positive_integer_equal_to_prepared_permission_generation"
+                  "present": "positive_integer_equal_to_prepared_permission_generation"
                 }
               },
               "artifact_ids": {
@@ -12797,163 +12037,112 @@
                   }
                 },
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;canonical_uuid_array"
+                  "present": "canonical_uuid_array"
                 }
               },
               "confirmation_id": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                  "present": "canonical_uuid"
                 }
               },
               "conversation_id": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                  "present": "canonical_uuid"
                 }
               },
               "created_at": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;rfc3339_nano"
+                  "present": "rfc3339_nano"
                 }
               },
               "execution_id": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                  "present": "canonical_uuid"
                 }
               },
               "failure_code": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;redacted_failure_code_or_empty"
+                  "present": "redacted_failure_code_or_empty"
                 }
               },
               "failure_summary": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;redacted_failure_summary_or_empty"
+                  "present": "redacted_failure_summary_or_empty"
                 }
               },
               "owner_id": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;exact_prepared_permission_owner"
+                  "present": "exact_prepared_permission_owner"
                 }
               },
               "persistent_worker": {
                 "type": "boolean",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;authoritative_worker_lifecycle_flag"
+                  "present": "authoritative_worker_lifecycle_flag"
                 }
               },
               "plan_id": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                  "present": "canonical_uuid"
                 }
               },
               "plan_revision": {
                 "type": "integer",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;positive_integer"
+                  "present": "positive_integer"
                 }
               },
               "revision": {
                 "type": "integer",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;positive_integer"
+                  "present": "positive_integer"
                 }
               },
               "run_id": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                  "present": "canonical_uuid"
                 }
               },
               "status": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;cloud_worker_execution_state"
+                  "present": "cloud_worker_execution_state"
                 }
               },
               "task_id": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                  "present": "canonical_uuid"
                 }
               },
               "turn_id": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                  "present": "canonical_uuid"
                 }
               },
               "updated_at": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;rfc3339_nano_not_before_created_at"
+                  "present": "rfc3339_nano_not_before_created_at"
                 }
               },
               "worker_id": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;empty_until_worker_assigned"
+                  "present": "empty_until_worker_assigned"
                 }
               }
             }
-          }
-        }
-      }
-    },
-    {
-      "name": "agent.execution.v2.runs.retry",
-      "auth": "owner",
-      "transport": "http_only",
-      "schema": {
-        "request": {
-          "expected_revision": {
-            "type": "integer",
-            "required": true,
-            "presence": {
-              "present": "positive_integer"
-            }
-          },
-          "idempotency_key": {
-            "type": "string",
-            "required": true,
-            "presence": {
-              "present": "canonical_uuid"
-            }
-          },
-          "run_id": {
-            "type": "string",
-            "required": true
-          }
-        },
-        "response": {
-          "run": {
-            "type": "object",
-            "required": true
           }
         }
       }
@@ -12980,8 +12169,8 @@
           },
           "record_kind": {
             "type": "string",
+            "required": true,
             "presence": {
-              "omitted": "generic_execution_v2_authority",
               "present": "exact:cloud_worker"
             }
           },
@@ -13003,57 +12192,49 @@
                 "account_generation": {
                   "type": "integer",
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;positive_integer_equal_to_prepared_permission_generation"
+                    "present": "positive_integer_equal_to_prepared_permission_generation"
                   }
                 },
                 "at": {
                   "type": "string",
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;rfc3339_nano"
+                    "present": "rfc3339_nano"
                   }
                 },
                 "event_id": {
                   "type": "string",
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                    "present": "canonical_uuid"
                   }
                 },
                 "owner_id": {
                   "type": "string",
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;exact_prepared_permission_owner"
+                    "present": "exact_prepared_permission_owner"
                   }
                 },
                 "payload_digest": {
                   "type": "string",
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;lowercase_sha256"
+                    "present": "lowercase_sha256"
                   }
                 },
                 "revision": {
                   "type": "integer",
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;positive_integer"
+                    "present": "positive_integer"
                   }
                 },
                 "run_id": {
                   "type": "string",
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;canonical_uuid_equal_to_requested_run"
+                    "present": "canonical_uuid_equal_to_requested_run"
                   }
                 },
                 "sequence": {
                   "type": "integer",
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;positive_contiguous_after_previous;first_equals_after_sequence_plus_one_unless_history_truncated"
+                    "present": "positive_contiguous_after_previous;first_equals_after_sequence_plus_one_unless_history_truncated"
                   }
                 },
                 "status": {
@@ -13066,8 +12247,7 @@
                 "type": {
                   "type": "string",
                   "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;nonempty_event_type"
+                    "present": "nonempty_event_type"
                   }
                 }
               }
@@ -13102,8 +12282,8 @@
           },
           "record_kind": {
             "type": "string",
+            "required": true,
             "presence": {
-              "omitted": "generic_execution_v2_authority",
               "present": "exact:cloud_worker"
             }
           }
@@ -13116,78 +12296,67 @@
               "account_generation": {
                 "type": "integer",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;positive_integer_equal_to_prepared_permission_generation"
+                  "present": "positive_integer_equal_to_prepared_permission_generation"
                 }
               },
               "artifact_id": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                  "present": "canonical_uuid"
                 }
               },
               "created_at": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;rfc3339_nano"
+                  "present": "rfc3339_nano"
                 }
               },
               "execution_id": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;canonical_uuid"
+                  "present": "canonical_uuid"
                 }
               },
               "kind": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;approved_artifact_kind"
+                  "present": "approved_artifact_kind"
                 }
               },
               "media_type": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;nonempty_media_type"
+                  "present": "nonempty_media_type"
                 }
               },
               "name": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;safe_display_name"
+                  "present": "safe_display_name"
                 }
               },
               "owner_id": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;exact_prepared_permission_owner"
+                  "present": "exact_prepared_permission_owner"
                 }
               },
               "sha256": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;lowercase_sha256"
+                  "present": "lowercase_sha256"
                 }
               },
               "size_bytes": {
                 "type": "integer",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;nonnegative_integer"
+                  "present": "nonnegative_integer"
                 }
               },
               "status": {
                 "type": "string",
                 "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;one_of:pending|verified|rejected"
+                  "present": "one_of:pending|verified|rejected"
                 }
               }
             }
@@ -13306,371 +12475,6 @@
             "required": true,
             "presence": {
               "present": "integer_1_to_8388608"
-            }
-          }
-        }
-      }
-    },
-    {
-      "name": "agent.execution.v2.service_bindings.list",
-      "auth": "owner",
-      "transport": "http_only",
-      "schema": {
-        "request": {
-          "page_size": {
-            "type": "integer",
-            "presence": {
-              "omitted": "server_default_100",
-              "present": "integer_1_to_200"
-            }
-          },
-          "page_token": {
-            "type": "string",
-            "presence": {
-              "omitted": "first_page"
-            }
-          },
-          "project_id": {
-            "type": "string"
-          }
-        },
-        "response": {
-          "bindings": {
-            "type": "array",
-            "required": true,
-            "items": {
-              "type": "object"
-            }
-          },
-          "next_page_token": {
-            "type": "string",
-            "required": true
-          }
-        }
-      }
-    },
-    {
-      "name": "agent.execution.v2.service_bindings.get",
-      "auth": "owner",
-      "transport": "http_only",
-      "schema": {
-        "request": {
-          "binding_id": {
-            "type": "string",
-            "required": true,
-            "presence": {
-              "present": "canonical_uuid"
-            }
-          }
-        },
-        "response": {
-          "binding": {
-            "type": "object",
-            "required": true
-          }
-        }
-      }
-    },
-    {
-      "name": "agent.execution.v2.service_bindings.invoke",
-      "auth": "owner",
-      "transport": "http_only",
-      "schema": {
-        "request": {
-          "binding_id": {
-            "type": "string",
-            "required": true
-          },
-          "expected_revision": {
-            "type": "integer",
-            "required": true,
-            "presence": {
-              "present": "positive_integer"
-            }
-          },
-          "idempotency_key": {
-            "type": "string",
-            "required": true,
-            "presence": {
-              "present": "canonical_uuid"
-            }
-          },
-          "input": {
-            "type": "object",
-            "required": true
-          },
-          "operation": {
-            "type": "string",
-            "required": true
-          }
-        },
-        "response": {
-          "result": {
-            "type": "object",
-            "required": true
-          }
-        }
-      }
-    },
-    {
-      "name": "agent.execution.v2.secrets.create",
-      "auth": "owner",
-      "transport": "http_only",
-      "schema": {
-        "request": {
-          "idempotency_key": {
-            "type": "string",
-            "required": true,
-            "presence": {
-              "present": "canonical_uuid"
-            }
-          },
-          "provider": {
-            "type": "string",
-            "required": true
-          },
-          "purpose": {
-            "type": "string",
-            "required": true,
-            "presence": {
-              "present": "exact:ai_provider_api_key"
-            }
-          },
-          "value": {
-            "type": "string",
-            "required": true,
-            "write_only": true
-          }
-        },
-        "response": {
-          "secret": {
-            "type": "object",
-            "required": true,
-            "properties": {
-              "binding_digest": {
-                "type": "string",
-                "required": true
-              },
-              "created_at": {
-                "type": "string",
-                "required": true
-              },
-              "provider": {
-                "type": "string",
-                "required": true
-              },
-              "purpose": {
-                "type": "string",
-                "required": true
-              },
-              "revision": {
-                "type": "integer",
-                "required": true
-              },
-              "secret_ref": {
-                "type": "string",
-                "required": true
-              },
-              "status": {
-                "type": "string",
-                "required": true
-              },
-              "updated_at": {
-                "type": "string",
-                "required": true
-              }
-            }
-          }
-        }
-      }
-    },
-    {
-      "name": "agent.execution.v2.secrets.get",
-      "auth": "owner",
-      "transport": "http_only",
-      "schema": {
-        "request": {
-          "revision": {
-            "type": "integer"
-          },
-          "secret_ref": {
-            "type": "string",
-            "required": true
-          }
-        },
-        "response": {
-          "secret": {
-            "type": "object",
-            "required": true,
-            "properties": {
-              "binding_digest": {
-                "type": "string",
-                "required": true
-              },
-              "created_at": {
-                "type": "string",
-                "required": true
-              },
-              "provider": {
-                "type": "string",
-                "required": true
-              },
-              "purpose": {
-                "type": "string",
-                "required": true
-              },
-              "revision": {
-                "type": "integer",
-                "required": true
-              },
-              "secret_ref": {
-                "type": "string",
-                "required": true
-              },
-              "status": {
-                "type": "string",
-                "required": true
-              },
-              "updated_at": {
-                "type": "string",
-                "required": true
-              }
-            }
-          }
-        }
-      }
-    },
-    {
-      "name": "agent.execution.v2.secrets.list",
-      "auth": "owner",
-      "transport": "http_only",
-      "schema": {
-        "request": {
-          "page_size": {
-            "type": "integer",
-            "presence": {
-              "omitted": "server_default_100",
-              "present": "integer_1_to_200"
-            }
-          },
-          "page_token": {
-            "type": "string",
-            "presence": {
-              "omitted": "first_page"
-            }
-          }
-        },
-        "response": {
-          "next_page_token": {
-            "type": "string",
-            "required": true
-          },
-          "secrets": {
-            "type": "array",
-            "required": true,
-            "items": {
-              "type": "object",
-              "properties": {
-                "binding_digest": {
-                  "type": "string",
-                  "required": true
-                },
-                "created_at": {
-                  "type": "string",
-                  "required": true
-                },
-                "provider": {
-                  "type": "string",
-                  "required": true
-                },
-                "purpose": {
-                  "type": "string",
-                  "required": true
-                },
-                "revision": {
-                  "type": "integer",
-                  "required": true
-                },
-                "secret_ref": {
-                  "type": "string",
-                  "required": true
-                },
-                "status": {
-                  "type": "string",
-                  "required": true
-                },
-                "updated_at": {
-                  "type": "string",
-                  "required": true
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    {
-      "name": "agent.execution.v2.secrets.revoke",
-      "auth": "owner",
-      "transport": "http_only",
-      "schema": {
-        "request": {
-          "expected_revision": {
-            "type": "integer",
-            "required": true,
-            "presence": {
-              "present": "positive_integer"
-            }
-          },
-          "idempotency_key": {
-            "type": "string",
-            "required": true,
-            "presence": {
-              "present": "canonical_uuid"
-            }
-          },
-          "secret_ref": {
-            "type": "string",
-            "required": true
-          }
-        },
-        "response": {
-          "secret": {
-            "type": "object",
-            "required": true,
-            "properties": {
-              "binding_digest": {
-                "type": "string",
-                "required": true
-              },
-              "created_at": {
-                "type": "string",
-                "required": true
-              },
-              "provider": {
-                "type": "string",
-                "required": true
-              },
-              "purpose": {
-                "type": "string",
-                "required": true
-              },
-              "revision": {
-                "type": "integer",
-                "required": true
-              },
-              "secret_ref": {
-                "type": "string",
-                "required": true
-              },
-              "status": {
-                "type": "string",
-                "required": true
-              },
-              "updated_at": {
-                "type": "string",
-                "required": true
-              }
             }
           }
         }

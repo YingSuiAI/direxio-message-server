@@ -247,11 +247,10 @@ DIREXTALK_MESSAGE_SERVER_NAME=message.example.com \
 grep -Fqx 'DIREXTALK_MESSAGE_TLS_MODE=edge-terminated' "$edge_production_dir/.env"
 grep -Fqx 'DIREXTALK_MESSAGE_CLIENT_BASE_URL=https://message.example.com' "$edge_production_dir/.env"
 grep -Fqx 'core_static_sites_public_origin: https://message.example.com' "$edge_production_dir/agent-config.yaml"
-grep -Fqx 'core_aws_enabled: true' "$edge_production_dir/agent-config.yaml"
 grep -Fqx 'core_extension_staging_root: /var/lib/dirextalk-agent/extension-staging' "$edge_production_dir/agent-config.yaml"
-if grep -Eq 'core_cloud_worker:|worker_control|model_relay|artifact_bucket|kms_key|ami_id|resource_graph' \
+if grep -Eq 'core_aws|DIREXTALK_CORE_AWS|core_cloud_worker:|worker_control|model_relay|artifact_bucket|kms_key|ami_id|resource_graph' \
     "$edge_production_dir/agent-config.yaml" "$edge_production_dir/.env"; then
-  echo 'production config retained the superseded bound Cloud Worker deployment' >&2
+  echo 'production config retained a superseded deploy-time AWS or Cloud Worker binding' >&2
   exit 1
 fi
 grep -Fqx 'message_tls_mode=edge-terminated' "$edge_production_dir/.manifest"
@@ -437,59 +436,4 @@ if env DIREXTALK_SPLIT_FIXTURE_MODE=true DIREXTALK_SPLIT_TEST_MODE=false \
 fi
 grep -Fq 'DIREXTALK_SPLIT_FIXTURE_MODE requires explicit DIREXTALK_SPLIT_TEST_MODE=true' "$tmp_dir/fixture-without-test-mode.stderr"
 
-ssm_credential=11111111-1111-4111-8111-111111111111
-ssm_region=us-east-1
-ssm_account=123456789012
-ssm_instance=i-0123456789abcdef0
-ssm_document=1
-ssm_service=dirextalk-agent.service
-ssm_tag_key=managed
-ssm_tag_value=true
-
-false_dir=$tmp_dir/aws-without-ssm
-if DIREXTALK_CORE_AWS_ENABLED=true \
-  DIREXTALK_CORE_AWS_SSM_ENABLED=false \
-  DIREXTALK_CORE_AWS_SSM_ACCOUNT_ID=not-an-account \
-  DIREXTALK_CORE_AWS_SSM_INSTANCE_ID=not-an-instance \
-  "$script" "$false_dir" >/dev/null 2>"$tmp_dir/aws-without-ssm.stderr"; then
-  :
-else
-  echo "aws=true with ssm=false must not validate or require SSM readiness metadata" >&2
-  exit 1
-fi
-if grep -Fq 'core_aws_ssm_readiness:' "$false_dir/agent-config.yaml"; then
-  echo "aws=true with ssm=false rendered an SSM readiness block" >&2
-  exit 1
-fi
-grep -Fqx 'DIREXTALK_CORE_AWS_SSM_ENABLED=false' "$false_dir/.env"
-if grep -Eq '^DIREXTALK_CORE_AWS_SSM_(CREDENTIAL_REFERENCE|REGION|ACCOUNT_ID|INSTANCE_ID|DOCUMENT_VERSION|SYSTEMD_SERVICE|REQUIRED_TAG_KEY|REQUIRED_TAG_VALUE)=' "$false_dir/.env"; then
-  echo "aws=true with ssm=false rendered SSM readiness metadata" >&2
-  exit 1
-fi
-
-true_dir=$tmp_dir/aws-with-ssm
-DIREXTALK_CORE_AWS_ENABLED=true \
-  DIREXTALK_CORE_AWS_SSM_ENABLED=true \
-  DIREXTALK_CORE_AWS_SSM_CREDENTIAL_REFERENCE=$ssm_credential \
-  DIREXTALK_CORE_AWS_SSM_REGION=$ssm_region \
-  DIREXTALK_CORE_AWS_SSM_ACCOUNT_ID=$ssm_account \
-  DIREXTALK_CORE_AWS_SSM_INSTANCE_ID=$ssm_instance \
-  DIREXTALK_CORE_AWS_SSM_DOCUMENT_VERSION=$ssm_document \
-  DIREXTALK_CORE_AWS_SSM_SYSTEMD_SERVICE=$ssm_service \
-  DIREXTALK_CORE_AWS_SSM_REQUIRED_TAG_KEY=$ssm_tag_key \
-  DIREXTALK_CORE_AWS_SSM_REQUIRED_TAG_VALUE=$ssm_tag_value \
-  "$script" "$true_dir" >/dev/null
-grep -Fqx 'DIREXTALK_CORE_AWS_SSM_ENABLED=true' "$true_dir/.env"
-grep -Fq 'core_aws_ssm_readiness:' "$true_dir/agent-config.yaml"
-grep -Fqx "DIREXTALK_CORE_AWS_SSM_CREDENTIAL_REFERENCE=$ssm_credential" "$true_dir/.env"
-grep -Fqx "DIREXTALK_CORE_AWS_SSM_ACCOUNT_ID=$ssm_account" "$true_dir/.env"
-grep -Fqx "DIREXTALK_CORE_AWS_SSM_INSTANCE_ID=$ssm_instance" "$true_dir/.env"
-grep -Fqx "DIREXTALK_CORE_AWS_SSM_REQUIRED_TAG_KEY=$ssm_tag_key" "$true_dir/.env"
-grep -Fqx "DIREXTALK_CORE_AWS_SSM_REQUIRED_TAG_VALUE=$ssm_tag_value" "$true_dir/.env"
-
-if DIREXTALK_CORE_AWS_ENABLED=false DIREXTALK_CORE_AWS_SSM_ENABLED=true "$script" "$tmp_dir/invalid-ssm" >/dev/null 2>&1; then
-  echo "ssm=true without aws=true was unexpectedly accepted" >&2
-  exit 1
-fi
-
-echo "provision-local password and AWS SSM gating tests passed"
+echo "provision-local password and split topology tests passed"

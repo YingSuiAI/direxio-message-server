@@ -598,15 +598,9 @@ Run the focused static/mock boundary check with:
 
     deploy/split-agent/scripts/accept-local.test.sh
 
-AWS CloudControl/workload capabilities remain unavailable until an explicitly
-authorized disposable-account runbook supplies typed readiness proof. This
-Compose harness must not be used as AWS authorization. When Execution V2 is
-enabled, configure the Agent's non-secret
-`core_aws_cloudformation_service_role_arn` to one exact allowlisted role ARN
-and pass the same value to `deploy/split-agent/aws/validate-policy.sh`; the
-policy gate requires a separate `iam:PassRole` statement constrained to
-`iam:PassedToService=cloudformation.amazonaws.com` and fails closed when it is
-missing or wildcarded. The Agent never falls back to the caller role.
+Cloud Worker AWS authorization comes only from the owner credential uploaded
+through the Agent API. The split deployment accepts no AWS credential,
+provider, SSM target, or instance binding input.
 
 ## Production shape
 

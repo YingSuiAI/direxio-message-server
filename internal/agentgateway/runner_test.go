@@ -42,8 +42,31 @@ func TestActionBindingIsExplicit(t *testing.T) {
 	if binding, ok := actionBindingFor("agent.model_profiles.list"); !ok || binding.capabilityID != "agent.models.v1" || binding.operation != "list_models" {
 		t.Fatalf("model profile list binding = %#v, want agent.models.v1/list_models", binding)
 	}
-	if binding, ok := actionBindingFor("agent.execution.v2.artifacts.download"); !ok || binding.capabilityID != "agent.execution.v2" || binding.operation != "artifacts_download" {
-		t.Fatalf("artifact download binding = %#v, want agent.execution.v2/artifacts_download", binding)
+	for action, operation := range map[string]string{
+		"agent.execution.v2.plans.get": "plans_get", "agent.execution.v2.plans.list": "plans_list",
+		"agent.execution.v2.runs.get": "runs_get", "agent.execution.v2.runs.list": "runs_list", "agent.execution.v2.runs.cancel": "runs_cancel", "agent.execution.v2.runs.events": "runs_events",
+		"agent.execution.v2.artifacts.get": "artifacts_get", "agent.execution.v2.artifacts.download": "artifacts_download",
+	} {
+		binding, ok := actionBindingFor(action)
+		if !ok || binding.capabilityID != "agent.execution.v2" || binding.operation != operation {
+			t.Errorf("%s binding = %#v, want agent.execution.v2/%s", action, binding, operation)
+		}
+	}
+	for _, action := range []string{
+		"agent.execution.v2.projects.analyze", "agent.execution.v2.analyses.get",
+		"agent.execution.v2.targets.list", "agent.execution.v2.targets.get", "agent.execution.v2.targets.import", "agent.execution.v2.targets.reserve", "agent.execution.v2.targets.observe",
+		"agent.execution.v2.plans.create", "agent.execution.v2.plans.revise",
+		"agent.execution.v2.deployments.list", "agent.execution.v2.deployments.get", "agent.execution.v2.deployments.events",
+		"agent.execution.v2.runs.create", "agent.execution.v2.runs.retry",
+		"agent.execution.v2.service_bindings.list", "agent.execution.v2.service_bindings.get", "agent.execution.v2.service_bindings.invoke",
+		"agent.execution.v2.secrets.create", "agent.execution.v2.secrets.get", "agent.execution.v2.secrets.list", "agent.execution.v2.secrets.revoke",
+	} {
+		if _, ok := actionBindingFor(action); ok {
+			t.Errorf("retired action %s retains a gateway binding", action)
+		}
+		if _, ok := expectedCatalogSchemaDigests[action]; ok {
+			t.Errorf("retired action %s retains a catalog schema pin", action)
+		}
 	}
 	for action, operation := range map[string]string{
 		"agent.web_search.config.get":    "get_config",

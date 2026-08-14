@@ -167,9 +167,7 @@ shellcheck \
   "$script_dir/materialize-agent-secrets.sh" \
   "$script_dir/message-server-entrypoint.sh" \
   "$script_dir/message-server-entrypoint.test.sh" \
-  "$script_dir/message-server-healthcheck.test.sh" \
-  "$stack_dir/aws/validate-policy.sh" \
-  "$stack_dir/aws/validate-policy.test.sh"
+  "$script_dir/message-server-healthcheck.test.sh"
 "$script_dir/message-server-entrypoint.test.sh" >/dev/null
 "$script_dir/message-server-healthcheck.test.sh" >/dev/null
 "$script_dir/compose-runner-limits.test.sh" >/dev/null
@@ -192,7 +190,6 @@ grep -Fqx '  userns,' "$stack_dir/apparmor.d/dirextalk-runner-userns"
 "$script_dir/verify-production-images.test.sh" >/dev/null
 "$script_dir/verify-production-tls.test.sh" >/dev/null
 "$script_dir/cutover-edge.test.sh" >/dev/null
-"$stack_dir/aws/validate-policy.test.sh" >/dev/null
 "$script_dir/verify-build-contexts.sh" "$agent_root" "$message_root" >/dev/null
 
 jq -e --arg http "$http_bind" --arg https "$https_bind" '

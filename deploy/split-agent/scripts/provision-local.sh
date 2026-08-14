@@ -32,11 +32,6 @@ parse_bool() {
   esac
 }
 
-validate_uuid() {
-  local name=$1 value=$2
-  printf '%s\n' "$value" | grep -Eiq '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' || die "$name must be a UUIDv4 credential reference"
-}
-
 validate_safe_value() {
   local name=$1 value=$2 pattern=$3
   printf '%s\n' "$value" | grep -Eq "$pattern" || die "$name contains unsafe characters"
@@ -288,22 +283,8 @@ release_catalog_origin=https://imadmin.dirextalk.ai
 if [ "$runner_fixture_mode" = true ] && [ "${DIREXTALK_SPLIT_TEST_MODE:-false}" != true ]; then
   die "DIREXTALK_SPLIT_FIXTURE_MODE requires explicit DIREXTALK_SPLIT_TEST_MODE=true"
 fi
-core_aws_default=false
-if [ "$compose_mode" = production ]; then
-  core_aws_default=true
-fi
-core_aws_enabled=$(parse_bool DIREXTALK_CORE_AWS_ENABLED "${DIREXTALK_CORE_AWS_ENABLED:-$core_aws_default}")
-core_aws_ssm_enabled=$(parse_bool DIREXTALK_CORE_AWS_SSM_ENABLED "${DIREXTALK_CORE_AWS_SSM_ENABLED:-false}")
 core_knowledge_vector_dimension=${DIREXTALK_CORE_KNOWLEDGE_VECTOR_DIMENSION:-1536}
 validate_vector_dimension DIREXTALK_CORE_KNOWLEDGE_VECTOR_DIMENSION "$core_knowledge_vector_dimension"
-core_aws_ssm_credential_reference=${DIREXTALK_CORE_AWS_SSM_CREDENTIAL_REFERENCE:-00000000-0000-4000-8000-000000000001}
-core_aws_ssm_region=${DIREXTALK_CORE_AWS_SSM_REGION:-us-east-1}
-core_aws_ssm_account_id=${DIREXTALK_CORE_AWS_SSM_ACCOUNT_ID:-000000000000}
-core_aws_ssm_instance_id=${DIREXTALK_CORE_AWS_SSM_INSTANCE_ID:-i-disabled}
-core_aws_ssm_document_version=${DIREXTALK_CORE_AWS_SSM_DOCUMENT_VERSION:-1}
-core_aws_ssm_systemd_service=${DIREXTALK_CORE_AWS_SSM_SYSTEMD_SERVICE:-dirextalk-agent.service}
-core_aws_ssm_required_tag_key=${DIREXTALK_CORE_AWS_SSM_REQUIRED_TAG_KEY:-managed}
-core_aws_ssm_required_tag_value=${DIREXTALK_CORE_AWS_SSM_REQUIRED_TAG_VALUE:-true}
 message_http_bind=${DIREXTALK_MESSAGE_HTTP_BIND:-8008}
 message_https_bind=${DIREXTALK_MESSAGE_HTTPS_BIND:-8448}
 validate_host_port DIREXTALK_MESSAGE_HTTP_BIND "$message_http_bind"
@@ -366,17 +347,6 @@ else
 fi
 validate_ipv4 DIREXTALK_TURN_EXTERNAL_IP "$turn_external_ip"
 
-if [ "$core_aws_ssm_enabled" = true ]; then
-  [ "$core_aws_enabled" = true ] || die "DIREXTALK_CORE_AWS_SSM_ENABLED requires DIREXTALK_CORE_AWS_ENABLED=true"
-  validate_uuid DIREXTALK_CORE_AWS_SSM_CREDENTIAL_REFERENCE "$core_aws_ssm_credential_reference"
-  validate_safe_value DIREXTALK_CORE_AWS_SSM_REGION "$core_aws_ssm_region" '^[a-z0-9-]{1,32}$'
-  validate_safe_value DIREXTALK_CORE_AWS_SSM_ACCOUNT_ID "$core_aws_ssm_account_id" '^[0-9]{12}$'
-  validate_safe_value DIREXTALK_CORE_AWS_SSM_INSTANCE_ID "$core_aws_ssm_instance_id" '^i-[a-z0-9]+$'
-  validate_safe_value DIREXTALK_CORE_AWS_SSM_DOCUMENT_VERSION "$core_aws_ssm_document_version" '^[0-9]+$'
-  validate_safe_value DIREXTALK_CORE_AWS_SSM_SYSTEMD_SERVICE "$core_aws_ssm_systemd_service" '^[A-Za-z0-9_.-]+\.service$'
-  validate_safe_value DIREXTALK_CORE_AWS_SSM_REQUIRED_TAG_KEY "$core_aws_ssm_required_tag_key" '^[A-Za-z0-9_.:/-]{1,128}$'
-  validate_safe_value DIREXTALK_CORE_AWS_SSM_REQUIRED_TAG_VALUE "$core_aws_ssm_required_tag_value" '^[A-Za-z0-9_.:/=-]{1,256}$'
-fi
 extension_runner_socket=${DIREXTALK_CORE_EXTENSION_RUNNER_SOCKET:-/run/dirextalk-agent/extension-runner.sock}
 workload_runner_socket=${DIREXTALK_CORE_WORKLOAD_RUNNER_SOCKET:-/run/dirextalk-core-runner/runner.sock}
 extension_runner_dir=${extension_runner_socket%/*}
@@ -1088,29 +1058,9 @@ core_static_sites_public_origin: $message_client_base_url
 core_workload_enabled: $core_workload_enabled
 core_workload_runner_socket: $workload_runner_socket
 core_workload_runner_uid: $workload_runner_uid
-core_aws_enabled: $core_aws_enabled
 core_secret_master_key_file: /run/secrets/core_secret_master_key
 core_secret_master_key_version: 1
 EOF
-if [ "$core_aws_ssm_enabled" = true ]; then
-  cat >>"$out/agent-config.yaml" <<EOF
-core_aws_ssm_readiness:
-  credential_reference: $core_aws_ssm_credential_reference
-  target:
-    region: $core_aws_ssm_region
-    account_id: "$core_aws_ssm_account_id"
-    instance_id: $core_aws_ssm_instance_id
-    identity:
-      kind: AWS_EC2_SSM
-      region: $core_aws_ssm_region
-      account_id: "$core_aws_ssm_account_id"
-      instance_id: $core_aws_ssm_instance_id
-    ec2_document_version: "$core_aws_ssm_document_version"
-    ec2_systemd_service: $core_aws_ssm_systemd_service
-    required_instance_tags:
-      $core_aws_ssm_required_tag_key: "$core_aws_ssm_required_tag_value"
-EOF
-fi
 cat >>"$out/agent-config.yaml" <<EOF
 core_knowledge_enabled: true
 core_knowledge_content_root: /var/lib/dirextalk-agent/knowledge-content
@@ -1235,25 +1185,7 @@ DIREXTALK_EXTENSION_RUNNER_USER=$extension_runner_user
 DIREXTALK_CORE_RUNNER_USER=$core_runner_user
 DIREXTALK_CORE_EXTENSION_ENABLED=$core_extension_enabled
 DIREXTALK_CORE_WORKLOAD_ENABLED=$core_workload_enabled
-DIREXTALK_CORE_AWS_ENABLED=$core_aws_enabled
 EOF
-if [ "$core_aws_ssm_enabled" = true ]; then
-  cat >>"$out/.env" <<EOF
-DIREXTALK_CORE_AWS_SSM_ENABLED=true
-DIREXTALK_CORE_AWS_SSM_CREDENTIAL_REFERENCE=$core_aws_ssm_credential_reference
-DIREXTALK_CORE_AWS_SSM_REGION=$core_aws_ssm_region
-DIREXTALK_CORE_AWS_SSM_ACCOUNT_ID=$core_aws_ssm_account_id
-DIREXTALK_CORE_AWS_SSM_INSTANCE_ID=$core_aws_ssm_instance_id
-DIREXTALK_CORE_AWS_SSM_DOCUMENT_VERSION=$core_aws_ssm_document_version
-DIREXTALK_CORE_AWS_SSM_SYSTEMD_SERVICE=$core_aws_ssm_systemd_service
-DIREXTALK_CORE_AWS_SSM_REQUIRED_TAG_KEY=$core_aws_ssm_required_tag_key
-DIREXTALK_CORE_AWS_SSM_REQUIRED_TAG_VALUE=$core_aws_ssm_required_tag_value
-EOF
-else
-  cat >>"$out/.env" <<EOF
-DIREXTALK_CORE_AWS_SSM_ENABLED=false
-EOF
-fi
 cat >>"$out/.env" <<EOF
 DIREXTALK_CORE_EXTENSION_RUNNER_SOCKET=$extension_runner_socket
 DIREXTALK_CORE_WORKLOAD_RUNNER_SOCKET=$workload_runner_socket

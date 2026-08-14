@@ -17,28 +17,31 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 )
 
-func TestExecutionV2ExternalAllowlistKeepsGenericRunMutationsOnly(t *testing.T) {
+func TestExecutionV2ExternalAllowlistMatchesRetainedCloudWorkerActions(t *testing.T) {
 	actions := make(map[string]bool, len(externalNativeActions))
 	for _, action := range externalNativeActions {
 		actions[action] = true
 	}
-	for _, action := range []string{"agent.execution.v2.runs.create", "agent.execution.v2.runs.retry"} {
+	for _, action := range []string{
+		"agent.execution.v2.plans.get", "agent.execution.v2.plans.list",
+		"agent.execution.v2.runs.get", "agent.execution.v2.runs.list", "agent.execution.v2.runs.cancel", "agent.execution.v2.runs.events",
+		"agent.execution.v2.artifacts.get", "agent.execution.v2.artifacts.download",
+	} {
 		if !actions[action] {
-			t.Errorf("generic Execution V2 action %s is missing from external routing", action)
+			t.Errorf("retained Cloud Worker action %s is missing from external routing", action)
 		}
 	}
-	if !actions["agent.execution.v2.artifacts.download"] {
-		t.Error("strict Cloud Worker artifact download action is missing from external routing")
-	}
 	for _, action := range []string{
-		"agent.execution.v2.runs.reconcile",
-		"agent.execution.v2.confirmations.get",
-		"agent.execution.v2.confirmations.list",
-		"agent.execution.v2.confirmations.confirm",
-		"agent.execution.v2.confirmations.reject",
+		"agent.execution.v2.projects.analyze", "agent.execution.v2.analyses.get",
+		"agent.execution.v2.targets.list", "agent.execution.v2.targets.get", "agent.execution.v2.targets.import", "agent.execution.v2.targets.reserve", "agent.execution.v2.targets.observe",
+		"agent.execution.v2.plans.create", "agent.execution.v2.plans.revise",
+		"agent.execution.v2.deployments.list", "agent.execution.v2.deployments.get", "agent.execution.v2.deployments.events",
+		"agent.execution.v2.runs.create", "agent.execution.v2.runs.retry",
+		"agent.execution.v2.service_bindings.list", "agent.execution.v2.service_bindings.get", "agent.execution.v2.service_bindings.invoke",
+		"agent.execution.v2.secrets.create", "agent.execution.v2.secrets.get", "agent.execution.v2.secrets.list", "agent.execution.v2.secrets.revoke",
 	} {
 		if actions[action] {
-			t.Errorf("superseded Execution V2 action %s remains externally routed", action)
+			t.Errorf("retired Execution V2 action %s remains externally routed", action)
 		}
 	}
 }

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v1.1.50
+
+1. Remove the superseded Generic Execution V2 product surface and retain only the eight current Cloud Worker read/cancel/artifact operations.
+2. Remove deploy-time Agent AWS/SSM configuration and policy artifacts so App-uploaded credentials are the only Worker binding.
+
 ## v1.1.49
 
 1. Synchronize the current Execution V2 Cloud Worker result schema digests with the Agent capability catalog.
