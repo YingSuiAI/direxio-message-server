@@ -118,13 +118,13 @@ func TestExecutionV2ActionsAreOwnerHTTPAndWSWithStrictMutations(t *testing.T) {
 
 func TestExecutionV2CloudWorkerConditionalResponseSchemasPinStrictPublicProjection(t *testing.T) {
 	planFields := []string{
-		"owner_id", "account_generation", "plan_id", "revision", "status", "digest", "execution_id", "task_id", "confirmation_id", "conversation_id", "turn_id",
-		"recipe_id", "adapter", "objective_summary", "proposal_reason", "input_manifest_digest", "input_manifest_item_count", "workspace_mode", "model_authorization", "aws", "compute", "limits",
-		"network_grants", "secret_grants", "artifact_retention_seconds", "quote", "execution_digest", "created_at", "updated_at",
+		"owner_id", "account_generation", "plan_id", "revision", "status", "execution_id", "task_id", "confirmation_id", "conversation_id", "turn_id",
+		"objective_summary", "proposal_reason", "persistent_worker_reuse", "workspace_mode", "aws", "compute", "limits", "network_grants", "secret_grants",
+		"artifact_retention_seconds", "quote", "created_at", "updated_at",
 	}
 	runFields := []string{
-		"owner_id", "account_generation", "run_id", "execution_id", "plan_id", "plan_revision", "plan_digest", "task_id", "confirmation_id", "conversation_id", "turn_id",
-		"status", "revision", "digest", "workspace_mode", "quote_digest", "execution_digest", "cancellation_requested", "cleanup", "artifact_ids", "failure_code", "failure_summary", "created_at", "updated_at",
+		"owner_id", "account_generation", "run_id", "execution_id", "plan_id", "plan_revision", "task_id", "confirmation_id", "conversation_id", "turn_id",
+		"status", "revision", "cancellation_requested", "worker_id", "persistent_worker", "cleanup", "artifact_ids", "failure_code", "failure_summary", "created_at", "updated_at",
 	}
 	artifactFields := []string{"owner_id", "account_generation", "artifact_id", "execution_id", "kind", "name", "media_type", "size_bytes", "sha256", "status", "created_at"}
 	eventFields := []string{"event_id", "run_id", "owner_id", "account_generation", "revision", "sequence", "type", "at", "payload_digest", "status", "progress"}
@@ -156,7 +156,7 @@ func TestExecutionV2CloudWorkerConditionalResponseSchemasPinStrictPublicProjecti
 		t.Fatalf("runs.events progress schema=%#v", progress)
 	}
 	progressFields := map[string]string{
-		"phase":      "one_of:claimed|preparing_inputs|running_pi|uploading_result|completing",
+		"phase":      "one_of:claimed|preparing_inputs|running|uploading_result|completing",
 		"elapsed_ms": "integer_0_to_86400000", "last_activity_at": "rfc3339_nano_not_after_event_at",
 		"cpu_time_ms": "integer_0_to_604800000", "memory_high_water_bytes": "integer_0_to_68719476736",
 		"invocation_count": "integer_0_to_1000000", "uploaded_bytes": "integer_0_to_9437184",
@@ -194,13 +194,15 @@ func TestExecutionV2CloudWorkerConditionalResponseSchemasPinStrictPublicProjecti
 	if status := planGet.Schema.Response["plan"].Properties["status"]; status.Presence == nil || status.Presence.Present != "required_when_record_kind=cloud_worker;exact:waiting_user" {
 		t.Fatalf("Cloud Worker plan status schema=%#v", status)
 	}
-	for _, field := range []string{"amount_micros", "currency", "source_time", "expires_at", "maximum_authorized_cost_micros", "digest"} {
+	for _, field := range []string{"amount_micros", "currency", "source_time", "expires_at", "maximum_authorized_cost_micros"} {
 		if !quote.Properties[field].Required {
 			t.Errorf("quote.%s is not strict when quote is present", field)
 		}
 	}
-	if _, exposed := quote.Properties["basis_digest"]; exposed {
-		t.Fatal("public quote must not expose the private authorization basis digest")
+	for _, retired := range []string{"digest", "basis_digest"} {
+		if _, exposed := quote.Properties[retired]; exposed {
+			t.Fatalf("public quote exposes retired field %q", retired)
+		}
 	}
 	secretGrant := planGet.Schema.Response["plan"].Properties["secret_grants"].Items
 	if secretGrant == nil || !secretGrant.Properties["purpose"].Required {

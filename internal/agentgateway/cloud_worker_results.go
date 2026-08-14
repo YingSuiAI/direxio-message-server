@@ -28,7 +28,7 @@ const (
 )
 
 var cloudWorkerProgressPhases = map[string]bool{
-	"claimed": true, "preparing_inputs": true, "running_pi": true,
+	"claimed": true, "preparing_inputs": true, "running": true,
 	"uploading_result": true, "completing": true,
 }
 
@@ -200,9 +200,9 @@ func cloudWorkerPage(output map[string]any, key string) ([]map[string]any, error
 
 func validateCloudWorkerPlan(plan map[string]any) error {
 	required := []string{
-		"owner_id", "account_generation", "plan_id", "revision", "status", "digest", "execution_id", "task_id", "confirmation_id", "conversation_id", "turn_id",
-		"recipe_id", "adapter", "objective_summary", "proposal_reason", "input_manifest_digest", "input_manifest_item_count", "workspace_mode", "model_authorization", "aws", "compute", "limits",
-		"network_grants", "secret_grants", "artifact_retention_seconds", "quote", "execution_digest", "created_at", "updated_at",
+		"owner_id", "account_generation", "plan_id", "revision", "status", "execution_id", "task_id", "confirmation_id", "conversation_id", "turn_id",
+		"objective_summary", "proposal_reason", "persistent_worker_reuse", "workspace_mode", "aws", "compute", "limits", "network_grants", "secret_grants",
+		"artifact_retention_seconds", "quote", "created_at", "updated_at",
 	}
 	if err := cloudExact(plan, required, nil, "plan"); err != nil {
 		return err
@@ -215,27 +215,19 @@ func validateCloudWorkerPlan(plan map[string]any) error {
 			return cloudWorkerResultError("plan %s is not a canonical UUID", key)
 		}
 	}
-	for _, key := range []string{"digest", "input_manifest_digest", "execution_digest"} {
-		if !cloudDigest(plan[key]) {
-			return cloudWorkerResultError("plan %s is not a digest", key)
-		}
+	if plan["status"] != "waiting_user" || !cloudWorkspace(plan["workspace_mode"]) {
+		return cloudWorkerResultError("plan status or workspace mode is invalid")
 	}
-	if plan["recipe_id"] != "ephemeral-pi-task" || plan["adapter"] != "pi_json_task_v1" || plan["status"] != "waiting_user" || !cloudWorkspace(plan["workspace_mode"]) {
-		return cloudWorkerResultError("plan recipe, adapter, status, or workspace mode is invalid")
-	}
-	if !cloudNonemptyString(plan["objective_summary"]) || !map[string]bool{"explicit_user_cloud": true, "local_budget_exceeded": true}[cloudString(plan["proposal_reason"])] {
+	if !cloudNonemptyString(plan["objective_summary"]) || !cloudNonemptyString(plan["proposal_reason"]) {
 		return cloudWorkerResultError("plan proposal is invalid")
 	}
-	if count, ok := cloudInteger(plan["input_manifest_item_count"]); !ok || count < 0 {
-		return cloudWorkerResultError("plan input manifest count is invalid")
+	if _, ok := plan["persistent_worker_reuse"].(bool); !ok {
+		return cloudWorkerResultError("plan persistent_worker_reuse must be a boolean")
 	}
 	if retention, ok := cloudInteger(plan["artifact_retention_seconds"]); !ok || retention <= 0 {
 		return cloudWorkerResultError("plan artifact retention is invalid")
 	}
 	if err := cloudTimestampOrder(plan, "created_at", "updated_at"); err != nil {
-		return err
-	}
-	if err := validateCloudModelAuthorization(plan["model_authorization"]); err != nil {
 		return err
 	}
 	if err := validateCloudAWS(plan["aws"]); err != nil {
@@ -258,8 +250,8 @@ func validateCloudWorkerPlan(plan map[string]any) error {
 
 func validateCloudWorkerRun(run map[string]any) error {
 	required := []string{
-		"owner_id", "account_generation", "run_id", "execution_id", "plan_id", "plan_revision", "plan_digest", "task_id", "confirmation_id", "conversation_id", "turn_id",
-		"status", "revision", "digest", "workspace_mode", "quote_digest", "execution_digest", "cancellation_requested", "cleanup", "artifact_ids", "failure_code", "failure_summary", "created_at", "updated_at",
+		"owner_id", "account_generation", "run_id", "execution_id", "plan_id", "plan_revision", "task_id", "confirmation_id", "conversation_id", "turn_id",
+		"status", "revision", "cancellation_requested", "worker_id", "persistent_worker", "cleanup", "artifact_ids", "failure_code", "failure_summary", "created_at", "updated_at",
 	}
 	if err := cloudExact(run, required, nil, "run"); err != nil {
 		return err
@@ -267,22 +259,14 @@ func validateCloudWorkerRun(run map[string]any) error {
 	if err := cloudOwned(run, "run_id"); err != nil {
 		return err
 	}
-	if run["run_id"] != run["execution_id"] {
-		return cloudWorkerResultError("run_id and execution_id differ")
-	}
-	for _, key := range []string{"plan_id", "task_id", "confirmation_id", "conversation_id", "turn_id"} {
+	for _, key := range []string{"execution_id", "plan_id", "task_id", "confirmation_id", "conversation_id", "turn_id"} {
 		if !cloudUUID(run[key]) {
 			return cloudWorkerResultError("run %s is not a canonical UUID", key)
 		}
 	}
-	for _, key := range []string{"plan_digest", "digest", "quote_digest", "execution_digest"} {
-		if !cloudDigest(run[key]) {
-			return cloudWorkerResultError("run %s is not a digest", key)
-		}
-	}
 	state := cloudString(run["status"])
-	if !cloudWorkerStates[state] || !cloudWorkspace(run["workspace_mode"]) {
-		return cloudWorkerResultError("run status or workspace mode is invalid")
+	if !cloudWorkerStates[state] {
+		return cloudWorkerResultError("run status is invalid")
 	}
 	if revision, ok := cloudInteger(run["plan_revision"]); !ok || revision <= 0 {
 		return cloudWorkerResultError("run plan revision is invalid")
@@ -296,12 +280,14 @@ func validateCloudWorkerRun(run map[string]any) error {
 	if _, ok := run["cancellation_requested"].(bool); !ok {
 		return cloudWorkerResultError("run cancellation_requested must be a boolean")
 	}
-	cleanup, err := validateCloudCleanup(run["cleanup"])
-	if err != nil {
-		return err
+	if _, ok := run["worker_id"].(string); !ok {
+		return cloudWorkerResultError("run worker_id must be a string")
 	}
-	if state == "succeeded" && !cleanup.verified || (state == "failed" || state == "canceled") && cleanup.total > 0 && !cleanup.verified || (state == "rejected" || state == "expired") && cleanup.total != 0 {
-		return cloudWorkerResultError("run terminal state precedes verified cleanup")
+	if _, ok := run["persistent_worker"].(bool); !ok {
+		return cloudWorkerResultError("run persistent_worker must be a boolean")
+	}
+	if err := validateCloudCleanup(run["cleanup"]); err != nil {
+		return err
 	}
 	if err := cloudUUIDArray(run["artifact_ids"], "artifact_ids"); err != nil {
 		return err
@@ -476,43 +462,27 @@ func validateCloudWorkerRequestedIdentity(request, value map[string]any, idField
 	return nil
 }
 
-func validateCloudModelAuthorization(value any) error {
-	object, ok := value.(map[string]any)
-	if !ok || cloudExact(object, []string{"model_profile_id", "model_profile_revision", "provider", "model", "interface", "credential_version"}, nil, "model_authorization") != nil || !cloudUUID(object["model_profile_id"]) || !cloudNonemptyString(object["provider"]) || !cloudNonemptyString(object["model"]) || !cloudNonemptyString(object["interface"]) {
-		return cloudWorkerResultError("model authorization is invalid")
-	}
-	for _, key := range []string{"model_profile_revision", "credential_version"} {
-		if number, ok := cloudInteger(object[key]); !ok || number <= 0 {
-			return cloudWorkerResultError("model authorization %s is invalid", key)
-		}
-	}
-	return nil
-}
-
 func validateCloudAWS(value any) error {
 	object, ok := value.(map[string]any)
-	if !ok || cloudExact(object, []string{"account_id", "region", "credential_revision"}, nil, "aws") != nil || len(cloudString(object["account_id"])) != 12 || !cloudNonemptyString(object["region"]) {
+	if !ok || cloudExact(object, []string{"account_id", "region"}, nil, "aws") != nil || len(cloudString(object["account_id"])) != 12 || !cloudNonemptyString(object["region"]) {
 		return cloudWorkerResultError("AWS binding is invalid")
 	}
-	if revision, ok := cloudInteger(object["credential_revision"]); !ok || revision <= 0 {
-		return cloudWorkerResultError("AWS credential revision is invalid")
+	for _, digit := range cloudString(object["account_id"]) {
+		if digit < '0' || digit > '9' {
+			return cloudWorkerResultError("AWS binding is invalid")
+		}
 	}
 	return nil
 }
 
 func validateCloudCompute(value any) error {
 	object, ok := value.(map[string]any)
-	required := []string{"instance_type", "architecture", "root_device_name", "volume_gib", "volume_type", "volume_iops", "volume_throughput_mib", "ami_id", "ami_digest", "worker_release_digest", "pi_runtime_digest", "host_network_policy_sha256"}
+	required := []string{"instance_type", "volume_gib", "volume_type", "volume_iops", "volume_throughput_mib"}
 	if !ok || cloudExact(object, required, nil, "compute") != nil {
 		return cloudWorkerResultError("compute binding is invalid")
 	}
-	for _, key := range []string{"instance_type", "architecture", "root_device_name", "volume_type", "ami_id"} {
+	for _, key := range []string{"instance_type", "volume_type"} {
 		if !cloudNonemptyString(object[key]) {
-			return cloudWorkerResultError("compute %s is invalid", key)
-		}
-	}
-	for _, key := range []string{"ami_digest", "worker_release_digest", "pi_runtime_digest", "host_network_policy_sha256"} {
-		if !cloudDigest(object[key]) {
 			return cloudWorkerResultError("compute %s is invalid", key)
 		}
 	}
@@ -526,13 +496,11 @@ func validateCloudCompute(value any) error {
 
 func validateCloudLimits(value any) error {
 	object, ok := value.(map[string]any)
-	if !ok || cloudExact(object, []string{"max_runtime_seconds", "max_tokens", "max_output_bytes"}, nil, "limits") != nil {
+	if !ok || cloudExact(object, []string{"max_runtime_seconds"}, nil, "limits") != nil {
 		return cloudWorkerResultError("limits are invalid")
 	}
-	for _, key := range []string{"max_runtime_seconds", "max_tokens", "max_output_bytes"} {
-		if number, ok := cloudInteger(object[key]); !ok || number <= 0 {
-			return cloudWorkerResultError("limit %s is invalid", key)
-		}
+	if number, ok := cloudInteger(object["max_runtime_seconds"]); !ok || number <= 0 {
+		return cloudWorkerResultError("limit max_runtime_seconds is invalid")
 	}
 	return nil
 }
@@ -553,7 +521,7 @@ func validateCloudSecretGrants(value any) error {
 
 func validateCloudQuote(value any) error {
 	quote, ok := value.(map[string]any)
-	if !ok || cloudExact(quote, []string{"amount_micros", "currency", "source_time", "expires_at", "maximum_authorized_cost_micros", "digest"}, nil, "quote") != nil || quote["currency"] != "USD" || !cloudDigest(quote["digest"]) {
+	if !ok || cloudExact(quote, []string{"amount_micros", "currency", "source_time", "expires_at", "maximum_authorized_cost_micros"}, nil, "quote") != nil || quote["currency"] != "USD" {
 		return cloudWorkerResultError("quote is invalid")
 	}
 	amount, amountOK := cloudInteger(quote["amount_micros"])
@@ -566,24 +534,19 @@ func validateCloudQuote(value any) error {
 	return nil
 }
 
-type cloudCleanup struct {
-	verified bool
-	total    int64
-}
-
-func validateCloudCleanup(value any) (cloudCleanup, error) {
+func validateCloudCleanup(value any) error {
 	cleanup, ok := value.(map[string]any)
 	if !ok || cloudExact(cleanup, []string{"verified_destroyed", "resources_total", "resources_verified_destroyed"}, []string{"verified_at"}, "cleanup") != nil {
-		return cloudCleanup{}, cloudWorkerResultError("cleanup is invalid")
+		return cloudWorkerResultError("cleanup is invalid")
 	}
 	verified, ok := cleanup["verified_destroyed"].(bool)
 	total, totalOK := cloudInteger(cleanup["resources_total"])
 	destroyed, destroyedOK := cloudInteger(cleanup["resources_verified_destroyed"])
 	_, hasVerifiedAt := cleanup["verified_at"]
 	if !ok || !totalOK || !destroyedOK || total < 0 || destroyed < 0 || destroyed > total || verified != (total > 0 && destroyed == total) || verified != hasVerifiedAt || hasVerifiedAt && !cloudTimestamp(cleanup["verified_at"]) {
-		return cloudCleanup{}, cloudWorkerResultError("cleanup evidence is inconsistent")
+		return cloudWorkerResultError("cleanup evidence is inconsistent")
 	}
-	return cloudCleanup{verified: verified, total: total}, nil
+	return nil
 }
 
 func cloudOwned(value map[string]any, idField string) error {

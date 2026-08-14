@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestCloudWorkerConfirmationActionsUseStrictPurposeOnlyGoldenProjection(t *testing.T) {
+func TestCloudWorkerConfirmationActionsUseIdentityRevisionAndQuoteProjection(t *testing.T) {
 	fixture := loadCloudWorkerPublicFixture(t)
 	authority := cloudWorkerFixtureAuthority(t, fixture)
 	for _, action := range []string{
@@ -29,17 +29,15 @@ func TestCloudWorkerConfirmationActionsUseStrictPurposeOnlyGoldenProjection(t *t
 				t.Fatalf("confirmation projection=%#v want golden=%#v", confirmation, fixture.Confirmation)
 			}
 			binding := confirmation["binding"].(map[string]any)
-			for _, raw := range binding["secret_grants"].([]any) {
-				grant := raw.(map[string]any)
-				if keys := sortedMapKeys(grant); !reflect.DeepEqual(keys, []string{"purpose"}) {
-					t.Fatalf("Cloud Worker secret grant keys=%v", keys)
-				}
+			want := []string{"account_generation", "execution_id", "operation_domain", "owner_id", "plan_id", "plan_revision", "quote", "target_id", "target_revision"}
+			if keys := sortedMapKeys(binding); !reflect.DeepEqual(keys, want) {
+				t.Fatalf("Cloud Worker binding keys=%v want=%v", keys, want)
 			}
 		})
 	}
 }
 
-func TestCloudWorkerConfirmationActionsFailClosedOnSecretLocatorAndAuthorityDrift(t *testing.T) {
+func TestCloudWorkerConfirmationActionsFailClosedOnRetiredFieldsAndAuthorityDrift(t *testing.T) {
 	fixture := loadCloudWorkerPublicFixture(t)
 	authority := cloudWorkerFixtureAuthority(t, fixture)
 	actions := []string{
@@ -52,18 +50,20 @@ func TestCloudWorkerConfirmationActionsFailClosedOnSecretLocatorAndAuthorityDrif
 		name   string
 		mutate func(map[string]any)
 	}{
-		{"reference_id leak", func(confirmation map[string]any) {
-			cloudWorkerConfirmationGrant(confirmation)["reference_id"] = "private-reference-canary"
+		{"retired digest", func(confirmation map[string]any) {
+			confirmation["binding"].(map[string]any)["digest"] = strings.Repeat("f", 64)
 		}},
-		{"binding_digest leak", func(confirmation map[string]any) {
-			cloudWorkerConfirmationGrant(confirmation)["binding_digest"] = strings.Repeat("f", 64)
+		{"retired recipe", func(confirmation map[string]any) {
+			confirmation["binding"].(map[string]any)["target_kind"] = "ephemeral_pi_worker"
 		}},
-		{"duplicate purpose", func(confirmation map[string]any) {
-			binding := confirmation["binding"].(map[string]any)
-			binding["secret_grants"] = []any{map[string]any{"purpose": "model_api_key"}, map[string]any{"purpose": "model_api_key"}}
+		{"missing plan revision", func(confirmation map[string]any) {
+			delete(confirmation["binding"].(map[string]any), "plan_revision")
 		}},
-		{"missing plan digest", func(confirmation map[string]any) {
-			delete(confirmation["binding"].(map[string]any), "plan_digest")
+		{"missing quote", func(confirmation map[string]any) {
+			delete(confirmation["binding"].(map[string]any), "quote")
+		}},
+		{"invalid quote maximum", func(confirmation map[string]any) {
+			confirmation["binding"].(map[string]any)["quote"].(map[string]any)["maximum_authorized_cost_micros"] = float64(1)
 		}},
 		{"operation drift", func(confirmation map[string]any) {
 			confirmation["binding"].(map[string]any)["operation_domain"] = "extension.execute"
@@ -79,9 +79,6 @@ func TestCloudWorkerConfirmationActionsFailClosedOnSecretLocatorAndAuthorityDrif
 		}},
 		{"plan revision mismatch", func(confirmation map[string]any) {
 			confirmation["binding"].(map[string]any)["target_revision"] = float64(2)
-		}},
-		{"command injection", func(confirmation map[string]any) {
-			confirmation["binding"].(map[string]any)["selected_command"] = []any{"pi", "--unsafe"}
 		}},
 		{"pending updated after expiry", func(confirmation map[string]any) {
 			confirmation["state"] = "pending"
@@ -299,10 +296,6 @@ func cloudWorkerProjectedConfirmation(t *testing.T, action string, output map[st
 		return output["confirmations"].([]any)[0].(map[string]any)
 	}
 	return output["confirmation"].(map[string]any)
-}
-
-func cloudWorkerConfirmationGrant(confirmation map[string]any) map[string]any {
-	return confirmation["binding"].(map[string]any)["secret_grants"].([]any)[0].(map[string]any)
 }
 
 func cloneCloudWorkerConfirmation(t *testing.T, confirmation map[string]any) map[string]any {

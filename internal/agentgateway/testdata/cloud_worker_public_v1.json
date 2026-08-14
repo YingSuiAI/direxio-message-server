@@ -6,50 +6,28 @@
     "plan_id": "c580b6ca-dd36-5759-8273-766afaef3a15",
     "revision": 1,
     "status": "waiting_user",
-    "digest": "40c92f69dc8cbe63f25a8c0b0ba1edb7a7fc565b6c28ae438ea3f4ddbfdd7dfb",
     "execution_id": "7e3937bb-c334-5360-90f9-931322e7fd88",
     "task_id": "f5d12ab5-e444-57f9-ab53-46214dc70fea",
     "confirmation_id": "d8c733c0-46ce-57d8-bc1b-0bf4b1115639",
     "conversation_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
     "turn_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
-    "recipe_id": "ephemeral-pi-task",
-    "adapter": "pi_json_task_v1",
     "objective_summary": "Produce a verified repository change",
-    "proposal_reason": "explicit_user_cloud",
-    "input_manifest_digest": "c94efac67992727f5285d674ad5f500ec903a94725dbd81540467c175f5af82c",
-    "input_manifest_item_count": 0,
+    "proposal_reason": "The local sandbox is too small for this task",
+    "persistent_worker_reuse": true,
     "workspace_mode": "none",
-    "model_authorization": {
-      "model_profile_id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
-      "model_profile_revision": 4,
-      "provider": "openai",
-      "model": "gpt-fixture",
-      "interface": "openai_responses",
-      "credential_version": 9
-    },
     "aws": {
       "account_id": "123456789012",
-      "region": "us-east-1",
-      "credential_revision": 3
+      "region": "us-east-1"
     },
     "compute": {
       "instance_type": "c7i.large",
-      "architecture": "x86_64",
-      "root_device_name": "/dev/xvda",
       "volume_gib": 32,
       "volume_type": "gp3",
       "volume_iops": 3000,
-      "volume_throughput_mib": 125,
-      "ami_id": "ami-0123456789abcdef0",
-      "ami_digest": "31b94c62b556b24a08d1e7dd97c13fca296136384a86ca0f0fbc9a5ff7c4cae1",
-      "worker_release_digest": "1636f9ecc7b580a7651279d7807d92dda808ba58d51abae7d1332ebe1d623ce7",
-      "pi_runtime_digest": "d9470c6b3069cf135b35c8e1f67317837d889fee4a894ec293ab09ae3f352716",
-      "host_network_policy_sha256": "72de7e673b4346128ac7787c329e253e0a260acc5e21a51f71e0a07e55147075"
+      "volume_throughput_mib": 125
     },
     "limits": {
-      "max_runtime_seconds": 3600,
-      "max_tokens": 2000,
-      "max_output_bytes": 1048576
+      "max_runtime_seconds": 3600
     },
     "network_grants": [
       "controlled_https_egress"
@@ -65,36 +43,30 @@
       "currency": "USD",
       "source_time": "2026-08-07T10:00:00.123456Z",
       "expires_at": "2026-08-07T10:15:00.123456Z",
-      "maximum_authorized_cost_micros": 300000,
-      "digest": "72b77ced853e8fe2eba98ccc70e19ec0281507818226c864057193a23a38b4c2"
+      "maximum_authorized_cost_micros": 300000
     },
-    "execution_digest": "800190ee56be5a888e75fc63e6f7bf8cc5689130f31af5091f2e2a8f8f34d56e",
     "created_at": "2026-08-07T10:00:00.123456Z",
     "updated_at": "2026-08-07T10:00:00.123456Z"
   },
   "run": {
     "owner_id": "@owner:example.test",
     "account_generation": 7,
-    "run_id": "7e3937bb-c334-5360-90f9-931322e7fd88",
+    "run_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
     "execution_id": "7e3937bb-c334-5360-90f9-931322e7fd88",
     "plan_id": "c580b6ca-dd36-5759-8273-766afaef3a15",
     "plan_revision": 1,
-    "plan_digest": "40c92f69dc8cbe63f25a8c0b0ba1edb7a7fc565b6c28ae438ea3f4ddbfdd7dfb",
     "task_id": "f5d12ab5-e444-57f9-ab53-46214dc70fea",
     "confirmation_id": "d8c733c0-46ce-57d8-bc1b-0bf4b1115639",
     "conversation_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
     "turn_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
     "status": "succeeded",
     "revision": 9,
-    "digest": "3cac010d5b7ab2d252a6a0cb07a6f1cacd053dcedd92b0d33e1a550fbf69dac1",
-    "workspace_mode": "none",
-    "quote_digest": "72b77ced853e8fe2eba98ccc70e19ec0281507818226c864057193a23a38b4c2",
-    "execution_digest": "800190ee56be5a888e75fc63e6f7bf8cc5689130f31af5091f2e2a8f8f34d56e",
+    "worker_id": "worker-fixture",
+    "persistent_worker": true,
     "cleanup": {
-      "verified_destroyed": true,
-      "verified_at": "2026-08-07T10:11:00.123456Z",
-      "resources_total": 8,
-      "resources_verified_destroyed": 8
+      "verified_destroyed": false,
+      "resources_total": 1,
+      "resources_verified_destroyed": 0
     },
     "artifact_ids": [
       "9e728519-ea72-52cc-bb5a-8eb2860722b8"
@@ -107,7 +79,7 @@
   },
   "run_event": {
     "event_id": "9f59ae12-83c8-55a2-b405-86a7e1b248e4",
-    "run_id": "7e3937bb-c334-5360-90f9-931322e7fd88",
+    "run_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
     "owner_id": "@owner:example.test",
     "account_generation": 7,
     "revision": 9,
@@ -126,35 +98,15 @@
       "operation_domain": "cloud_worker.execute",
       "target_id": "7e3937bb-c334-5360-90f9-931322e7fd88",
       "target_revision": 1,
-      "target_kind": "ephemeral_pi_worker",
-      "source_version": "ephemeral-pi-task",
-      "source_commit": "1636f9ecc7b580a7651279d7807d92dda808ba58d51abae7d1332ebe1d623ce7",
-      "content_digest": "d5dae220d25df0c8810883319a3179972cc4cfe00657bee6741cae0d4dcb5e99",
-      "manifest_digest": "c94efac67992727f5285d674ad5f500ec903a94725dbd81540467c175f5af82c",
-      "execution_digest": "800190ee56be5a888e75fc63e6f7bf8cc5689130f31af5091f2e2a8f8f34d56e",
-      "permission_digest": "7d38351c52e714c855342a7ad273c9282d690b00de4ad404289467892ffdf595",
-      "parameter_digest": "40c92f69dc8cbe63f25a8c0b0ba1edb7a7fc565b6c28ae438ea3f4ddbfdd7dfb",
-      "network_digest": "40b2b29340fd4c81d47d8be2a509aed9a6dd6400ed889ffc61fcc4aa4bf64e41",
-      "secret_grant_digest": "e735243a33fd217d929b201d8a2a8154f248f3121b62c1924cf4312bfc4a2db1",
-      "selected_tool": "cloud_worker_propose",
-      "selected_command": [],
-      "network_grants": [
-        "controlled_https_egress"
-      ],
-      "secret_grants": [
-        {
-          "purpose": "model_api_key"
-        }
-      ],
       "execution_id": "7e3937bb-c334-5360-90f9-931322e7fd88",
       "plan_id": "c580b6ca-dd36-5759-8273-766afaef3a15",
       "plan_revision": 1,
-      "plan_digest": "40c92f69dc8cbe63f25a8c0b0ba1edb7a7fc565b6c28ae438ea3f4ddbfdd7dfb",
-      "run_id": "7e3937bb-c334-5360-90f9-931322e7fd88",
-      "run_revision": 1,
-      "run_digest": "34a50999a701f416156008302655b98a8c264076f2dc2f4cef25b82ffeb2a038",
-      "quote_digest": "72b77ced853e8fe2eba98ccc70e19ec0281507818226c864057193a23a38b4c2",
-      "digest": "c5d896274efdc6b7c046ada7a21c4dbb7dfb01e05f5915fe8a73d93bb907bd2c"
+      "quote": {
+        "amount_micros": 230000,
+        "currency": "USD",
+        "expires_at": "2026-08-07T10:15:00.123456Z",
+        "maximum_authorized_cost_micros": 300000
+      }
     },
     "task_id": "f5d12ab5-e444-57f9-ab53-46214dc70fea",
     "state": "consumed",
@@ -173,16 +125,7 @@
       "task_id": "f5d12ab5-e444-57f9-ab53-46214dc70fea",
       "plan_id": "c580b6ca-dd36-5759-8273-766afaef3a15",
       "plan_revision": 1,
-      "plan_digest": "40c92f69dc8cbe63f25a8c0b0ba1edb7a7fc565b6c28ae438ea3f4ddbfdd7dfb",
-      "run_id": "7e3937bb-c334-5360-90f9-931322e7fd88",
-      "run_revision": 9,
-      "run_digest": "3cac010d5b7ab2d252a6a0cb07a6f1cacd053dcedd92b0d33e1a550fbf69dac1",
-      "execution_id": "7e3937bb-c334-5360-90f9-931322e7fd88",
       "confirmation_id": "d8c733c0-46ce-57d8-bc1b-0bf4b1115639",
-      "confirmation_revision": 3,
-      "binding_digest": "29305d4d912450f4f0a0fb780e66db81e6ec8db2a7d995e15010edf12ad60c45",
-      "quote_digest": "72b77ced853e8fe2eba98ccc70e19ec0281507818226c864057193a23a38b4c2",
-      "execution_digest": "800190ee56be5a888e75fc63e6f7bf8cc5689130f31af5091f2e2a8f8f34d56e",
       "status": "waiting_user"
     },
     "run": {
@@ -191,16 +134,9 @@
       "task_id": "f5d12ab5-e444-57f9-ab53-46214dc70fea",
       "plan_id": "c580b6ca-dd36-5759-8273-766afaef3a15",
       "plan_revision": 1,
-      "plan_digest": "40c92f69dc8cbe63f25a8c0b0ba1edb7a7fc565b6c28ae438ea3f4ddbfdd7dfb",
-      "run_id": "7e3937bb-c334-5360-90f9-931322e7fd88",
-      "run_revision": 9,
-      "run_digest": "3cac010d5b7ab2d252a6a0cb07a6f1cacd053dcedd92b0d33e1a550fbf69dac1",
+      "run_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
       "execution_id": "7e3937bb-c334-5360-90f9-931322e7fd88",
-      "confirmation_id": "d8c733c0-46ce-57d8-bc1b-0bf4b1115639",
-      "confirmation_revision": 3,
-      "binding_digest": "29305d4d912450f4f0a0fb780e66db81e6ec8db2a7d995e15010edf12ad60c45",
-      "quote_digest": "72b77ced853e8fe2eba98ccc70e19ec0281507818226c864057193a23a38b4c2",
-      "execution_digest": "800190ee56be5a888e75fc63e6f7bf8cc5689130f31af5091f2e2a8f8f34d56e",
+      "worker_id": "worker-fixture",
       "status": "succeeded"
     },
     "confirmation": {
@@ -209,16 +145,7 @@
       "task_id": "f5d12ab5-e444-57f9-ab53-46214dc70fea",
       "plan_id": "c580b6ca-dd36-5759-8273-766afaef3a15",
       "plan_revision": 1,
-      "plan_digest": "40c92f69dc8cbe63f25a8c0b0ba1edb7a7fc565b6c28ae438ea3f4ddbfdd7dfb",
-      "run_id": "7e3937bb-c334-5360-90f9-931322e7fd88",
-      "run_revision": 9,
-      "run_digest": "3cac010d5b7ab2d252a6a0cb07a6f1cacd053dcedd92b0d33e1a550fbf69dac1",
-      "execution_id": "7e3937bb-c334-5360-90f9-931322e7fd88",
       "confirmation_id": "d8c733c0-46ce-57d8-bc1b-0bf4b1115639",
-      "confirmation_revision": 3,
-      "binding_digest": "29305d4d912450f4f0a0fb780e66db81e6ec8db2a7d995e15010edf12ad60c45",
-      "quote_digest": "72b77ced853e8fe2eba98ccc70e19ec0281507818226c864057193a23a38b4c2",
-      "execution_digest": "800190ee56be5a888e75fc63e6f7bf8cc5689130f31af5091f2e2a8f8f34d56e",
       "state": "consumed"
     }
   },
@@ -253,11 +180,11 @@
   "completion": {
     "event_id": "bb58e65f-f277-5ac2-b958-1cf6c151cbef",
     "execution_id": "7e3937bb-c334-5360-90f9-931322e7fd88",
-    "run_id": "7e3937bb-c334-5360-90f9-931322e7fd88",
+    "run_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
     "conversation_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
     "turn_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
     "terminal_state": "succeeded",
     "completed_at": "2026-08-07T10:11:00.123456Z",
-    "payload_digest": "c9b0f61d37d848e3585a64cde51397d5a5495ddbca63ef1ba3bbc7a7cb5628fa"
+    "payload_digest": "e0f45b6b2bc5c361ccf1bc50fe4aaedf40c6c2c1fcc7c76294e940e4b8afd78c"
   }
 }

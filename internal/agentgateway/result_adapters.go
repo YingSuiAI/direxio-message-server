@@ -1449,7 +1449,8 @@ var chatReferenceFields = map[string]struct{}{
 	"preview_digest": {}, "binding_digest": {}, "quote_digest": {},
 	"execution_digest": {}, "risk_level": {}, "gate_type": {}, "binding_id": {},
 	"binding_revision": {}, "project_id": {}, "status": {}, "state": {},
-	"room_id": {}, "room_type": {}, "channel_id": {}, "post_id": {}, "title": {},
+	"worker_id": {},
+	"room_id":   {}, "room_type": {}, "channel_id": {}, "post_id": {}, "title": {},
 	"preview": {},
 }
 
@@ -1618,7 +1619,7 @@ func chatReferenceKey(reference map[string]any) string {
 		"task_id", "plan_id", "plan_digest", "run_id", "run_digest", "deployment_id",
 		"execution_id", "confirmation_id", "stage_id", "stage_digest", "target_id",
 		"target_digest", "preview_digest", "binding_digest", "quote_digest",
-		"execution_digest", "risk_level", "gate_type", "binding_id", "project_id",
+		"execution_digest", "risk_level", "gate_type", "binding_id", "project_id", "worker_id",
 		"status", "state", "room_id", "room_type", "channel_id", "post_id", "title",
 		"preview",
 	} {
@@ -1680,28 +1681,37 @@ func validCloudWorkerChatReference(reference map[string]any, kind string, author
 	generation, generationOK := turnInt64(reference["account_generation"])
 	if !authority.valid() || !generationOK || generation != authority.accountGeneration ||
 		!canonicalTurnUUID(reference["task_id"]) || !canonicalTurnUUID(reference["plan_id"]) ||
-		!validPositiveReferenceInteger(reference["plan_revision"]) || !validReferenceDigest(reference["plan_digest"]) ||
-		!canonicalTurnUUID(reference["run_id"]) || !validPositiveReferenceInteger(reference["run_revision"]) ||
-		!validReferenceDigest(reference["run_digest"]) || !canonicalTurnUUID(reference["execution_id"]) ||
-		reference["run_id"] != reference["execution_id"] || !canonicalTurnUUID(reference["confirmation_id"]) ||
-		!validPositiveReferenceInteger(reference["confirmation_revision"]) || !validReferenceDigest(reference["binding_digest"]) ||
-		!validReferenceDigest(reference["quote_digest"]) || !validReferenceDigest(reference["execution_digest"]) ||
-		!noConversationReferenceFields(reference) {
+		!validPositiveReferenceInteger(reference["plan_revision"]) || !noConversationReferenceFields(reference) {
 		return false
 	}
-	for _, field := range []string{
-		"deployment_id", "stage_id", "stage_revision", "stage_digest", "target_id",
-		"target_revision", "target_digest", "preview_digest", "risk_level", "gate_type",
-		"binding_id", "binding_revision", "project_id",
-	} {
-		if !zeroReferenceValue(reference, field) {
-			return false
+	if !zeroReferenceFields(reference,
+		"plan_digest", "run_revision", "run_digest", "deployment_id", "confirmation_revision",
+		"stage_id", "stage_revision", "stage_digest", "target_id", "target_revision", "target_digest",
+		"preview_digest", "binding_digest", "quote_digest", "execution_digest", "risk_level",
+		"gate_type", "binding_id", "binding_revision", "project_id") {
+		return false
+	}
+	switch kind {
+	case "execution_plan":
+		return canonicalTurnUUID(reference["confirmation_id"]) &&
+			zeroReferenceFields(reference, "run_id", "execution_id", "worker_id", "state") &&
+			validExecutionReferenceStatus(reference["status"])
+	case "execution_run":
+		workerValid := true
+		if _, present := reference["worker_id"]; present {
+			workerValid = validBoundedReferenceString(reference, "worker_id", true, maxReferenceIdentity)
 		}
+		return canonicalTurnUUID(reference["run_id"]) && canonicalTurnUUID(reference["execution_id"]) &&
+			workerValid &&
+			zeroReferenceFields(reference, "confirmation_id", "state") &&
+			validExecutionReferenceStatus(reference["status"])
+	case "execution_confirmation":
+		return canonicalTurnUUID(reference["confirmation_id"]) &&
+			zeroReferenceFields(reference, "run_id", "execution_id", "worker_id", "status") &&
+			validConfirmationReferenceState(reference["state"])
+	default:
+		return false
 	}
-	if kind == "execution_confirmation" {
-		return zeroReferenceString(reference, "status") && validConfirmationReferenceState(reference["state"])
-	}
-	return zeroReferenceString(reference, "state") && validExecutionReferenceStatus(reference["status"])
 }
 
 func validGenericExecutionChatReference(reference map[string]any, kind string) bool {
@@ -1800,7 +1810,7 @@ func validOptionalReferenceString(value any, limit int) bool {
 
 func noCloudReferenceFields(reference map[string]any) bool {
 	for _, field := range []string{
-		"account_generation", "task_id", "execution_id", "quote_digest", "execution_digest",
+		"account_generation", "task_id", "execution_id", "quote_digest", "execution_digest", "worker_id",
 	} {
 		if !zeroReferenceValue(reference, field) {
 			return false
@@ -1816,7 +1826,7 @@ func noExecutionReferenceFields(reference map[string]any) bool {
 		"confirmation_id", "confirmation_revision", "stage_id", "stage_revision", "stage_digest",
 		"target_id", "target_revision", "target_digest", "preview_digest", "binding_digest",
 		"quote_digest", "execution_digest", "risk_level", "gate_type", "binding_id",
-		"binding_revision", "project_id", "status", "state")
+		"binding_revision", "project_id", "worker_id", "status", "state")
 }
 
 func zeroReferenceValue(reference map[string]any, field string) bool {

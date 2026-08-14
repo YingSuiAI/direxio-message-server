@@ -318,6 +318,7 @@ func TestNativeAgentReferenceSchemaMatchesStrictProducerShape(t *testing.T) {
 		"kind": true, "account_generation": true, "task_id": true, "plan_id": true,
 		"plan_revision": true, "plan_digest": true, "run_id": true, "run_revision": true,
 		"run_digest": true, "deployment_id": true, "execution_id": true, "confirmation_id": true,
+		"worker_id":             true,
 		"confirmation_revision": true, "stage_id": true, "stage_revision": true,
 		"stage_digest": true, "target_id": true, "target_revision": true,
 		"target_digest": true, "preview_digest": true, "binding_digest": true,

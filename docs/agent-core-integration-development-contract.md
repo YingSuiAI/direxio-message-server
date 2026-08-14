@@ -255,8 +255,21 @@ Cloud Worker plans are proposed inside an Agent-owned Native conversation, not
 created by an App action. Message Server forwards the complete server-authored
 `related_task_ids`, `related_plan_ids`, and strict Execution V2 references in
 unary and streaming history/results. A reference carries account generation
-and exact task/plan/run/confirmation revision/digest linkage; Message Server
-does not manufacture, weaken, or use it as authorization.
+and exact task/plan revision linkage. Plan and confirmation references carry
+the confirmation id; run references carry independent run/execution ids and
+an optional Worker id. Cloud Worker references contain no digests; generic
+Execution V2 references retain their separate schema. Message Server does not
+manufacture, weaken, or use a reference as authorization.
+
+For `record_kind=cloud_worker`, plan and run reads use closed provider-neutral
+projections. Plans expose the owner and request linkage, reusable-Worker
+preference, workspace, AWS account/region, compute/runtime request, grants,
+retention, live quote, and timestamps. Runs expose independent run and
+execution identities, plan revision, lifecycle state, Worker identity and
+persistence, cleanup summary, artifacts, failure summary, and timestamps.
+They do not expose recipe/adapter/model/input-manifest pins, AMI/runtime
+implementation data, AWS credential revisions, or plan/run/quote/execution
+digests.
 
 Verified Cloud Worker deliverables are read only through
 `agent.execution.v2.artifacts.download`. The request is the closed
@@ -272,8 +285,7 @@ range continuity before returning it. S3 bucket/key/version, signed URLs,
 retention internals, Worker diagnostics, and provider errors are never part of
 the public contract.
 
-After Agent has frozen one terminal conversation result and independently
-verified AWS cleanup, it calls the private fixed
+After Agent has frozen one terminal conversation result, it calls the private fixed
 `product.agent_execution.v1/record_completion` operation. This callback is
 not advertised in the Product Capability catalog and accepts no user/model
 Permission. The existing mTLS, direction token, Agent peer identity, fresh
@@ -284,7 +296,8 @@ Message Server atomically stores one minimal receipt and one
 `agent.execution.v2.completed` realtime invalidation. Exact event/execution and
 payload replay succeeds idempotently; a different payload conflicts. The
 receipt contains only event/execution/run/conversation/turn identity, terminal
-state, completion time, and payload digest. It contains no result-message
+state, completion time, and payload digest. Worker persistence and cleanup are
+independent lifecycle state and do not gate this callback. The receipt contains no result-message
 identity because the central continuation owns the eventual assistant message,
 and contains no result body, quote, artifact details, S3 address, AWS
 resource identity, secret, or Worker diagnostics. Flutter treats the realtime

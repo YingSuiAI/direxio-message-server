@@ -2,7 +2,7 @@ package serviceapi
 
 import "testing"
 
-func TestCoreConfirmationSchemasPinCloudWorkerAuthorityAndPurposeOnlyGrants(t *testing.T) {
+func TestCoreConfirmationSchemasPinCloudWorkerIdentityRevisionAndQuote(t *testing.T) {
 	for _, action := range []string{
 		"agent.core.confirmations.get",
 		"agent.core.confirmations.list",
@@ -43,12 +43,20 @@ func TestCoreConfirmationSchemasPinCloudWorkerAuthorityAndPurposeOnlyGrants(t *t
 				t.Errorf("conditional authority binding.account_generation=%#v", accountGeneration)
 			}
 			for _, field := range []string{
-				"execution_id", "plan_id", "plan_revision", "plan_digest",
-				"run_id", "run_revision", "run_digest", "quote_digest", "digest",
+				"execution_id", "plan_id", "plan_revision", "quote",
 			} {
 				value := binding[field]
 				if value.Required || value.Presence == nil || value.Presence.Omitted != "non_cloud_worker_confirmation" || value.Presence.Present == "" {
 					t.Errorf("conditional Cloud Worker binding.%s=%#v", field, value)
+				}
+			}
+			quote := binding["quote"]
+			if quote.Type != "object" || quote.Presence == nil || len(quote.Properties) != 4 {
+				t.Fatalf("conditional Cloud Worker quote=%#v", quote)
+			}
+			for _, field := range []string{"amount_micros", "currency", "expires_at", "maximum_authorized_cost_micros"} {
+				if !quote.Properties[field].Required {
+					t.Errorf("Cloud Worker quote.%s must be required", field)
 				}
 			}
 			grant := binding["secret_grants"].Items

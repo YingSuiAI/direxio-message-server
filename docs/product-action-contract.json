@@ -1393,13 +1393,9 @@
                   },
                   "content_digest": {
                     "type": "string",
-                    "required": true
-                  },
-                  "digest": {
-                    "type": "string",
                     "presence": {
-                      "omitted": "non_cloud_worker_confirmation",
-                      "present": "lowercase_sha256_required_for_cloud_worker.execute"
+                      "omitted": "cloud_worker.execute",
+                      "present": "required_for_non_cloud_worker_confirmation"
                     }
                   },
                   "execution_digest": {
@@ -1417,7 +1413,10 @@
                   },
                   "network_digest": {
                     "type": "string",
-                    "required": true
+                    "presence": {
+                      "omitted": "cloud_worker.execute",
+                      "present": "required_for_non_cloud_worker_confirmation"
+                    }
                   },
                   "network_grants": {
                     "type": "array",
@@ -1438,17 +1437,13 @@
                   },
                   "parameter_digest": {
                     "type": "string",
-                    "required": true
+                    "presence": {
+                      "omitted": "cloud_worker.execute",
+                      "present": "required_for_non_cloud_worker_confirmation"
+                    }
                   },
                   "permission_digest": {
                     "type": "string"
-                  },
-                  "plan_digest": {
-                    "type": "string",
-                    "presence": {
-                      "omitted": "non_cloud_worker_confirmation",
-                      "present": "lowercase_sha256_required_for_cloud_worker.execute"
-                    }
                   },
                   "plan_id": {
                     "type": "string",
@@ -1464,41 +1459,52 @@
                       "present": "positive_integer_required_for_cloud_worker.execute"
                     }
                   },
-                  "quote_digest": {
-                    "type": "string",
+                  "quote": {
+                    "type": "object",
+                    "properties": {
+                      "amount_micros": {
+                        "type": "integer",
+                        "required": true,
+                        "presence": {
+                          "present": "nonnegative_integer"
+                        }
+                      },
+                      "currency": {
+                        "type": "string",
+                        "required": true,
+                        "presence": {
+                          "present": "exact:USD"
+                        }
+                      },
+                      "expires_at": {
+                        "type": "string",
+                        "required": true,
+                        "presence": {
+                          "present": "rfc3339_nano"
+                        }
+                      },
+                      "maximum_authorized_cost_micros": {
+                        "type": "integer",
+                        "required": true,
+                        "presence": {
+                          "present": "integer_greater_than_or_equal_to_amount"
+                        }
+                      }
+                    },
                     "presence": {
                       "omitted": "non_cloud_worker_confirmation",
-                      "present": "lowercase_sha256_required_for_cloud_worker.execute"
-                    }
-                  },
-                  "run_digest": {
-                    "type": "string",
-                    "presence": {
-                      "omitted": "non_cloud_worker_confirmation",
-                      "present": "lowercase_sha256_required_for_cloud_worker.execute"
-                    }
-                  },
-                  "run_id": {
-                    "type": "string",
-                    "presence": {
-                      "omitted": "non_cloud_worker_confirmation",
-                      "present": "canonical_uuid_required_for_cloud_worker.execute"
-                    }
-                  },
-                  "run_revision": {
-                    "type": "integer",
-                    "presence": {
-                      "omitted": "non_cloud_worker_confirmation",
-                      "present": "positive_integer_required_for_cloud_worker.execute"
+                      "present": "required_for_cloud_worker.execute;live_quote_display_and_authority"
                     }
                   },
                   "secret_grant_digest": {
                     "type": "string",
-                    "required": true
+                    "presence": {
+                      "omitted": "cloud_worker.execute",
+                      "present": "required_for_non_cloud_worker_confirmation"
+                    }
                   },
                   "secret_grants": {
                     "type": "array",
-                    "required": true,
                     "items": {
                       "type": "object",
                       "properties": {
@@ -1521,6 +1527,10 @@
                           }
                         }
                       }
+                    },
+                    "presence": {
+                      "omitted": "cloud_worker.execute",
+                      "present": "required_for_non_cloud_worker_confirmation"
                     }
                   },
                   "selected_command": {
@@ -1666,13 +1676,9 @@
                     },
                     "content_digest": {
                       "type": "string",
-                      "required": true
-                    },
-                    "digest": {
-                      "type": "string",
                       "presence": {
-                        "omitted": "non_cloud_worker_confirmation",
-                        "present": "lowercase_sha256_required_for_cloud_worker.execute"
+                        "omitted": "cloud_worker.execute",
+                        "present": "required_for_non_cloud_worker_confirmation"
                       }
                     },
                     "execution_digest": {
@@ -1690,7 +1696,10 @@
                     },
                     "network_digest": {
                       "type": "string",
-                      "required": true
+                      "presence": {
+                        "omitted": "cloud_worker.execute",
+                        "present": "required_for_non_cloud_worker_confirmation"
+                      }
                     },
                     "network_grants": {
                       "type": "array",
@@ -1711,17 +1720,13 @@
                     },
                     "parameter_digest": {
                       "type": "string",
-                      "required": true
+                      "presence": {
+                        "omitted": "cloud_worker.execute",
+                        "present": "required_for_non_cloud_worker_confirmation"
+                      }
                     },
                     "permission_digest": {
                       "type": "string"
-                    },
-                    "plan_digest": {
-                      "type": "string",
-                      "presence": {
-                        "omitted": "non_cloud_worker_confirmation",
-                        "present": "lowercase_sha256_required_for_cloud_worker.execute"
-                      }
                     },
                     "plan_id": {
                       "type": "string",
@@ -1737,41 +1742,52 @@
                         "present": "positive_integer_required_for_cloud_worker.execute"
                       }
                     },
-                    "quote_digest": {
-                      "type": "string",
+                    "quote": {
+                      "type": "object",
+                      "properties": {
+                        "amount_micros": {
+                          "type": "integer",
+                          "required": true,
+                          "presence": {
+                            "present": "nonnegative_integer"
+                          }
+                        },
+                        "currency": {
+                          "type": "string",
+                          "required": true,
+                          "presence": {
+                            "present": "exact:USD"
+                          }
+                        },
+                        "expires_at": {
+                          "type": "string",
+                          "required": true,
+                          "presence": {
+                            "present": "rfc3339_nano"
+                          }
+                        },
+                        "maximum_authorized_cost_micros": {
+                          "type": "integer",
+                          "required": true,
+                          "presence": {
+                            "present": "integer_greater_than_or_equal_to_amount"
+                          }
+                        }
+                      },
                       "presence": {
                         "omitted": "non_cloud_worker_confirmation",
-                        "present": "lowercase_sha256_required_for_cloud_worker.execute"
-                      }
-                    },
-                    "run_digest": {
-                      "type": "string",
-                      "presence": {
-                        "omitted": "non_cloud_worker_confirmation",
-                        "present": "lowercase_sha256_required_for_cloud_worker.execute"
-                      }
-                    },
-                    "run_id": {
-                      "type": "string",
-                      "presence": {
-                        "omitted": "non_cloud_worker_confirmation",
-                        "present": "canonical_uuid_required_for_cloud_worker.execute"
-                      }
-                    },
-                    "run_revision": {
-                      "type": "integer",
-                      "presence": {
-                        "omitted": "non_cloud_worker_confirmation",
-                        "present": "positive_integer_required_for_cloud_worker.execute"
+                        "present": "required_for_cloud_worker.execute;live_quote_display_and_authority"
                       }
                     },
                     "secret_grant_digest": {
                       "type": "string",
-                      "required": true
+                      "presence": {
+                        "omitted": "cloud_worker.execute",
+                        "present": "required_for_non_cloud_worker_confirmation"
+                      }
                     },
                     "secret_grants": {
                       "type": "array",
-                      "required": true,
                       "items": {
                         "type": "object",
                         "properties": {
@@ -1794,6 +1810,10 @@
                             }
                           }
                         }
+                      },
+                      "presence": {
+                        "omitted": "cloud_worker.execute",
+                        "present": "required_for_non_cloud_worker_confirmation"
                       }
                     },
                     "selected_command": {
@@ -1930,13 +1950,9 @@
                   },
                   "content_digest": {
                     "type": "string",
-                    "required": true
-                  },
-                  "digest": {
-                    "type": "string",
                     "presence": {
-                      "omitted": "non_cloud_worker_confirmation",
-                      "present": "lowercase_sha256_required_for_cloud_worker.execute"
+                      "omitted": "cloud_worker.execute",
+                      "present": "required_for_non_cloud_worker_confirmation"
                     }
                   },
                   "execution_digest": {
@@ -1954,7 +1970,10 @@
                   },
                   "network_digest": {
                     "type": "string",
-                    "required": true
+                    "presence": {
+                      "omitted": "cloud_worker.execute",
+                      "present": "required_for_non_cloud_worker_confirmation"
+                    }
                   },
                   "network_grants": {
                     "type": "array",
@@ -1975,17 +1994,13 @@
                   },
                   "parameter_digest": {
                     "type": "string",
-                    "required": true
+                    "presence": {
+                      "omitted": "cloud_worker.execute",
+                      "present": "required_for_non_cloud_worker_confirmation"
+                    }
                   },
                   "permission_digest": {
                     "type": "string"
-                  },
-                  "plan_digest": {
-                    "type": "string",
-                    "presence": {
-                      "omitted": "non_cloud_worker_confirmation",
-                      "present": "lowercase_sha256_required_for_cloud_worker.execute"
-                    }
                   },
                   "plan_id": {
                     "type": "string",
@@ -2001,41 +2016,52 @@
                       "present": "positive_integer_required_for_cloud_worker.execute"
                     }
                   },
-                  "quote_digest": {
-                    "type": "string",
+                  "quote": {
+                    "type": "object",
+                    "properties": {
+                      "amount_micros": {
+                        "type": "integer",
+                        "required": true,
+                        "presence": {
+                          "present": "nonnegative_integer"
+                        }
+                      },
+                      "currency": {
+                        "type": "string",
+                        "required": true,
+                        "presence": {
+                          "present": "exact:USD"
+                        }
+                      },
+                      "expires_at": {
+                        "type": "string",
+                        "required": true,
+                        "presence": {
+                          "present": "rfc3339_nano"
+                        }
+                      },
+                      "maximum_authorized_cost_micros": {
+                        "type": "integer",
+                        "required": true,
+                        "presence": {
+                          "present": "integer_greater_than_or_equal_to_amount"
+                        }
+                      }
+                    },
                     "presence": {
                       "omitted": "non_cloud_worker_confirmation",
-                      "present": "lowercase_sha256_required_for_cloud_worker.execute"
-                    }
-                  },
-                  "run_digest": {
-                    "type": "string",
-                    "presence": {
-                      "omitted": "non_cloud_worker_confirmation",
-                      "present": "lowercase_sha256_required_for_cloud_worker.execute"
-                    }
-                  },
-                  "run_id": {
-                    "type": "string",
-                    "presence": {
-                      "omitted": "non_cloud_worker_confirmation",
-                      "present": "canonical_uuid_required_for_cloud_worker.execute"
-                    }
-                  },
-                  "run_revision": {
-                    "type": "integer",
-                    "presence": {
-                      "omitted": "non_cloud_worker_confirmation",
-                      "present": "positive_integer_required_for_cloud_worker.execute"
+                      "present": "required_for_cloud_worker.execute;live_quote_display_and_authority"
                     }
                   },
                   "secret_grant_digest": {
                     "type": "string",
-                    "required": true
+                    "presence": {
+                      "omitted": "cloud_worker.execute",
+                      "present": "required_for_non_cloud_worker_confirmation"
+                    }
                   },
                   "secret_grants": {
                     "type": "array",
-                    "required": true,
                     "items": {
                       "type": "object",
                       "properties": {
@@ -2058,6 +2084,10 @@
                           }
                         }
                       }
+                    },
+                    "presence": {
+                      "omitted": "cloud_worker.execute",
+                      "present": "required_for_non_cloud_worker_confirmation"
                     }
                   },
                   "selected_command": {
@@ -2190,13 +2220,9 @@
                   },
                   "content_digest": {
                     "type": "string",
-                    "required": true
-                  },
-                  "digest": {
-                    "type": "string",
                     "presence": {
-                      "omitted": "non_cloud_worker_confirmation",
-                      "present": "lowercase_sha256_required_for_cloud_worker.execute"
+                      "omitted": "cloud_worker.execute",
+                      "present": "required_for_non_cloud_worker_confirmation"
                     }
                   },
                   "execution_digest": {
@@ -2214,7 +2240,10 @@
                   },
                   "network_digest": {
                     "type": "string",
-                    "required": true
+                    "presence": {
+                      "omitted": "cloud_worker.execute",
+                      "present": "required_for_non_cloud_worker_confirmation"
+                    }
                   },
                   "network_grants": {
                     "type": "array",
@@ -2235,17 +2264,13 @@
                   },
                   "parameter_digest": {
                     "type": "string",
-                    "required": true
+                    "presence": {
+                      "omitted": "cloud_worker.execute",
+                      "present": "required_for_non_cloud_worker_confirmation"
+                    }
                   },
                   "permission_digest": {
                     "type": "string"
-                  },
-                  "plan_digest": {
-                    "type": "string",
-                    "presence": {
-                      "omitted": "non_cloud_worker_confirmation",
-                      "present": "lowercase_sha256_required_for_cloud_worker.execute"
-                    }
                   },
                   "plan_id": {
                     "type": "string",
@@ -2261,41 +2286,52 @@
                       "present": "positive_integer_required_for_cloud_worker.execute"
                     }
                   },
-                  "quote_digest": {
-                    "type": "string",
+                  "quote": {
+                    "type": "object",
+                    "properties": {
+                      "amount_micros": {
+                        "type": "integer",
+                        "required": true,
+                        "presence": {
+                          "present": "nonnegative_integer"
+                        }
+                      },
+                      "currency": {
+                        "type": "string",
+                        "required": true,
+                        "presence": {
+                          "present": "exact:USD"
+                        }
+                      },
+                      "expires_at": {
+                        "type": "string",
+                        "required": true,
+                        "presence": {
+                          "present": "rfc3339_nano"
+                        }
+                      },
+                      "maximum_authorized_cost_micros": {
+                        "type": "integer",
+                        "required": true,
+                        "presence": {
+                          "present": "integer_greater_than_or_equal_to_amount"
+                        }
+                      }
+                    },
                     "presence": {
                       "omitted": "non_cloud_worker_confirmation",
-                      "present": "lowercase_sha256_required_for_cloud_worker.execute"
-                    }
-                  },
-                  "run_digest": {
-                    "type": "string",
-                    "presence": {
-                      "omitted": "non_cloud_worker_confirmation",
-                      "present": "lowercase_sha256_required_for_cloud_worker.execute"
-                    }
-                  },
-                  "run_id": {
-                    "type": "string",
-                    "presence": {
-                      "omitted": "non_cloud_worker_confirmation",
-                      "present": "canonical_uuid_required_for_cloud_worker.execute"
-                    }
-                  },
-                  "run_revision": {
-                    "type": "integer",
-                    "presence": {
-                      "omitted": "non_cloud_worker_confirmation",
-                      "present": "positive_integer_required_for_cloud_worker.execute"
+                      "present": "required_for_cloud_worker.execute;live_quote_display_and_authority"
                     }
                   },
                   "secret_grant_digest": {
                     "type": "string",
-                    "required": true
+                    "presence": {
+                      "omitted": "cloud_worker.execute",
+                      "present": "required_for_non_cloud_worker_confirmation"
+                    }
                   },
                   "secret_grants": {
                     "type": "array",
-                    "required": true,
                     "items": {
                       "type": "object",
                       "properties": {
@@ -2318,6 +2354,10 @@
                           }
                         }
                       }
+                    },
+                    "presence": {
+                      "omitted": "cloud_worker.execute",
+                      "present": "required_for_non_cloud_worker_confirmation"
                     }
                   },
                   "selected_command": {
@@ -7269,7 +7309,8 @@
                 "binding_digest": {
                   "type": "string",
                   "presence": {
-                    "present": "lowercase_sha256;cloud_worker_confirmation_binding_or_generic_binding"
+                    "omitted": "cloud_worker_reference",
+                    "present": "lowercase_sha256;generic_binding_only"
                   }
                 },
                 "binding_id": {
@@ -7299,7 +7340,8 @@
                 "confirmation_revision": {
                   "type": "integer",
                   "presence": {
-                    "present": "positive_integer;required_for_cloud_worker_or_full_generic_confirmation"
+                    "omitted": "cloud_worker_reference",
+                    "present": "positive_integer;full_generic_confirmation_only"
                   }
                 },
                 "deployment_id": {
@@ -7311,15 +7353,15 @@
                 "execution_digest": {
                   "type": "string",
                   "presence": {
-                    "omitted": "generic_execution_v2_reference",
-                    "present": "lowercase_sha256;required_with_task_id"
+                    "omitted": "cloud_worker_reference",
+                    "present": "lowercase_sha256;generic_reference_only"
                   }
                 },
                 "execution_id": {
                   "type": "string",
                   "presence": {
-                    "omitted": "generic_execution_v2_reference",
-                    "present": "canonical_uuid_equal_to_run_id;required_with_task_id"
+                    "omitted": "generic_execution_v2_reference_or_non_run_cloud_worker_reference",
+                    "present": "canonical_uuid;required_for_cloud_worker_execution_run"
                   }
                 },
                 "gate_type": {
@@ -7338,7 +7380,8 @@
                 "plan_digest": {
                   "type": "string",
                   "presence": {
-                    "present": "lowercase_sha256;required_by_plan_linkage"
+                    "omitted": "cloud_worker_reference",
+                    "present": "lowercase_sha256;generic_execution_reference_only"
                   }
                 },
                 "plan_id": {
@@ -7377,8 +7420,8 @@
                 "quote_digest": {
                   "type": "string",
                   "presence": {
-                    "omitted": "generic_execution_v2_reference",
-                    "present": "lowercase_sha256;required_with_task_id"
+                    "omitted": "cloud_worker_reference",
+                    "present": "lowercase_sha256;generic_reference_only"
                   }
                 },
                 "risk_level": {
@@ -7399,7 +7442,8 @@
                 "run_digest": {
                   "type": "string",
                   "presence": {
-                    "present": "lowercase_sha256;required_by_run_linkage_except_full_generic_confirmation"
+                    "omitted": "cloud_worker_reference",
+                    "present": "lowercase_sha256;generic_execution_reference_only"
                   }
                 },
                 "run_id": {
@@ -7411,7 +7455,8 @@
                 "run_revision": {
                   "type": "integer",
                   "presence": {
-                    "present": "positive_integer;required_by_run_linkage"
+                    "omitted": "cloud_worker_reference",
+                    "present": "positive_integer;generic_execution_reference_only"
                   }
                 },
                 "stage_digest": {
@@ -7471,6 +7516,13 @@
                 },
                 "title": {
                   "type": "string"
+                },
+                "worker_id": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "non_run_or_unassigned_worker_reference",
+                    "present": "nonempty_bounded_512;cloud_worker_execution_run_only"
+                  }
                 }
               }
             },
@@ -11554,13 +11606,6 @@
                   "present": "required_when_record_kind=cloud_worker;positive_integer_equal_to_prepared_permission_generation"
                 }
               },
-              "adapter": {
-                "type": "string",
-                "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;exact:pi_json_task_v1"
-                }
-              },
               "artifact_retention_seconds": {
                 "type": "integer",
                 "presence": {
@@ -11576,13 +11621,6 @@
                     "required": true,
                     "presence": {
                       "present": "aws_account_id"
-                    }
-                  },
-                  "credential_revision": {
-                    "type": "integer",
-                    "required": true,
-                    "presence": {
-                      "present": "positive_integer"
                     }
                   },
                   "region": {
@@ -11601,49 +11639,7 @@
               "compute": {
                 "type": "object",
                 "properties": {
-                  "ami_digest": {
-                    "type": "string",
-                    "required": true,
-                    "presence": {
-                      "present": "lowercase_sha256"
-                    }
-                  },
-                  "ami_id": {
-                    "type": "string",
-                    "required": true,
-                    "presence": {
-                      "present": "nonempty"
-                    }
-                  },
-                  "architecture": {
-                    "type": "string",
-                    "required": true,
-                    "presence": {
-                      "present": "nonempty"
-                    }
-                  },
-                  "host_network_policy_sha256": {
-                    "type": "string",
-                    "required": true,
-                    "presence": {
-                      "present": "lowercase_sha256"
-                    }
-                  },
                   "instance_type": {
-                    "type": "string",
-                    "required": true,
-                    "presence": {
-                      "present": "nonempty"
-                    }
-                  },
-                  "pi_runtime_digest": {
-                    "type": "string",
-                    "required": true,
-                    "presence": {
-                      "present": "lowercase_sha256"
-                    }
-                  },
-                  "root_device_name": {
                     "type": "string",
                     "required": true,
                     "presence": {
@@ -11677,18 +11673,11 @@
                     "presence": {
                       "present": "nonempty"
                     }
-                  },
-                  "worker_release_digest": {
-                    "type": "string",
-                    "required": true,
-                    "presence": {
-                      "present": "lowercase_sha256"
-                    }
                   }
                 },
                 "presence": {
                   "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;strict_single_worker_compute"
+                  "present": "required_when_record_kind=cloud_worker;strict_worker_compute"
                 }
               },
               "confirmation_id": {
@@ -11712,20 +11701,6 @@
                   "present": "required_when_record_kind=cloud_worker;rfc3339_nano"
                 }
               },
-              "digest": {
-                "type": "string",
-                "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;lowercase_sha256"
-                }
-              },
-              "execution_digest": {
-                "type": "string",
-                "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;lowercase_sha256"
-                }
-              },
               "execution_id": {
                 "type": "string",
                 "presence": {
@@ -11733,38 +11708,10 @@
                   "present": "required_when_record_kind=cloud_worker;canonical_uuid"
                 }
               },
-              "input_manifest_digest": {
-                "type": "string",
-                "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;lowercase_sha256"
-                }
-              },
-              "input_manifest_item_count": {
-                "type": "integer",
-                "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;nonnegative_integer"
-                }
-              },
               "limits": {
                 "type": "object",
                 "properties": {
-                  "max_output_bytes": {
-                    "type": "integer",
-                    "required": true,
-                    "presence": {
-                      "present": "positive_integer"
-                    }
-                  },
                   "max_runtime_seconds": {
-                    "type": "integer",
-                    "required": true,
-                    "presence": {
-                      "present": "positive_integer"
-                    }
-                  },
-                  "max_tokens": {
                     "type": "integer",
                     "required": true,
                     "presence": {
@@ -11775,57 +11722,6 @@
                 "presence": {
                   "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
                   "present": "required_when_record_kind=cloud_worker;strict_hard_limits"
-                }
-              },
-              "model_authorization": {
-                "type": "object",
-                "properties": {
-                  "credential_version": {
-                    "type": "integer",
-                    "required": true,
-                    "presence": {
-                      "present": "positive_integer"
-                    }
-                  },
-                  "interface": {
-                    "type": "string",
-                    "required": true,
-                    "presence": {
-                      "present": "nonempty"
-                    }
-                  },
-                  "model": {
-                    "type": "string",
-                    "required": true,
-                    "presence": {
-                      "present": "nonempty"
-                    }
-                  },
-                  "model_profile_id": {
-                    "type": "string",
-                    "required": true,
-                    "presence": {
-                      "present": "canonical_uuid"
-                    }
-                  },
-                  "model_profile_revision": {
-                    "type": "integer",
-                    "required": true,
-                    "presence": {
-                      "present": "positive_integer"
-                    }
-                  },
-                  "provider": {
-                    "type": "string",
-                    "required": true,
-                    "presence": {
-                      "present": "nonempty"
-                    }
-                  }
-                },
-                "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;strict_model_authorization"
                 }
               },
               "network_grants": {
@@ -11854,6 +11750,13 @@
                   "present": "required_when_record_kind=cloud_worker;exact_prepared_permission_owner"
                 }
               },
+              "persistent_worker_reuse": {
+                "type": "boolean",
+                "presence": {
+                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                  "present": "required_when_record_kind=cloud_worker;authoritative_reuse_preference"
+                }
+              },
               "plan_id": {
                 "type": "string",
                 "presence": {
@@ -11865,7 +11768,7 @@
                 "type": "string",
                 "presence": {
                   "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;one_of:explicit_user_cloud|local_budget_exceeded"
+                  "present": "required_when_record_kind=cloud_worker;nonempty_redacted_reason"
                 }
               },
               "quote": {
@@ -11883,13 +11786,6 @@
                     "required": true,
                     "presence": {
                       "present": "exact:USD"
-                    }
-                  },
-                  "digest": {
-                    "type": "string",
-                    "required": true,
-                    "presence": {
-                      "present": "lowercase_sha256"
                     }
                   },
                   "expires_at": {
@@ -11917,13 +11813,6 @@
                 "presence": {
                   "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
                   "present": "required_when_record_kind=cloud_worker;strict_quote_and_owner_hard_limit"
-                }
-              },
-              "recipe_id": {
-                "type": "string",
-                "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;exact:ephemeral-pi-task"
                 }
               },
               "revision": {
@@ -12038,13 +11927,6 @@
                     "present": "required_when_record_kind=cloud_worker;positive_integer_equal_to_prepared_permission_generation"
                   }
                 },
-                "adapter": {
-                  "type": "string",
-                  "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;exact:pi_json_task_v1"
-                  }
-                },
                 "artifact_retention_seconds": {
                   "type": "integer",
                   "presence": {
@@ -12060,13 +11942,6 @@
                       "required": true,
                       "presence": {
                         "present": "aws_account_id"
-                      }
-                    },
-                    "credential_revision": {
-                      "type": "integer",
-                      "required": true,
-                      "presence": {
-                        "present": "positive_integer"
                       }
                     },
                     "region": {
@@ -12085,49 +11960,7 @@
                 "compute": {
                   "type": "object",
                   "properties": {
-                    "ami_digest": {
-                      "type": "string",
-                      "required": true,
-                      "presence": {
-                        "present": "lowercase_sha256"
-                      }
-                    },
-                    "ami_id": {
-                      "type": "string",
-                      "required": true,
-                      "presence": {
-                        "present": "nonempty"
-                      }
-                    },
-                    "architecture": {
-                      "type": "string",
-                      "required": true,
-                      "presence": {
-                        "present": "nonempty"
-                      }
-                    },
-                    "host_network_policy_sha256": {
-                      "type": "string",
-                      "required": true,
-                      "presence": {
-                        "present": "lowercase_sha256"
-                      }
-                    },
                     "instance_type": {
-                      "type": "string",
-                      "required": true,
-                      "presence": {
-                        "present": "nonempty"
-                      }
-                    },
-                    "pi_runtime_digest": {
-                      "type": "string",
-                      "required": true,
-                      "presence": {
-                        "present": "lowercase_sha256"
-                      }
-                    },
-                    "root_device_name": {
                       "type": "string",
                       "required": true,
                       "presence": {
@@ -12161,18 +11994,11 @@
                       "presence": {
                         "present": "nonempty"
                       }
-                    },
-                    "worker_release_digest": {
-                      "type": "string",
-                      "required": true,
-                      "presence": {
-                        "present": "lowercase_sha256"
-                      }
                     }
                   },
                   "presence": {
                     "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;strict_single_worker_compute"
+                    "present": "required_when_record_kind=cloud_worker;strict_worker_compute"
                   }
                 },
                 "confirmation_id": {
@@ -12196,20 +12022,6 @@
                     "present": "required_when_record_kind=cloud_worker;rfc3339_nano"
                   }
                 },
-                "digest": {
-                  "type": "string",
-                  "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;lowercase_sha256"
-                  }
-                },
-                "execution_digest": {
-                  "type": "string",
-                  "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;lowercase_sha256"
-                  }
-                },
                 "execution_id": {
                   "type": "string",
                   "presence": {
@@ -12217,38 +12029,10 @@
                     "present": "required_when_record_kind=cloud_worker;canonical_uuid"
                   }
                 },
-                "input_manifest_digest": {
-                  "type": "string",
-                  "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;lowercase_sha256"
-                  }
-                },
-                "input_manifest_item_count": {
-                  "type": "integer",
-                  "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;nonnegative_integer"
-                  }
-                },
                 "limits": {
                   "type": "object",
                   "properties": {
-                    "max_output_bytes": {
-                      "type": "integer",
-                      "required": true,
-                      "presence": {
-                        "present": "positive_integer"
-                      }
-                    },
                     "max_runtime_seconds": {
-                      "type": "integer",
-                      "required": true,
-                      "presence": {
-                        "present": "positive_integer"
-                      }
-                    },
-                    "max_tokens": {
                       "type": "integer",
                       "required": true,
                       "presence": {
@@ -12259,57 +12043,6 @@
                   "presence": {
                     "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
                     "present": "required_when_record_kind=cloud_worker;strict_hard_limits"
-                  }
-                },
-                "model_authorization": {
-                  "type": "object",
-                  "properties": {
-                    "credential_version": {
-                      "type": "integer",
-                      "required": true,
-                      "presence": {
-                        "present": "positive_integer"
-                      }
-                    },
-                    "interface": {
-                      "type": "string",
-                      "required": true,
-                      "presence": {
-                        "present": "nonempty"
-                      }
-                    },
-                    "model": {
-                      "type": "string",
-                      "required": true,
-                      "presence": {
-                        "present": "nonempty"
-                      }
-                    },
-                    "model_profile_id": {
-                      "type": "string",
-                      "required": true,
-                      "presence": {
-                        "present": "canonical_uuid"
-                      }
-                    },
-                    "model_profile_revision": {
-                      "type": "integer",
-                      "required": true,
-                      "presence": {
-                        "present": "positive_integer"
-                      }
-                    },
-                    "provider": {
-                      "type": "string",
-                      "required": true,
-                      "presence": {
-                        "present": "nonempty"
-                      }
-                    }
-                  },
-                  "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;strict_model_authorization"
                   }
                 },
                 "network_grants": {
@@ -12337,6 +12070,13 @@
                     "present": "required_when_record_kind=cloud_worker;exact_prepared_permission_owner"
                   }
                 },
+                "persistent_worker_reuse": {
+                  "type": "boolean",
+                  "presence": {
+                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
+                    "present": "required_when_record_kind=cloud_worker;authoritative_reuse_preference"
+                  }
+                },
                 "plan_id": {
                   "type": "string",
                   "presence": {
@@ -12348,7 +12088,7 @@
                   "type": "string",
                   "presence": {
                     "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;one_of:explicit_user_cloud|local_budget_exceeded"
+                    "present": "required_when_record_kind=cloud_worker;nonempty_redacted_reason"
                   }
                 },
                 "quote": {
@@ -12366,13 +12106,6 @@
                       "required": true,
                       "presence": {
                         "present": "exact:USD"
-                      }
-                    },
-                    "digest": {
-                      "type": "string",
-                      "required": true,
-                      "presence": {
-                        "present": "lowercase_sha256"
                       }
                     },
                     "expires_at": {
@@ -12400,13 +12133,6 @@
                   "presence": {
                     "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
                     "present": "required_when_record_kind=cloud_worker;strict_quote_and_owner_hard_limit"
-                  }
-                },
-                "recipe_id": {
-                  "type": "string",
-                  "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;exact:ephemeral-pi-task"
                   }
                 },
                 "revision": {
@@ -12712,7 +12438,7 @@
                 },
                 "presence": {
                   "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;strict_verified_cleanup_summary"
+                  "present": "required_when_record_kind=cloud_worker;strict_cleanup_summary"
                 }
               },
               "confirmation_id": {
@@ -12736,25 +12462,11 @@
                   "present": "required_when_record_kind=cloud_worker;rfc3339_nano"
                 }
               },
-              "digest": {
-                "type": "string",
-                "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;lowercase_sha256"
-                }
-              },
-              "execution_digest": {
-                "type": "string",
-                "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;lowercase_sha256"
-                }
-              },
               "execution_id": {
                 "type": "string",
                 "presence": {
                   "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;canonical_uuid_equal_to_run_id"
+                  "present": "required_when_record_kind=cloud_worker;canonical_uuid"
                 }
               },
               "failure_code": {
@@ -12778,11 +12490,11 @@
                   "present": "required_when_record_kind=cloud_worker;exact_prepared_permission_owner"
                 }
               },
-              "plan_digest": {
-                "type": "string",
+              "persistent_worker": {
+                "type": "boolean",
                 "presence": {
                   "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;lowercase_sha256"
+                  "present": "required_when_record_kind=cloud_worker;authoritative_worker_lifecycle_flag"
                 }
               },
               "plan_id": {
@@ -12799,13 +12511,6 @@
                   "present": "required_when_record_kind=cloud_worker;positive_integer"
                 }
               },
-              "quote_digest": {
-                "type": "string",
-                "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;lowercase_sha256"
-                }
-              },
               "revision": {
                 "type": "integer",
                 "presence": {
@@ -12817,7 +12522,7 @@
                 "type": "string",
                 "presence": {
                   "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;canonical_uuid_equal_to_execution_id"
+                  "present": "required_when_record_kind=cloud_worker;canonical_uuid"
                 }
               },
               "status": {
@@ -12848,11 +12553,11 @@
                   "present": "required_when_record_kind=cloud_worker;rfc3339_nano_not_before_created_at"
                 }
               },
-              "workspace_mode": {
+              "worker_id": {
                 "type": "string",
                 "presence": {
                   "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;one_of:none|read_only|write"
+                  "present": "required_when_record_kind=cloud_worker;empty_until_worker_assigned"
                 }
               }
             }
@@ -12976,7 +12681,7 @@
                   },
                   "presence": {
                     "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;strict_verified_cleanup_summary"
+                    "present": "required_when_record_kind=cloud_worker;strict_cleanup_summary"
                   }
                 },
                 "confirmation_id": {
@@ -13000,25 +12705,11 @@
                     "present": "required_when_record_kind=cloud_worker;rfc3339_nano"
                   }
                 },
-                "digest": {
-                  "type": "string",
-                  "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;lowercase_sha256"
-                  }
-                },
-                "execution_digest": {
-                  "type": "string",
-                  "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;lowercase_sha256"
-                  }
-                },
                 "execution_id": {
                   "type": "string",
                   "presence": {
                     "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;canonical_uuid_equal_to_run_id"
+                    "present": "required_when_record_kind=cloud_worker;canonical_uuid"
                   }
                 },
                 "failure_code": {
@@ -13042,11 +12733,11 @@
                     "present": "required_when_record_kind=cloud_worker;exact_prepared_permission_owner"
                   }
                 },
-                "plan_digest": {
-                  "type": "string",
+                "persistent_worker": {
+                  "type": "boolean",
                   "presence": {
                     "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;lowercase_sha256"
+                    "present": "required_when_record_kind=cloud_worker;authoritative_worker_lifecycle_flag"
                   }
                 },
                 "plan_id": {
@@ -13063,13 +12754,6 @@
                     "present": "required_when_record_kind=cloud_worker;positive_integer"
                   }
                 },
-                "quote_digest": {
-                  "type": "string",
-                  "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;lowercase_sha256"
-                  }
-                },
                 "revision": {
                   "type": "integer",
                   "presence": {
@@ -13081,7 +12765,7 @@
                   "type": "string",
                   "presence": {
                     "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;canonical_uuid_equal_to_execution_id"
+                    "present": "required_when_record_kind=cloud_worker;canonical_uuid"
                   }
                 },
                 "status": {
@@ -13112,11 +12796,11 @@
                     "present": "required_when_record_kind=cloud_worker;rfc3339_nano_not_before_created_at"
                   }
                 },
-                "workspace_mode": {
+                "worker_id": {
                   "type": "string",
                   "presence": {
                     "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;one_of:none|read_only|write"
+                    "present": "required_when_record_kind=cloud_worker;empty_until_worker_assigned"
                   }
                 }
               }
@@ -13224,7 +12908,7 @@
                 },
                 "presence": {
                   "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;strict_verified_cleanup_summary"
+                  "present": "required_when_record_kind=cloud_worker;strict_cleanup_summary"
                 }
               },
               "confirmation_id": {
@@ -13248,25 +12932,11 @@
                   "present": "required_when_record_kind=cloud_worker;rfc3339_nano"
                 }
               },
-              "digest": {
-                "type": "string",
-                "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;lowercase_sha256"
-                }
-              },
-              "execution_digest": {
-                "type": "string",
-                "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;lowercase_sha256"
-                }
-              },
               "execution_id": {
                 "type": "string",
                 "presence": {
                   "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;canonical_uuid_equal_to_run_id"
+                  "present": "required_when_record_kind=cloud_worker;canonical_uuid"
                 }
               },
               "failure_code": {
@@ -13290,11 +12960,11 @@
                   "present": "required_when_record_kind=cloud_worker;exact_prepared_permission_owner"
                 }
               },
-              "plan_digest": {
-                "type": "string",
+              "persistent_worker": {
+                "type": "boolean",
                 "presence": {
                   "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;lowercase_sha256"
+                  "present": "required_when_record_kind=cloud_worker;authoritative_worker_lifecycle_flag"
                 }
               },
               "plan_id": {
@@ -13311,13 +12981,6 @@
                   "present": "required_when_record_kind=cloud_worker;positive_integer"
                 }
               },
-              "quote_digest": {
-                "type": "string",
-                "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;lowercase_sha256"
-                }
-              },
               "revision": {
                 "type": "integer",
                 "presence": {
@@ -13329,7 +12992,7 @@
                 "type": "string",
                 "presence": {
                   "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;canonical_uuid_equal_to_execution_id"
+                  "present": "required_when_record_kind=cloud_worker;canonical_uuid"
                 }
               },
               "status": {
@@ -13360,11 +13023,11 @@
                   "present": "required_when_record_kind=cloud_worker;rfc3339_nano_not_before_created_at"
                 }
               },
-              "workspace_mode": {
+              "worker_id": {
                 "type": "string",
                 "presence": {
                   "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;one_of:none|read_only|write"
+                  "present": "required_when_record_kind=cloud_worker;empty_until_worker_assigned"
                 }
               }
             }
@@ -13531,7 +13194,7 @@
                       "type": "string",
                       "required": true,
                       "presence": {
-                        "present": "one_of:claimed|preparing_inputs|running_pi|uploading_result|completing"
+                        "present": "one_of:claimed|preparing_inputs|running|uploading_result|completing"
                       }
                     },
                     "uploaded_bytes": {

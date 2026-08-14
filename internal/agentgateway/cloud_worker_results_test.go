@@ -98,7 +98,7 @@ func TestCloudWorkerRunEventsPinBoundedSecretFreeProgressAndCursor(t *testing.T)
 	request["after_sequence"] = runEventSequence - 1
 	validProgress := func() map[string]any {
 		return map[string]any{
-			"phase": "running_pi", "elapsed_ms": float64(1200), "last_activity_at": fixture.RunEvent["at"],
+			"phase": "running", "elapsed_ms": float64(1200), "last_activity_at": fixture.RunEvent["at"],
 			"cpu_time_ms": float64(800), "memory_high_water_bytes": float64(32 << 20),
 			"invocation_count": float64(2), "uploaded_bytes": float64(0), "output_truncated": false,
 		}
@@ -162,7 +162,7 @@ func TestCloudWorkerRunEventsPinBoundedSecretFreeProgressAndCursor(t *testing.T)
 
 	for name, mutate := range map[string]func(map[string]any){
 		"unknown phase":         func(progress map[string]any) { progress["phase"] = "shell_output" },
-		"padded phase":          func(progress map[string]any) { progress["phase"] = " running_pi" },
+		"padded phase":          func(progress map[string]any) { progress["phase"] = " running" },
 		"negative elapsed":      func(progress map[string]any) { progress["elapsed_ms"] = float64(-1) },
 		"elapsed over max":      func(progress map[string]any) { progress["elapsed_ms"] = float64(86400001) },
 		"cpu over max":          func(progress map[string]any) { progress["cpu_time_ms"] = float64(604800001) },
@@ -372,12 +372,53 @@ func TestCloudWorkerExecutionV2ResultsFailClosedOnShapeDrift(t *testing.T) {
 		name   string
 		mutate func(map[string]any)
 	}{
-		{"missing digest", func(plan map[string]any) { delete(plan, "digest") }},
+		{"missing reuse preference", func(plan map[string]any) { delete(plan, "persistent_worker_reuse") }},
 		{"unknown field", func(plan map[string]any) { plan["s3_url"] = "s3://private/internal" }},
-		{"foreign recipe", func(plan map[string]any) { plan["recipe_id"] = "legacy-team-worker" }},
+		{"retired digest", func(plan map[string]any) { plan["digest"] = strings.Repeat("a", 64) }},
+		{"retired recipe", func(plan map[string]any) { plan["recipe_id"] = "ephemeral-pi-task" }},
 		{"producer status drift", func(plan map[string]any) { plan["status"] = "queued" }},
 		{"invalid generation", func(plan map[string]any) { plan["account_generation"] = float64(0) }},
 	}
+
+	t.Run("persistent terminal run does not require destruction", func(t *testing.T) {
+		run := cloneParams(fixture.Run)
+		if _, err := adaptActionResultForRequestWithAuthority(
+			"agent.execution.v2.runs.get",
+			cloudWorkerRequest("run_id", run["run_id"]),
+			map[string]any{"run": run}, authority,
+		); err != nil {
+			t.Fatalf("persistent terminal run rejected: %v", err)
+		}
+	})
+
+	for _, field := range []string{"plan_digest", "digest", "workspace_mode", "quote_digest", "execution_digest"} {
+		t.Run("retired run field "+field, func(t *testing.T) {
+			run := cloneParams(fixture.Run)
+			run[field] = strings.Repeat("b", 64)
+			_, err := adaptActionResultForRequestWithAuthority(
+				"agent.execution.v2.runs.get",
+				cloudWorkerRequest("run_id", run["run_id"]),
+				map[string]any{"run": run}, authority,
+			)
+			if !errors.Is(err, ErrInvalidActionResult) {
+				t.Fatalf("retired run field %s was accepted: %v", field, err)
+			}
+		})
+	}
+
+	t.Run("run and execution identities are independent", func(t *testing.T) {
+		run := cloneParams(fixture.Run)
+		if run["run_id"] == run["execution_id"] {
+			t.Fatal("fixture does not exercise independent run and execution identities")
+		}
+		if _, err := adaptActionResultForRequestWithAuthority(
+			"agent.execution.v2.runs.get",
+			cloudWorkerRequest("run_id", run["run_id"]),
+			map[string]any{"run": run}, authority,
+		); err != nil {
+			t.Fatalf("independent run and execution identities rejected: %v", err)
+		}
+	})
 	for _, mutation := range mutations {
 		t.Run(mutation.name, func(t *testing.T) {
 			plan := cloneParams(fixture.Plan)
@@ -473,7 +514,7 @@ func TestCloudWorkerExecutionV2ResultsRejectForeignPreparedAuthority(t *testing.
 		"event_id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd", "run_id": fixture.Run["run_id"],
 		"owner_id": authority.ownerID, "account_generation": float64(authority.accountGeneration + 1),
 		"revision": float64(9), "sequence": float64(1), "type": "execution_succeeded",
-		"at": fixture.Run["updated_at"], "payload_digest": fixture.Run["digest"], "status": "succeeded",
+		"at": fixture.Run["updated_at"], "payload_digest": fixture.RunEvent["payload_digest"], "status": "succeeded",
 	}
 	tests := []struct {
 		name    string

@@ -71,9 +71,6 @@ func (r AgentExecutionCompletionReceipt) Validate() error {
 			return fmt.Errorf("%s must be a canonical lowercase non-nil UUID", name)
 		}
 	}
-	if r.RunID != r.ExecutionID {
-		return errors.New("run_id must equal execution_id")
-	}
 	switch r.TerminalState {
 	case "succeeded", "failed", "canceled":
 	default:

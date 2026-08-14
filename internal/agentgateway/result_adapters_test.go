@@ -426,7 +426,7 @@ func TestChatResultRejectsMalformedReferencesAndRelatedIDs(t *testing.T) {
 		{name: "channel post lacks post", input: map[string]any{"references": []any{map[string]any{"kind": "channel_post", "room_id": "!r:example", "channel_id": "!r:example"}}}},
 		{name: "execution is incomplete", input: map[string]any{"references": []any{map[string]any{"kind": "execution_plan", "task_id": "11111111-1111-4111-8111-111111111111"}}}},
 		{name: "execution has unknown field", input: map[string]any{"references": []any{withReferenceField(valid, "action", "confirm")}}},
-		{name: "execution digest is not lowercase sha256", input: map[string]any{"references": []any{withReferenceField(valid, "quote_digest", strings.Repeat("A", 64))}}},
+		{name: "retired Cloud Worker digest", input: map[string]any{"references": []any{withReferenceField(valid, "quote_digest", strings.Repeat("a", 64))}}},
 		{name: "duplicate reference", input: map[string]any{"references": []any{valid, valid}}},
 		{name: "semantic duplicate with explicit empty field", input: map[string]any{"references": []any{map[string]any{"kind": "room", "room_id": "!room:example"}, map[string]any{"kind": "room", "room_id": "!room:example", "title": ""}}}},
 	}
@@ -449,22 +449,13 @@ func TestChatResultRejectsMalformedReferencesAndRelatedIDs(t *testing.T) {
 
 func validExecutionReferenceForTest() map[string]any {
 	return map[string]any{
-		"kind":                  "execution_plan",
-		"account_generation":    float64(7),
-		"task_id":               "11111111-1111-4111-8111-111111111111",
-		"plan_id":               "22222222-2222-4222-8222-222222222222",
-		"plan_revision":         float64(3),
-		"plan_digest":           strings.Repeat("a", 64),
-		"run_id":                "33333333-3333-4333-8333-333333333333",
-		"run_revision":          float64(4),
-		"run_digest":            strings.Repeat("b", 64),
-		"execution_id":          "33333333-3333-4333-8333-333333333333",
-		"confirmation_id":       "44444444-4444-4444-8444-444444444444",
-		"confirmation_revision": float64(5),
-		"binding_digest":        strings.Repeat("c", 64),
-		"quote_digest":          strings.Repeat("d", 64),
-		"execution_digest":      strings.Repeat("e", 64),
-		"status":                "waiting_user",
+		"kind":               "execution_plan",
+		"account_generation": float64(7),
+		"task_id":            "11111111-1111-4111-8111-111111111111",
+		"plan_id":            "22222222-2222-4222-8222-222222222222",
+		"plan_revision":      float64(3),
+		"confirmation_id":    "44444444-4444-4444-8444-444444444444",
+		"status":             "waiting_user",
 	}
 }
 

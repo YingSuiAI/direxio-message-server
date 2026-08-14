@@ -231,7 +231,7 @@ capability live.
   retracts the exact active fact. Both mutations are owner-scoped and
   idempotent. Message Server validates and projects this closed contract but
   never extracts, stores, or recalls facts itself.
-- Successful `agent.chat` responses and Native Agent stream `done` payloads may include additive `related_task_ids`, `related_plan_ids`, and strict `references[]`. Message Server promotes only fields authored by Agent at the top level, on the assistant message, or in the nested stream response; it never synthesizes a reference from a related id. Room references derived from successful built-in Dirextalk tool results use `kind=room`, `room_id`, optional `room_type=direct|group|channel`, `title`, and optional `preview`; channel-post references use `kind=channel_post`, `room_id`, `channel_id`, `post_id`, `title`, and optional `preview`. Execution references use `kind=execution_plan|execution_run|execution_confirmation` and require the complete account-generation, task/plan/run/confirmation UUID, revision, and digest linkage authored by Agent. They are informational projections, not confirmation authority. References preserve producer order, reject duplicates or unknown fields/kinds, never include message `event_id`, and are not inferred from model-authored text or third-party/runtime tool output.
+- Successful `agent.chat` responses and Native Agent stream `done` payloads may include additive `related_task_ids`, `related_plan_ids`, and strict `references[]`. Message Server promotes only fields authored by Agent at the top level, on the assistant message, or in the nested stream response; it never synthesizes a reference from a related id. Room references derived from successful built-in Dirextalk tool results use `kind=room`, `room_id`, optional `room_type=direct|group|channel`, `title`, and optional `preview`; channel-post references use `kind=channel_post`, `room_id`, `channel_id`, `post_id`, `title`, and optional `preview`. Cloud Worker execution references use `kind=execution_plan|execution_run|execution_confirmation` with account generation, task id, plan id/revision, and the identity relevant to the reference: confirmation id for plan/confirmation or independent run/execution ids plus optional Worker id for a run. Generic Execution V2 references retain their separate digest-bearing schema. References are informational projections, not confirmation authority; they preserve producer order, reject duplicates or unknown fields/kinds, never include message `event_id`, and are not inferred from model-authored text or third-party/runtime tool output.
 - `mcp.channel_posts.list` and the Agent-side `dirextalk_channel_posts_list` result envelope include both top-level `channel_id` and `room_id`, allowing a post reference to identify its product channel and Matrix room without parsing post content.
 
 ### Native Agent schedule chat tools
@@ -264,10 +264,22 @@ the accepted architecture decision is
 V2 planning is declarative and side-effect free; remote mutations use the
 Agent-owned typed coordinator with durable receipts and explicit uncertainty.
 The Message Server is only the authenticated product proxy and does not execute
-third-party shell/code/Skills or expose raw SSM/SSH/AWS passthrough. Agent's
-single Pi Cloud Worker path preserves local Native Agent MCP/Skills for local
-work but does not copy those installations, their credentials, or the Extension
-Runner into an ephemeral Worker.
+third-party shell/code/Skills or expose raw SSM/SSH/AWS passthrough. Agent owns
+Worker selection, provisioning, reuse, and execution; Message Server exposes
+only the provider-neutral Worker projection and does not copy local Native
+Agent installations, their credentials, or the Extension Runner into a Worker.
+
+The closed Cloud Worker plan projection contains owner/account generation,
+plan/revision/status, execution/task/confirmation/conversation/turn identity,
+the objective and proposal reason, persistent-worker reuse preference,
+workspace mode, AWS account/region, compute and runtime limits, grants,
+artifact retention, the live quote, and timestamps. The closed run projection
+contains the same authority and conversation linkage, run/execution/plan
+identity and plan revision, status/revision/cancel intent, Worker identity and
+persistence, cleanup summary, artifact ids, failure summary, and timestamps.
+Neither projection exposes recipe/adapter/model/input-manifest pins, AMI or
+runtime implementation details, credential revisions, or authorization
+digests. Run and execution identifiers are independent identities.
 
 Every `execution.v2.*` capability and ProductCore action is published only
 after its authenticated route, durable PostgreSQL state, typed
@@ -279,7 +291,8 @@ Agent conversation and use generic `agent.core.confirmations.*`; the former
 Execution V2 confirmation aliases and public `runs.reconcile` are absent.
 Worker completion reaches Message Server only through the private fixed
 `product.agent_execution.v1/record_completion` receipt callback after Agent
-result validation and verified cleanup. That receipt carries execution and turn
+result validation. Worker retention or cleanup is an independent lifecycle
+choice reflected by run state and does not block a terminal result. The receipt carries execution and turn
 identity plus terminal state/time/digest; it does not carry an assistant-message
 identity because the central continuation creates that message.
 
@@ -300,7 +313,7 @@ all events after the first item in either page form are contiguous.
 carry `progress`, and it must carry the complete secret-free snapshot:
 `phase`, `elapsed_ms`, `last_activity_at`, `cpu_time_ms`,
 `memory_high_water_bytes`, `invocation_count`, `uploaded_bytes`, and
-`output_truncated`. Phase is one of `claimed`, `preparing_inputs`, `running_pi`,
+`output_truncated`. Phase is one of `claimed`, `preparing_inputs`, `running`,
 `uploading_result`, or `completing`; all counters are nonnegative and bounded by
 the generated ProductCore contract. A zero CPU or memory value means the Worker
 had no verified runtime metric source; it does not assert zero resource use.

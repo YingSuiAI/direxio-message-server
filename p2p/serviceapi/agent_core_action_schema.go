@@ -104,8 +104,8 @@ func coreConfirmationMutationSchema() *ActionSchema {
 
 // coreConfirmationResponseFields mirrors confirmationMap, the single public
 // confirmation projection used by confirmation actions and control-plane
-// requests. It contains only immutable binding facts and digests; no
-// credential or other secret values cross this wire boundary.
+// requests. Cloud Worker confirmations use identity/revision and live quote
+// facts only; other domains retain their existing immutable binding fields.
 func coreConfirmationResponseFields() map[string]ActionFieldSchema {
 	secretGrant := &ActionFieldSchema{Type: "object", Properties: map[string]ActionFieldSchema{
 		"reference_id": {Type: "string", Presence: &ActionPresenceSchema{
@@ -122,6 +122,12 @@ func coreConfirmationResponseFields() map[string]ActionFieldSchema {
 	cloudOnlyInteger := func(present string) ActionFieldSchema {
 		return ActionFieldSchema{Type: "integer", Presence: &ActionPresenceSchema{Omitted: "non_cloud_worker_confirmation", Present: present}}
 	}
+	cloudOnlyObject := func(present string, properties map[string]ActionFieldSchema) ActionFieldSchema {
+		return ActionFieldSchema{Type: "object", Presence: &ActionPresenceSchema{Omitted: "non_cloud_worker_confirmation", Present: present}, Properties: properties}
+	}
+	nonCloudOnly := func(kind string) ActionFieldSchema {
+		return ActionFieldSchema{Type: kind, Presence: &ActionPresenceSchema{Omitted: "cloud_worker.execute", Present: "required_for_non_cloud_worker_confirmation"}}
+	}
 	binding := map[string]ActionFieldSchema{
 		"owner_id": {Type: "string", Required: true, Presence: &ActionPresenceSchema{Present: "authenticated_owner_id"}},
 		"account_generation": {Type: "integer", Presence: &ActionPresenceSchema{
@@ -134,26 +140,26 @@ func coreConfirmationResponseFields() map[string]ActionFieldSchema {
 		"target_kind":         {Type: "string"},
 		"source_version":      {Type: "string"},
 		"source_commit":       {Type: "string"},
-		"content_digest":      {Type: "string", Required: true},
+		"content_digest":      nonCloudOnly("string"),
 		"manifest_digest":     {Type: "string"},
 		"execution_digest":    {Type: "string"},
 		"permission_digest":   {Type: "string"},
-		"parameter_digest":    {Type: "string", Required: true},
-		"network_digest":      {Type: "string", Required: true},
-		"secret_grant_digest": {Type: "string", Required: true},
+		"parameter_digest":    nonCloudOnly("string"),
+		"network_digest":      nonCloudOnly("string"),
+		"secret_grant_digest": nonCloudOnly("string"),
 		"selected_tool":       {Type: "string"},
 		"selected_command":    {Type: "array", Items: &ActionFieldSchema{Type: "string"}},
 		"network_grants":      {Type: "array", Items: &ActionFieldSchema{Type: "string"}},
-		"secret_grants":       {Type: "array", Required: true, Items: secretGrant},
+		"secret_grants":       {Type: "array", Items: secretGrant, Presence: &ActionPresenceSchema{Omitted: "cloud_worker.execute", Present: "required_for_non_cloud_worker_confirmation"}},
 		"execution_id":        cloudOnlyString("canonical_uuid_required_for_cloud_worker.execute"),
 		"plan_id":             cloudOnlyString("canonical_uuid_required_for_cloud_worker.execute"),
 		"plan_revision":       cloudOnlyInteger("positive_integer_required_for_cloud_worker.execute"),
-		"plan_digest":         cloudOnlyString("lowercase_sha256_required_for_cloud_worker.execute"),
-		"run_id":              cloudOnlyString("canonical_uuid_required_for_cloud_worker.execute"),
-		"run_revision":        cloudOnlyInteger("positive_integer_required_for_cloud_worker.execute"),
-		"run_digest":          cloudOnlyString("lowercase_sha256_required_for_cloud_worker.execute"),
-		"quote_digest":        cloudOnlyString("lowercase_sha256_required_for_cloud_worker.execute"),
-		"digest":              cloudOnlyString("lowercase_sha256_required_for_cloud_worker.execute"),
+		"quote": cloudOnlyObject("required_for_cloud_worker.execute;live_quote_display_and_authority", map[string]ActionFieldSchema{
+			"amount_micros":                  cloudWorkerNested("integer", "nonnegative_integer"),
+			"currency":                       cloudWorkerNested("string", "exact:USD"),
+			"expires_at":                     cloudWorkerNested("string", "rfc3339_nano"),
+			"maximum_authorized_cost_micros": cloudWorkerNested("integer", "integer_greater_than_or_equal_to_amount"),
+		}),
 	}
 	return map[string]ActionFieldSchema{
 		"confirmation_id": {Type: "string", Required: true, Presence: &ActionPresenceSchema{Present: "canonical_uuid"}},
