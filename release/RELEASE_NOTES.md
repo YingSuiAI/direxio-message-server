@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v1.1.45
+
+1. Move ProductCore queries and mutations to HTTP and deliver durable product events through owner-authenticated SSE with cursor resume and reset recovery.
+2. Move Native Agent text turns to one HTTP admission followed by durable SSE observation, including reconnect without repeating the mutation.
+3. Preserve focused-room push suppression through server-expiring Matrix account data after removing the client WebSocket session store.
+
 ## v1.1.43
 
 1. Expose owner actions to list, inspect, and destroy persistent AWS Workers.
