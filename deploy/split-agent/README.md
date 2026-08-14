@@ -611,11 +611,11 @@ only Compose exec. There is intentionally no
 `agent.knowledge.index` workaround: a binding mismatch is a hard contract
 failure.
 
-This HTTP acceptance lane does not claim Native Agent WebSocket streaming,
-reconnect/resume, or cancellation coverage. Those behaviors require a later
-dedicated gate using real `client.native_agent_stream` and
-`server.native_agent_stream.*` frames; an HTTP `agent.chat` response cannot
-stand in for that protocol evidence.
+The dedicated split-Agent batch lane creates each Native Agent text turn with
+exactly one HTTP POST, reads its durable SSE events, intentionally disconnects,
+and resumes with `after_seq` plus `Last-Event-ID` without repeating the
+mutation. It also verifies terminal cancellation and authoritative history
+readback; a unary `agent.chat` response does not stand in for that evidence.
 
 For the final persistent-account acceptance, set
 `DIREXTALK_ACCEPTANCE_ACCOUNT_DELETE=false`. This keeps the configured model

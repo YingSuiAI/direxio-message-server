@@ -171,8 +171,8 @@ if grep -Eq -- 'model profile create/list/get|model connection test' "$readme"; 
   exit 1
 fi
 grep -Fq -- 'does not automatically inject ordinary uploaded Knowledge' "$readme"
-grep -Fq -- 'does not claim Native Agent WebSocket streaming' "$readme"
-grep -Fq -- 'an HTTP `agent.chat` response cannot' "$readme"
+grep -Fq -- 'exactly one HTTP POST' "$readme"
+grep -Fq -- 'resumes with `after_seq` plus `Last-Event-ID`' "$readme"
 if grep -Eiq -- 'https?://agent(:|/)' "$script"; then
   echo "accept-local.sh must not bypass message-server with direct Agent HTTP" >&2
   exit 1
