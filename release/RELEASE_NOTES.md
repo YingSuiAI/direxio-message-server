@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v1.1.49
+
+1. Synchronize the current Execution V2 Cloud Worker result schema digests with the Agent capability catalog.
+
 ## v1.1.48
 
 1. Align Cloud Worker plan and run projections with the simplified Agent-owned SSH execution shape.
