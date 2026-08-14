@@ -60,7 +60,11 @@ case "${1:-}" in
     case "$id" in
       "$OLD_AGENT_ID"|"$OLD_EXTENSION_ID"|"$OLD_CORE_ID") exit 1 ;;
       "$LIVE_AGENT_ID") container_json "$id" agent "$LIVE_IMAGE_ID" unhealthy ;;
-      "$LIVE_EXTENSION_ID") container_json "$id" extension-runner "$LIVE_IMAGE_ID" healthy ;;
+      "$LIVE_EXTENSION_ID")
+        health=healthy
+        [ "$DOCKER_FIXTURE_SCENARIO" != extension_unhealthy ] || health=unhealthy
+        container_json "$id" extension-runner "$LIVE_IMAGE_ID" "$health"
+        ;;
       "$LIVE_CORE_ID")
         image_id=$LIVE_IMAGE_ID
         [ "$DOCKER_FIXTURE_SCENARIO" != bad_image_id ] || image_id=$OTHER_IMAGE_ID
@@ -230,6 +234,12 @@ make_fixture "$restarting_root"
 run_wrapper "$restarting_root" agent_restarting >"$restarting_root/stdout" 2>"$restarting_root/stderr"
 grep -Fqx 'migration saw recovered v1.0.90 baseline' "$restarting_root/docker.log"
 grep -Fqx 'DIREXTALK_AGENT_VERSION=v1.0.91' "$restarting_root/out/.env"
+
+unhealthy_extension_root=$tmp/extension_unhealthy
+make_fixture "$unhealthy_extension_root"
+run_wrapper "$unhealthy_extension_root" extension_unhealthy >"$unhealthy_extension_root/stdout" 2>"$unhealthy_extension_root/stderr"
+grep -Fqx 'migration saw recovered v1.0.90 baseline' "$unhealthy_extension_root/docker.log"
+grep -Fqx 'DIREXTALK_AGENT_VERSION=v1.0.91' "$unhealthy_extension_root/out/.env"
 
 for scenario in bad_project bad_service bad_config_image bad_image_id agent_exited agent_dead agent_paused runner_restarting; do
   root=$tmp/$scenario

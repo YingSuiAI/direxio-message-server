@@ -9,7 +9,7 @@ usage() { printf 'usage: %s OUTPUT_DIR target_version minimum_server_version\n' 
 canonical_version() { printf '%s\n' "$1" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; }
 semver_ge() { local a=${1#v} b=${2#v} a1 a2 a3 b1 b2 b3; IFS=. read -r a1 a2 a3 <<<"$a"; IFS=. read -r b1 b2 b3 <<<"$b"; [ "$a1" -gt "$b1" ] || { [ "$a1" -eq "$b1" ] && { [ "$a2" -gt "$b2" ] || { [ "$a2" -eq "$b2" ] && [ "$a3" -ge "$b3" ]; }; }; }; }
 read_pair() { local file=$1 key=$2 count value; count=$(awk -F= -v k="$key" '$0 !~ /^[[:space:]]*#/ && index($0,k "=")==1 {n++} END {print n+0}' "$file"); [ "$count" -eq 1 ] || die "$file must contain exactly one $key"; value=$(awk -F= -v k="$key" 'index($0,k "=")==1 {print substr($0,length(k)+2); exit}' "$file"); [ -n "$value" ] || die "$key is empty"; printf '%s' "$value"; }
-recovery_runtime_valid() { case "$1:$2:$3" in agent:running:healthy|agent:running:unhealthy|agent:restarting:healthy|agent:restarting:unhealthy|extension-runner:running:healthy|core-runner:running:healthy) return 0;; *) return 1;; esac; }
+recovery_runtime_valid() { case "$1:$2:$3" in agent:running:healthy|agent:running:unhealthy|agent:restarting:healthy|agent:restarting:unhealthy|extension-runner:running:healthy|extension-runner:running:unhealthy|core-runner:running:healthy) return 0;; *) return 1;; esac; }
 
 [ "$#" -eq 3 ] || usage
 out=$(readlink -m -- "$1"); target_version=$2; minimum_server_version=$3
