@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v1.1.46
+
+1. Simplify Cloud Worker plan and run projections for reusable, persistent Workers while keeping run and execution identities independent.
+2. Replace Cloud Worker confirmation and conversation-reference digest linkage with exact identity, revision, live-quote, and canonical Worker UUID fields.
+
 ## v1.1.45
 
 1. Move ProductCore queries and mutations to HTTP and deliver durable product events through owner-authenticated SSE with cursor resume and reset recovery.
