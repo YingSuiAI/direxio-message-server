@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v1.1.47
+
+1. Remove the legacy node-bound Cloud Worker deployment wiring so Workers use the Agent-owned dynamic SSH execution path.
+2. Expose Worker compute capacity, storage, hourly price, and authorized total from the live quote through ProductCore.
+3. Recover interrupted Agent update receipts and allow watchdog retries to resume safely after restart.
+
 ## v1.1.46
 
 1. Simplify Cloud Worker plan and run projections for reusable, persistent Workers while keeping run and execution identities independent.
