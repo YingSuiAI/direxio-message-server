@@ -248,6 +248,12 @@ grep -Fqx 'DIREXTALK_MESSAGE_TLS_MODE=edge-terminated' "$edge_production_dir/.en
 grep -Fqx 'DIREXTALK_MESSAGE_CLIENT_BASE_URL=https://message.example.com' "$edge_production_dir/.env"
 grep -Fqx 'core_static_sites_public_origin: https://message.example.com' "$edge_production_dir/agent-config.yaml"
 grep -Fqx 'core_aws_enabled: true' "$edge_production_dir/agent-config.yaml"
+grep -Fqx 'core_extension_staging_root: /var/lib/dirextalk-agent/extension-staging' "$edge_production_dir/agent-config.yaml"
+if grep -Eq 'core_cloud_worker:|worker_control|model_relay|artifact_bucket|kms_key|ami_id|resource_graph' \
+    "$edge_production_dir/agent-config.yaml" "$edge_production_dir/.env"; then
+  echo 'production config retained the superseded bound Cloud Worker deployment' >&2
+  exit 1
+fi
 grep -Fqx 'message_tls_mode=edge-terminated' "$edge_production_dir/.manifest"
 [ ! -s "$edge_production_dir/message-tls-external-cert.pem" ]
 [ ! -s "$edge_production_dir/message-tls-external-key.pem" ]
