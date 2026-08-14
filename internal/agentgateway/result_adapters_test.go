@@ -176,6 +176,29 @@ func TestPublicResultAdaptersProjectCanonicalCapabilityResults(t *testing.T) {
 	}
 }
 
+func TestConversationGetNormalizesCanonicalEmptyMessages(t *testing.T) {
+	result, err := adaptActionResult("agent.chat.conversations.get", map[string]any{
+		"conversation": map[string]any{"conversation_id": "953224b6-2357-47ae-af7b-9666ecef2da4"},
+		"messages":     nil, "next_page_token": "",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages, ok := result["messages"].([]any)
+	if !ok || messages == nil || len(messages) != 0 {
+		t.Fatalf("empty conversation messages=%#v", result["messages"])
+	}
+	invalid := []map[string]any{
+		{"conversation": map[string]any{}, "next_page_token": ""},
+		{"conversation": map[string]any{}, "messages": map[string]any{}, "next_page_token": ""},
+	}
+	for _, output := range invalid {
+		if _, err := adaptActionResult("agent.chat.conversations.get", output); !errors.Is(err, ErrInvalidActionResult) {
+			t.Fatalf("invalid empty conversation response accepted: %#v err=%v", output, err)
+		}
+	}
+}
+
 func TestTaskActionsValidateAgentShapeAndProjectProductEnvelope(t *testing.T) {
 	const taskID = "11111111-1111-4111-8111-111111111111"
 	for _, action := range []string{

@@ -1622,7 +1622,16 @@ func validateCanonicalChatLinkage(value map[string]any, authority actionResultAu
 }
 
 func validateConversationHistoryReferences(output map[string]any, authority actionResultAuthority) error {
-	messages, ok := actionObjectSlice(output["messages"])
+	rawMessages, present := output["messages"]
+	if !present {
+		return fmt.Errorf("%w: conversation history messages are missing", ErrInvalidActionResult)
+	}
+	// Agent's current empty page is JSON null because page construction starts
+	// from a nil slice. The public ProductCore projection remains a stable [].
+	if rawMessages == nil {
+		return nil
+	}
+	messages, ok := actionObjectSlice(rawMessages)
 	if !ok {
 		return fmt.Errorf("%w: conversation history messages must be an array", ErrInvalidActionResult)
 	}
