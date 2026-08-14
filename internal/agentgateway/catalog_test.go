@@ -89,7 +89,7 @@ func TestArtifactDownloadCatalogPinsExactAgentSchemas(t *testing.T) {
 	}
 }
 
-func TestCloudWorkerExecutionCatalogPinsRecordKindSchemas(t *testing.T) {
+func TestCloudWorkerExecutionCatalogPinsRecordKindInputSchemas(t *testing.T) {
 	tests := []struct {
 		action, operation, input string
 	}{
@@ -105,7 +105,12 @@ func TestCloudWorkerExecutionCatalogPinsRecordKindSchemas(t *testing.T) {
 		t.Run(test.action, func(t *testing.T) {
 			descriptor := catalogTestDescriptor("agent.execution.v2", test.operation, test.input, `{"type":"object","additionalProperties":true}`)
 			catalog := catalogTestWithDigest(t, descriptor)
-			if err := ValidateCatalog(catalog, []CatalogRequirement{NewCatalogRequirement(test.action)}); err != nil {
+			requirement := NewCatalogRequirement(test.action)
+			// This focused fixture owns the record_kind request boundary only.
+			// Result projections are exercised through their typed adapter tests and
+			// the live Agent catalog instead of duplicating those large schemas here.
+			requirement.ResultSchemaDigest = append([]byte(nil), descriptor.Operations[0].ResultSchemaDigest...)
+			if err := ValidateCatalog(catalog, []CatalogRequirement{requirement}); err != nil {
 				t.Fatalf("current Agent Cloud Worker schema rejected: %v", err)
 			}
 		})
