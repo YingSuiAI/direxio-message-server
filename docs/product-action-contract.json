@@ -7359,7 +7359,14 @@
                   "type": "integer",
                   "presence": {
                     "omitted": "generic_execution_v2_reference",
-                    "present": "positive_integer_equal_to_prepared_permission_generation;required_with_task_id"
+                    "present": "positive_integer_equal_to_prepared_permission_generation;required_with_task_id_or_execution_artifact"
+                  }
+                },
+                "artifact_id": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "non_artifact_reference",
+                    "present": "canonical_uuid;required_for_execution_artifact"
                   }
                 },
                 "binding_digest": {
@@ -7417,7 +7424,7 @@
                   "type": "string",
                   "presence": {
                     "omitted": "generic_execution_v2_reference_or_non_run_cloud_worker_reference",
-                    "present": "canonical_uuid;required_for_cloud_worker_execution_run"
+                    "present": "canonical_uuid;required_for_cloud_worker_execution_run_or_execution_artifact"
                   }
                 },
                 "gate_type": {
@@ -7430,7 +7437,21 @@
                   "type": "string",
                   "required": true,
                   "presence": {
-                    "present": "one_of:room|channel_post|execution_plan|execution_run|execution_confirmation|service_binding"
+                    "present": "one_of:room|channel_post|execution_plan|execution_run|execution_confirmation|execution_artifact|service_binding"
+                  }
+                },
+                "media_type": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "non_artifact_reference",
+                    "present": "trimmed_media_type;utf8_bytes_1_to_255;required_for_execution_artifact"
+                  }
+                },
+                "name": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "non_artifact_reference",
+                    "present": "safe_relative_artifact_name;utf8_bytes_1_to_1024;required_for_execution_artifact"
                   }
                 },
                 "plan_digest": {
@@ -7480,6 +7501,13 @@
                     "present": "lowercase_sha256;generic_reference_only"
                   }
                 },
+                "record_kind": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "non_artifact_reference",
+                    "present": "exact:local_sandbox;required_for_execution_artifact"
+                  }
+                },
                 "risk_level": {
                   "type": "string",
                   "presence": {
@@ -7513,6 +7541,20 @@
                   "presence": {
                     "omitted": "non_run_reference",
                     "present": "positive_integer;required_for_execution_run"
+                  }
+                },
+                "sha256": {
+                  "type": "string",
+                  "presence": {
+                    "omitted": "non_artifact_reference",
+                    "present": "lowercase_sha256;required_for_execution_artifact"
+                  }
+                },
+                "size_bytes": {
+                  "type": "integer",
+                  "presence": {
+                    "omitted": "non_artifact_reference",
+                    "present": "integer_0_to_67108864;required_for_execution_artifact"
                   }
                 },
                 "stage_digest": {
@@ -7583,8 +7625,8 @@
               }
             },
             "presence": {
-              "omitted": "No room, channel-post, or Execution V2 references were produced.",
-              "present": "At most 32 strict server-authored references; Execution V2 references carry complete UUID/revision/digest linkage and grant no authority."
+              "omitted": "No room, channel-post, Execution V2, or execution-artifact references were produced.",
+              "present": "At most 32 strict server-authored references; execution and artifact references carry complete linkage metadata and grant no authority."
             }
           },
           "related_plan_ids": {
@@ -10461,7 +10503,312 @@
             "type": "object"
           },
           "messages": {
-            "type": "array"
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "content": {
+                  "type": "string",
+                  "required": true
+                },
+                "created_at": {
+                  "type": "string",
+                  "required": true
+                },
+                "message_id": {
+                  "type": "string",
+                  "required": true
+                },
+                "message_seq": {
+                  "type": "integer",
+                  "required": true
+                },
+                "references": {
+                  "type": "array",
+                  "required": true,
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "account_generation": {
+                        "type": "integer",
+                        "presence": {
+                          "omitted": "generic_execution_v2_reference",
+                          "present": "positive_integer_equal_to_prepared_permission_generation;required_with_task_id_or_execution_artifact"
+                        }
+                      },
+                      "artifact_id": {
+                        "type": "string",
+                        "presence": {
+                          "omitted": "non_artifact_reference",
+                          "present": "canonical_uuid;required_for_execution_artifact"
+                        }
+                      },
+                      "binding_digest": {
+                        "type": "string",
+                        "presence": {
+                          "omitted": "cloud_worker_reference",
+                          "present": "lowercase_sha256;generic_binding_only"
+                        }
+                      },
+                      "binding_id": {
+                        "type": "string",
+                        "presence": {
+                          "present": "canonical_uuid;service_binding_only"
+                        }
+                      },
+                      "binding_revision": {
+                        "type": "integer",
+                        "presence": {
+                          "present": "positive_integer;service_binding_only"
+                        }
+                      },
+                      "channel_id": {
+                        "type": "string",
+                        "presence": {
+                          "present": "required_for_channel_post"
+                        }
+                      },
+                      "confirmation_id": {
+                        "type": "string",
+                        "presence": {
+                          "present": "canonical_uuid;required_for_execution_confirmation"
+                        }
+                      },
+                      "confirmation_revision": {
+                        "type": "integer",
+                        "presence": {
+                          "omitted": "non_confirmation_reference",
+                          "present": "positive_integer;required_for_execution_confirmation"
+                        }
+                      },
+                      "deployment_id": {
+                        "type": "string",
+                        "presence": {
+                          "present": "canonical_uuid;generic_execution_run_or_service_binding_only"
+                        }
+                      },
+                      "execution_digest": {
+                        "type": "string",
+                        "presence": {
+                          "omitted": "cloud_worker_reference",
+                          "present": "lowercase_sha256;generic_reference_only"
+                        }
+                      },
+                      "execution_id": {
+                        "type": "string",
+                        "presence": {
+                          "omitted": "generic_execution_v2_reference_or_non_run_cloud_worker_reference",
+                          "present": "canonical_uuid;required_for_cloud_worker_execution_run_or_execution_artifact"
+                        }
+                      },
+                      "gate_type": {
+                        "type": "string",
+                        "presence": {
+                          "present": "bounded_128;full_generic_execution_confirmation_only"
+                        }
+                      },
+                      "kind": {
+                        "type": "string",
+                        "required": true,
+                        "presence": {
+                          "present": "one_of:room|channel_post|execution_plan|execution_run|execution_confirmation|execution_artifact|service_binding"
+                        }
+                      },
+                      "media_type": {
+                        "type": "string",
+                        "presence": {
+                          "omitted": "non_artifact_reference",
+                          "present": "trimmed_media_type;utf8_bytes_1_to_255;required_for_execution_artifact"
+                        }
+                      },
+                      "name": {
+                        "type": "string",
+                        "presence": {
+                          "omitted": "non_artifact_reference",
+                          "present": "safe_relative_artifact_name;utf8_bytes_1_to_1024;required_for_execution_artifact"
+                        }
+                      },
+                      "plan_digest": {
+                        "type": "string",
+                        "presence": {
+                          "omitted": "cloud_worker_reference",
+                          "present": "lowercase_sha256;generic_execution_reference_only"
+                        }
+                      },
+                      "plan_id": {
+                        "type": "string",
+                        "presence": {
+                          "present": "canonical_uuid;required_by_plan_linkage"
+                        }
+                      },
+                      "plan_revision": {
+                        "type": "integer",
+                        "presence": {
+                          "present": "positive_integer;required_by_plan_linkage"
+                        }
+                      },
+                      "post_id": {
+                        "type": "string",
+                        "presence": {
+                          "present": "required_for_channel_post"
+                        }
+                      },
+                      "preview": {
+                        "type": "string"
+                      },
+                      "preview_digest": {
+                        "type": "string",
+                        "presence": {
+                          "present": "lowercase_sha256;full_generic_execution_confirmation_only"
+                        }
+                      },
+                      "project_id": {
+                        "type": "string",
+                        "presence": {
+                          "present": "canonical_uuid;service_binding_only"
+                        }
+                      },
+                      "quote_digest": {
+                        "type": "string",
+                        "presence": {
+                          "omitted": "cloud_worker_reference",
+                          "present": "lowercase_sha256;generic_reference_only"
+                        }
+                      },
+                      "record_kind": {
+                        "type": "string",
+                        "presence": {
+                          "omitted": "non_artifact_reference",
+                          "present": "exact:local_sandbox;required_for_execution_artifact"
+                        }
+                      },
+                      "risk_level": {
+                        "type": "string",
+                        "presence": {
+                          "present": "bounded_16;full_generic_execution_confirmation_only"
+                        }
+                      },
+                      "room_id": {
+                        "type": "string",
+                        "presence": {
+                          "present": "required_for_room_or_channel_post"
+                        }
+                      },
+                      "room_type": {
+                        "type": "string"
+                      },
+                      "run_digest": {
+                        "type": "string",
+                        "presence": {
+                          "omitted": "cloud_worker_reference",
+                          "present": "lowercase_sha256;generic_execution_reference_only"
+                        }
+                      },
+                      "run_id": {
+                        "type": "string",
+                        "presence": {
+                          "present": "canonical_uuid;required_by_run_linkage"
+                        }
+                      },
+                      "run_revision": {
+                        "type": "integer",
+                        "presence": {
+                          "omitted": "non_run_reference",
+                          "present": "positive_integer;required_for_execution_run"
+                        }
+                      },
+                      "sha256": {
+                        "type": "string",
+                        "presence": {
+                          "omitted": "non_artifact_reference",
+                          "present": "lowercase_sha256;required_for_execution_artifact"
+                        }
+                      },
+                      "size_bytes": {
+                        "type": "integer",
+                        "presence": {
+                          "omitted": "non_artifact_reference",
+                          "present": "integer_0_to_67108864;required_for_execution_artifact"
+                        }
+                      },
+                      "stage_digest": {
+                        "type": "string",
+                        "presence": {
+                          "present": "lowercase_sha256;generic_execution_confirmation_only"
+                        }
+                      },
+                      "stage_id": {
+                        "type": "string",
+                        "presence": {
+                          "present": "canonical_uuid;generic_execution_confirmation_only"
+                        }
+                      },
+                      "stage_revision": {
+                        "type": "integer",
+                        "presence": {
+                          "present": "positive_integer;generic_execution_confirmation_only"
+                        }
+                      },
+                      "state": {
+                        "type": "string",
+                        "presence": {
+                          "present": "cloud_worker_confirmation_state_or_bounded_generic_confirmation_state"
+                        }
+                      },
+                      "status": {
+                        "type": "string",
+                        "presence": {
+                          "present": "cloud_worker_execution_state_or_bounded_generic_run_status"
+                        }
+                      },
+                      "target_digest": {
+                        "type": "string",
+                        "presence": {
+                          "present": "lowercase_sha256;generic_execution_confirmation_or_service_binding"
+                        }
+                      },
+                      "target_id": {
+                        "type": "string",
+                        "presence": {
+                          "present": "canonical_uuid;generic_execution_confirmation_or_service_binding"
+                        }
+                      },
+                      "target_revision": {
+                        "type": "integer",
+                        "presence": {
+                          "present": "positive_integer;generic_execution_confirmation_or_service_binding"
+                        }
+                      },
+                      "task_id": {
+                        "type": "string",
+                        "presence": {
+                          "omitted": "generic_execution_v2_reference",
+                          "present": "canonical_uuid;cloud_worker_reference"
+                        }
+                      },
+                      "title": {
+                        "type": "string"
+                      },
+                      "worker_id": {
+                        "type": "string",
+                        "presence": {
+                          "omitted": "non_run_or_unassigned_worker_reference",
+                          "present": "canonical_uuid;cloud_worker_execution_run_only"
+                        }
+                      }
+                    }
+                  }
+                },
+                "role": {
+                  "type": "string",
+                  "required": true
+                },
+                "status": {
+                  "type": "string",
+                  "required": true
+                }
+              }
+            }
           },
           "next_cursor": {
             "type": "string"

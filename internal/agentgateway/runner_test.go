@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -291,6 +292,18 @@ func TestNativeEventsFromResultProjectsCanonicalChatResponse(t *testing.T) {
 	}
 	if len(done["references"].([]any)) != 1 || len(done["related_task_ids"].([]any)) != 1 || len(done["related_plan_ids"].([]any)) != 1 {
 		t.Fatalf("done event did not promote server-authored linkage: %#v", done)
+	}
+}
+
+func TestNativeEventsFromResultProjectsExecutionArtifactReference(t *testing.T) {
+	reference := validExecutionArtifactReferenceForTest()
+	result, err := json.Marshal(durableChatResponseForTest("done", []any{reference}, nil, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := nativeEventsFromResult(result, 17, durableTestStartID, actionResultAuthority{ownerID: "@owner:example.test", accountGeneration: 7})
+	if err != nil || len(events) != 1 || !reflect.DeepEqual(events[0].Data["references"], []any{reference}) {
+		t.Fatalf("artifact result events=%#v err=%v", events, err)
 	}
 }
 

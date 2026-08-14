@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"math"
 	"net/url"
+	"path"
 	"reflect"
 	"sort"
 	"strings"
@@ -232,6 +233,8 @@ func validateActionResult(action string, request, output map[string]any, authori
 		return validateTurnSteerResult(request, output)
 	case "agent.chat.turns.list":
 		return validateTurnsListResult(output)
+	case "agent.chat.conversations.get":
+		return validateConversationHistoryReferences(output, authority)
 	case "agent.core.mcp.get", "agent.core.mcp.list", "agent.core.mcp.install", "agent.core.mcp.update", "agent.core.mcp.remove":
 		if err := validateCurrentAgentResultShape(action, output); err != nil {
 			return err
@@ -1439,6 +1442,9 @@ const (
 	maxReferenceRoomType = 128
 	maxReferenceTitle    = 512
 	maxReferencePreview  = 4096
+	maxArtifactNameBytes = 1024
+	maxArtifactMediaType = 255
+	maxArtifactSizeBytes = 64 << 20
 )
 
 var chatReferenceFields = map[string]struct{}{
@@ -1450,8 +1456,9 @@ var chatReferenceFields = map[string]struct{}{
 	"preview_digest": {}, "binding_digest": {}, "quote_digest": {},
 	"execution_digest": {}, "risk_level": {}, "gate_type": {}, "binding_id": {},
 	"binding_revision": {}, "project_id": {}, "status": {}, "state": {},
-	"worker_id": {},
-	"room_id":   {}, "room_type": {}, "channel_id": {}, "post_id": {}, "title": {},
+	"worker_id":   {},
+	"record_kind": {}, "artifact_id": {}, "name": {}, "media_type": {}, "size_bytes": {}, "sha256": {},
+	"room_id": {}, "room_type": {}, "channel_id": {}, "post_id": {}, "title": {},
 	"preview": {},
 }
 
@@ -1614,6 +1621,23 @@ func validateCanonicalChatLinkage(value map[string]any, authority actionResultAu
 	return nil
 }
 
+func validateConversationHistoryReferences(output map[string]any, authority actionResultAuthority) error {
+	messages, ok := actionObjectSlice(output["messages"])
+	if !ok {
+		return fmt.Errorf("%w: conversation history messages must be an array", ErrInvalidActionResult)
+	}
+	for index, message := range messages {
+		references, present := message["references"]
+		if !present {
+			return fmt.Errorf("%w: conversation history message %d references are missing", ErrInvalidActionResult, index)
+		}
+		if err := validateCanonicalChatLinkage(map[string]any{"references": references}, authority); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func chatReferenceKey(reference map[string]any) string {
 	normalized := map[string]any{"kind": reference["kind"]}
 	for _, field := range []string{
@@ -1622,7 +1646,7 @@ func chatReferenceKey(reference map[string]any) string {
 		"target_digest", "preview_digest", "binding_digest", "quote_digest",
 		"execution_digest", "risk_level", "gate_type", "binding_id", "project_id", "worker_id",
 		"status", "state", "room_id", "room_type", "channel_id", "post_id", "title",
-		"preview",
+		"preview", "record_kind", "artifact_id", "name", "media_type", "sha256",
 	} {
 		if value, ok := reference[field].(string); ok && value != "" {
 			normalized[field] = value
@@ -1631,6 +1655,7 @@ func chatReferenceKey(reference map[string]any) string {
 	for _, field := range []string{
 		"account_generation", "plan_revision", "run_revision", "confirmation_revision",
 		"stage_revision", "target_revision", "binding_revision",
+		"size_bytes",
 	} {
 		if value, ok := turnInt64(reference[field]); ok && value != 0 {
 			normalized[field] = value
@@ -1671,11 +1696,34 @@ func validChatReference(reference map[string]any, authority actionResultAuthorit
 			return validCloudWorkerChatReference(reference, kind, authority)
 		}
 		return validGenericExecutionChatReference(reference, kind)
+	case "execution_artifact":
+		return validExecutionArtifactChatReference(reference, authority)
 	case "service_binding":
 		return validServiceBindingChatReference(reference)
 	default:
 		return false
 	}
+}
+
+func validExecutionArtifactChatReference(reference map[string]any, authority actionResultAuthority) bool {
+	if len(reference) != 9 || !authority.valid() {
+		return false
+	}
+	generation, generationOK := turnInt64(reference["account_generation"])
+	size, sizeOK := turnInt64(reference["size_bytes"])
+	name, nameOK := reference["name"].(string)
+	mediaType, mediaTypeOK := reference["media_type"].(string)
+	return generationOK && generation == authority.accountGeneration &&
+		reference["record_kind"] == "local_sandbox" && canonicalTurnUUID(reference["artifact_id"]) && canonicalTurnUUID(reference["execution_id"]) &&
+		nameOK && validArtifactReferenceName(name) && mediaTypeOK && mediaType != "" && mediaType == strings.TrimSpace(mediaType) &&
+		len(mediaType) <= maxArtifactMediaType && utf8.ValidString(mediaType) && !strings.ContainsAny(mediaType, "\r\n\x00") &&
+		sizeOK && size >= 0 && size <= maxArtifactSizeBytes && validReferenceDigest(reference["sha256"])
+}
+
+func validArtifactReferenceName(name string) bool {
+	return name != "" && name == strings.TrimSpace(name) && len(name) <= maxArtifactNameBytes && utf8.ValidString(name) &&
+		!path.IsAbs(name) && path.Clean(name) == name && name != "." && !strings.HasPrefix(name, "../") &&
+		!strings.ContainsAny(name, "\\\r\n\x00")
 }
 
 func validCloudWorkerChatReference(reference map[string]any, kind string, authority actionResultAuthority) bool {
@@ -1689,7 +1737,8 @@ func validCloudWorkerChatReference(reference map[string]any, kind string, author
 		"plan_digest", "run_digest", "deployment_id",
 		"stage_id", "stage_revision", "stage_digest", "target_id", "target_revision", "target_digest",
 		"preview_digest", "binding_digest", "quote_digest", "execution_digest", "risk_level",
-		"gate_type", "binding_id", "binding_revision", "project_id") {
+		"gate_type", "binding_id", "binding_revision", "project_id",
+		"record_kind", "artifact_id", "name", "media_type", "size_bytes", "sha256") {
 		return false
 	}
 	switch kind {
@@ -1811,6 +1860,7 @@ func validOptionalReferenceString(value any, limit int) bool {
 func noCloudReferenceFields(reference map[string]any) bool {
 	for _, field := range []string{
 		"account_generation", "task_id", "execution_id", "quote_digest", "execution_digest", "worker_id",
+		"record_kind", "artifact_id", "name", "media_type", "size_bytes", "sha256",
 	} {
 		if !zeroReferenceValue(reference, field) {
 			return false
@@ -1826,7 +1876,8 @@ func noExecutionReferenceFields(reference map[string]any) bool {
 		"confirmation_id", "confirmation_revision", "stage_id", "stage_revision", "stage_digest",
 		"target_id", "target_revision", "target_digest", "preview_digest", "binding_digest",
 		"quote_digest", "execution_digest", "risk_level", "gate_type", "binding_id",
-		"binding_revision", "project_id", "worker_id", "status", "state")
+		"binding_revision", "project_id", "worker_id", "status", "state",
+		"record_kind", "artifact_id", "name", "media_type", "size_bytes", "sha256")
 }
 
 func zeroReferenceValue(reference map[string]any, field string) bool {

@@ -35,7 +35,7 @@ func TestPublicResultAdaptersProjectCanonicalCapabilityResults(t *testing.T) {
 				t.Fatalf("conversation create = %#v", got)
 			}
 		}},
-		{"conversation get", "agent.chat.conversations.get", map[string]any{"conversation": map[string]any{"conversation_id": "c1"}, "messages": []any{map[string]any{"role": "user"}}, "next_page_token": "next"}, func(t *testing.T, got map[string]any) {
+		{"conversation get", "agent.chat.conversations.get", map[string]any{"conversation": map[string]any{"conversation_id": "c1"}, "messages": []any{map[string]any{"role": "user", "references": []any{}}}, "next_page_token": "next"}, func(t *testing.T, got map[string]any) {
 			if _, ok := got["conversation"]; !ok || got["next_cursor"] != "next" || len(got["messages"].([]any)) != 1 {
 				t.Fatalf("conversation get = %#v", got)
 			}
@@ -414,6 +414,59 @@ func TestChatResultRejectsCloudWorkerReferenceFromForeignGeneration(t *testing.T
 	}
 }
 
+func TestChatAndHistoryPreserveExecutionArtifactReference(t *testing.T) {
+	reference := validExecutionArtifactReferenceForTest()
+	authority := actionResultAuthority{ownerID: "@owner:example.test", accountGeneration: 7}
+	chat, err := adaptActionResultForRequestWithAuthority(
+		"agent.chat", nil, canonicalChatResponseForTest("done", []any{reference}, nil, nil), authority,
+	)
+	if err != nil || !reflect.DeepEqual(chat["references"], []any{reference}) {
+		t.Fatalf("artifact chat projection=%#v err=%v", chat, err)
+	}
+	historyResult := map[string]any{
+		"conversation": map[string]any{"conversation_id": "22222222-2222-4222-8222-222222222222"},
+		"messages": []any{map[string]any{
+			"message_id": "33333333-3333-4333-8333-333333333333", "role": "assistant", "content": "done",
+			"created_at": "2026-08-15T00:00:00Z", "message_seq": float64(2), "status": "done", "references": []any{reference},
+		}},
+		"next_page_token": "",
+	}
+	history, err := adaptActionResultForRequestWithAuthority("agent.chat.conversations.get", nil, historyResult, authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages := history["messages"].([]any)
+	if !reflect.DeepEqual(messages[0].(map[string]any)["references"], []any{reference}) {
+		t.Fatalf("artifact history projection=%#v", history)
+	}
+}
+
+func TestExecutionArtifactReferenceRejectsShapeAndAuthorityDrift(t *testing.T) {
+	authority := actionResultAuthority{ownerID: "@owner:example.test", accountGeneration: 7}
+	valid := validExecutionArtifactReferenceForTest()
+	for name, mutate := range map[string]func(map[string]any){
+		"foreign generation": func(value map[string]any) { value["account_generation"] = float64(8) },
+		"cloud worker kind":  func(value map[string]any) { value["record_kind"] = "cloud_worker" },
+		"missing size":       func(value map[string]any) { delete(value, "size_bytes") },
+		"unsafe name":        func(value map[string]any) { value["name"] = "../secret" },
+		"bad media type":     func(value map[string]any) { value["media_type"] = "text/html\r\nsecret" },
+		"oversize":           func(value map[string]any) { value["size_bytes"] = float64((64 << 20) + 1) },
+		"bad digest":         func(value map[string]any) { value["sha256"] = "ABC" },
+		"cross-kind field":   func(value map[string]any) { value["task_id"] = "44444444-4444-4444-8444-444444444444" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			reference := withReferenceField(valid, "kind", valid["kind"])
+			mutate(reference)
+			_, err := adaptActionResultForRequestWithAuthority(
+				"agent.chat", nil, canonicalChatResponseForTest("done", []any{reference}, nil, nil), authority,
+			)
+			if !errors.Is(err, ErrInvalidActionResult) {
+				t.Fatalf("invalid artifact reference accepted: %v", err)
+			}
+		})
+	}
+}
+
 func TestChatResultRejectsMalformedReferencesAndRelatedIDs(t *testing.T) {
 	valid := validExecutionReferenceForTest()
 	tests := []struct {
@@ -455,6 +508,14 @@ func validExecutionReferenceForTest() map[string]any {
 		"plan_id":            "22222222-2222-4222-8222-222222222222",
 		"plan_revision":      float64(3),
 		"status":             "waiting_user",
+	}
+}
+
+func validExecutionArtifactReferenceForTest() map[string]any {
+	return map[string]any{
+		"kind": "execution_artifact", "account_generation": float64(7), "record_kind": "local_sandbox",
+		"artifact_id": "55555555-5555-4555-8555-555555555555", "execution_id": "66666666-6666-4666-8666-666666666666",
+		"name": "report/index.html", "media_type": "text/html", "size_bytes": float64(0), "sha256": strings.Repeat("a", 64),
 	}
 }
 

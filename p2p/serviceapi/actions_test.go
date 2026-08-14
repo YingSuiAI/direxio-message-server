@@ -326,6 +326,8 @@ func TestNativeAgentReferenceSchemaMatchesStrictProducerShape(t *testing.T) {
 		"gate_type": true, "binding_id": true, "binding_revision": true,
 		"project_id": true, "status": true, "state": true, "room_id": true,
 		"room_type": true, "title": true, "preview": true, "channel_id": true, "post_id": true,
+		"record_kind": true, "artifact_id": true, "name": true, "media_type": true,
+		"size_bytes": true, "sha256": true,
 	}
 	for _, action := range []string{"agent.chat"} {
 		spec, ok := ActionSpecFor(action)
@@ -346,7 +348,7 @@ func TestNativeAgentReferenceSchemaMatchesStrictProducerShape(t *testing.T) {
 			}
 		}
 		kind := field.Items.Properties["kind"]
-		if !kind.Required || kind.Presence == nil || kind.Presence.Present != "one_of:room|channel_post|execution_plan|execution_run|execution_confirmation|service_binding" {
+		if !kind.Required || kind.Presence == nil || kind.Presence.Present != "one_of:room|channel_post|execution_plan|execution_run|execution_confirmation|execution_artifact|service_binding" {
 			t.Errorf("%s reference kind schema = %#v", action, kind)
 		}
 		taskID := field.Items.Properties["task_id"]
@@ -357,7 +359,7 @@ func TestNativeAgentReferenceSchemaMatchesStrictProducerShape(t *testing.T) {
 		if roomID.Required || roomID.Presence == nil || roomID.Presence.Present != "required_for_room_or_channel_post" {
 			t.Errorf("%s reference room_id must be conditionally required: %#v", action, roomID)
 		}
-		if field.Presence == nil || field.Presence.Omitted != "No room, channel-post, or Execution V2 references were produced." {
+		if field.Presence == nil || field.Presence.Omitted != "No room, channel-post, Execution V2, or execution-artifact references were produced." {
 			t.Errorf("%s reference presence = %#v", action, field.Presence)
 		}
 		for _, name := range []string{"related_task_ids", "related_plan_ids"} {
@@ -366,6 +368,14 @@ func TestNativeAgentReferenceSchemaMatchesStrictProducerShape(t *testing.T) {
 				t.Errorf("%s %s schema = %#v", action, name, related)
 			}
 		}
+	}
+	history, _ := ActionSpecFor("agent.chat.conversations.get")
+	messages := history.Schema.Response["messages"]
+	if messages.Items == nil || messages.Items.Properties["references"].Items == nil {
+		t.Fatalf("conversation history reference schema = %#v", messages)
+	}
+	if got := messages.Items.Properties["references"].Items.Properties["record_kind"]; got.Presence == nil || got.Presence.Present != "exact:local_sandbox;required_for_execution_artifact" {
+		t.Fatalf("conversation history artifact record kind = %#v", got)
 	}
 }
 

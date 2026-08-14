@@ -1,12 +1,12 @@
 package serviceapi
 
-func nativeAgentChatSchema(acceptsAttachments bool) *ActionSchema {
-	reference := &ActionFieldSchema{Type: "object", Properties: map[string]ActionFieldSchema{
-		"kind": {Type: "string", Required: true, Presence: &ActionPresenceSchema{Present: "one_of:room|channel_post|execution_plan|execution_run|execution_confirmation|service_binding"}},
+func nativeAgentReferenceSchema() *ActionFieldSchema {
+	return &ActionFieldSchema{Type: "object", Properties: map[string]ActionFieldSchema{
+		"kind": {Type: "string", Required: true, Presence: &ActionPresenceSchema{Present: "one_of:room|channel_post|execution_plan|execution_run|execution_confirmation|execution_artifact|service_binding"}},
 		// task_id is the only Cloud Worker discriminator. Without it the
 		// original generic Execution V2 informational schemas remain in force.
 		"task_id":            {Type: "string", Presence: &ActionPresenceSchema{Omitted: "generic_execution_v2_reference", Present: "canonical_uuid;cloud_worker_reference"}},
-		"account_generation": {Type: "integer", Presence: &ActionPresenceSchema{Omitted: "generic_execution_v2_reference", Present: "positive_integer_equal_to_prepared_permission_generation;required_with_task_id"}},
+		"account_generation": {Type: "integer", Presence: &ActionPresenceSchema{Omitted: "generic_execution_v2_reference", Present: "positive_integer_equal_to_prepared_permission_generation;required_with_task_id_or_execution_artifact"}},
 		"plan_id":            {Type: "string", Presence: &ActionPresenceSchema{Present: "canonical_uuid;required_by_plan_linkage"}},
 		"plan_revision":      {Type: "integer", Presence: &ActionPresenceSchema{Present: "positive_integer;required_by_plan_linkage"}},
 		"plan_digest":        {Type: "string", Presence: &ActionPresenceSchema{Omitted: "cloud_worker_reference", Present: "lowercase_sha256;generic_execution_reference_only"}},
@@ -14,7 +14,7 @@ func nativeAgentChatSchema(acceptsAttachments bool) *ActionSchema {
 		"run_revision":       {Type: "integer", Presence: &ActionPresenceSchema{Omitted: "non_run_reference", Present: "positive_integer;required_for_execution_run"}},
 		"run_digest":         {Type: "string", Presence: &ActionPresenceSchema{Omitted: "cloud_worker_reference", Present: "lowercase_sha256;generic_execution_reference_only"}},
 		"deployment_id":      {Type: "string", Presence: &ActionPresenceSchema{Present: "canonical_uuid;generic_execution_run_or_service_binding_only"}},
-		"execution_id":       {Type: "string", Presence: &ActionPresenceSchema{Omitted: "generic_execution_v2_reference_or_non_run_cloud_worker_reference", Present: "canonical_uuid;required_for_cloud_worker_execution_run"}},
+		"execution_id":       {Type: "string", Presence: &ActionPresenceSchema{Omitted: "generic_execution_v2_reference_or_non_run_cloud_worker_reference", Present: "canonical_uuid;required_for_cloud_worker_execution_run_or_execution_artifact"}},
 		"worker_id":          {Type: "string", Presence: &ActionPresenceSchema{Omitted: "non_run_or_unassigned_worker_reference", Present: "canonical_uuid;cloud_worker_execution_run_only"}},
 		"confirmation_id":    {Type: "string", Presence: &ActionPresenceSchema{Present: "canonical_uuid;required_for_execution_confirmation"}},
 		"confirmation_revision": {Type: "integer", Presence: &ActionPresenceSchema{
@@ -43,7 +43,17 @@ func nativeAgentChatSchema(acceptsAttachments bool) *ActionSchema {
 		"post_id":          {Type: "string", Presence: &ActionPresenceSchema{Present: "required_for_channel_post"}},
 		"title":            {Type: "string"},
 		"preview":          {Type: "string"},
+		"record_kind":      {Type: "string", Presence: &ActionPresenceSchema{Omitted: "non_artifact_reference", Present: "exact:local_sandbox;required_for_execution_artifact"}},
+		"artifact_id":      {Type: "string", Presence: &ActionPresenceSchema{Omitted: "non_artifact_reference", Present: "canonical_uuid;required_for_execution_artifact"}},
+		"name":             {Type: "string", Presence: &ActionPresenceSchema{Omitted: "non_artifact_reference", Present: "safe_relative_artifact_name;utf8_bytes_1_to_1024;required_for_execution_artifact"}},
+		"media_type":       {Type: "string", Presence: &ActionPresenceSchema{Omitted: "non_artifact_reference", Present: "trimmed_media_type;utf8_bytes_1_to_255;required_for_execution_artifact"}},
+		"size_bytes":       {Type: "integer", Presence: &ActionPresenceSchema{Omitted: "non_artifact_reference", Present: "integer_0_to_67108864;required_for_execution_artifact"}},
+		"sha256":           {Type: "string", Presence: &ActionPresenceSchema{Omitted: "non_artifact_reference", Present: "lowercase_sha256;required_for_execution_artifact"}},
 	}}
+}
+
+func nativeAgentChatSchema(acceptsAttachments bool) *ActionSchema {
+	reference := nativeAgentReferenceSchema()
 	canonicalUUIDArray := &ActionFieldSchema{Type: "string", Presence: &ActionPresenceSchema{Present: "canonical_uuid"}}
 	request := map[string]ActionFieldSchema{
 		"idempotency_key":        {Type: "string", Required: true, Presence: &ActionPresenceSchema{Present: "canonical_uuid"}},
@@ -92,8 +102,8 @@ func nativeAgentChatSchema(acceptsAttachments bool) *ActionSchema {
 			Present: "At most 32 server-authored canonical UUIDs; never synthesized from references.",
 		}},
 		"references": {Type: "array", Items: reference, Presence: &ActionPresenceSchema{
-			Omitted: "No room, channel-post, or Execution V2 references were produced.",
-			Present: "At most 32 strict server-authored references; Execution V2 references carry complete UUID/revision/digest linkage and grant no authority.",
+			Omitted: "No room, channel-post, Execution V2, or execution-artifact references were produced.",
+			Present: "At most 32 strict server-authored references; execution and artifact references carry complete linkage metadata and grant no authority.",
 		}},
 	}}
 }

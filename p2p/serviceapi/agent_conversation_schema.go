@@ -19,7 +19,13 @@ func conversationSchema(action string) *ActionSchema {
 	case "list":
 		s.Response = map[string]ActionFieldSchema{"conversations": {Type: "array"}, "next_cursor": {Type: "string"}}
 	case "get":
-		s.Response = map[string]ActionFieldSchema{"conversation": {Type: "object"}, "messages": {Type: "array"}, "next_cursor": {Type: "string"}}
+		message := &ActionFieldSchema{Type: "object", Properties: map[string]ActionFieldSchema{
+			"message_id": {Type: "string", Required: true}, "role": {Type: "string", Required: true},
+			"content": {Type: "string", Required: true}, "created_at": {Type: "string", Required: true},
+			"message_seq": {Type: "integer", Required: true}, "status": {Type: "string", Required: true},
+			"references": {Type: "array", Required: true, Items: nativeAgentReferenceSchema()},
+		}}
+		s.Response = map[string]ActionFieldSchema{"conversation": {Type: "object"}, "messages": {Type: "array", Items: message}, "next_cursor": {Type: "string"}}
 	default:
 		s.Response = map[string]ActionFieldSchema{"conversation": {Type: "object"}, "replayed": {Type: "boolean"}}
 	}

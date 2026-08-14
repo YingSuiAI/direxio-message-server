@@ -262,6 +262,14 @@ revision, and state. Cloud Worker references contain no cross-kind fields or dig
 Execution V2 references retain their separate schema. Message Server does not
 manufacture, weaken, or use a reference as authorization.
 
+A completed local sandbox tool may add one durable `execution_artifact`
+reference to unary chat, terminal stream, and reconstructed conversation
+history. Its exact public fields are `kind`, prepared `account_generation`,
+`record_kind=local_sandbox`, artifact and execution UUIDs, safe relative name,
+media type, size, and SHA-256. Message Server validates and forwards this
+server-authored reference without reconstructing storage identity or bytes;
+Flutter uses it only to call the authenticated Execution V2 artifact actions.
+
 For `record_kind=cloud_worker`, plan and run reads use closed provider-neutral
 projections. Plans expose the owner and request linkage, reusable-Worker
 preference, workspace, AWS account/region, compute/runtime request, one live
