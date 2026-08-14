@@ -3,16 +3,16 @@ set -euo pipefail
 
 script_dir=$(cd -- "$(dirname -- "$0")" && pwd -P)
 script=$script_dir/accept-existing-local-batch.sh
-helper=$script_dir/internal/accept-existing-ws/main.go
+helper=$script_dir/internal/accept-existing-sse/main.go
 [ -x "$script" ]
 bash -n "$script"
 test -z "$(gofmt -d "$helper")"
-go test ./deploy/split-agent/scripts/internal/accept-existing-ws
+go test ./deploy/split-agent/scripts/internal/accept-existing-sse
 for required in \
   'set -uo pipefail' \
   'run_group skills_mcp' \
   'run_group http_chat' \
-  'run_group ws_stream_reconnect' \
+  'run_group sse_stream_reconnect' \
   'run_group durable_failed_history' \
   'run_group memory_ambiguous_readback' \
   'run_group static_site_lifecycle' \
@@ -26,7 +26,6 @@ for required in \
   grep -Fq -- "$required" "$script"
 done
 [ "$(grep -Fc 'stop_after_accepted:true' "$script")" -eq 1 ]
-[ "$(grep -Fc 'stop_after_reconnect:true' "$script")" -eq 1 ]
 [ "$(grep -Fc 'agent.chat.turn.stop' "$helper")" -eq 1 ]
 profile_filter='[.profiles[]? | select(.model_kind=="conversation" and .api_key_configured==true) | select($model=="" or .model==$model)] | first // empty'
 profiles='{"profiles":[{"model":"embedding","model_kind":"embedding","api_key_configured":true},{"model":"configured-chat","model_kind":"conversation","api_key_configured":true}]}'
@@ -34,7 +33,6 @@ profiles='{"profiles":[{"model":"embedding","model_kind":"embedding","api_key_co
 [ "$(jq -cr --arg model configured-chat "$profile_filter" <<<"$profiles" | jq -r '.model')" = configured-chat ]
 [ -z "$(jq -cr --arg model missing "$profile_filter" <<<"$profiles")" ]
 [ "$(grep -Fc 'run_group static_site_lifecycle static_site_group' "$script")" -eq 1 ]
-grep -Fq 'client.native_agent_stream' "$helper"
 grep -Fq 'after_seq' "$helper"
 static_group=$(sed -n '/^static_site_group() {/,/^}/p' "$script")
 for required in \
@@ -48,7 +46,7 @@ for required in \
   grep -Fq -- "$required" <<<"$static_group"
 done
 if grep -Fq 'call_http agent.chat ' <<<"$static_group"; then
-  echo 'static-site acceptance bypasses the durable Native WS helper' >&2
+  echo 'static-site acceptance bypasses the durable Native SSE helper' >&2
   exit 1
 fi
 terminal_text_filter='[.[] | select(.event=="done") | (.data.text // empty) | select(type=="string" and length>0)] | last // empty'

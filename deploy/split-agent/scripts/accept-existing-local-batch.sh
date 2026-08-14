@@ -168,19 +168,19 @@ http_chat_group() {
   jq -e '.text|contains("BATCH_HTTP_OK")' "$last_response" >/dev/null
 }
 
-ws_reconnect_group() {
+sse_reconnect_group() {
   local profile conversation params config frames
   profile=$(profile_json "$chat_model"); [ -n "$profile" ] || return 1
   conversation=$(uuid4); owned_conversations+=("$conversation")
-  create_conversation "$conversation" "Batch WS reconnect" || return 1
-  params=$(chat_params "$profile" "$conversation" "$(uuid4)" 'Reply with exactly BATCH_WS_OK')
-  config=$out/ws-reconnect-config.json; frames=$out/ws-reconnect.frames.jsonl
+  create_conversation "$conversation" "Batch SSE reconnect" || return 1
+  params=$(chat_params "$profile" "$conversation" "$(uuid4)" 'Reply with exactly BATCH_SSE_OK')
+  config=$out/sse-reconnect-config.json; frames=$out/sse-reconnect.frames.jsonl
   jq -n --arg base "$http_base" --arg session "$session" --argjson params "$params" --arg output "$frames" \
-    '{http_base:$base,session_file:$session,params:$params,expect:"done",reconnect:true,stop_after_reconnect:true,output_file:$output}' >"$config"
+    '{http_base:$base,session_file:$session,params:$params,expect:"done",reconnect:true,output_file:$output}' >"$config"
   seal "$config"
-  go run "$script_dir/internal/accept-existing-ws" "$config" || return 1
+  go run "$script_dir/internal/accept-existing-sse" "$config" || return 1
   seal "$frames"
-  jq -s -e 'any(.[]; .type=="server.native_agent_stream.accepted") and ([.[] | (.seq // 0)] | max) > ([.[] | select(.type=="server.native_agent_stream.accepted") | .seq] | first)' "$frames" >/dev/null
+  jq -s -e 'any(.[]; .event=="accepted") and ([.[] | (.seq // 0)] | max) > ([.[] | select(.event=="accepted") | .seq] | first)' "$frames" >/dev/null
 }
 
 failed_history_group() {
@@ -189,13 +189,13 @@ failed_history_group() {
   conversation=$(uuid4); owned_conversations+=("$conversation")
   create_conversation "$conversation" "Batch durable cancellation" || return 1
   params=$(chat_params "$profile" "$conversation" "$(uuid4)" 'Write a detailed response until this acceptance run cancels the durable turn.')
-  config=$out/ws-failure-config.json; frames=$out/ws-failure.frames.jsonl
+  config=$out/sse-failure-config.json; frames=$out/sse-failure.frames.jsonl
   jq -n --arg base "$http_base" --arg session "$session" --argjson params "$params" --arg output "$frames" \
     '{http_base:$base,session_file:$session,params:$params,expect:"error",reconnect:false,stop_after_accepted:true,output_file:$output}' >"$config"
   seal "$config"
-  go run "$script_dir/internal/accept-existing-ws" "$config" || return 1
+  go run "$script_dir/internal/accept-existing-sse" "$config" || return 1
   seal "$frames"
-  jq -s -e 'any(.[]; .event=="error" and .error_code=="canceled")' "$frames" >/dev/null || return 1
+  jq -s -e 'any(.[]; .event=="error" and .data.error_code=="canceled")' "$frames" >/dev/null || return 1
   call_http agent.chat.conversations.get "$(jq -cn --arg id "$conversation" '{conversation_id:$id,message_limit:100}')" failed-conversation-get || return 1
   jq -e --arg id "$conversation" '.conversation.conversation_id==$id' "$last_response" >/dev/null || return 1
   call_http agent.chat.turns.list "$(jq -cn --arg id "$conversation" '{conversation_id:$id,limit:100}')" failed-turns-list || return 1
@@ -245,7 +245,7 @@ static_site_group() {
   jq -n --arg base "$http_base" --arg session "$session" --argjson params "$params" --arg output "$frames" \
     '{http_base:$base,session_file:$session,params:$params,expect:"done",reconnect:false,output_file:$output}' >"$config" || return 1
   seal "$config"
-  go run "$script_dir/internal/accept-existing-ws" "$config" || return 1
+  go run "$script_dir/internal/accept-existing-sse" "$config" || return 1
   seal "$frames"
   published_text=$(jq -rs '[.[] | select(.event=="done") | (.data.text // empty) | select(type=="string" and length>0)] | last // empty' "$frames")
   [ -n "$published_text" ] || return 1
@@ -275,7 +275,7 @@ record bootstrap PASS "owner session created"
 run_group identity identity_group
 run_group skills_mcp skills_mcp_group
 run_group http_chat http_chat_group
-run_group ws_stream_reconnect ws_reconnect_group
+run_group sse_stream_reconnect sse_reconnect_group
 run_group durable_failed_history failed_history_group
 run_group memory_ambiguous_readback memory_readback_group
 run_group static_site_lifecycle static_site_group
