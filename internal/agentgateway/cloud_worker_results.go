@@ -526,12 +526,19 @@ func validateCloudCompute(value any) error {
 
 func validateCloudLimits(value any) error {
 	object, ok := value.(map[string]any)
-	if !ok || cloudExact(object, []string{"max_runtime_seconds", "max_tokens", "max_output_bytes"}, nil, "limits") != nil {
+	if !ok || cloudExact(object, []string{"max_runtime_seconds", "max_output_bytes"}, []string{"max_tokens"}, "limits") != nil {
 		return cloudWorkerResultError("limits are invalid")
 	}
-	for _, key := range []string{"max_runtime_seconds", "max_tokens", "max_output_bytes"} {
+	for _, key := range []string{"max_runtime_seconds", "max_output_bytes"} {
 		if number, ok := cloudInteger(object[key]); !ok || number <= 0 {
 			return cloudWorkerResultError("limit %s is invalid", key)
+		}
+	}
+	// New Plans have no cumulative model-token allowance. A positive value is
+	// accepted only so signed historical Plans remain readable.
+	if value, present := object["max_tokens"]; present {
+		if number, ok := cloudInteger(value); !ok || number <= 0 {
+			return cloudWorkerResultError("limit max_tokens is invalid")
 		}
 	}
 	return nil

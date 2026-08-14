@@ -48,7 +48,6 @@
     },
     "limits": {
       "max_runtime_seconds": 3600,
-      "max_tokens": 2000,
       "max_output_bytes": 1048576
     },
     "network_grants": [

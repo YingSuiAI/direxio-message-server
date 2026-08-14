@@ -102,6 +102,43 @@ func TestCloudWorkerPlanAcceptsCentralDelegation(t *testing.T) {
 	}
 }
 
+func TestCloudWorkerPlanAcceptsNoCumulativeTokenBudget(t *testing.T) {
+	fixture := loadCloudWorkerPublicFixture(t)
+	plan := cloneParams(fixture.Plan)
+	limits := cloneParams(plan["limits"].(map[string]any))
+	delete(limits, "max_tokens")
+	plan["limits"] = limits
+	request := cloudWorkerRequest("plan_id", plan["plan_id"])
+	if _, err := adaptActionResultForRequestWithAuthority(
+		"agent.execution.v2.plans.get",
+		request,
+		map[string]any{"plan": plan},
+		cloudWorkerFixtureAuthority(t, fixture),
+	); err != nil {
+		t.Fatalf("unbounded Plan rejected: %v", err)
+	}
+
+	limits["max_tokens"] = float64(2000)
+	if _, err := adaptActionResultForRequestWithAuthority(
+		"agent.execution.v2.plans.get",
+		request,
+		map[string]any{"plan": plan},
+		cloudWorkerFixtureAuthority(t, fixture),
+	); err != nil {
+		t.Fatalf("positive legacy max_tokens rejected: %v", err)
+	}
+
+	limits["max_tokens"] = float64(0)
+	if _, err := adaptActionResultForRequestWithAuthority(
+		"agent.execution.v2.plans.get",
+		request,
+		map[string]any{"plan": plan},
+		cloudWorkerFixtureAuthority(t, fixture),
+	); !errors.Is(err, ErrInvalidActionResult) {
+		t.Fatalf("zero-valued legacy max_tokens accepted: %v", err)
+	}
+}
+
 func TestCloudWorkerRunEventsPinBoundedSecretFreeProgressAndCursor(t *testing.T) {
 	fixture := loadCloudWorkerPublicFixture(t)
 	authority := cloudWorkerFixtureAuthority(t, fixture)
