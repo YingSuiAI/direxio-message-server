@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v1.1.52
+
+1. Refresh the Agent config material volume after removing the retired AWS key, and rematerialize the original config during rollback.
+
 ## v1.1.51
 
 1. Remove the retired `core_aws_enabled` key transactionally during existing-node Agent upgrades and restore the original config if the update fails.

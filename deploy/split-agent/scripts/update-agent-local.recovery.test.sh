@@ -124,16 +124,26 @@ case "${1:-}" in
         fi
         ;;
       run)
-        grep -Fqx 'DIREXTALK_AGENT_VERSION=v1.0.90' "$DOCKER_FIXTURE_OUT/.env"
-        grep -Fqx "DIREXTALK_AGENT_SOURCE_REVISION=$REVISION_90" "$DOCKER_FIXTURE_OUT/.env"
-        grep -Fqx "container.1.id=$LIVE_AGENT_ID" "$DOCKER_FIXTURE_OUT/.cleanup-receipt"
-        grep -Fqx "container.2.id=$LIVE_EXTENSION_ID" "$DOCKER_FIXTURE_OUT/.cleanup-receipt"
-        grep -Fqx "container.3.id=$LIVE_CORE_ID" "$DOCKER_FIXTURE_OUT/.cleanup-receipt"
-        env_identity=$(stat -c '%d:%i:%u' "$DOCKER_FIXTURE_OUT/.env")
-        env_sha=$(sha256sum "$DOCKER_FIXTURE_OUT/.env" | awk '{print $1}')
-        grep -Fqx "control.env_identity=$env_identity" "$DOCKER_FIXTURE_OUT/.cleanup-receipt"
-        grep -Fqx "control.env_sha256=$env_sha" "$DOCKER_FIXTURE_OUT/.cleanup-receipt"
-        log 'migration saw recovered v1.0.90 baseline'
+        service=${@: -1}
+        if [ "$service" = agent-secret-init ]; then
+          if grep -Fq 'core_aws_enabled:' "$DOCKER_FIXTURE_OUT/agent-config.yaml"; then
+            log 'materialized restored Agent config'
+          else
+            log 'materialized migrated Agent config'
+          fi
+        else
+          [ "$service" = agent-migrate ]
+          grep -Fqx 'DIREXTALK_AGENT_VERSION=v1.0.90' "$DOCKER_FIXTURE_OUT/.env"
+          grep -Fqx "DIREXTALK_AGENT_SOURCE_REVISION=$REVISION_90" "$DOCKER_FIXTURE_OUT/.env"
+          grep -Fqx "container.1.id=$LIVE_AGENT_ID" "$DOCKER_FIXTURE_OUT/.cleanup-receipt"
+          grep -Fqx "container.2.id=$LIVE_EXTENSION_ID" "$DOCKER_FIXTURE_OUT/.cleanup-receipt"
+          grep -Fqx "container.3.id=$LIVE_CORE_ID" "$DOCKER_FIXTURE_OUT/.cleanup-receipt"
+          env_identity=$(stat -c '%d:%i:%u' "$DOCKER_FIXTURE_OUT/.env")
+          env_sha=$(sha256sum "$DOCKER_FIXTURE_OUT/.env" | awk '{print $1}')
+          grep -Fqx "control.env_identity=$env_identity" "$DOCKER_FIXTURE_OUT/.cleanup-receipt"
+          grep -Fqx "control.env_sha256=$env_sha" "$DOCKER_FIXTURE_OUT/.cleanup-receipt"
+          log 'migration saw recovered v1.0.90 baseline'
+        fi
         ;;
       up)
         log 'compose up'
@@ -219,6 +229,7 @@ cp "$success_root/out/.cleanup-receipt" "$success_root/original.receipt"
 cp "$success_root/out/agent-config.yaml" "$success_root/original.agent-config.yaml"
 run_wrapper "$success_root" success >"$success_root/stdout" 2>"$success_root/stderr"
 grep -Fqx 'migration saw recovered v1.0.90 baseline' "$success_root/docker.log"
+grep -Fqx 'materialized migrated Agent config' "$success_root/docker.log"
 grep -Fqx 'DIREXTALK_AGENT_VERSION=v1.0.91' "$success_root/out/.env"
 grep -Fqx "DIREXTALK_AGENT_SOURCE_REVISION=$revision_91" "$success_root/out/.env"
 grep -Fqx 'UNRELATED_ENV=preserve-me' "$success_root/out/.env"

@@ -142,11 +142,16 @@ for binary in /usr/local/bin/dirextalk-agent /usr/local/bin/dirextalk-extension-
 
 rollback_needed=false
 config_restore_needed=false
+config_materialized=false
 config_backup=
 restore_agent_config() {
   [ "$config_restore_needed" = true ] || return 0
   mv -f -- "$config_backup" "$agent_config"
+  if [ "$config_materialized" = true ]; then
+    "${compose[@]}" run --rm --no-deps --pull never -T --interactive=false agent-secret-init >/dev/null
+  fi
   config_restore_needed=false
+  config_materialized=false
   config_backup=
 }
 rollback_agent() {
@@ -195,6 +200,8 @@ if [ "$retired_config_count" -eq 1 ]; then
   chmod 400 "$next_config"
   mv -f -- "$next_config" "$agent_config"
   config_restore_needed=true
+  config_materialized=true
+  "${compose[@]}" run --rm --no-deps --pull never -T --interactive=false agent-secret-init >/dev/null || die 'Agent config materialization failed'
 fi
 "${compose[@]}" run --rm --no-deps --pull never -T --interactive=false agent-migrate >/dev/null || die 'Agent storage migration failed'
 "${compose[@]}" up -d --no-deps --force-recreate --no-build --pull never extension-runner core-runner agent >/dev/null || die 'Agent recreate failed'
@@ -214,6 +221,7 @@ awk -F= -v identity="$new_env_identity" -v digest="$new_env_sha" -v ai="${indexe
 chmod 400 "$new_receipt"; mv -f "$new_env" "$env_file"; mv -f "$new_receipt" "$receipt"
 rollback_needed=false
 config_restore_needed=false
+config_materialized=false
 [ -z "$config_backup" ] || rm -f -- "$config_backup"
 config_backup=
 trap - EXIT
