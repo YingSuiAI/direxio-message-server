@@ -255,9 +255,10 @@ Cloud Worker plans are proposed inside an Agent-owned Native conversation, not
 created by an App action. Message Server forwards the complete server-authored
 `related_task_ids`, `related_plan_ids`, and strict Execution V2 references in
 unary and streaming history/results. A reference carries account generation
-and exact task/plan revision linkage. Plan and confirmation references carry
-the confirmation id; run references carry independent run/execution ids and
-an optional Worker id. Cloud Worker references contain no digests; generic
+and exact task/plan revision linkage. A plan reference adds only status; a run
+reference carries its run revision, independent run/execution ids, optional
+Worker id, and status; a confirmation reference carries its confirmation id,
+revision, and state. Cloud Worker references contain no cross-kind fields or digests; generic
 Execution V2 references retain their separate schema. Message Server does not
 manufacture, weaken, or use a reference as authorization.
 

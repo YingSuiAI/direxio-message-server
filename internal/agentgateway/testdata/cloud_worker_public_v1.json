@@ -125,7 +125,6 @@
       "task_id": "f5d12ab5-e444-57f9-ab53-46214dc70fea",
       "plan_id": "c580b6ca-dd36-5759-8273-766afaef3a15",
       "plan_revision": 1,
-      "confirmation_id": "d8c733c0-46ce-57d8-bc1b-0bf4b1115639",
       "status": "waiting_user"
     },
     "run": {
@@ -135,6 +134,7 @@
       "plan_id": "c580b6ca-dd36-5759-8273-766afaef3a15",
       "plan_revision": 1,
       "run_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "run_revision": 9,
       "execution_id": "7e3937bb-c334-5360-90f9-931322e7fd88",
       "worker_id": "worker-fixture",
       "status": "succeeded"
@@ -146,6 +146,7 @@
       "plan_id": "c580b6ca-dd36-5759-8273-766afaef3a15",
       "plan_revision": 1,
       "confirmation_id": "d8c733c0-46ce-57d8-bc1b-0bf4b1115639",
+      "confirmation_revision": 3,
       "state": "consumed"
     }
   },

@@ -7334,14 +7334,14 @@
                 "confirmation_id": {
                   "type": "string",
                   "presence": {
-                    "present": "canonical_uuid;required_by_confirmation_linkage"
+                    "present": "canonical_uuid;required_for_execution_confirmation"
                   }
                 },
                 "confirmation_revision": {
                   "type": "integer",
                   "presence": {
-                    "omitted": "cloud_worker_reference",
-                    "present": "positive_integer;full_generic_confirmation_only"
+                    "omitted": "non_confirmation_reference",
+                    "present": "positive_integer;required_for_execution_confirmation"
                   }
                 },
                 "deployment_id": {
@@ -7455,8 +7455,8 @@
                 "run_revision": {
                   "type": "integer",
                   "presence": {
-                    "omitted": "cloud_worker_reference",
-                    "present": "positive_integer;generic_execution_reference_only"
+                    "omitted": "non_run_reference",
+                    "present": "positive_integer;required_for_execution_run"
                   }
                 },
                 "stage_digest": {

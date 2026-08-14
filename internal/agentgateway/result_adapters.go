@@ -1685,7 +1685,7 @@ func validCloudWorkerChatReference(reference map[string]any, kind string, author
 		return false
 	}
 	if !zeroReferenceFields(reference,
-		"plan_digest", "run_revision", "run_digest", "deployment_id", "confirmation_revision",
+		"plan_digest", "run_digest", "deployment_id",
 		"stage_id", "stage_revision", "stage_digest", "target_id", "target_revision", "target_digest",
 		"preview_digest", "binding_digest", "quote_digest", "execution_digest", "risk_level",
 		"gate_type", "binding_id", "binding_revision", "project_id") {
@@ -1693,21 +1693,20 @@ func validCloudWorkerChatReference(reference map[string]any, kind string, author
 	}
 	switch kind {
 	case "execution_plan":
-		return canonicalTurnUUID(reference["confirmation_id"]) &&
-			zeroReferenceFields(reference, "run_id", "execution_id", "worker_id", "state") &&
+		return zeroReferenceFields(reference, "run_id", "run_revision", "execution_id", "worker_id", "confirmation_id", "confirmation_revision", "state") &&
 			validExecutionReferenceStatus(reference["status"])
 	case "execution_run":
 		workerValid := true
 		if _, present := reference["worker_id"]; present {
 			workerValid = validBoundedReferenceString(reference, "worker_id", true, maxReferenceIdentity)
 		}
-		return canonicalTurnUUID(reference["run_id"]) && canonicalTurnUUID(reference["execution_id"]) &&
+		return canonicalTurnUUID(reference["run_id"]) && validPositiveReferenceInteger(reference["run_revision"]) && canonicalTurnUUID(reference["execution_id"]) &&
 			workerValid &&
-			zeroReferenceFields(reference, "confirmation_id", "state") &&
+			zeroReferenceFields(reference, "confirmation_id", "confirmation_revision", "state") &&
 			validExecutionReferenceStatus(reference["status"])
 	case "execution_confirmation":
-		return canonicalTurnUUID(reference["confirmation_id"]) &&
-			zeroReferenceFields(reference, "run_id", "execution_id", "worker_id", "status") &&
+		return canonicalTurnUUID(reference["confirmation_id"]) && validPositiveReferenceInteger(reference["confirmation_revision"]) &&
+			zeroReferenceFields(reference, "run_id", "run_revision", "execution_id", "worker_id", "status") &&
 			validConfirmationReferenceState(reference["state"])
 	default:
 		return false

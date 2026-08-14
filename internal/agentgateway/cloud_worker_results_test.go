@@ -266,6 +266,16 @@ func TestCloudWorkerRunEventsPinBoundedSecretFreeProgressAndCursor(t *testing.T)
 
 func TestCloudWorkerChatReferencesConsumePinnedPublicFixture(t *testing.T) {
 	fixture := loadCloudWorkerPublicFixture(t)
+	wantFields := map[string][]string{
+		"plan":         {"account_generation", "kind", "plan_id", "plan_revision", "status", "task_id"},
+		"run":          {"account_generation", "execution_id", "kind", "plan_id", "plan_revision", "run_id", "run_revision", "status", "task_id", "worker_id"},
+		"confirmation": {"account_generation", "confirmation_id", "confirmation_revision", "kind", "plan_id", "plan_revision", "state", "task_id"},
+	}
+	for kind, fields := range wantFields {
+		if got := sortedMapKeys(fixture.References[kind]); !reflect.DeepEqual(got, fields) {
+			t.Fatalf("Cloud Worker %s reference fields=%v want=%v", kind, got, fields)
+		}
+	}
 	references := []any{
 		fixture.References["plan"],
 		fixture.References["run"],
