@@ -224,7 +224,8 @@ func (r *Runner) watchDurableChat(
 			continue
 		}
 		if result, ok := event.Event.(*capv1.WatchOperationEvent_Result); ok && result.Result != nil {
-			nativeEvents, projectionErr := nativeEventsFromResult(result.Result.ResultJson, event.Sequence, operationID, authority)
+			turn := r.lookupDurableChatTurn(ctx, operationID, conversationID)
+			nativeEvents, projectionErr := nativeEventsFromCompletedResult(result.Result.ResultJson, event.Sequence, operationID, authority, turn)
 			if projectionErr != nil {
 				return projectionErr
 			}
@@ -743,6 +744,31 @@ func nativeEventsFromResult(resultJSON []byte, resultSequence int64, operationID
 	data["revision"] = response["revision"]
 	data["sequence"] = sequence
 	return []agentstream.Event{{Event: "done", Seq: sequence, Data: data}}, nil
+}
+
+// nativeEventsFromCompletedResult binds a terminal capability result back to
+// the authoritative durable turn. ChatResponse.revision is the conversation
+// revision, while SSE revision is the turn revision and may already be much
+// higher after tool rounds. The completed turn ledger is therefore the only
+// valid source for terminal turn identity and revision.
+func nativeEventsFromCompletedResult(resultJSON []byte, resultSequence int64, operationID string, authority actionResultAuthority, turn map[string]any) ([]agentstream.Event, error) {
+	if !validCanonicalTurn(turn) || turn["state"] != "completed" || turn["idempotency_key"] != operationID {
+		return nil, fmt.Errorf("%w: completed chat turn is unavailable", ErrInvalidActionResult)
+	}
+	events, err := nativeEventsFromResult(resultJSON, resultSequence, operationID, authority)
+	if err != nil {
+		return nil, err
+	}
+	if len(events) != 1 || events[0].Data["conversation_id"] != turn["conversation_id"] {
+		return nil, fmt.Errorf("%w: completed chat result does not match its turn", ErrInvalidActionResult)
+	}
+	revision, ok := turnInt64(turn["revision"])
+	if !ok || revision <= 0 {
+		return nil, fmt.Errorf("%w: completed chat turn revision is invalid", ErrInvalidActionResult)
+	}
+	events[0].Data["turn_id"] = turn["turn_id"]
+	events[0].Data["revision"] = revision
+	return events, nil
 }
 
 func nativeEventFromProto(event *capv1.WatchOperationEvent, authority actionResultAuthority) (*agentstream.Event, bool, error) {

@@ -307,6 +307,47 @@ func TestNativeEventsFromResultProjectsExecutionArtifactReference(t *testing.T) 
 	}
 }
 
+func TestCompletedResultUsesDurableTurnRevisionAfterToolRounds(t *testing.T) {
+	artifactIDs := []string{
+		"10000000-0000-4000-8000-000000000001", "10000000-0000-4000-8000-000000000002", "10000000-0000-4000-8000-000000000003",
+		"10000000-0000-4000-8000-000000000004", "10000000-0000-4000-8000-000000000005", "10000000-0000-4000-8000-000000000006",
+		"10000000-0000-4000-8000-000000000007", "10000000-0000-4000-8000-000000000008", "10000000-0000-4000-8000-000000000009",
+	}
+	executionIDs := []string{
+		"20000000-0000-4000-8000-000000000001", "20000000-0000-4000-8000-000000000002", "20000000-0000-4000-8000-000000000003",
+	}
+	references := make([]any, 0, len(artifactIDs))
+	for index, artifactID := range artifactIDs {
+		reference := validExecutionArtifactReferenceForTest()
+		reference["artifact_id"] = artifactID
+		reference["execution_id"] = executionIDs[index/3]
+		references = append(references, reference)
+	}
+	result, err := json.Marshal(durableChatResponseForTest("done", references, nil, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn := map[string]any{
+		"turn_id": durableTestTurnID, "idempotency_key": durableTestStartID,
+		"conversation_id": durableTestConversationID, "state": "completed",
+		"revision": float64(11), "last_sequence": float64(97), "terminal_code": "", "terminal_summary": "",
+		"created_at": "2026-08-14T18:10:42.667862Z", "updated_at": "2026-08-14T18:11:51.943944Z",
+	}
+	events, err := nativeEventsFromCompletedResult(result, 1601, durableTestStartID, actionResultAuthority{
+		ownerID: "@owner:example.test", accountGeneration: 7,
+	}, turn)
+	if err != nil || len(events) != 1 {
+		t.Fatalf("completed result events=%#v err=%v", events, err)
+	}
+	done := events[0]
+	if done.Event != "done" || done.Seq != 1601 || done.Data["revision"] != int64(11) || done.Data["turn_id"] != durableTestTurnID {
+		t.Fatalf("completed result projection=%#v", done)
+	}
+	if len(done.Data["references"].([]any)) != 9 || done.Data["revision"].(int64) <= 10 {
+		t.Fatalf("terminal result lost artifact linkage or regressed after tool-round revision 10: %#v", done.Data)
+	}
+}
+
 func TestNativeEventsFromResultRejectsOperationIdentityMismatch(t *testing.T) {
 	result, err := json.Marshal(durableChatResponseForTest("done", nil, nil, nil))
 	if err != nil {
