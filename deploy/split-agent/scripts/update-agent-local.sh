@@ -9,6 +9,7 @@ usage() { printf 'usage: %s OUTPUT_DIR target_version minimum_server_version\n' 
 canonical_version() { printf '%s\n' "$1" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; }
 semver_ge() { local a=${1#v} b=${2#v} a1 a2 a3 b1 b2 b3; IFS=. read -r a1 a2 a3 <<<"$a"; IFS=. read -r b1 b2 b3 <<<"$b"; [ "$a1" -gt "$b1" ] || { [ "$a1" -eq "$b1" ] && { [ "$a2" -gt "$b2" ] || { [ "$a2" -eq "$b2" ] && [ "$a3" -ge "$b3" ]; }; }; }; }
 read_pair() { local file=$1 key=$2 count value; count=$(awk -F= -v k="$key" '$0 !~ /^[[:space:]]*#/ && index($0,k "=")==1 {n++} END {print n+0}' "$file"); [ "$count" -eq 1 ] || die "$file must contain exactly one $key"; value=$(awk -F= -v k="$key" 'index($0,k "=")==1 {print substr($0,length(k)+2); exit}' "$file"); [ -n "$value" ] || die "$key is empty"; printf '%s' "$value"; }
+recovery_runtime_valid() { case "$1:$2:$3" in agent:running:healthy|agent:running:unhealthy|agent:restarting:healthy|agent:restarting:unhealthy|extension-runner:running:healthy|core-runner:running:healthy) return 0;; *) return 1;; esac; }
 
 [ "$#" -eq 3 ] || usage
 out=$(readlink -m -- "$1"); target_version=$2; minimum_server_version=$3
@@ -42,7 +43,7 @@ semver_ge "$server_version" "$minimum_server_version" || negative "target requir
 recorded_available=true
 for service in agent extension-runner core-runner; do docker inspect "${old_ids[$service]}" >/dev/null 2>&1 || recorded_available=false; done
 if [ "$recorded_available" = false ]; then
-  declare -A recovered_ids=()
+  declare -A recovered_ids=() recovered_statuses=()
   recovered_image_id=
   for service in agent extension-runner core-runner; do
     recovered_ids[$service]=$("${compose[@]}" ps -q "$service" 2>/dev/null) || die "could not resolve current $service container"
@@ -52,10 +53,11 @@ if [ "$recorded_available" = false ]; then
       length == 1 and .[0].Id == $id and
       .[0].Config.Labels["com.docker.compose.project"] == $project and
       .[0].Config.Labels["com.docker.compose.service"] == $service and
-      .[0].Config.Image == $image and .[0].State.Status == "running"
+      .[0].Config.Image == $image
     ' <<<"$data" >/dev/null || die "current $service container identity does not match the receipt-bound compose service"
-    health=$(jq -r '.[0].State.Health.Status // empty' <<<"$data")
-    case "$service:$health" in agent:healthy|agent:unhealthy|extension-runner:healthy|core-runner:healthy) ;; *) die "current $service health is invalid for interrupted update recovery";; esac
+    status=$(jq -r '.[0].State.Status // empty' <<<"$data"); health=$(jq -r '.[0].State.Health.Status // empty' <<<"$data")
+    recovery_runtime_valid "$service" "$status" "$health" || die "current $service runtime state is invalid for interrupted update recovery"
+    recovered_statuses[$service]=$status
     observed=$(jq -r '.[0].Image // empty' <<<"$data")
     [ -n "$observed" ] || die "current $service image identity is missing"
     [ -z "$recovered_image_id" ] && recovered_image_id=$observed
@@ -67,7 +69,12 @@ if [ "$recorded_available" = false ]; then
   printf '%s\n' "$recovered_revision" | grep -Eq '^[0-9a-f]{40}$' || die 'current Agent revision is invalid'
   for pair in agent:/usr/local/bin/dirextalk-agent extension-runner:/usr/local/bin/dirextalk-extension-runner core-runner:/usr/local/bin/dirextalk-core-runner; do
     service=${pair%%:*}; binary=${pair#*:}
-    [ "$(docker exec "${recovered_ids[$service]}" "$binary" --version 2>/dev/null)" = "$recovered_version" ] || die "current $service binary version does not match its image"
+    if [ "$service" = agent ] && [ "${recovered_statuses[$service]}" = restarting ]; then
+      binary_version=$(docker run --rm --entrypoint "$binary" "$recovered_image_id" --version 2>/dev/null)
+    else
+      binary_version=$(docker exec "${recovered_ids[$service]}" "$binary" --version 2>/dev/null)
+    fi
+    [ "$binary_version" = "$recovered_version" ] || die "current $service binary version does not match its image"
   done
 
   repair_env='' repair_receipt=''
@@ -98,8 +105,10 @@ if [ "$recorded_available" = false ]; then
       length == 1 and .[0].Id == $id and .[0].Image == $image_id and
       .[0].Config.Labels["com.docker.compose.project"] == $project and
       .[0].Config.Labels["com.docker.compose.service"] == $service and
-      .[0].Config.Image == $image and .[0].State.Status == "running"
+      .[0].Config.Image == $image
     ' <<<"$data" >/dev/null || die "current $service container changed before receipt repair"
+    status=$(jq -r '.[0].State.Status // empty' <<<"$data"); health=$(jq -r '.[0].State.Health.Status // empty' <<<"$data")
+    recovery_runtime_valid "$service" "$status" "$health" || die "current $service runtime state changed before receipt repair"
   done
   mv -f "$repair_env" "$env_file"; repair_env=
   mv -f "$repair_receipt" "$receipt"; repair_receipt=

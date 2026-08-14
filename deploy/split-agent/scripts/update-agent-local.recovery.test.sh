@@ -32,12 +32,22 @@ cat >"$fake_bin/docker" <<'DOCKER'
 set -euo pipefail
 log() { printf '%s\n' "$*" >>"$DOCKER_FIXTURE_LOG"; }
 container_json() {
-  local id=$1 service=$2 image_id=$3 health=$4 project=test-stack config_image=docker.io/dirextalk/agent:latest
+  local id=$1 service=$2 image_id=$3 health=$4 project=test-stack config_image=docker.io/dirextalk/agent:latest status=running
+  if [ "$service" = agent ]; then
+    case "$DOCKER_FIXTURE_SCENARIO" in
+      agent_restarting) status=restarting ;;
+      agent_exited) status=exited ;;
+      agent_dead) status=dead ;;
+      agent_paused) status=paused ;;
+    esac
+  elif [ "$service" = extension-runner ] && [ "$DOCKER_FIXTURE_SCENARIO" = runner_restarting ]; then
+    status=restarting
+  fi
   [ "$DOCKER_FIXTURE_SCENARIO" != bad_project ] || [ "$service" != agent ] || project=other-stack
   [ "$DOCKER_FIXTURE_SCENARIO" != bad_service ] || [ "$service" != extension-runner ] || service=agent
   [ "$DOCKER_FIXTURE_SCENARIO" != bad_config_image ] || [ "$id" != "$LIVE_CORE_ID" ] || config_image=docker.io/dirextalk/agent:v1.0.90
-  printf '[{"Id":"%s","Image":"%s","Config":{"Image":"%s","Labels":{"com.docker.compose.project":"%s","com.docker.compose.service":"%s"}},"State":{"Status":"running","Health":{"Status":"%s"}}}]\n' \
-    "$id" "$image_id" "$config_image" "$project" "$service" "$health"
+  printf '[{"Id":"%s","Image":"%s","Config":{"Image":"%s","Labels":{"com.docker.compose.project":"%s","com.docker.compose.service":"%s"}},"State":{"Status":"%s","Health":{"Status":"%s"}}}]\n' \
+    "$id" "$image_id" "$config_image" "$project" "$service" "$status" "$health"
 }
 
 case "${1:-}" in
@@ -93,7 +103,7 @@ case "${1:-}" in
     esac
     ;;
   run)
-    printf 'v1.0.91\n'
+    case " $* " in *" $LIVE_IMAGE_ID "*) printf 'v1.0.90\n';; *) printf 'v1.0.91\n';; esac
     ;;
   compose)
     shift
@@ -215,7 +225,13 @@ sed -E '/^control\.env_(identity|sha256)=|^container\.[123]\.id=/d' "$success_ro
 sed -E '/^control\.env_(identity|sha256)=|^container\.[123]\.id=/d' "$success_root/out/.cleanup-receipt" >"$success_root/final.receipt.stable"
 cmp "$success_root/original.receipt.stable" "$success_root/final.receipt.stable"
 
-for scenario in bad_project bad_service bad_config_image bad_image_id; do
+restarting_root=$tmp/agent_restarting
+make_fixture "$restarting_root"
+run_wrapper "$restarting_root" agent_restarting >"$restarting_root/stdout" 2>"$restarting_root/stderr"
+grep -Fqx 'migration saw recovered v1.0.90 baseline' "$restarting_root/docker.log"
+grep -Fqx 'DIREXTALK_AGENT_VERSION=v1.0.91' "$restarting_root/out/.env"
+
+for scenario in bad_project bad_service bad_config_image bad_image_id agent_exited agent_dead agent_paused runner_restarting; do
   root=$tmp/$scenario
   make_fixture "$root"
   cp "$root/out/.env" "$root/original.env"
