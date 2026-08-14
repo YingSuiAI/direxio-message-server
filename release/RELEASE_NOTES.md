@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v1.1.51
+
+1. Remove the retired `core_aws_enabled` key transactionally during existing-node Agent upgrades and restore the original config if the update fails.
+
 ## v1.1.50
 
 1. Remove the superseded Generic Execution V2 product surface and retain only the eight current Cloud Worker read/cancel/artifact operations.

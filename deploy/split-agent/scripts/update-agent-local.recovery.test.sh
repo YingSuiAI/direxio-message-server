@@ -156,7 +156,13 @@ make_fixture() {
 DIREXTALK_AGENT_IMAGE=docker.io/dirextalk/agent:latest
 DIREXTALK_AGENT_VERSION=v1.0.89
 DIREXTALK_AGENT_SOURCE_REVISION=$revision_89
+DIREXTALK_AGENT_CONFIG_FILE=$out/agent-config.yaml
 UNRELATED_ENV=preserve-me
+EOF
+  cat >"$out/agent-config.yaml" <<EOF
+instance_id: test
+core_aws_enabled: true
+capability_enabled: true
 EOF
   chmod 400 "$out/.env"
   env_identity=$(stat -c '%d:%i:%u' "$out/.env")
@@ -185,6 +191,7 @@ container.3.project=test-stack
 unrelated.receipt=preserve-me
 EOF
   chmod 400 "$out/.manifest" "$out/.cleanup-receipt"
+  chmod 400 "$out/agent-config.yaml"
 }
 
 run_wrapper() {
@@ -209,6 +216,7 @@ success_root=$tmp/success
 make_fixture "$success_root"
 cp "$success_root/out/.env" "$success_root/original.env"
 cp "$success_root/out/.cleanup-receipt" "$success_root/original.receipt"
+cp "$success_root/out/agent-config.yaml" "$success_root/original.agent-config.yaml"
 run_wrapper "$success_root" success >"$success_root/stdout" 2>"$success_root/stderr"
 grep -Fqx 'migration saw recovered v1.0.90 baseline' "$success_root/docker.log"
 grep -Fqx 'DIREXTALK_AGENT_VERSION=v1.0.91' "$success_root/out/.env"
@@ -228,6 +236,11 @@ cmp "$success_root/original.env.stable" "$success_root/final.env.stable"
 sed -E '/^control\.env_(identity|sha256)=|^container\.[123]\.id=/d' "$success_root/original.receipt" >"$success_root/original.receipt.stable"
 sed -E '/^control\.env_(identity|sha256)=|^container\.[123]\.id=/d' "$success_root/out/.cleanup-receipt" >"$success_root/final.receipt.stable"
 cmp "$success_root/original.receipt.stable" "$success_root/final.receipt.stable"
+if grep -Fq 'core_aws_enabled:' "$success_root/out/agent-config.yaml"; then
+  echo 'successful Agent update retained core_aws_enabled' >&2
+  exit 1
+fi
+grep -Fqx 'capability_enabled: true' "$success_root/out/agent-config.yaml"
 
 restarting_root=$tmp/agent_restarting
 make_fixture "$restarting_root"
@@ -246,12 +259,14 @@ for scenario in bad_project bad_service bad_config_image bad_image_id agent_exit
   make_fixture "$root"
   cp "$root/out/.env" "$root/original.env"
   cp "$root/out/.cleanup-receipt" "$root/original.receipt"
+  cp "$root/out/agent-config.yaml" "$root/original.agent-config.yaml"
   if run_wrapper "$root" "$scenario" >"$root/stdout" 2>"$root/stderr"; then
     echo "$scenario recovery unexpectedly succeeded" >&2
     exit 1
   fi
   cmp "$root/original.env" "$root/out/.env"
   cmp "$root/original.receipt" "$root/out/.cleanup-receipt"
+  cmp "$root/original.agent-config.yaml" "$root/out/agent-config.yaml"
   if [ -f "$root/docker.log" ] && grep -Eq 'migration|compose up' "$root/docker.log"; then
     echo "$scenario reached migration or recreate" >&2
     exit 1
