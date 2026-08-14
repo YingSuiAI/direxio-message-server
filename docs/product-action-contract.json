@@ -7521,7 +7521,7 @@
                   "type": "string",
                   "presence": {
                     "omitted": "non_run_or_unassigned_worker_reference",
-                    "present": "nonempty_bounded_512;cloud_worker_execution_run_only"
+                    "present": "canonical_uuid;cloud_worker_execution_run_only"
                   }
                 }
               }

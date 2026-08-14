@@ -61,7 +61,7 @@
     "turn_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
     "status": "succeeded",
     "revision": 9,
-    "worker_id": "worker-fixture",
+    "worker_id": "99999999-9999-4999-8999-999999999999",
     "persistent_worker": true,
     "cleanup": {
       "verified_destroyed": false,
@@ -136,7 +136,7 @@
       "run_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
       "run_revision": 9,
       "execution_id": "7e3937bb-c334-5360-90f9-931322e7fd88",
-      "worker_id": "worker-fixture",
+      "worker_id": "99999999-9999-4999-8999-999999999999",
       "status": "succeeded"
     },
     "confirmation": {

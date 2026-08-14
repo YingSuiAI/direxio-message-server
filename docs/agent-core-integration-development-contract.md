@@ -257,7 +257,7 @@ created by an App action. Message Server forwards the complete server-authored
 unary and streaming history/results. A reference carries account generation
 and exact task/plan revision linkage. A plan reference adds only status; a run
 reference carries its run revision, independent run/execution ids, optional
-Worker id, and status; a confirmation reference carries its confirmation id,
+canonical Worker UUID, and status; a confirmation reference carries its confirmation id,
 revision, and state. Cloud Worker references contain no cross-kind fields or digests; generic
 Execution V2 references retain their separate schema. Message Server does not
 manufacture, weaken, or use a reference as authorization.

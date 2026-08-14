@@ -298,6 +298,14 @@ func TestCloudWorkerChatReferencesConsumePinnedPublicFixture(t *testing.T) {
 		!reflect.DeepEqual(got["related_plan_ids"], []any{fixture.Plan["plan_id"]}) {
 		t.Fatalf("golden Cloud Worker linkage projection=%#v", got)
 	}
+	invalidRun := cloneParams(fixture.References["run"])
+	invalidRun["worker_id"] = "worker-fixture"
+	invalidResponse := canonicalChatResponseForTest("Cloud task completed", []any{invalidRun}, nil, nil)
+	if _, err := adaptActionResultForRequestWithAuthority(
+		"agent.chat", nil, invalidResponse, cloudWorkerFixtureAuthority(t, fixture),
+	); !errors.Is(err, ErrInvalidActionResult) {
+		t.Fatalf("non-UUID Cloud Worker reference worker_id accepted: %v", err)
+	}
 }
 
 func TestCloudWorkerArtifactDownloadResultFailsClosed(t *testing.T) {

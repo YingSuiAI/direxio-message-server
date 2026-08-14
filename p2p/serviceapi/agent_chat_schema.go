@@ -15,7 +15,7 @@ func nativeAgentChatSchema(acceptsAttachments bool) *ActionSchema {
 		"run_digest":         {Type: "string", Presence: &ActionPresenceSchema{Omitted: "cloud_worker_reference", Present: "lowercase_sha256;generic_execution_reference_only"}},
 		"deployment_id":      {Type: "string", Presence: &ActionPresenceSchema{Present: "canonical_uuid;generic_execution_run_or_service_binding_only"}},
 		"execution_id":       {Type: "string", Presence: &ActionPresenceSchema{Omitted: "generic_execution_v2_reference_or_non_run_cloud_worker_reference", Present: "canonical_uuid;required_for_cloud_worker_execution_run"}},
-		"worker_id":          {Type: "string", Presence: &ActionPresenceSchema{Omitted: "non_run_or_unassigned_worker_reference", Present: "nonempty_bounded_512;cloud_worker_execution_run_only"}},
+		"worker_id":          {Type: "string", Presence: &ActionPresenceSchema{Omitted: "non_run_or_unassigned_worker_reference", Present: "canonical_uuid;cloud_worker_execution_run_only"}},
 		"confirmation_id":    {Type: "string", Presence: &ActionPresenceSchema{Present: "canonical_uuid;required_for_execution_confirmation"}},
 		"confirmation_revision": {Type: "integer", Presence: &ActionPresenceSchema{
 			Omitted: "non_confirmation_reference", Present: "positive_integer;required_for_execution_confirmation",

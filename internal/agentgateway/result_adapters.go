@@ -1698,7 +1698,7 @@ func validCloudWorkerChatReference(reference map[string]any, kind string, author
 	case "execution_run":
 		workerValid := true
 		if _, present := reference["worker_id"]; present {
-			workerValid = validBoundedReferenceString(reference, "worker_id", true, maxReferenceIdentity)
+			workerValid = canonicalTurnUUID(reference["worker_id"])
 		}
 		return canonicalTurnUUID(reference["run_id"]) && validPositiveReferenceInteger(reference["run_revision"]) && canonicalTurnUUID(reference["execution_id"]) &&
 			workerValid &&
