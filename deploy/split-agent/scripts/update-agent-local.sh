@@ -28,14 +28,84 @@ stack=$(read_pair "$manifest" stack_name); image=$(read_pair "$env_file" DIREXTA
 local_image_ref=${DIREXTALK_AGENT_LOCAL_IMAGE_REF:-}
 [ "$(id -u)" -eq 0 ] || [ -z "$local_image_ref" ] || [ "${DIREXTALK_AGENT_UPDATE_TEST_FIXTURE:-false}" = true ] || die 'local image apply requires root'
 [[ "$local_image_ref" != *$'\n'* ]] || die 'local image ref contains a newline'
+compose=(docker compose --env-file "$env_file" -f "$stack_dir/compose.yaml" -f "$stack_dir/compose.production.yaml" --project-name "$stack")
 
 container_count=$(read_pair "$receipt" container.count); message_id=
-declare -A old_ids=() indexes=()
-for ((index=0; index<container_count; index++)); do service=$(read_pair "$receipt" "container.$index.service"); case "$service" in message-server) message_id=$(read_pair "$receipt" "container.$index.id");; agent|extension-runner|core-runner) old_ids[$service]=$(read_pair "$receipt" "container.$index.id"); indexes[$service]=$index;; esac; done
+declare -A old_ids=() indexes=() receipt_projects=()
+for ((index=0; index<container_count; index++)); do service=$(read_pair "$receipt" "container.$index.service"); case "$service" in message-server) message_id=$(read_pair "$receipt" "container.$index.id");; agent|extension-runner|core-runner) old_ids[$service]=$(read_pair "$receipt" "container.$index.id"); indexes[$service]=$index; receipt_projects[$service]=$(read_pair "$receipt" "container.$index.project");; esac; done
 [ -n "$message_id" ] && [ "${#old_ids[@]}" -eq 3 ] || die 'cleanup receipt lacks application services'
+for service in agent extension-runner core-runner; do [ "${receipt_projects[$service]}" = "$stack" ] || die "$service receipt project does not match the deployment stack"; done
 message_image_id=$(docker inspect "$message_id" --format '{{.Image}}' 2>/dev/null) || die 'message-server container is unavailable'
 server_version=$(docker image inspect "$message_image_id" --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null) || die 'message-server version inspection failed'
 semver_ge "$server_version" "$minimum_server_version" || negative "target requires message-server $minimum_server_version (running $server_version)"
+
+recorded_available=true
+for service in agent extension-runner core-runner; do docker inspect "${old_ids[$service]}" >/dev/null 2>&1 || recorded_available=false; done
+if [ "$recorded_available" = false ]; then
+  declare -A recovered_ids=()
+  recovered_image_id=
+  for service in agent extension-runner core-runner; do
+    recovered_ids[$service]=$("${compose[@]}" ps -q "$service" 2>/dev/null) || die "could not resolve current $service container"
+    printf '%s\n' "${recovered_ids[$service]}" | grep -Eq '^[0-9a-f]{64}$' || die "current $service container identity is invalid"
+    data=$(docker inspect "${recovered_ids[$service]}" 2>/dev/null) || die "current $service container is unavailable"
+    jq -e --arg id "${recovered_ids[$service]}" --arg project "$stack" --arg service "$service" --arg image "$image" '
+      length == 1 and .[0].Id == $id and
+      .[0].Config.Labels["com.docker.compose.project"] == $project and
+      .[0].Config.Labels["com.docker.compose.service"] == $service and
+      .[0].Config.Image == $image and .[0].State.Status == "running"
+    ' <<<"$data" >/dev/null || die "current $service container identity does not match the receipt-bound compose service"
+    health=$(jq -r '.[0].State.Health.Status // empty' <<<"$data")
+    case "$service:$health" in agent:healthy|agent:unhealthy|extension-runner:healthy|core-runner:healthy) ;; *) die "current $service health is invalid for interrupted update recovery";; esac
+    observed=$(jq -r '.[0].Image // empty' <<<"$data")
+    [ -n "$observed" ] || die "current $service image identity is missing"
+    [ -z "$recovered_image_id" ] && recovered_image_id=$observed
+    [ "$observed" = "$recovered_image_id" ] || die 'current Agent containers do not use one image ID'
+  done
+  recovered_identity=$(docker image inspect "$recovered_image_id" --format '{{index .Config.Labels "org.opencontainers.image.version"}}|{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null) || die 'current Agent image identity inspection failed'
+  IFS='|' read -r recovered_version recovered_revision <<<"$recovered_identity"
+  canonical_version "$recovered_version" || die 'current Agent version is invalid'
+  printf '%s\n' "$recovered_revision" | grep -Eq '^[0-9a-f]{40}$' || die 'current Agent revision is invalid'
+  for pair in agent:/usr/local/bin/dirextalk-agent extension-runner:/usr/local/bin/dirextalk-extension-runner core-runner:/usr/local/bin/dirextalk-core-runner; do
+    service=${pair%%:*}; binary=${pair#*:}
+    [ "$(docker exec "${recovered_ids[$service]}" "$binary" --version 2>/dev/null)" = "$recovered_version" ] || die "current $service binary version does not match its image"
+  done
+
+  repair_env='' repair_receipt=''
+  cleanup_repair() { local status=$?; [ -z "$repair_env" ] || rm -f -- "$repair_env"; [ -z "$repair_receipt" ] || rm -f -- "$repair_receipt"; return "$status"; }
+  trap cleanup_repair EXIT
+  repair_env=$(mktemp "$out/.env.XXXXXX")
+  awk -F= -v version="$recovered_version" -v revision="$recovered_revision" '
+    $1=="DIREXTALK_AGENT_VERSION" {$0=$1 "=" version; vs=1}
+    $1=="DIREXTALK_AGENT_SOURCE_REVISION" {$0=$1 "=" revision; rs=1}
+    {print}
+    END {if (!vs || !rs) exit 1}
+  ' "$env_file" >"$repair_env" || die 'could not repair expected Agent identity'
+  chmod 400 "$repair_env"
+  repair_env_identity=$(stat -c '%d:%i:%u' "$repair_env"); repair_env_sha=$(sha256sum "$repair_env" | awk '{print $1}')
+  repair_receipt=$(mktemp "$out/.cleanup-receipt.XXXXXX")
+  awk -F= -v identity="$repair_env_identity" -v digest="$repair_env_sha" -v ai="${indexes[agent]}" -v aid="${recovered_ids[agent]}" -v ei="${indexes[extension-runner]}" -v eid="${recovered_ids[extension-runner]}" -v ci="${indexes[core-runner]}" -v cid="${recovered_ids[core-runner]}" '
+    $1=="control.env_identity" {$0=$1 "=" identity}
+    $1=="control.env_sha256" {$0=$1 "=" digest}
+    $1==("container." ai ".id") {$0=$1 "=" aid}
+    $1==("container." ei ".id") {$0=$1 "=" eid}
+    $1==("container." ci ".id") {$0=$1 "=" cid}
+    {print}
+  ' "$receipt" >"$repair_receipt"
+  chmod 400 "$repair_receipt"
+  for service in agent extension-runner core-runner; do
+    data=$(docker inspect "${recovered_ids[$service]}" 2>/dev/null) || die "current $service container changed before receipt repair"
+    jq -e --arg id "${recovered_ids[$service]}" --arg project "$stack" --arg service "$service" --arg image "$image" --arg image_id "$recovered_image_id" '
+      length == 1 and .[0].Id == $id and .[0].Image == $image_id and
+      .[0].Config.Labels["com.docker.compose.project"] == $project and
+      .[0].Config.Labels["com.docker.compose.service"] == $service and
+      .[0].Config.Image == $image and .[0].State.Status == "running"
+    ' <<<"$data" >/dev/null || die "current $service container changed before receipt repair"
+  done
+  mv -f "$repair_env" "$env_file"; repair_env=
+  mv -f "$repair_receipt" "$receipt"; repair_receipt=
+  trap - EXIT
+  for service in agent extension-runner core-runner; do old_ids[$service]=${recovered_ids[$service]}; done
+fi
 
 old_image_id=
 for service in agent extension-runner core-runner; do
@@ -57,7 +127,6 @@ IFS='|' read -r pulled_version target_image_id target_revision <<<"$identity"
 printf '%s\n' "$target_revision" | grep -Eq '^[0-9a-f]{40}$' || die 'target revision label is invalid'
 for binary in /usr/local/bin/dirextalk-agent /usr/local/bin/dirextalk-extension-runner /usr/local/bin/dirextalk-core-runner; do [ "$(docker run --rm --entrypoint "$binary" "$target_image_id" --version)" = "$target_version" ] || die "$binary version mismatch"; done
 
-compose=(docker compose --env-file "$env_file" -f "$stack_dir/compose.yaml" -f "$stack_dir/compose.production.yaml" --project-name "$stack")
 rollback_needed=false
 rollback_agent() {
   local status=$? rollback_receipt rollback_agent_id rollback_extension_id rollback_core_id id data attempts rollback_ready
