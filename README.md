@@ -52,24 +52,23 @@ Dirextalk product APIs use the body-action surface:
 - `GET /_p2p/health`
 - `POST /_p2p/query`
 - `POST /_p2p/command`
-- `GET /_p2p/ws`
+- `GET /_p2p/events`
 - `GET /.well-known/portal/owner.json`
 
 The generated ProductCore action metadata is
 [docs/product-action-contract.json](docs/product-action-contract.json); it is
 the checkable action list and may change as capabilities are added. Owner
-clients prefer `client.request`/`server.response` over the realtime WebSocket
-and use HTTP query/command fallback when realtime is not ready. External MCP
+clients use HTTP query/command, and subscribe to Product events with SSE.
+External MCP
 clients use JSON-RPC over `POST /mcp` with an `agent_token`.
 
 Authentication and transport boundaries:
 
 - Owner ProductCore actions use `Authorization: Bearer <access_token>`.
-- `realtime.ws_ticket.create` issues a short-lived single-use owner ticket;
-  `GET /_p2p/ws` accepts that ticket, not a bearer token.
+- `GET /_p2p/events` accepts the owner bearer token and resumes with
+  `after_seq` or `Last-Event-ID`.
 - `agent_token` is limited to `agent.matrix_session.create` and the standard
-  `POST /mcp` endpoint; it cannot create an owner WebSocket ticket or call
-  owner actions.
+  `POST /mcp` endpoint; it cannot call owner actions.
 
 Product requests use this envelope:
 

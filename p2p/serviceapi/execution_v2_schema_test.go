@@ -7,7 +7,7 @@ func TestExecutionV2ActionsAreOwnerHTTPAndWSWithStrictMutations(t *testing.T) {
 	for _, bare := range want {
 		name := executionV2Name(bare)
 		s, ok := ActionSpecFor(name)
-		if !ok || s.Auth != ActionAuthOwner || s.Transport != ActionTransportHTTPAndWS || s.Schema == nil {
+		if !ok || s.Auth != ActionAuthOwner || s.Transport != ActionTransportHTTPOnly || s.Schema == nil {
 			t.Fatalf("%s spec = %#v", name, s)
 		}
 	}

@@ -10,7 +10,6 @@ import (
 
 	rootinternal "github.com/YingSuiAI/dirextalk-message-server/internal"
 	actionbase "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/action"
-	"github.com/YingSuiAI/dirextalk-message-server/p2p/serviceapi"
 )
 
 type productContextKey struct{}
@@ -42,9 +41,6 @@ type productPortStub struct {
 	handledParams  map[string]any
 	handleResult   any
 	handleErr      *actionbase.Error
-	ticketToken    string
-	ticketResult   any
-	ticketErr      *actionbase.Error
 }
 
 func (p *productPortStub) HasAction(action string) bool { return p.actions[action] }
@@ -65,11 +61,6 @@ func (p *productPortStub) Handle(ctx context.Context, action string, params map[
 	p.handledAction = action
 	p.handledParams = params
 	return p.handleResult, p.handleErr
-}
-
-func (p *productPortStub) CreateWSTicket(token string) (any, *actionbase.Error) {
-	p.ticketToken = token
-	return p.ticketResult, p.ticketErr
 }
 
 func TestProductHandlerPreservesDecodeAuthAndResponseContract(t *testing.T) {
@@ -113,7 +104,7 @@ func TestProductHandlerPreservesDecodeAuthAndResponseContract(t *testing.T) {
 	}
 }
 
-func TestProductHandlerPublicAndWSTicketDispatch(t *testing.T) {
+func TestProductHandlerPublicDispatch(t *testing.T) {
 	publicPort := &productPortStub{
 		actions:      map[string]bool{"portal.status": true},
 		handleResult: map[string]any{"initialized": false},
@@ -121,16 +112,6 @@ func TestProductHandlerPublicAndWSTicketDispatch(t *testing.T) {
 	publicRec := serveProduct(t, publicPort, `{"action":"portal.status"}`, "")
 	if publicRec.Code != http.StatusOK || publicPort.authorizeCalls != 0 || publicPort.handledParams == nil {
 		t.Fatalf("public dispatch changed: status=%d auth_calls=%d params=%#v", publicRec.Code, publicPort.authorizeCalls, publicPort.handledParams)
-	}
-
-	ticketPort := &productPortStub{
-		actions:      map[string]bool{},
-		authorized:   true,
-		ticketResult: map[string]any{"ticket": "one-use"},
-	}
-	ticketRec := serveProduct(t, ticketPort, `{"action":"`+serviceapi.RealtimeWSTicketAction+`"}`, "owner-token")
-	if ticketRec.Code != http.StatusOK || ticketPort.ticketToken != "owner-token" || ticketPort.handledAction != "" {
-		t.Fatalf("ticket dispatch changed: status=%d token=%q handled=%q", ticketRec.Code, ticketPort.ticketToken, ticketPort.handledAction)
 	}
 }
 
@@ -149,7 +130,6 @@ func TestProductHandlerRejectsInvalidRequestsInContractOrder(t *testing.T) {
 		{"missing action", `{}`, &productPortStub{}, http.StatusBadRequest, "action is required", 0},
 		{"unknown spec", `{"action":"retired.action"}`, &productPortStub{}, http.StatusBadRequest, "unknown action", 0},
 		{"missing handler", `{"action":"profile.get"}`, &productPortStub{actions: map[string]bool{}}, http.StatusBadRequest, "unknown action", 0},
-		{"websocket only", `{"action":"agent.chat.stream"}`, &productPortStub{actions: map[string]bool{"agent.chat.stream": true}}, http.StatusBadRequest, "action requires websocket", 0},
 		{"unauthorized", `{"action":"profile.get"}`, &productPortStub{actions: map[string]bool{"profile.get": true}}, http.StatusUnauthorized, "M_UNKNOWN_TOKEN", 1},
 	}
 

@@ -84,7 +84,7 @@ func (m *Module) Stream(ctx context.Context, action string, params map[string]an
 }
 
 // DurableStream forwards a remote durable operation and projects its events
-// into the existing ProductCore websocket DTO. No local turn store or runner
+// into the existing ProductCore SSE DTO. No local turn store or runner
 // is constructed in message-server.
 func (m *Module) DurableStream(ctx context.Context, ownerID, action string, params map[string]any, emit func(agentstream.StreamEvent) error) error {
 	if m == nil || m.runner == nil {
@@ -300,17 +300,12 @@ func (m *Module) Handlers() map[string]actionbase.Handler {
 		actionMatrixSessionCreate: m.createMatrixSession,
 		actionConfigGet:           m.getConfig,
 		actionConfigUpdate:        m.updateConfig,
-		"agent.chat.stream":       streamOnly,
 	}
 	for _, action := range runtimeActions {
 		handlers[action] = m.invoke(action)
 	}
 	for _, action := range externalNativeActions {
-		if strings.HasSuffix(action, ".stream") {
-			handlers[action] = streamOnly
-		} else {
-			handlers[action] = m.invoke(action)
-		}
+		handlers[action] = m.invoke(action)
 	}
 	return handlers
 }
@@ -386,10 +381,6 @@ func externalAgentActionError(err error) *actionbase.Error {
 	}
 }
 
-func streamOnly(context.Context, map[string]any) (any, *actionbase.Error) {
-	return nil, actionbase.BadRequest("action requires websocket")
-}
-
 func cloneMap(values map[string]any) map[string]any {
 	if values == nil {
 		return map[string]any{}
@@ -417,5 +408,5 @@ var externalNativeActions = []string{
 	"agent.memory.config.get", "agent.memory.config.update", "agent.memory.status", "agent.memory.facts.update", "agent.memory.facts.delete",
 	"agent.static_sites.list", "agent.static_sites.delete",
 	"agent.workers.list", "agent.workers.get", "agent.workers.destroy", "agent.workers.bind_domain", "agent.workers.unbind_domain",
-	"agent.account.deprovision", "agent.backends.get", "agent.model_profiles.sync", "agent.model_profiles.list", "agent.model_profiles.get", "agent.model_profiles.test", "agent.model_profiles.delete", "agent.core.tasks.get", "agent.core.tasks.list", "agent.core.tasks.cancel", "agent.core.tasks.retry", "agent.core.tasks.events", "agent.core.schedules.create", "agent.core.schedules.get", "agent.core.schedules.list", "agent.core.schedules.update", "agent.core.schedules.pause", "agent.core.schedules.resume", "agent.core.schedules.trigger", "agent.core.schedules.delete", "agent.core.confirmations.get", "agent.core.confirmations.list", "agent.core.confirmations.confirm", "agent.core.confirmations.reject", "agent.core.confirmations.acknowledge_extension_execution_uncertain", "agent.core.mcp.discover", "agent.core.mcp.get", "agent.core.mcp.list", "agent.core.mcp.inspect", "agent.core.mcp.install", "agent.core.mcp.update", "agent.core.mcp.remove", "agent.core.mcp.list_tools", "agent.core.mcp.execute", "agent.core.skills.discover", "agent.core.skills.get", "agent.core.skills.list", "agent.core.skills.inspect", "agent.core.skills.install", "agent.core.skills.update", "agent.core.skills.remove", "agent.core.skills.execute", "agent.core.aws.credentials.create", "agent.core.aws.credentials.update", "agent.core.aws.credentials.delete", "agent.core.aws.credentials.list", "agent.core.aws.credentials.test", "agent.chat.attachment.begin", "agent.chat.attachment.append", "agent.chat.attachment.commit", "agent.image_tools.upload.begin", "agent.image_tools.upload.append", "agent.image_tools.upload.commit", "agent.image_tools.extract_text", "agent.image_tools.translate_text", "agent.chat.turn.stop", "agent.chat.turn.steer", "agent.chat.turns.list", "agent.voice.session.create", "agent.voice.session.start", "agent.voice.session.transcript", "agent.voice.session.interrupt", "agent.voice.session.end", "agent.voice.session.stream", "agent.execution.v2.projects.analyze", "agent.execution.v2.analyses.get", "agent.execution.v2.targets.list", "agent.execution.v2.targets.get", "agent.execution.v2.targets.import", "agent.execution.v2.targets.reserve", "agent.execution.v2.targets.observe", "agent.execution.v2.plans.create", "agent.execution.v2.plans.revise", "agent.execution.v2.plans.get", "agent.execution.v2.plans.list", "agent.execution.v2.deployments.list", "agent.execution.v2.deployments.get", "agent.execution.v2.deployments.events", "agent.execution.v2.runs.create", "agent.execution.v2.runs.get", "agent.execution.v2.runs.list", "agent.execution.v2.runs.cancel", "agent.execution.v2.runs.retry", "agent.execution.v2.runs.events", "agent.execution.v2.artifacts.get", "agent.execution.v2.artifacts.download", "agent.execution.v2.service_bindings.list", "agent.execution.v2.service_bindings.get", "agent.execution.v2.service_bindings.invoke", "agent.execution.v2.secrets.create", "agent.execution.v2.secrets.get", "agent.execution.v2.secrets.list", "agent.execution.v2.secrets.revoke",
+	"agent.account.deprovision", "agent.backends.get", "agent.model_profiles.sync", "agent.model_profiles.list", "agent.model_profiles.get", "agent.model_profiles.test", "agent.model_profiles.delete", "agent.core.tasks.get", "agent.core.tasks.list", "agent.core.tasks.cancel", "agent.core.tasks.retry", "agent.core.tasks.events", "agent.core.schedules.create", "agent.core.schedules.get", "agent.core.schedules.list", "agent.core.schedules.update", "agent.core.schedules.pause", "agent.core.schedules.resume", "agent.core.schedules.trigger", "agent.core.schedules.delete", "agent.core.confirmations.get", "agent.core.confirmations.list", "agent.core.confirmations.confirm", "agent.core.confirmations.reject", "agent.core.confirmations.acknowledge_extension_execution_uncertain", "agent.core.mcp.discover", "agent.core.mcp.get", "agent.core.mcp.list", "agent.core.mcp.inspect", "agent.core.mcp.install", "agent.core.mcp.update", "agent.core.mcp.remove", "agent.core.mcp.list_tools", "agent.core.mcp.execute", "agent.core.skills.discover", "agent.core.skills.get", "agent.core.skills.list", "agent.core.skills.inspect", "agent.core.skills.install", "agent.core.skills.update", "agent.core.skills.remove", "agent.core.skills.execute", "agent.core.aws.credentials.create", "agent.core.aws.credentials.update", "agent.core.aws.credentials.delete", "agent.core.aws.credentials.list", "agent.core.aws.credentials.test", "agent.chat.attachment.begin", "agent.chat.attachment.append", "agent.chat.attachment.commit", "agent.image_tools.upload.begin", "agent.image_tools.upload.append", "agent.image_tools.upload.commit", "agent.image_tools.extract_text", "agent.image_tools.translate_text", "agent.chat.turn.stop", "agent.chat.turn.steer", "agent.chat.turns.list", "agent.voice.session.create", "agent.voice.session.start", "agent.voice.session.transcript", "agent.voice.session.interrupt", "agent.voice.session.end", "agent.execution.v2.projects.analyze", "agent.execution.v2.analyses.get", "agent.execution.v2.targets.list", "agent.execution.v2.targets.get", "agent.execution.v2.targets.import", "agent.execution.v2.targets.reserve", "agent.execution.v2.targets.observe", "agent.execution.v2.plans.create", "agent.execution.v2.plans.revise", "agent.execution.v2.plans.get", "agent.execution.v2.plans.list", "agent.execution.v2.deployments.list", "agent.execution.v2.deployments.get", "agent.execution.v2.deployments.events", "agent.execution.v2.runs.create", "agent.execution.v2.runs.get", "agent.execution.v2.runs.list", "agent.execution.v2.runs.cancel", "agent.execution.v2.runs.retry", "agent.execution.v2.runs.events", "agent.execution.v2.artifacts.get", "agent.execution.v2.artifacts.download", "agent.execution.v2.service_bindings.list", "agent.execution.v2.service_bindings.get", "agent.execution.v2.service_bindings.invoke", "agent.execution.v2.secrets.create", "agent.execution.v2.secrets.get", "agent.execution.v2.secrets.list", "agent.execution.v2.secrets.revoke",
 }

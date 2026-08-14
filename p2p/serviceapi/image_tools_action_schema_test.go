@@ -30,7 +30,7 @@ func TestImageToolActionsPublishClosedOwnerOnlyTypedContract(t *testing.T) {
 	}
 	for action, expected := range want {
 		spec, ok := ActionSpecFor(action)
-		if !ok || spec.Auth != ActionAuthOwner || spec.Transport != ActionTransportHTTPAndWS || spec.Schema == nil {
+		if !ok || spec.Auth != ActionAuthOwner || spec.Transport != ActionTransportHTTPOnly || spec.Schema == nil {
 			t.Fatalf("%s is not an owner HTTP/WS typed action: %#v", action, spec)
 		}
 		assertExactImageToolFields(t, action+" request", spec.Schema.Request, expected.request)

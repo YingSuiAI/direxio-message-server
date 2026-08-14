@@ -11,7 +11,6 @@ import (
 
 	"github.com/YingSuiAI/dirextalk-message-server/internal/caching"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/pushgateway"
-	"github.com/YingSuiAI/dirextalk-message-server/internal/realtime"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/sqlutil"
 	"github.com/YingSuiAI/dirextalk-message-server/roomserver"
 	"github.com/YingSuiAI/dirextalk-message-server/roomserver/types"
@@ -382,78 +381,6 @@ func TestNotifyLocalOnlySuppressesFreshFocusedForegroundRoom(t *testing.T) {
 		}
 		if count != 2 {
 			t.Fatalf("background app context must create a notification, got %d", count)
-		}
-	})
-}
-
-func TestNotifyLocalUsesRealtimeFocusWhenWSSessionExists(t *testing.T) {
-	ctx := context.Background()
-	localpart := "test"
-	serverName := spec.ServerName("localhost")
-	userID := "@test:localhost"
-
-	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		db, close := mustCreateDatabase(t, dbType)
-		defer close()
-		sessionStore := realtime.NewSessionStore(time.Minute)
-		consumer := OutputRoomEventConsumer{
-			db:               db,
-			rsAPI:            &currentStateRoomserver{state: map[gomatrixserverlib.StateKeyTuple]*types.HeaderedEvent{}},
-			syncProducer:     producers.NewSyncAPI(db, noopPublisher{}, "client_data", "notification_data"),
-			realtimeSessions: sessionStore,
-		}
-		mem := &localMembership{
-			UserID:    userID,
-			Localpart: localpart,
-			Domain:    serverName,
-		}
-		contextData := json.RawMessage(`{
-			"foreground": true,
-			"expires_at_ms": 4102444800000
-		}`)
-		if err := db.SaveAccountData(ctx, localpart, serverName, "", "io.dirextalk.push.context", contextData); err != nil {
-			t.Fatal(err)
-		}
-		sessionStore.Upsert("ws-1", realtime.SessionState{
-			UserID:        userID,
-			Role:          "owner",
-			Foreground:    true,
-			FocusedRoomID: "!focused:example.com",
-			LastSeen:      time.Now(),
-		})
-
-		focusedEvent := mustCreateEvent(t, `{
-			"type":"m.room.message",
-			"room_id":"!focused:example.com",
-			"sender":"@alice:example.com",
-			"content":{"body":"focused","msgtype":"m.text"}
-		}`)
-		if err := consumer.notifyLocal(ctx, focusedEvent, mem, 2, "Focused", 100); err != nil {
-			t.Fatalf("notifyLocal returned error for focused room: %v", err)
-		}
-		count, err := db.GetNotificationCount(ctx, localpart, serverName, tables.AllNotifications)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if count != 0 {
-			t.Fatalf("focused WS room must not create unread notifications, got %d", count)
-		}
-
-		otherEvent := mustCreateEvent(t, `{
-			"type":"m.room.message",
-			"room_id":"!other:example.com",
-			"sender":"@alice:example.com",
-			"content":{"body":"other","msgtype":"m.text"}
-		}`)
-		if err := consumer.notifyLocal(ctx, otherEvent, mem, 2, "Other", 101); err != nil {
-			t.Fatalf("notifyLocal returned error for other room: %v", err)
-		}
-		count, err = db.GetNotificationCount(ctx, localpart, serverName, tables.AllNotifications)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if count != 1 {
-			t.Fatalf("different room with active WS focus must create a notification, got %d", count)
 		}
 	})
 }

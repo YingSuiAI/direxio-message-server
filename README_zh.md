@@ -50,23 +50,22 @@ Dirextalk 产品 API 使用 body-action 入口：
 - `GET /_p2p/health`
 - `POST /_p2p/query`
 - `POST /_p2p/command`
-- `GET /_p2p/ws`
+- `GET /_p2p/events`
 - `GET /.well-known/portal/owner.json`
 
 生成后的 ProductCore action 元数据位于
 [docs/product-action-contract.json](docs/product-action-contract.json)，它是
-可检查的 action 列表，能力增加时会随源码变化。Owner 客户端优先在 realtime
-WebSocket 上使用 `client.request`/`server.response`，realtime 未 ready 时回退
-到 HTTP query/command；外部 MCP 客户端在 `POST /mcp` 上使用带 `agent_token`
+可检查的 action 列表，能力增加时会随源码变化。Owner 客户端使用 HTTP
+query/command，并通过 SSE 订阅 Product 事件；外部 MCP 客户端在 `POST /mcp` 上使用带 `agent_token`
 的 JSON-RPC。
 
 鉴权和传输边界：
 
 - Owner ProductCore action 使用 `Authorization: Bearer <access_token>`。
-- `realtime.ws_ticket.create` 颁发短期单次 owner ticket；`GET /_p2p/ws`
-  只接受该 ticket，不接受 bearer token。
+- `GET /_p2p/events` 接受 owner bearer token，并通过 `after_seq` 或
+  `Last-Event-ID` 断点续传。
 - `agent_token` 只能调用 `agent.matrix_session.create` 和标准 `POST /mcp`；
-  不能创建 owner WebSocket ticket 或调用 owner action。
+  不能调用 owner action。
 
 请求 envelope：
 

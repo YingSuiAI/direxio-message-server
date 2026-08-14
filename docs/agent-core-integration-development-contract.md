@@ -21,8 +21,8 @@ override narrative documentation.
   tasks, schedules, confirmations, Skills/MCP installations, Execution V2,
   AWS configuration, and Agent runtime data.
 - Online Agent remains the private Matrix `agent_room_id` conversation. Native
-  Agent remains the ProductCore `agent.*` / `client.native_agent_stream`
-  surface. The two transports do not share history or online-state inference.
+  Agent remains the ProductCore `agent.*` HTTP/SSE surface. The two transports
+  do not share history or online-state inference.
 - Message Server contains no in-process Native Agent runner, Agent database
   schema, model provider, knowledge index, scheduler, extension runner, or
   Execution V2 coordinator.
@@ -175,7 +175,7 @@ For a durable operation, the bounded CallContext deadline authorizes each
 admission or control RPC; it is not a total execution or observation timeout.
 Message Server renews the Watch admission context and its domain-separated
 control grant after Start succeeds. The live Watch is then owned by the client
-WebSocket lifecycle and may outlive that admission deadline. A Watch is
+client connection lifecycle and may outlive that admission deadline. A Watch is
 detached after 30 consecutive minutes without a persisted event, on client
 disconnect, or on explicit stream cancellation; detaching never cancels the
 durable operation. Message Server reports an observation-only interruption with
@@ -246,7 +246,7 @@ published ProductCore actions. It does not expose raw SSH, SSM, AWS SDK,
 arbitrary URL, shell, or Docker-socket passthrough.
 
 Every mutation requires a UUID idempotency key. Mutations of an existing object
-also require the exact expected revision. After a WebSocket mutation may have
+also require the exact expected revision. After an HTTP mutation may have
 been dispatched, Flutter does not replay it over HTTP; it reads the durable
 Agent state. Provider reconciliation is an Agent background-controller concern,
 not a public `runs.reconcile` operation.

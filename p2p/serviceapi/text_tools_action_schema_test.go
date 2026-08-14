@@ -5,7 +5,7 @@ import "testing"
 func TestTextToolsActionSurfaceIsOwnerHTTPAndWSTyped(t *testing.T) {
 	for _, action := range []string{"agent.text_tools.config.get", "agent.text_tools.config.update", "agent.text_tools.execute"} {
 		spec, ok := ActionSpecFor(action)
-		if !ok || spec.Auth != ActionAuthOwner || spec.Transport != ActionTransportHTTPAndWS || spec.Schema == nil {
+		if !ok || spec.Auth != ActionAuthOwner || spec.Transport != ActionTransportHTTPOnly || spec.Schema == nil {
 			t.Fatalf("%s spec = %#v", action, spec)
 		}
 	}

@@ -16,7 +16,7 @@ func TestStaticSiteActionsPublishCurrentOwnerContract(t *testing.T) {
 		},
 	} {
 		spec, ok := ActionSpecFor(test.action)
-		if !ok || spec.Auth != ActionAuthOwner || spec.Transport != ActionTransportHTTPAndWS || spec.Schema == nil {
+		if !ok || spec.Auth != ActionAuthOwner || spec.Transport != ActionTransportHTTPOnly || spec.Schema == nil {
 			t.Fatalf("%s spec = %#v", test.action, spec)
 		}
 		for _, field := range test.requestRequired {

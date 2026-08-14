@@ -301,7 +301,7 @@ func TestAgentCoreFamilySchemaDrift(t *testing.T) {
 func TestBuildActionSpecIndexRejectsDuplicateNames(t *testing.T) {
 	specs := []ActionSpec{
 		{Name: "duplicate", Auth: ActionAuthPublic, Transport: ActionTransportHTTPOnly},
-		{Name: "duplicate", Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS},
+		{Name: "duplicate", Auth: ActionAuthOwner, Transport: ActionTransportHTTPOnly},
 	}
 
 	index, err := buildActionSpecIndex(specs)
@@ -326,7 +326,7 @@ func TestNativeAgentReferenceSchemaMatchesStrictProducerShape(t *testing.T) {
 		"project_id": true, "status": true, "state": true, "room_id": true,
 		"room_type": true, "title": true, "preview": true, "channel_id": true, "post_id": true,
 	}
-	for _, action := range []string{"agent.chat", "agent.chat.stream"} {
+	for _, action := range []string{"agent.chat"} {
 		spec, ok := ActionSpecFor(action)
 		if !ok || spec.Schema == nil {
 			t.Fatalf("%s must publish a schema", action)
@@ -368,26 +368,13 @@ func TestNativeAgentReferenceSchemaMatchesStrictProducerShape(t *testing.T) {
 	}
 }
 
-func TestNativeAgentAttachmentsAreStreamOnlyAndUseClosedUploadSchemas(t *testing.T) {
+func TestNativeAgentAttachmentsUseClosedUploadSchemas(t *testing.T) {
 	unary, ok := ActionSpecFor("agent.chat")
 	if !ok || unary.Schema == nil {
 		t.Fatal("agent.chat must publish a schema")
 	}
 	if _, present := unary.Schema.Request["accepted_attachment_ids"]; present {
 		t.Fatal("unary agent.chat must not advertise committed attachment IDs")
-	}
-	stream, ok := ActionSpecFor("agent.chat.stream")
-	if !ok || stream.Schema == nil {
-		t.Fatal("agent.chat.stream must publish a schema")
-	}
-	accepted, present := stream.Schema.Request["accepted_attachment_ids"]
-	if !present || accepted.Type != "array" || accepted.Items == nil || accepted.Items.Presence == nil || accepted.Items.Presence.Present != "canonical_uuid" {
-		t.Fatalf("stream attachment IDs schema = %#v", accepted)
-	}
-	extensions, present := stream.Schema.Request["extensions"]
-	if !present || extensions.Type != "array" || extensions.Items == nil || extensions.Items.Type != "object" ||
-		extensions.Items.Properties["id"].Presence == nil || extensions.Items.Properties["allowed_tools"].Items == nil {
-		t.Fatalf("stream extension selection schema = %#v", extensions)
 	}
 	for _, action := range []string{
 		"agent.chat.attachment.begin",
@@ -425,7 +412,7 @@ func TestNativeAgentAttachmentsAreStreamOnlyAndUseClosedUploadSchemas(t *testing
 }
 
 func TestNativeAgentChatPublishesOneClosedStartShape(t *testing.T) {
-	for _, action := range []string{"agent.chat", "agent.chat.stream"} {
+	for _, action := range []string{"agent.chat"} {
 		spec, ok := ActionSpecFor(action)
 		if !ok || spec.Schema == nil {
 			t.Fatalf("%s must publish a schema", action)
@@ -448,13 +435,6 @@ func TestNativeAgentChatPublishesOneClosedStartShape(t *testing.T) {
 	}
 	if _, present := unary.Schema.Request["after_seq"]; present {
 		t.Fatal("unary agent.chat must not advertise a stream cursor")
-	}
-	stream, _ := ActionSpecFor("agent.chat.stream")
-	if !stream.Schema.Request["conversation_id"].Required {
-		t.Fatal("agent.chat.stream must require the authoritative conversation")
-	}
-	if _, present := stream.Schema.Request["after_seq"]; !present {
-		t.Fatal("agent.chat.stream must advertise its reconnect cursor")
 	}
 }
 
@@ -524,7 +504,7 @@ func TestNativeAgentWebSearchSchemasUseServerStoredCredential(t *testing.T) {
 	if !ok || testSpec.Schema == nil || len(testSpec.Schema.Request) != 0 {
 		t.Fatalf("agent.web_search.test must use the stored credential without request secrets: %#v", testSpec)
 	}
-	for _, action := range []string{"agent.chat", "agent.chat.stream"} {
+	for _, action := range []string{"agent.chat"} {
 		spec, ok := ActionSpecFor(action)
 		if !ok || spec.Schema == nil {
 			t.Fatalf("%s must publish a schema", action)

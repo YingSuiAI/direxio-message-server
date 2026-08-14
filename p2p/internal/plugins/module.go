@@ -37,7 +37,6 @@ const (
 	actionHealth        = "plugins.health"
 	actionLogsTail      = "plugins.logs.tail"
 	actionInvoke        = "plugins.invoke"
-	actionInvokeStream  = "plugins.invoke.stream"
 )
 
 // Store is the durable plugin repository used by Module.
@@ -86,7 +85,6 @@ func (m *Module) Handlers() map[string]actionbase.Handler {
 		actionHealth:        m.health,
 		actionLogsTail:      m.logsTail,
 		actionInvoke:        m.invoke,
-		actionInvokeStream:  m.invokeStreamOnly,
 	}
 }
 
@@ -173,10 +171,6 @@ func (m *Module) invoke(ctx context.Context, params map[string]any) (any, *actio
 	}, nil
 }
 
-func (m *Module) invokeStreamOnly(context.Context, map[string]any) (any, *actionbase.Error) {
-	return nil, actionbase.BadRequest("action requires websocket")
-}
-
 // PreparedStream is validated synchronously before the WS adapter starts a
 // goroutine. The runner request stays opaque so callers cannot bypass module
 // validation while retaining the existing frame metadata.
@@ -229,7 +223,7 @@ func (m *Module) prepareInvoke(ctx context.Context, params map[string]any, strea
 		return InvokeRequest{}, "", actionbase.BadRequest("plugin action is not allowed")
 	}
 	if !stream && strings.HasSuffix(runnerAction, ".stream") {
-		return InvokeRequest{}, "", actionbase.BadRequest("stream action requires websocket")
+		return InvokeRequest{}, "", actionbase.BadRequest("stream plugin actions are not available through Product HTTP")
 	}
 	invokeParams := map[string]any{}
 	if rawParams, ok := params["params"].(map[string]any); ok {

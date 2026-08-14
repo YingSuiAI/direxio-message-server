@@ -160,16 +160,6 @@ func TestReleaseV2StatusIsOwnerHTTPOnlyAndCombinesReceiptWithCentralAgent(t *tes
 			t.Fatalf("status token=%q got %d", token, response.Code)
 		}
 	}
-	identity, authorized := service.authorizeProductAction(service.AccessToken(), "release.v2.status")
-	if !authorized {
-		t.Fatal("expected owner session")
-	}
-	frame := service.handleRealtimeWSRequest(context.Background(), realtimeWSTicket{Role: "owner", UserID: service.OwnerMXID(), DeviceID: identity.DeviceID, Generation: identity.Generation}, map[string]any{
-		"id": "release-v2-status", "action": "release.v2.status", "params": map[string]any{},
-	})
-	if frame["ok"] != false || frame["error"] != "action requires http" {
-		t.Fatalf("release.v2.status must remain HTTP-only: %#v", frame)
-	}
 }
 
 func TestReleaseV2StatusKeepsUpdaterAndCentralFailuresIndependent(t *testing.T) {
@@ -325,16 +315,6 @@ func TestReleaseV2ApplyIsOwnerHTTPOnly(t *testing.T) {
 		if response.Code != http.StatusUnauthorized {
 			t.Fatalf("apply token=%q got %d body=%s", token, response.Code, response.Body.String())
 		}
-	}
-	identity, authorized := service.authorizeProductAction(service.AccessToken(), "release.v2.apply")
-	if !authorized {
-		t.Fatal("expected owner session")
-	}
-	frame := service.handleRealtimeWSRequest(context.Background(), realtimeWSTicket{
-		Role: "owner", UserID: service.OwnerMXID(), DeviceID: identity.DeviceID, Generation: identity.Generation,
-	}, map[string]any{"id": "release-v2-apply", "action": "release.v2.apply", "params": params})
-	if frame["ok"] != false || frame["error"] != "action requires http" || controller.applyRequest.Component != "" {
-		t.Fatalf("release.v2.apply must remain owner HTTP-only: %#v", frame)
 	}
 }
 
@@ -508,34 +488,6 @@ func TestClientVersionReportRejectsHTTPAuthorizationCapturedBeforeDeviceSwitch(t
 	}
 }
 
-func TestClientVersionReportRejectsConnectedOwnerWSAfterDeviceSwitch(t *testing.T) {
-	service := NewService(Config{ServerName: "example.com"})
-	service.SetMatrixSessionIssuer(&recordingMatrixSessionIssuer{})
-	ticketResult, apiErr := service.createRealtimeWSTicketForToken(service.AccessToken())
-	if apiErr != nil {
-		t.Fatalf("create WS ticket: %#v", apiErr)
-	}
-	record, consumeErr := service.consumeRealtimeWSTicketRecord(trimString(ticketResult["ticket"]))
-	if consumeErr != nil {
-		t.Fatalf("consume WS ticket: %v", consumeErr)
-	}
-	if _, apiErr := service.Handle(context.Background(), "portal.auth", map[string]any{
-		"password": service.password, "device_id": "NEW_DEVICE",
-	}); apiErr != nil {
-		t.Fatalf("switch portal device: %#v", apiErr)
-	}
-
-	frame := service.handleRealtimeWSRequest(context.Background(), record, map[string]any{
-		"id": "stale-ws", "action": "client.version.report", "params": map[string]any{"client_version": "v9.9.9"},
-	})
-	if frame["ok"] != false || frame["status"] != http.StatusUnauthorized || frame["code"] != "client_session_stale" {
-		t.Fatalf("expected stale connected WS to be rejected, got %#v", frame)
-	}
-	if service.clientBuild.Version != "" {
-		t.Fatalf("stale WS wrote the new device build: %#v", service.clientBuild)
-	}
-}
-
 func TestClientVersionReportUsesNarrowDeviceCASWithoutLosingConcurrentPortalFields(t *testing.T) {
 	service := NewService(withTestExternalAgent(Config{ServerName: "example.com"}))
 	service.mu.Lock()
@@ -594,85 +546,59 @@ func TestClientVersionReportUsesNarrowDeviceCASWithoutLosingConcurrentPortalFiel
 }
 
 func TestClientVersionReportSerializesSameDevicePasswordRotation(t *testing.T) {
-	for _, transport := range []string{"http", "ws"} {
-		t.Run(transport, func(t *testing.T) {
-			service := NewService(Config{ServerName: "example.com"})
-			service.mu.Lock()
-			initial := service.portalStateLocked()
-			service.mu.Unlock()
-			store := &blockingClientBuildStore{
-				Store:          service.store,
-				state:          initial,
-				narrowEntered:  make(chan struct{}),
-				releaseNarrow:  make(chan struct{}),
-				fullReportSave: make(chan struct{}, 1),
-				portalSaved:    make(chan portalState, 1),
-			}
-			service.store = store
-			identity, authorized := service.authorizeProductAction(service.AccessToken(), "client.version.report")
-			if !authorized {
-				t.Fatal("expected current owner session")
-			}
-			record := realtimeWSTicket{Role: "owner", UserID: service.OwnerMXID(), DeviceID: identity.DeviceID, Generation: identity.Generation}
-			reportDone := make(chan *apiError, 1)
-			go func() {
-				if transport == "ws" {
-					frame := service.handleRealtimeWSRequest(context.Background(), record, map[string]any{
-						"id": "same-device-race", "action": "client.version.report", "params": map[string]any{"client_version": "v2.3.4"},
-					})
-					if frame["ok"] != true {
-						status, _ := frame["status"].(int)
-						reportDone <- codedError(status, trimString(frame["code"]), trimString(frame["error"]))
-						return
-					}
-					reportDone <- nil
-					return
-				}
-				_, apiErr := service.Handle(withPortalActionSession(context.Background(), identity), "client.version.report", map[string]any{"client_version": "v2.3.4"})
-				reportDone <- apiErr
-			}()
-			<-store.narrowEntered
+	service := NewService(Config{ServerName: "example.com"})
+	service.mu.Lock()
+	initial := service.portalStateLocked()
+	service.mu.Unlock()
+	store := &blockingClientBuildStore{
+		Store:          service.store,
+		state:          initial,
+		narrowEntered:  make(chan struct{}),
+		releaseNarrow:  make(chan struct{}),
+		fullReportSave: make(chan struct{}, 1),
+		portalSaved:    make(chan portalState, 1),
+	}
+	service.store = store
+	identity, authorized := service.authorizeProductAction(service.AccessToken(), "client.version.report")
+	if !authorized {
+		t.Fatal("expected current owner session")
+	}
+	reportDone := make(chan *apiError, 1)
+	go func() {
+		_, apiErr := service.Handle(withPortalActionSession(context.Background(), identity), "client.version.report", map[string]any{"client_version": "v2.3.4"})
+		reportDone <- apiErr
+	}()
+	<-store.narrowEntered
 
-			passwordDone := make(chan *apiError, 1)
-			go func() {
-				_, apiErr := service.Handle(context.Background(), "portal.password", map[string]any{
-					"old_password": service.password,
-					"new_password": "rotated-password",
-					"device_id":    identity.DeviceID,
-				})
-				passwordDone <- apiErr
-			}()
-			passwordPersistedBeforeReport := false
-			select {
-			case <-store.portalSaved:
-				passwordPersistedBeforeReport = true
-			case <-time.After(300 * time.Millisecond):
-			}
-			close(store.releaseNarrow)
-			if apiErr := <-reportDone; apiErr != nil {
-				t.Fatalf("report client version: %#v", apiErr)
-			}
-			if apiErr := <-passwordDone; apiErr != nil {
-				t.Fatalf("rotate portal password: %#v", apiErr)
-			}
-			if passwordPersistedBeforeReport {
-				t.Fatal("same-device password token/generation mutation overtook an already-validated client report")
-			}
-
-			if transport == "ws" {
-				frame := service.handleRealtimeWSRequest(context.Background(), record, map[string]any{
-					"id": "stale-after-password", "action": "client.version.report", "params": map[string]any{"client_version": "v9.9.9"},
-				})
-				if frame["code"] != clientSessionStaleCode {
-					t.Fatalf("old WS remained valid after same-device password rotation: %#v", frame)
-				}
-				return
-			}
-			_, apiErr := service.Handle(withPortalActionSession(context.Background(), identity), "client.version.report", map[string]any{"client_version": "v9.9.9"})
-			if apiErr == nil || apiErr.Code != clientSessionStaleCode {
-				t.Fatalf("old HTTP session remained valid after same-device password rotation: %#v", apiErr)
-			}
+	passwordDone := make(chan *apiError, 1)
+	go func() {
+		_, apiErr := service.Handle(context.Background(), "portal.password", map[string]any{
+			"old_password": service.password,
+			"new_password": "rotated-password",
+			"device_id":    identity.DeviceID,
 		})
+		passwordDone <- apiErr
+	}()
+	passwordPersistedBeforeReport := false
+	select {
+	case <-store.portalSaved:
+		passwordPersistedBeforeReport = true
+	case <-time.After(300 * time.Millisecond):
+	}
+	close(store.releaseNarrow)
+	if apiErr := <-reportDone; apiErr != nil {
+		t.Fatalf("report client version: %#v", apiErr)
+	}
+	if apiErr := <-passwordDone; apiErr != nil {
+		t.Fatalf("rotate portal password: %#v", apiErr)
+	}
+	if passwordPersistedBeforeReport {
+		t.Fatal("same-device password token/generation mutation overtook an already-validated client report")
+	}
+
+	_, apiErr := service.Handle(withPortalActionSession(context.Background(), identity), "client.version.report", map[string]any{"client_version": "v9.9.9"})
+	if apiErr == nil || apiErr.Code != clientSessionStaleCode {
+		t.Fatalf("old HTTP session remained valid after same-device password rotation: %#v", apiErr)
 	}
 }
 

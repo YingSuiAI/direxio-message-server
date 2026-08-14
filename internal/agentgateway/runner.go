@@ -58,7 +58,7 @@ type RunnerConfig struct {
 }
 
 // Runner adapts the capability operation protocol to the Native Agent runner
-// contract used by ProductCore and the realtime websocket facade.
+// contract used by ProductCore and the HTTP/SSE facade.
 // Native Agent execution happens in dirextalk-agent; message-server only
 // admits, watches and translates the operation stream.
 type Runner struct {
@@ -1108,7 +1108,7 @@ func transformCapabilityRequest(action, operationID string, params map[string]an
 	delete(input, "after_seq")
 	if action == "agent.chat" || action == "agent.chat.stream" {
 		// ProductCore and the Agent capability share one closed request shape.
-		// Reconnect cursors and websocket correlation metadata are consumed by
+		// Reconnect cursors and stream correlation metadata are consumed by
 		// the gateway and must never cross the capability boundary.
 		canonical := make(map[string]any, 8)
 		for _, key := range []string{

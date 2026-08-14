@@ -44,7 +44,7 @@ Dirextalk 产品 API 以 body-action surface 为主；标准 MCP 客户端使用
 - `POST /_p2p/query`
 - `POST /_p2p/command`
 - `POST /mcp`
-- `GET /_p2p/ws`
+- `GET /_p2p/events`
 - `GET /.well-known/portal/owner.json`
 
 请求 envelope：
@@ -59,7 +59,7 @@ Dirextalk 产品 API 以 body-action surface 为主；标准 MCP 客户端使用
 }
 ```
 
-Protected action 通过 HTTP route 调用时需要 `Authorization: Bearer <access_token>`。登录后的客户端 product action 在 WS 已收到 `server.ready` 时优先走 `GET /_p2p/ws` 上的 `client.request`/`server.response`；点击时 WS 未 ready 或已断线时，当前 action 立即用 `POST /_p2p/query` 或 `POST /_p2p/command` 作为 owner HTTP fallback，同时 realtime WS 在后台继续重连。已发出 WS request 后响应丢失时，只对可安全重复的 action 做 HTTP fallback。`client.version.report` 支持 owner HTTP/WS；`release.v2.status`、`release.v2.apply` 与 `portal.account.delete` 是 owner `access_token` 保护的 HTTP-only 命令。`release.v2.status` 不接受参数，并行读取 receipt-bound updater 状态与固定中台 `appId=1&channelId=agents` 记录；中台故障不会阻止返回 updater/server/job/watchdog 事实，Agent 目标不可用时以结构化 reason 表示。状态不执行 GitHub discovery、不暴露执行计划或基础设施字段。`release.v2.apply` 只接受 `component=server|agent`、canonical `target_version`、小写 UUID `idempotency_key` 与 `confirm=apply_release_change`。server 更新每次重取固定 server 记录，并用其 `preVersion` 复核当前 device 报告的 client；Agent 更新每次重取固定 agents 记录，用其 `preVersion` 复核实际运行的 Message Server，并要求目标严格新于 updater receipt 绑定的 Agent 当前版本。通过 Gate 后仅向 updater 发送 `component`、`target_version`、`minimum_server_version`、`idempotency_key`、`confirm` 五个字段；server 的 `minimum_server_version` 必须为空字符串，Agent 使用 agents `preVersion`。它拒绝 image/digest/url/shell/Compose/service 和未知基础设施字段。`realtime.ws_ticket.create` 只接受 owner `access_token` 创建 owner WS ticket。`agent_token` 只允许通过 product body-action 访问 `agent.matrix_session.create`，并可访问标准 `POST /mcp` MCP endpoint，不能通过 HTTP fallback 调用 owner product action。固定 `mcp.*` HTTP body action 已从 `/_p2p/query` 和 `/_p2p/command` 删除；外部 MCP客户端必须使用 `POST /mcp` JSON-RPC。标准 MCP endpoint 与 `agent.matrix_session.create` 不迁移到 WS `client.request`。`GET /_p2p/ws` 只接受短期单次 owner WS ticket，不直接接受 bearer token。当前 public action 是：
+Protected action 通过 HTTP route 调用时需要 `Authorization: Bearer <access_token>`。客户端 product 查询和写入统一使用 `POST /_p2p/query` 或 `POST /_p2p/command`，产品投影事件通过 owner-authenticated `GET /_p2p/events` SSE 接收。`agent_token` 只允许调用 `agent.matrix_session.create` 和标准 `POST /mcp`；其他 protected action 只认 owner access token。
 
 - `portal.bootstrap`
 - `portal.auth`
@@ -76,9 +76,9 @@ Protected action 通过 HTTP route 调用时需要 `Authorization: Bearer <acces
 
 Action auth and transport metadata is generated from `p2p/serviceapi.ActionSpecs` into `docs/product-action-contract.json`; contract-critical docs and clients should treat that generated file as the checkable action list.
 
-`portal.bootstrap`、`portal.auth`、`portal.password` 响应只暴露一个初始化状态：`initialized`。它只表示用户是否已通过 `portal.password` 修改过初始密码；profile 是否填写不影响该状态。`client.version.report` 绑定发起 HTTP 请求或创建 WS ticket 时认证的 portal device/session；设备或会话切换后的旧请求、旧 WS 会以 `client_session_stale` 拒绝。报告通过只更新 client build 字段的 device-CAS 写入，其他 portal 字段不会被旧快照覆盖；新 portal device 会原子清掉旧设备报告。同 device 的 `portal.password` token/generation 轮换和 portal 持久化与 report 复核/CAS 共用 session mutex，完成后释放锁再刷新 Matrix session，旧 report 不会越过轮换落库。`release.v2.status` 的 Agent 当前版本来自 host updater 的 receipt-bound runtime，中台 agents `version` 仅是比较目标：只有它严格高于当前版本时才返回 `update_available=true`；中台版本低于或等于当前版本时，`latest_version` 返回当前版本，避免把落后的中台记录标成最新版本。`minimum_server_version` 来自本次固定中台 agents 记录；兼容性只在存在更高 Agent 目标时比较实际 Message Server 版本与 agents `preVersion`。中台或 updater 任一侧失败都保留另一侧可验证事实，不使用缓存或旧 action fallback。`portal.account.delete` 要求 `params.confirm="delete_account"`，先持久化 updater desired state `deprovisioned`，失败时不执行后续破坏操作；成功后向 accepted direct contacts 发布带 `account_deleted` 的 `io.dirextalk.room.profile` 解散状态，让对端隐藏已注销联系人，随后退出直聊、解散 owner 创建的群聊和频道、退出 owner 只是成员的群聊/频道、停用本地 owner/agent Matrix 账号并写入非密钥 deprovision 标记。设置 `deprovisioned` 后任一阶段失败都会 best-effort 恢复 `running`；恢复失败返回安全结构化错误 `account_delete_watchdog_restore_failed`。该动作只清理本机数据库并关闭 message-server 进程，不销毁 AWS/云服务器实例。
+`portal.bootstrap`、`portal.auth`、`portal.password` 响应只暴露一个初始化状态：`initialized`。它只表示用户是否已通过 `portal.password` 修改过初始密码；profile 是否填写不影响该状态。`client.version.report` 绑定发起 HTTP 请求时认证的 portal device/session；设备或会话切换后的旧请求会以 `client_session_stale` 拒绝。报告通过只更新 client build 字段的 device-CAS 写入，其他 portal 字段不会被旧快照覆盖；新 portal device 会原子清掉旧设备报告。同 device 的 `portal.password` token/generation 轮换和 portal 持久化与 report 复核/CAS 共用 session mutex，完成后释放锁再刷新 Matrix session，旧 report 不会越过轮换落库。`release.v2.status` 的 Agent 当前版本来自 host updater 的 receipt-bound runtime，中台 agents `version` 仅是比较目标：只有它严格高于当前版本时才返回 `update_available=true`；中台版本低于或等于当前版本时，`latest_version` 返回当前版本，避免把落后的中台记录标成最新版本。`minimum_server_version` 来自本次固定中台 agents 记录；兼容性只在存在更高 Agent 目标时比较实际 Message Server 版本与 agents `preVersion`。中台或 updater 任一侧失败都保留另一侧可验证事实，不使用缓存或旧 action fallback。`portal.account.delete` 要求 `params.confirm="delete_account"`，先持久化 updater desired state `deprovisioned`，失败时不执行后续破坏操作；成功后向 accepted direct contacts 发布带 `account_deleted` 的 `io.dirextalk.room.profile` 解散状态，让对端隐藏已注销联系人，随后退出直聊、解散 owner 创建的群聊和频道、退出 owner 只是成员的群聊/频道、停用本地 owner/agent Matrix 账号并写入非密钥 deprovision 标记。设置 `deprovisioned` 后任一阶段失败都会 best-effort 恢复 `running`；恢复失败返回安全结构化错误 `account_delete_watchdog_restore_failed`。该动作只清理本机数据库并关闭 message-server 进程，不销毁 AWS/云服务器实例。
 
-`rooms.reactivate` 与 `channels.public.join_result` 是 HTTP-only 节点间回调，不是 WS `client.request` 或客户端常规入口。`rooms.reactivate` 只用于在群/私有频道成员节点重建后恢复对方节点上的邀请/待加入提示，不能让对方静默加入；最终加入仍由对方客户端调用 `groups.join` 或 `channels.join`。
+`rooms.reactivate` 与 `channels.public.join_result` 是 HTTP-only 节点间回调，不是 HTTP action 或客户端常规入口。`rooms.reactivate` 只用于在群/私有频道成员节点重建后恢复对方节点上的邀请/待加入提示，不能让对方静默加入；最终加入仍由对方客户端调用 `groups.join` 或 `channels.join`。
 
 `plugins.*` 只服务非 Agent 插件，并使用 owner `access_token`；Agent 不进入
 plugin catalog、生命周期、配置或 invoke 路径。插件未启用时不发布对应能力。
@@ -88,7 +88,7 @@ Native Agent 当前边界：
 - `dirextalk-agent` 拥有模型与加密凭据、对话/turn、Knowledge/长期记忆、
   Tasks、调度、Skills/MCP、AWS、Execution V2 和 runner 数据；Message Server
   不挂载或解释这些表和数据卷。
-- Flutter 继续使用现有 `agent.*` actions 和 `client.native_agent_stream`。
+- Flutter 继续使用现有 `agent.*` actions；文本 turn 通过 HTTP POST 和 SSE。
   Chat 只转发完整的 `model_profile_id`、`model_profile_revision`、
   `credential_version` 三元组；inline profile、历史消息、工具凭据及嵌套
   credential-like 字段在到达 Agent 前拒绝。
@@ -193,8 +193,8 @@ Native Agent 当前边界：
 
 P2P action 生命周期：
 
-1. 登录后客户端在 WS 已收到 `server.ready` 时通过 `GET /_p2p/ws` 发送 `client.request`；点击时 WS 未 ready 或断线时，同一 `{ "action": "...", "params": ... }` envelope 立即通过 HTTP `/query` 或 `/command` 作为 owner fallback，realtime WS 后台重连恢复事件流。portal/auth/password/account-delete、WS ticket、`POST /mcp`、`agent.matrix_session.create`、public/callback action 仍按各自 HTTP/WS 边界执行；固定 `mcp.*` body action 已删除。
-2. route 或 WS request 处理器调用 `Service.Authorize`：
+1. 客户端通过 HTTP `/query` 或 `/command` 提交 `{ "action": "...", "params": ... }` envelope；标准 MCP 使用 `POST /mcp`。
+2. route 处理器调用 `Service.Authorize`：
    - public action 直接放行；
    - protected action 校验 owner access token；`agent_token` 仅允许 product body-action `agent.matrix_session.create` 和标准 `POST /mcp`。
 3. `Service.Handle` 分发到对应业务函数。
@@ -202,15 +202,15 @@ P2P action 生命周期：
 5. 需要 Matrix 事实写入时调用 `p2p.Transport`。
 6. Dirextalk Message Server roomserver 产生 output event。
 7. `p2p.consumer` 调用 `ProjectRoomEvent` 更新 P2P read model。
-8. `/_p2p/ws` 发送产品投影事件和通用 `server.response`。Owner WS 通过 `client.request` 执行登录后 product 查询/命令，但不包含 MCP action；旧 `client.command` 兼容别名已移除，客户端必须发送 `client.request`。同一连接上的 request 以 `id` 独立关联响应并允许完成顺序不同于发送顺序，最多同时执行 8 个；超限 request 在 dispatch 前收到 `429`，仍在执行的重复 `id` 只收到不带关联 `id` 的 `duplicate_request_id` protocol error，原 request 不会重放或产生第二个关联响应。连接关闭会取消仍在执行的 request。Agents room 消息、预览和回复走 Matrix Client-Server，不通过 P2P event 或 WS stream 转发。
+8. `/_p2p/events` 通过 SSE 发送产品投影事件。Agents room 消息、预览和回复继续走 Matrix Client-Server。
 9. 客户端普通消息、历史、搜索、redaction 继续通过 Matrix Client-Server API。
 
 同步策略：
 
 - `sync.bootstrap` 是冷启动、登录后恢复、本地缓存不可用或事件缺口兜底用的基线快照；不要在每个事件后全量刷新。
 - `sync.bootstrap.read_markers` 固定返回按 `room_id` 排序的 metadata-only 数组，每项只有 `room_id`、`event_id`、`origin_server_ts`，空状态返回 `[]`。它只为新设备未读恢复提供 ProductCore fallback 边界，不返回消息正文、发送者或媒体；客户端仍通过 Matrix `/sync`、receipt 与 `/rooms/{roomID}/messages` 获取未读和历史。`sync.read_marker`、`channels.read_marker` 由服务端把 `event_id` 解析为对应 `room_id` 内的 Matrix timeline topology token，并只按该权威顺序推进；请求中的 `origin_server_ts` 可省略且不参与排序，bootstrap 返回事件本身的服务端时间戳。解析固定绑定已认证 owner MXID，并复用 Matrix history-visibility 与本地隐藏事件访问检查；事件不存在、属于其他房间或对该 owner 不可见时统一返回不泄露差异的校验错误。
-- 日常弱网/断线恢复使用 `GET /_p2p/ws` 增量追平。客户端先通过 `realtime.ws_ticket.create` 创建 ticket，连接后发送 `client.hello` 的 `since=<last_seq>`，并持久保存最后处理的 `seq`，对已知事件类型做本地 reducer 更新；只有遇到未知事件、解析失败、缺口无法确认或本地缓存损坏时才拉一次 `sync.bootstrap`。WS ready 时可通过 `client.request` 拉取；WS 不可用时可通过 owner HTTP fallback 立即拉取。
-- 如果 `since` 是非零旧 cursor 且已经早于服务端保留的 `p2p_events` 最小序号，WS 会先发送 `server.cursor_reset`。控制事件 payload 包含 `type`、`since`、`min_seq`、`max_seq`、`count`、`recovery: "bootstrap_required"`；客户端收到后应清理本地产品缓存，优先通过 WS `client.request` 调用一次 `sync.bootstrap`，WS 不 ready 时可用 owner HTTP fallback 拉取，再用最新 `seq` 继续订阅增量。
+- 日常弱网/断线恢复使用 `GET /_p2p/events?after_seq=<last_seq>` 或 `Last-Event-ID` 增量追平；客户端持久保存最后处理的正 `seq`。
+- 过期 cursor 会收到一次 `cursor_reset`（含 `since`、`min_seq`、`max_seq`、`count`、`recovery: "bootstrap_required"`）后连接关闭；客户端通过 HTTP 调用 `sync.bootstrap` 后重新订阅。
 
 Matrix Client-Server 写入生命周期：
 
@@ -327,15 +327,15 @@ Calls/Favorites/Follows：
 Push：
 
 - 系统推送仍使用 Matrix Push Gateway API。客户端用 `/pushers/set` 注册 APNs/FCM pusher，普通 direct/group 消息、call invite 等通知由 `userapi/consumers/roomserver.go` 按 Matrix push rules 评估后发送到 gateway。所有 channel room 事件不投递 HTTP Push Gateway。
-- 服务端不能从 `/sync`、read receipt 或 pusher 注册可靠判断 App 是否处于前台。Dirextalk 客户端通过 `GET /_p2p/ws` 上报 `client.lifecycle` 和 `client.focus`：`client.lifecycle` 至少包含 `foreground`，并可携带 `state`、`hidden` 和 `flags`；`client.focus` 至少包含 `room_id`，并可携带 `focused` 和 `flags`。前台、未 hidden、且 focused room 等于收到消息的 room 时，服务端不新增 unread notification，也不调用 HTTP push gateway；后台、hidden、断线、60 秒会话过期、未聚焦或聚焦到其他 room 时继续按后台推送处理。迁移期保留全局 Matrix account data `io.dirextalk.push.context` 作为无新鲜 WS session 时的兜底，服务端按服务端时间保存 60 秒过期时间。
+- 客户端通过全局 Matrix account data `io.dirextalk.push.context` 上报 `foreground` 和 `focused_room_id`；服务端生成 60 秒有效期。新鲜、前台且聚焦当前 room 时抑制 unread 和 HTTP push，其余情况保持后台推送。
 
 Agent/API：
 
-- Agent token 不再有动态权限表，只能通过 product body-action 访问 `agent.matrix_session.create`，并可访问标准 `POST /mcp` MCP endpoint，不能调用 `realtime.ws_ticket.create` 创建 WS ticket；其他 protected action 只认 owner `access_token`。本地 bridge 使用 `agent.matrix_session.create` 得到的 Matrix session 监听 agents room 并回写消息。
+- Agent token 不再有动态权限表，只能通过 product body-action 访问 `agent.matrix_session.create`，并可访问标准 `POST /mcp` MCP endpoint；其他 protected action 只认 owner `access_token`。本地 bridge 使用 `agent.matrix_session.create` 得到的 Matrix session 监听 agents room 并回写消息。
 - MCP capability 是 owner-scoped 代理能力：`agent_token` 只负责授权标准 MCP endpoint，联系人、房间、成员、消息和频道内容工具按 portal owner 视角执行，并在 Matrix 读写前校验 joined membership。标准 `POST /mcp` 使用 MCP Streamable HTTP JSON-RPC，支持 `initialize`、`tools/list`、`tools/call`，只接受 `Authorization: Bearer <agent_token>`，拒绝 query-string token，校验 `Origin`，并且不会把入站 bearer token 传给下游 capability。Native Agent 内置 Dirextalk tools 与标准 `POST /mcp` 共用 `internal/dirextalkmcp` registry/service；固定 `mcp.*` body action 已删除。详见 [当前 Agent 和 MCP 合约](agent-mcp-current-contract.md)。
-- Native Agent 对话是独立于 Online Agent Matrix room 的 `agent.*` 业务；普通调用走 owner-protected action，流式调用走 `client.native_agent_stream` / `server.native_agent_stream.*`。Message Server 把两者代理到外部 `dirextalk-agent`，只发布已通过 mTLS、account-generation、schema catalog 和 readiness 检查的能力。durable stream 的 request/result/event schema 均精确 pin；`waiting_confirmation` 在通用事件身份之外只携带 `confirmation_id`、`execution_id` 与固定 waiting status，不公开 `attempt_id`，也不与 text/tool/result/response/error 混合。Agent authored `turn_id` 与 App start `idempotency_key` 分离投影，`agent.chat.turn.stop` 通过 typed `stop_turn` revision mutation 执行而不复用通用 operation cancel，生成中的追加指令通过 typed `agent.chat.turn.steer` 立即引导同一 turn，禁止排队 successor turn。模型 profile、持久化对话、知识/长期记忆、Skills/MCP、调度和 Execution V2 均由 Agent 拥有，详见 [当前 Agent 和 MCP 合约](agent-mcp-current-contract.md) 与 [Agent Core 集成合约](agent-core-integration-development-contract.md)。
+- Native Agent 对话是独立于 Online Agent Matrix room 的 `agent.*` 业务；普通调用走 owner-protected action，文本 turn 流式调用走 HTTP POST / SSE。Message Server 把两者代理到外部 `dirextalk-agent`，只发布已通过 mTLS、account-generation、schema catalog 和 readiness 检查的能力。durable stream 的 request/result/event schema 均精确 pin；`waiting_confirmation` 在通用事件身份之外只携带 `confirmation_id`、`execution_id` 与固定 waiting status，不公开 `attempt_id`，也不与 text/tool/result/response/error 混合。Agent authored `turn_id` 与 App start `idempotency_key` 分离投影，`agent.chat.turn.stop` 通过 typed `stop_turn` revision mutation 执行而不复用通用 operation cancel，生成中的追加指令通过 typed `agent.chat.turn.steer` 立即引导同一 turn，禁止排队 successor turn。模型 profile、持久化对话、知识/长期记忆、Skills/MCP、调度和 Execution V2 均由 Agent 拥有，详见 [当前 Agent 和 MCP 合约](agent-mcp-current-contract.md) 与 [Agent Core 集成合约](agent-core-integration-development-contract.md)。
 - `agent.matrix_session.create` 使用 owner `access_token` 或 `agent_token` 调用，用于本地 cc-connect/gateway 获取 `@agent:<server>` 的 Matrix Client-Server session；它不返回 owner Matrix session，也不回显 `agent_token` 或 portal password。
-- Agent 在线状态对 owner 客户端只暴露一个 Matrix 房间状态字段：真实 `agent_room_id` 内的 `io.dirextalk.agent.status`，state key 为 `@agent:<server>`，content 只含 `online`。运行中的本地 bridge 通过 `@agent:<server>` Matrix session 发布 `online=true/false`；服务端不能从 Agent 配置、`/sync` 或 WS session 推断在线，只在启动/修复 agents room 或禁用 Agent 配置时写 `online=false` 兜底。`sync.bootstrap` 只返回 `agent_room_id` 供客户端定位房间，不再返回 `agent_online`；WS `server.event` 不发送 `agent.presence`。`agent.status`/`agents.status` 已删除，客户端不得再调用。
+- Agent 在线状态对 owner 客户端只暴露一个 Matrix 房间状态字段：真实 `agent_room_id` 内的 `io.dirextalk.agent.status`，state key 为 `@agent:<server>`，content 只含 `online`。运行中的本地 bridge 通过 `@agent:<server>` Matrix session 发布 `online=true/false`；服务端不能从 Agent 配置、`/sync` 或 WS session 推断在线，只在启动/修复 agents room 或禁用 Agent 配置时写 `online=false` 兜底。`sync.bootstrap` 只返回 `agent_room_id` 供客户端定位房间，不再返回 `agent_online`；SSE Product event 不发送 `agent.presence`。`agent.status`/`agents.status` 已删除，客户端不得再调用。
 - Agent 预览和最终可恢复正文都通过 Matrix 消息/编辑回写；客户端展示 Matrix timeline 的聚合编辑结果，不消费 `server.agent_stream`。
 - 服务初始化会创建真实私有 Matrix agents room，把 owner 和本地
   `@agent:<server>` 加入同一房间，并把 `agent_room_id` 写入 bootstrap

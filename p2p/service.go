@@ -14,7 +14,6 @@ import (
 	"github.com/YingSuiAI/dirextalk-message-server/internal/dirextalktransport"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/productpolicy"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/pushrules"
-	"github.com/YingSuiAI/dirextalk-message-server/internal/realtime"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/releasecontrol"
 	agentmodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agent"
 	blocksmodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/blocks"
@@ -31,7 +30,6 @@ import (
 	portalmodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/portal"
 	profilemodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/profile"
 	projectormodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/projector"
-	realtimewsmodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/realtimews"
 	releasemodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/release"
 	reportsmodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/reports"
 	socialmodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/social"
@@ -52,7 +50,6 @@ type Config struct {
 	P2PEventRetentionMaxRows        int64
 	P2PEventRetentionPruneOnWrite   bool
 	PushRules                       PushRuleManager
-	RealtimeSessions                *realtime.SessionStore
 	PluginRunner                    PluginRunner
 	NativeAgentRunner               NativeAgentRunner
 	NativeAgentGateway              *agentgateway.Client
@@ -165,7 +162,6 @@ type Service struct {
 	portalModule         *portalmodule.Module
 	profileModule        *profilemodule.Module
 	projectorModule      *projectormodule.Module
-	realtimeModule       *realtimewsmodule.Module
 	releaseModule        *releasemodule.Module
 	reportsModule        *reportsmodule.Module
 	socialModule         *socialmodule.Module
@@ -613,10 +609,6 @@ func newService(cfg Config, store Store, transport Transport, state portalState,
 	if accountGeneration <= 0 {
 		accountGeneration = 1
 	}
-	realtimeSessions := cfg.RealtimeSessions
-	if realtimeSessions == nil {
-		realtimeSessions = realtime.DefaultSessionStore
-	}
 	basePluginRunner := cfg.PluginRunner
 	if basePluginRunner == nil {
 		basePluginRunner = pluginsmodule.NewEnvironmentRunner()
@@ -929,12 +921,6 @@ func newService(cfg Config, store Store, transport Transport, state portalState,
 		Readiness: service.nativeAgentCatalogReadinessError,
 	})
 	service.actions = service.actionHandlers()
-	service.realtimeModule = realtimewsmodule.New(realtimewsmodule.Dependencies{
-		Actions: serviceRealtimeActionPort{service: service}, Events: service.eventsModule,
-		Sessions: realtimeSessions, Plugins: service.pluginsModule, Agent: service.agentModule,
-		NativeAgentReadiness: service.nativeAgentCatalogReadinessError,
-		TicketActive:         service.realtimeWSTicketActive,
-	}, realtimewsmodule.Config{Now: time.Now, NewToken: randomToken, HeartbeatInterval: realtimewsmodule.DefaultHeartbeatInterval})
 	if memoryStore, ok := store.(*p2pstorage.MemoryStore); ok {
 		service.mu.Lock()
 		state := service.portalStateLocked()

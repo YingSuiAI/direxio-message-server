@@ -28,8 +28,8 @@ func TestModelProfileTestActionIsPubliclyRegistered(t *testing.T) {
 	if !ok {
 		t.Fatalf("%s is missing from the public ProductCore action contract", action)
 	}
-	if spec.Auth != serviceapi.ActionAuthOwner || spec.Transport != serviceapi.ActionTransportHTTPAndWS {
-		t.Fatalf("%s metadata = %#v, want owner HTTP+WS action", action, spec)
+	if spec.Auth != serviceapi.ActionAuthOwner || spec.Transport != serviceapi.ActionTransportHTTPOnly {
+		t.Fatalf("%s metadata = %#v, want owner HTTP action", action, spec)
 	}
 	if spec.Schema == nil || !spec.Schema.Request["idempotency_key"].Required || !spec.Schema.Request["profile_id"].Required || !spec.Schema.Response["reachable"].Required || !spec.Schema.Response["error_code"].Required {
 		t.Fatalf("%s schema = %#v, want strict test request and response", action, spec.Schema)
@@ -84,7 +84,7 @@ func TestActionMetadataCoversRegistryAndDerivesClassifications(t *testing.T) {
 			t.Fatalf("unexpected auth metadata for %s: %q", spec.Name, spec.Auth)
 		}
 		switch spec.Transport {
-		case serviceapi.ActionTransportHTTPOnly, serviceapi.ActionTransportHTTPAndWS, serviceapi.ActionTransportWSStreamOnly, serviceapi.ActionTransportInternalOnly:
+		case serviceapi.ActionTransportHTTPOnly, serviceapi.ActionTransportInternalOnly:
 		default:
 			t.Fatalf("unexpected transport metadata for %s: %q", spec.Name, spec.Transport)
 		}
@@ -95,15 +95,9 @@ func TestActionMetadataCoversRegistryAndDerivesClassifications(t *testing.T) {
 			t.Fatalf("registered action %s has no action metadata", action)
 		}
 	}
-	for action, spec := range metadataByName {
-		if action == serviceapi.RealtimeWSTicketAction {
-			continue
-		}
+	for action := range metadataByName {
 		if _, ok := service.actions[action]; !ok {
 			t.Fatalf("action metadata %s has no registered handler", action)
-		}
-		if spec.Transport == serviceapi.ActionTransportWSStreamOnly && serviceapi.HTTPAction(action) {
-			t.Fatalf("stream-only action %s must not be allowed through HTTP body actions", action)
 		}
 	}
 }
@@ -122,9 +116,6 @@ func TestInternalPublicCallbacksAreHTTPOnly(t *testing.T) {
 		}
 		if !serviceapi.HTTPAction(action) {
 			t.Fatalf("expected %s to remain callable through HTTP body actions", action)
-		}
-		if serviceapi.RealtimeWSClientRequestAction(action) {
-			t.Fatalf("expected %s to be blocked from WS client.request", action)
 		}
 	}
 }

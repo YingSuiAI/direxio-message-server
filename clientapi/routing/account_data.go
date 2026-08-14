@@ -29,8 +29,9 @@ const (
 )
 
 type dirextalkPushContextAccountData struct {
-	Foreground  bool  `json:"foreground"`
-	ExpiresAtMS int64 `json:"expires_at_ms,omitempty"`
+	Foreground    bool   `json:"foreground"`
+	ExpiresAtMS   int64  `json:"expires_at_ms,omitempty"`
+	FocusedRoomID string `json:"focused_room_id,omitempty"`
 }
 
 // GetAccountData implements GET /user/{userId}/[rooms/{roomid}/]account_data/{type}
@@ -157,8 +158,9 @@ func normalizeDirextalkPushContextAccountData(roomID, dataType string, body []by
 		return json.Marshal(dirextalkPushContextAccountData{Foreground: false})
 	}
 	return json.Marshal(dirextalkPushContextAccountData{
-		Foreground:  true,
-		ExpiresAtMS: now.Add(dirextalkPushContextExpiry).UnixMilli(),
+		Foreground:    true,
+		ExpiresAtMS:   now.Add(dirextalkPushContextExpiry).UnixMilli(),
+		FocusedRoomID: pushContext.FocusedRoomID,
 	})
 }
 

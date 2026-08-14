@@ -19,7 +19,7 @@ type Event struct {
 	Data map[string]any
 }
 
-// State is the remote durable-turn state projected on the websocket facade.
+// State is the remote durable-turn state projected on the SSE facade.
 type State string
 
 const (
@@ -52,7 +52,7 @@ var (
 	validID         = regexp.MustCompile(`^[A-Za-z0-9._:@!/-]{1,256}$`)
 )
 
-// Turn is the redacted remote-turn projection used by the public websocket
+// Turn is the redacted remote-turn projection used by the public HTTP/SSE
 // facade. Digest and credential fields are retained for wire compatibility but
 // are never populated by message-server's external runner.
 type Turn struct {
@@ -86,7 +86,7 @@ type EventRecord struct {
 	CreatedAt      time.Time
 }
 
-// StreamEvent is the callback DTO consumed by the realtime websocket facade.
+// StreamEvent is the callback DTO consumed by the SSE facade.
 type StreamEvent struct {
 	Kind           string
 	Turn           Turn

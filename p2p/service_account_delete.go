@@ -335,9 +335,6 @@ func (s *Service) clearAccountStateInMemory() {
 
 func (s *Service) clearAccountStateAfterDeprovision() {
 	s.mu.Lock()
-	if s.realtimeModule != nil {
-		s.realtimeModule.ResetTickets()
-	}
 	s.accountDeprovisioned = true
 	s.initialized = false
 	s.password = ""

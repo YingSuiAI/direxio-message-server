@@ -69,36 +69,7 @@ Use a regional gateway URL when required, for example `https://push-eu.dirextalk
 
 ## Client Foreground And Focus State
 
-The homeserver cannot reliably infer whether a mobile app is foreground or background from `/sync`, read receipts, or pusher registration. Current Dirextalk clients should report app lifecycle and focused room over `GET /_p2p/ws` after creating a `realtime.ws_ticket.create` ticket:
-
-```json
-{
-  "type": "client.lifecycle",
-  "foreground": true,
-  "state": "resumed",
-  "hidden": false,
-  "flags": {
-    "foreground": true,
-    "background": false,
-    "hidden": false
-  }
-}
-```
-
-```json
-{
-  "type": "client.focus",
-  "room_id": "!room:server",
-  "focused": true,
-  "flags": {
-    "focused": true
-  }
-}
-```
-
-A fresh foreground, non-hidden WS session suppresses Matrix push-rule notifications only for the same focused room: the server does not create a new unread notification row and does not call the HTTP push gateway for that room. Missing focus, different-room focus, hidden, background, disconnected, or expired session state keeps normal background push behavior. WS session freshness is stamped with server time and expires after 60 seconds.
-
-During migration, clients without a fresh WS session may still report a coarse foreground fallback with global Matrix account data:
+The homeserver cannot reliably infer whether a mobile app is foreground or background from `/sync`, read receipts, or pusher registration. Dirextalk clients report foreground and focus using global Matrix account data:
 
 ```http
 PUT /_matrix/client/v3/user/{userId}/account_data/io.dirextalk.push.context
@@ -108,13 +79,12 @@ Content-Type: application/json
 
 ```json
 {
-  "foreground": true
+  "foreground": true,
+  "focused_room_id": "!room:server"
 }
 ```
 
-When `foreground=true` is written and no fresh WS session exists for the user, the server stamps the account data with a 60-second expiry based on the server clock. While that stamped fallback is fresh, the server suppresses Matrix push-rule notifications for that user. Missing, malformed, expired, or `foreground=false` state keeps normal background push behavior.
-
-Mobile clients should prefer WS lifecycle/focus reporting. During migration they may continue this lifecycle write: while foreground, write `{"foreground": true}` immediately and refresh the account data every 30 seconds. When entering background, immediately write:
+When `foreground=true` is written, the server preserves `focused_room_id` and stamps a 60-second expiry based on the server clock. While the record is fresh, the server suppresses Matrix push-rule notifications only for that focused room. Missing focus, different-room focus, malformed or expired data, or `foreground=false` keeps normal background push behavior. Clients refresh the record every 30 seconds while foreground and immediately write the background form when leaving foreground:
 
 ```json
 {

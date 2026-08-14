@@ -39,7 +39,7 @@ func (s *Service) actionHandlers() map[string]actionHandler {
 	}
 	return mustBuildActionHandlers(
 		serviceapi.ActionSpecs(),
-		[]string{serviceapi.RealtimeWSTicketAction},
+		nil,
 		modules,
 	)
 }

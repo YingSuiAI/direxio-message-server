@@ -15,7 +15,6 @@ type ProductPort interface {
 	HasAction(action string) bool
 	Authorize(ctx context.Context, token, action string) (context.Context, bool)
 	Handle(ctx context.Context, action string, params map[string]any) (any, *actionbase.Error)
-	CreateWSTicket(token string) (any, *actionbase.Error)
 }
 
 type productEnvelope struct {
@@ -50,12 +49,12 @@ func ProductHandler(port ProductPort) http.HandlerFunc {
 			WriteError(w, actionbase.BadRequest("unknown action"))
 			return
 		}
-		if (port == nil || !port.HasAction(action)) && action != serviceapi.RealtimeWSTicketAction {
+		if port == nil || !port.HasAction(action) {
 			WriteError(w, actionbase.BadRequest("unknown action"))
 			return
 		}
 		if !serviceapi.HTTPAction(action) {
-			WriteError(w, actionbase.StatusError(http.StatusBadRequest, "action requires websocket"))
+			WriteError(w, actionbase.StatusError(http.StatusBadRequest, "action is not available over Product HTTP"))
 			return
 		}
 
@@ -72,15 +71,6 @@ func ProductHandler(port ProductPort) http.HandlerFunc {
 			}
 		}
 
-		if action == serviceapi.RealtimeWSTicketAction {
-			response, err := port.CreateWSTicket(token)
-			if err != nil {
-				WriteError(w, err)
-				return
-			}
-			WriteJSON(w, http.StatusOK, response)
-			return
-		}
 		response, err := port.Handle(ctx, action, req.Params)
 		if err != nil {
 			WriteError(w, err)

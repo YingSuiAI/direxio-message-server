@@ -21,7 +21,6 @@ import (
 	"github.com/YingSuiAI/dirextalk-message-server/internal/eventutil"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/pushgateway"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/pushrules"
-	"github.com/YingSuiAI/dirextalk-message-server/internal/realtime"
 	rsapi "github.com/YingSuiAI/dirextalk-message-server/roomserver/api"
 	rstypes "github.com/YingSuiAI/dirextalk-message-server/roomserver/types"
 	"github.com/YingSuiAI/dirextalk-message-server/setup/config"
@@ -38,21 +37,20 @@ import (
 )
 
 type OutputRoomEventConsumer struct {
-	ctx              context.Context
-	cfg              *config.UserAPI
-	rsAPI            rsapi.UserRoomserverAPI
-	jetstream        nats.JetStreamContext
-	durable          string
-	db               storage.UserDatabase
-	topic            string
-	pgClient         pushgateway.Client
-	syncProducer     *producers.SyncAPI
-	msgCounts        map[spec.ServerName]userAPITypes.MessageStats
-	roomCounts       map[spec.ServerName]map[string]bool // map from serverName to map from rommID to "isEncrypted"
-	lastUpdate       time.Time
-	countsLock       sync.Mutex
-	serverName       spec.ServerName
-	realtimeSessions *realtime.SessionStore
+	ctx          context.Context
+	cfg          *config.UserAPI
+	rsAPI        rsapi.UserRoomserverAPI
+	jetstream    nats.JetStreamContext
+	durable      string
+	db           storage.UserDatabase
+	topic        string
+	pgClient     pushgateway.Client
+	syncProducer *producers.SyncAPI
+	msgCounts    map[spec.ServerName]userAPITypes.MessageStats
+	roomCounts   map[spec.ServerName]map[string]bool // map from serverName to map from rommID to "isEncrypted"
+	lastUpdate   time.Time
+	countsLock   sync.Mutex
+	serverName   spec.ServerName
 }
 
 func NewOutputRoomEventConsumer(
@@ -65,21 +63,20 @@ func NewOutputRoomEventConsumer(
 	syncProducer *producers.SyncAPI,
 ) *OutputRoomEventConsumer {
 	return &OutputRoomEventConsumer{
-		ctx:              process.Context(),
-		cfg:              cfg,
-		jetstream:        js,
-		db:               store,
-		durable:          cfg.Matrix.JetStream.Durable("UserAPIRoomServerConsumer"),
-		topic:            cfg.Matrix.JetStream.Prefixed(jetstream.OutputRoomEvent),
-		pgClient:         pgClient,
-		rsAPI:            rsAPI,
-		syncProducer:     syncProducer,
-		msgCounts:        map[spec.ServerName]userAPITypes.MessageStats{},
-		roomCounts:       map[spec.ServerName]map[string]bool{},
-		lastUpdate:       time.Now(),
-		countsLock:       sync.Mutex{},
-		serverName:       cfg.Matrix.ServerName,
-		realtimeSessions: realtime.DefaultSessionStore,
+		ctx:          process.Context(),
+		cfg:          cfg,
+		jetstream:    js,
+		db:           store,
+		durable:      cfg.Matrix.JetStream.Durable("UserAPIRoomServerConsumer"),
+		topic:        cfg.Matrix.JetStream.Prefixed(jetstream.OutputRoomEvent),
+		pgClient:     pgClient,
+		rsAPI:        rsAPI,
+		syncProducer: syncProducer,
+		msgCounts:    map[spec.ServerName]userAPITypes.MessageStats{},
+		roomCounts:   map[spec.ServerName]map[string]bool{},
+		lastUpdate:   time.Now(),
+		countsLock:   sync.Mutex{},
+		serverName:   cfg.Matrix.ServerName,
 	}
 }
 
@@ -703,17 +700,6 @@ type dirextalkPushContext struct {
 
 func (s *OutputRoomEventConsumer) suppressPushForForegroundContext(ctx context.Context, event *rstypes.HeaderedEvent, mem *localMembership) (bool, error) {
 	now := time.Now().UTC()
-	if s.realtimeSessions != nil && s.realtimeSessions.HasFreshSession(mem.UserID, now) {
-		if s.realtimeSessions.ShouldSuppressPush(mem.UserID, event.RoomID().String(), now) {
-			log.WithFields(log.Fields{
-				"event_id":  event.EventID(),
-				"room_id":   event.RoomID().String(),
-				"localpart": mem.Localpart,
-			}).Trace("Suppressing push for focused foreground WebSocket session")
-			return true, nil
-		}
-		return false, nil
-	}
 	data, err := s.db.GetAccountDataByType(ctx, mem.Localpart, mem.Domain, "", dirextalkPushContextAccountDataType)
 	if err != nil || len(data) == 0 {
 		return false, err

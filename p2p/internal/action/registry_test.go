@@ -18,8 +18,8 @@ func actionSpec(name string, transport serviceapi.ActionTransport) serviceapi.Ac
 
 func TestRegistryMergesModulesAndValidatesExactCoverage(t *testing.T) {
 	specs := []serviceapi.ActionSpec{
-		actionSpec("regular.action", serviceapi.ActionTransportHTTPAndWS),
-		actionSpec("stream.action", serviceapi.ActionTransportWSStreamOnly),
+		actionSpec("regular.action", serviceapi.ActionTransportHTTPOnly),
+		actionSpec("stream.action", serviceapi.ActionTransportInternalOnly),
 		actionSpec("route.action", serviceapi.ActionTransportHTTPOnly),
 	}
 	registry, err := NewRegistry(specs, "route.action")
@@ -52,8 +52,8 @@ func TestRegistryMergesModulesAndValidatesExactCoverage(t *testing.T) {
 
 func TestRegistryRejectsDuplicateHandlerWithoutPartialMerge(t *testing.T) {
 	specs := []serviceapi.ActionSpec{
-		actionSpec("first.action", serviceapi.ActionTransportHTTPAndWS),
-		actionSpec("second.action", serviceapi.ActionTransportHTTPAndWS),
+		actionSpec("first.action", serviceapi.ActionTransportHTTPOnly),
+		actionSpec("second.action", serviceapi.ActionTransportHTTPOnly),
 	}
 	registry, err := NewRegistry(specs)
 	if err != nil {
@@ -91,7 +91,7 @@ func TestRegistryRejectsMissingExtraNilAndRouteHandlers(t *testing.T) {
 		},
 		{
 			name:     "missing stream handler",
-			specs:    []serviceapi.ActionSpec{actionSpec("stream.action", serviceapi.ActionTransportWSStreamOnly)},
+			specs:    []serviceapi.ActionSpec{actionSpec("stream.action", serviceapi.ActionTransportInternalOnly)},
 			want:     "missing handler",
 			validate: true,
 		},
@@ -144,7 +144,7 @@ func TestNewRegistryRejectsInvalidContractInputs(t *testing.T) {
 	}{
 		{
 			name:  "duplicate specs",
-			specs: []serviceapi.ActionSpec{actionSpec("same.action", serviceapi.ActionTransportHTTPOnly), actionSpec("same.action", serviceapi.ActionTransportHTTPAndWS)},
+			specs: []serviceapi.ActionSpec{actionSpec("same.action", serviceapi.ActionTransportHTTPOnly), actionSpec("same.action", serviceapi.ActionTransportHTTPOnly)},
 			want:  "duplicate action spec",
 		},
 		{

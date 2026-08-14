@@ -5,7 +5,7 @@ import "testing"
 func TestMemoryActionsPublishOwnerHTTPAndWSSchemas(t *testing.T) {
 	for _, action := range []string{"agent.memory.config.get", "agent.memory.config.update", "agent.memory.status", "agent.memory.facts.update", "agent.memory.facts.delete"} {
 		spec, ok := ActionSpecFor(action)
-		if !ok || spec.Auth != ActionAuthOwner || spec.Transport != ActionTransportHTTPAndWS || spec.Schema == nil {
+		if !ok || spec.Auth != ActionAuthOwner || spec.Transport != ActionTransportHTTPOnly || spec.Schema == nil {
 			t.Fatalf("%s schema = %#v", action, spec)
 		}
 	}

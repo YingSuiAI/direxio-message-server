@@ -28,14 +28,9 @@
       "transport": "http_only"
     },
     {
-      "name": "realtime.ws_ticket.create",
-      "auth": "owner",
-      "transport": "http_only"
-    },
-    {
       "name": "client.version.report",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "release.v2.status",
@@ -202,37 +197,37 @@
     {
       "name": "profile.get",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "profile.update",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "sync.bootstrap",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "sync.read_marker",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "conversations.list",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "conversations.get",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "agent.password",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "agent.account.deprovision",
@@ -247,7 +242,7 @@
     {
       "name": "agent.config.get",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "response": {
           "enabled": {
@@ -292,7 +287,7 @@
     {
       "name": "agent.config.update",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "enabled": {
@@ -376,12 +371,12 @@
     {
       "name": "agent.backends.get",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "agent.model_profiles.sync",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "default_conversation_client_profile_id": {
@@ -652,7 +647,7 @@
     {
       "name": "agent.model_profiles.list",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "page_size": {
@@ -802,7 +797,7 @@
     {
       "name": "agent.model_profiles.get",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "profile_id": {
@@ -925,7 +920,7 @@
     {
       "name": "agent.model_profiles.test",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "idempotency_key": {
@@ -952,7 +947,7 @@
     {
       "name": "agent.model_profiles.delete",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "expected_revision": {
@@ -984,7 +979,7 @@
     {
       "name": "agent.core.tasks.get",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "task_id": {
@@ -1002,7 +997,7 @@
     {
       "name": "agent.core.tasks.list",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "page_size": {
@@ -1041,7 +1036,7 @@
     {
       "name": "agent.core.tasks.cancel",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "expected_revision": {
@@ -1070,7 +1065,7 @@
     {
       "name": "agent.core.tasks.retry",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "expected_revision": {
@@ -1099,7 +1094,7 @@
     {
       "name": "agent.core.tasks.events",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "after_sequence": {
@@ -1132,7 +1127,7 @@
     {
       "name": "agent.core.schedules.create",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "idempotency_key": {
@@ -1162,7 +1157,7 @@
     {
       "name": "agent.core.schedules.get",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "schedule_id": {
@@ -1180,7 +1175,7 @@
     {
       "name": "agent.core.schedules.list",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "page_size": {
@@ -1212,7 +1207,7 @@
     {
       "name": "agent.core.schedules.update",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "expected_revision": {
@@ -1251,7 +1246,7 @@
     {
       "name": "agent.core.schedules.pause",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "expected_revision": {
@@ -1281,7 +1276,7 @@
     {
       "name": "agent.core.schedules.resume",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "expected_revision": {
@@ -1311,7 +1306,7 @@
     {
       "name": "agent.core.schedules.trigger",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "idempotency_key": {
@@ -1339,7 +1334,7 @@
     {
       "name": "agent.core.schedules.delete",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "expected_revision": {
@@ -1372,7 +1367,7 @@
     {
       "name": "agent.core.confirmations.get",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "confirmation_id": {
@@ -1624,7 +1619,7 @@
     {
       "name": "agent.core.confirmations.list",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "operation_domain": {
@@ -1901,7 +1896,7 @@
     {
       "name": "agent.core.confirmations.confirm",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "confirmation_id": {
@@ -2161,7 +2156,7 @@
     {
       "name": "agent.core.confirmations.reject",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "confirmation_id": {
@@ -2421,7 +2416,7 @@
     {
       "name": "agent.core.confirmations.acknowledge_extension_execution_uncertain",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "confirmation_id": {
@@ -2476,7 +2471,7 @@
     {
       "name": "agent.core.mcp.discover",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "page_size": {
@@ -2594,7 +2589,7 @@
     {
       "name": "agent.core.mcp.get",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "installation_id": {
@@ -2832,7 +2827,7 @@
     {
       "name": "agent.core.mcp.list",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "page_size": {
@@ -3098,7 +3093,7 @@
     {
       "name": "agent.core.mcp.inspect",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "candidate": {
@@ -3396,7 +3391,7 @@
     {
       "name": "agent.core.mcp.install",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "candidate": {
@@ -3949,7 +3944,7 @@
     {
       "name": "agent.core.mcp.update",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "candidate": {
@@ -4510,7 +4505,7 @@
     {
       "name": "agent.core.mcp.remove",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "expected_revision": {
@@ -4766,7 +4761,7 @@
     {
       "name": "agent.core.mcp.list_tools",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "expected_revision": {
@@ -4799,7 +4794,7 @@
     {
       "name": "agent.core.mcp.execute",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "expected_revision": {
@@ -4841,7 +4836,7 @@
     {
       "name": "agent.core.skills.discover",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "page_size": {
@@ -4959,7 +4954,7 @@
     {
       "name": "agent.core.skills.get",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "installation_id": {
@@ -5138,7 +5133,7 @@
     {
       "name": "agent.core.skills.list",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "page_size": {
@@ -5345,7 +5340,7 @@
     {
       "name": "agent.core.skills.inspect",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "candidate": {
@@ -5625,7 +5620,7 @@
     {
       "name": "agent.core.skills.install",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "candidate": {
@@ -6101,7 +6096,7 @@
     {
       "name": "agent.core.skills.update",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "candidate": {
@@ -6585,7 +6580,7 @@
     {
       "name": "agent.core.skills.remove",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "expected_revision": {
@@ -6782,7 +6777,7 @@
     {
       "name": "agent.core.skills.execute",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "expected_revision": {
@@ -6826,7 +6821,7 @@
     {
       "name": "agent.core.aws.credentials.create",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "access_key_id": {
@@ -6933,7 +6928,7 @@
     {
       "name": "agent.core.aws.credentials.update",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "access_key_id": {
@@ -7044,7 +7039,7 @@
     {
       "name": "agent.core.aws.credentials.delete",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "credential_id": {
@@ -7073,7 +7068,7 @@
     {
       "name": "agent.core.aws.credentials.list",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "page_size": {
@@ -7172,7 +7167,7 @@
     {
       "name": "agent.core.aws.credentials.test",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "credential_id": {
@@ -7213,7 +7208,7 @@
     {
       "name": "agent.chat",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "conversation_id": {
@@ -7227,386 +7222,6 @@
             "required": true,
             "presence": {
               "present": "positive_integer"
-            }
-          },
-          "idempotency_key": {
-            "type": "string",
-            "required": true,
-            "presence": {
-              "present": "canonical_uuid"
-            }
-          },
-          "message": {
-            "type": "string",
-            "required": true,
-            "presence": {
-              "present": "nonempty_utf8"
-            }
-          },
-          "model_profile_id": {
-            "type": "string",
-            "required": true,
-            "presence": {
-              "present": "exact_nonempty_bytes"
-            }
-          },
-          "model_profile_revision": {
-            "type": "integer",
-            "required": true,
-            "presence": {
-              "present": "positive_integer"
-            }
-          }
-        },
-        "response": {
-          "references": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "account_generation": {
-                  "type": "integer",
-                  "presence": {
-                    "omitted": "generic_execution_v2_reference",
-                    "present": "positive_integer_equal_to_prepared_permission_generation;required_with_task_id"
-                  }
-                },
-                "binding_digest": {
-                  "type": "string",
-                  "presence": {
-                    "present": "lowercase_sha256;cloud_worker_confirmation_binding_or_generic_binding"
-                  }
-                },
-                "binding_id": {
-                  "type": "string",
-                  "presence": {
-                    "present": "canonical_uuid;service_binding_only"
-                  }
-                },
-                "binding_revision": {
-                  "type": "integer",
-                  "presence": {
-                    "present": "positive_integer;service_binding_only"
-                  }
-                },
-                "channel_id": {
-                  "type": "string",
-                  "presence": {
-                    "present": "required_for_channel_post"
-                  }
-                },
-                "confirmation_id": {
-                  "type": "string",
-                  "presence": {
-                    "present": "canonical_uuid;required_by_confirmation_linkage"
-                  }
-                },
-                "confirmation_revision": {
-                  "type": "integer",
-                  "presence": {
-                    "present": "positive_integer;required_for_cloud_worker_or_full_generic_confirmation"
-                  }
-                },
-                "deployment_id": {
-                  "type": "string",
-                  "presence": {
-                    "present": "canonical_uuid;generic_execution_run_or_service_binding_only"
-                  }
-                },
-                "execution_digest": {
-                  "type": "string",
-                  "presence": {
-                    "omitted": "generic_execution_v2_reference",
-                    "present": "lowercase_sha256;required_with_task_id"
-                  }
-                },
-                "execution_id": {
-                  "type": "string",
-                  "presence": {
-                    "omitted": "generic_execution_v2_reference",
-                    "present": "canonical_uuid_equal_to_run_id;required_with_task_id"
-                  }
-                },
-                "gate_type": {
-                  "type": "string",
-                  "presence": {
-                    "present": "bounded_128;full_generic_execution_confirmation_only"
-                  }
-                },
-                "kind": {
-                  "type": "string",
-                  "required": true,
-                  "presence": {
-                    "present": "one_of:room|channel_post|execution_plan|execution_run|execution_confirmation|service_binding"
-                  }
-                },
-                "plan_digest": {
-                  "type": "string",
-                  "presence": {
-                    "present": "lowercase_sha256;required_by_plan_linkage"
-                  }
-                },
-                "plan_id": {
-                  "type": "string",
-                  "presence": {
-                    "present": "canonical_uuid;required_by_plan_linkage"
-                  }
-                },
-                "plan_revision": {
-                  "type": "integer",
-                  "presence": {
-                    "present": "positive_integer;required_by_plan_linkage"
-                  }
-                },
-                "post_id": {
-                  "type": "string",
-                  "presence": {
-                    "present": "required_for_channel_post"
-                  }
-                },
-                "preview": {
-                  "type": "string"
-                },
-                "preview_digest": {
-                  "type": "string",
-                  "presence": {
-                    "present": "lowercase_sha256;full_generic_execution_confirmation_only"
-                  }
-                },
-                "project_id": {
-                  "type": "string",
-                  "presence": {
-                    "present": "canonical_uuid;service_binding_only"
-                  }
-                },
-                "quote_digest": {
-                  "type": "string",
-                  "presence": {
-                    "omitted": "generic_execution_v2_reference",
-                    "present": "lowercase_sha256;required_with_task_id"
-                  }
-                },
-                "risk_level": {
-                  "type": "string",
-                  "presence": {
-                    "present": "bounded_16;full_generic_execution_confirmation_only"
-                  }
-                },
-                "room_id": {
-                  "type": "string",
-                  "presence": {
-                    "present": "required_for_room_or_channel_post"
-                  }
-                },
-                "room_type": {
-                  "type": "string"
-                },
-                "run_digest": {
-                  "type": "string",
-                  "presence": {
-                    "present": "lowercase_sha256;required_by_run_linkage_except_full_generic_confirmation"
-                  }
-                },
-                "run_id": {
-                  "type": "string",
-                  "presence": {
-                    "present": "canonical_uuid;required_by_run_linkage"
-                  }
-                },
-                "run_revision": {
-                  "type": "integer",
-                  "presence": {
-                    "present": "positive_integer;required_by_run_linkage"
-                  }
-                },
-                "stage_digest": {
-                  "type": "string",
-                  "presence": {
-                    "present": "lowercase_sha256;generic_execution_confirmation_only"
-                  }
-                },
-                "stage_id": {
-                  "type": "string",
-                  "presence": {
-                    "present": "canonical_uuid;generic_execution_confirmation_only"
-                  }
-                },
-                "stage_revision": {
-                  "type": "integer",
-                  "presence": {
-                    "present": "positive_integer;generic_execution_confirmation_only"
-                  }
-                },
-                "state": {
-                  "type": "string",
-                  "presence": {
-                    "present": "cloud_worker_confirmation_state_or_bounded_generic_confirmation_state"
-                  }
-                },
-                "status": {
-                  "type": "string",
-                  "presence": {
-                    "present": "cloud_worker_execution_state_or_bounded_generic_run_status"
-                  }
-                },
-                "target_digest": {
-                  "type": "string",
-                  "presence": {
-                    "present": "lowercase_sha256;generic_execution_confirmation_or_service_binding"
-                  }
-                },
-                "target_id": {
-                  "type": "string",
-                  "presence": {
-                    "present": "canonical_uuid;generic_execution_confirmation_or_service_binding"
-                  }
-                },
-                "target_revision": {
-                  "type": "integer",
-                  "presence": {
-                    "present": "positive_integer;generic_execution_confirmation_or_service_binding"
-                  }
-                },
-                "task_id": {
-                  "type": "string",
-                  "presence": {
-                    "omitted": "generic_execution_v2_reference",
-                    "present": "canonical_uuid;cloud_worker_reference"
-                  }
-                },
-                "title": {
-                  "type": "string"
-                }
-              }
-            },
-            "presence": {
-              "omitted": "No room, channel-post, or Execution V2 references were produced.",
-              "present": "At most 32 strict server-authored references; Execution V2 references carry complete UUID/revision/digest linkage and grant no authority."
-            }
-          },
-          "related_plan_ids": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "presence": {
-                "present": "canonical_uuid"
-              }
-            },
-            "presence": {
-              "omitted": "No Execution V2 plan was related to the assistant result.",
-              "present": "At most 32 server-authored canonical UUIDs; never synthesized from references."
-            }
-          },
-          "related_task_ids": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "presence": {
-                "present": "canonical_uuid"
-              }
-            },
-            "presence": {
-              "omitted": "No CoreTask was related to the assistant result.",
-              "present": "At most 32 server-authored canonical UUIDs; never synthesized from references."
-            }
-          },
-          "text": {
-            "type": "string"
-          },
-          "tool_calls": {
-            "type": "array"
-          }
-        }
-      }
-    },
-    {
-      "name": "agent.chat.stream",
-      "auth": "owner",
-      "transport": "ws_stream_only",
-      "schema": {
-        "request": {
-          "accepted_attachment_ids": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "presence": {
-                "present": "canonical_uuid"
-              }
-            },
-            "presence": {
-              "omitted": "no_committed_turn_inputs",
-              "present": "unique;at_most_4;all_owned_committed_unexpired_and_bound_to_turn_request_id;combined_size_at_most_8388608"
-            }
-          },
-          "after_seq": {
-            "type": "integer",
-            "presence": {
-              "omitted": "from_beginning",
-              "present": "nonnegative_integer"
-            }
-          },
-          "conversation_id": {
-            "type": "string",
-            "required": true,
-            "presence": {
-              "present": "canonical_uuid"
-            }
-          },
-          "credential_version": {
-            "type": "integer",
-            "required": true,
-            "presence": {
-              "present": "positive_integer"
-            }
-          },
-          "extensions": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "allowed_tools": {
-                  "type": "array",
-                  "required": true,
-                  "items": {
-                    "type": "string"
-                  },
-                  "presence": {
-                    "present": "unique;1_to_64;each_utf8_bytes_1_to_256;exactly_present_in_pinned_tool_catalog;no_core_intrinsics"
-                  }
-                },
-                "digest": {
-                  "type": "string",
-                  "required": true,
-                  "presence": {
-                    "present": "lowercase_sha256_equal_to_active_content_digest"
-                  }
-                },
-                "id": {
-                  "type": "string",
-                  "required": true,
-                  "presence": {
-                    "present": "canonical_uuid;installed_and_enabled"
-                  }
-                },
-                "kind": {
-                  "type": "string",
-                  "required": true,
-                  "presence": {
-                    "present": "exactly:mcp"
-                  }
-                },
-                "pinned_version": {
-                  "type": "string",
-                  "required": true,
-                  "presence": {
-                    "present": "exact_source_version_or_commit;utf8_bytes_1_to_256"
-                  }
-                }
-              }
-            },
-            "presence": {
-              "omitted": "no_local_extension_tools_exposed_to_the_model",
-              "present": "unique_installation_ids;1_to_64;immutable_exact_selections_only"
             }
           },
           "idempotency_key": {
@@ -7902,7 +7517,7 @@
     {
       "name": "agent.chat.attachment.begin",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "content_sha256": {
@@ -8018,7 +7633,7 @@
     {
       "name": "agent.chat.attachment.append",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "chunk_sha256": {
@@ -8135,7 +7750,7 @@
     {
       "name": "agent.chat.attachment.commit",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "content_sha256": {
@@ -8250,7 +7865,7 @@
     {
       "name": "agent.web_search.config.get",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "response": {
           "api_key_configured": {
@@ -8284,7 +7899,7 @@
     {
       "name": "agent.web_search.config.update",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "api_key": {
@@ -8354,7 +7969,7 @@
     {
       "name": "agent.web_search.test",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "response": {
           "api_key_configured": {
@@ -8391,7 +8006,7 @@
     {
       "name": "agent.memory.config.get",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "response": {
           "embedding_configured": {
@@ -8421,7 +8036,7 @@
     {
       "name": "agent.memory.config.update",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "enabled": {
@@ -8465,7 +8080,7 @@
     {
       "name": "agent.memory.status",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "response": {
           "active_fact_count": {
@@ -8519,7 +8134,7 @@
     {
       "name": "agent.memory.facts.update",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "fact_id": {
@@ -8574,7 +8189,7 @@
     {
       "name": "agent.memory.facts.delete",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "fact_id": {
@@ -8601,7 +8216,7 @@
     {
       "name": "agent.static_sites.list",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "page_size": {
@@ -8659,7 +8274,7 @@
     {
       "name": "agent.static_sites.delete",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "idempotency_key": {
@@ -8690,7 +8305,7 @@
     {
       "name": "agent.workers.list",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "response": {
           "workers": {
@@ -8886,7 +8501,7 @@
     {
       "name": "agent.workers.get",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "identity": {
@@ -9119,7 +8734,7 @@
     {
       "name": "agent.workers.destroy",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "confirmation": {
@@ -9217,7 +8832,7 @@
     {
       "name": "agent.workers.bind_domain",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "confirmation": {
@@ -9361,7 +8976,7 @@
     {
       "name": "agent.workers.unbind_domain",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "confirmation": {
@@ -9509,7 +9124,7 @@
     {
       "name": "agent.text_tools.config.get",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "response": {
           "enabled": {
@@ -9559,7 +9174,7 @@
     {
       "name": "agent.text_tools.config.update",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "enabled": {
@@ -9652,7 +9267,7 @@
     {
       "name": "agent.text_tools.execute",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "output_language": {
@@ -9708,7 +9323,7 @@
     {
       "name": "agent.image_tools.upload.begin",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "content_sha256": {
@@ -9817,7 +9432,7 @@
     {
       "name": "agent.image_tools.upload.append",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "chunk_sha256": {
@@ -9934,7 +9549,7 @@
     {
       "name": "agent.image_tools.upload.commit",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "content_sha256": {
@@ -10036,7 +9651,7 @@
     {
       "name": "agent.image_tools.extract_text",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "idempotency_key": {
@@ -10096,7 +9711,7 @@
     {
       "name": "agent.image_tools.translate_text",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "idempotency_key": {
@@ -10170,7 +9785,7 @@
     {
       "name": "agent.chat.turn.stop",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "expected_revision": {
@@ -10266,7 +9881,7 @@
     {
       "name": "agent.chat.turn.steer",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "expected_revision": {
@@ -10376,7 +9991,7 @@
     {
       "name": "agent.chat.turns.list",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "conversation_id": {
@@ -10485,7 +10100,7 @@
     {
       "name": "agent.voice.session.create",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "conversation_id": {
@@ -10545,7 +10160,7 @@
     {
       "name": "agent.voice.session.start",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "session_id": {
@@ -10575,7 +10190,7 @@
     {
       "name": "agent.voice.session.transcript",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "session_id": {
@@ -10608,7 +10223,7 @@
     {
       "name": "agent.voice.session.interrupt",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "session_id": {
@@ -10638,7 +10253,7 @@
     {
       "name": "agent.voice.session.end",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "session_id": {
@@ -10666,22 +10281,9 @@
       }
     },
     {
-      "name": "agent.voice.session.stream",
-      "auth": "owner",
-      "transport": "ws_stream_only",
-      "schema": {
-        "request": {
-          "session_id": {
-            "type": "string",
-            "required": true
-          }
-        }
-      }
-    },
-    {
       "name": "agent.chat.conversations.create",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "conversation_id": {
@@ -10709,7 +10311,7 @@
     {
       "name": "agent.chat.conversations.list",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "page_size": {
@@ -10732,7 +10334,7 @@
     {
       "name": "agent.chat.conversations.get",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "conversation_id": {
@@ -10762,7 +10364,7 @@
     {
       "name": "agent.chat.conversations.rename",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "conversation_id": {
@@ -10794,7 +10396,7 @@
     {
       "name": "agent.chat.conversations.delete",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "conversation_id": {
@@ -10823,12 +10425,12 @@
     {
       "name": "agent.context.compress",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "agent.models.list",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "api_key": {
@@ -10927,27 +10529,27 @@
     {
       "name": "agent.runtime.inspect",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "agent.runtime.install",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "agent.runtime.which",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "agent.runtime.run",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "agent.knowledge.config.get",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "response": {
           "collection": {
@@ -10985,7 +10587,7 @@
     {
       "name": "agent.knowledge.config.update",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "collection": {
@@ -11048,7 +10650,7 @@
     {
       "name": "agent.knowledge.sources.list",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "page_size": {
@@ -11071,7 +10673,7 @@
     {
       "name": "agent.knowledge.sources.delete",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "expected_revision": {
@@ -11100,7 +10702,7 @@
     {
       "name": "agent.knowledge.upload.start",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "content_sha256": {
@@ -11155,7 +10757,7 @@
     {
       "name": "agent.knowledge.upload.chunk",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "chunk_sha256": {
@@ -11207,7 +10809,7 @@
     {
       "name": "agent.knowledge.upload.finish",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "content_sha256": {
@@ -11236,7 +10838,7 @@
     {
       "name": "agent.knowledge.search",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "page_size": {
@@ -11284,7 +10886,7 @@
     {
       "name": "agent.knowledge.status",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "response": {
           "checked_at": {
@@ -11358,57 +10960,57 @@
     {
       "name": "agent.contacts.list",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "agent.contacts.search",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "agent.rooms.search",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "agent.messages.list",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "agent.messages.send",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "agent.room_members.list",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "agent.channel_posts.list",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "agent.channel_comments.list",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "agent.channel_comments.create",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "agent.summarize",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "agent.execution.v2.projects.analyze",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "idempotency_key": {
@@ -11472,7 +11074,7 @@
     {
       "name": "agent.execution.v2.analyses.get",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "analysis_id": {
@@ -11500,7 +11102,7 @@
     {
       "name": "agent.execution.v2.targets.list",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "page_size": {
@@ -11541,7 +11143,7 @@
     {
       "name": "agent.execution.v2.targets.get",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "revision": {
@@ -11569,7 +11171,7 @@
     {
       "name": "agent.execution.v2.targets.import",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "credential_id": {
@@ -11635,7 +11237,7 @@
     {
       "name": "agent.execution.v2.targets.reserve",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "credential_id": {
@@ -11691,7 +11293,7 @@
     {
       "name": "agent.execution.v2.targets.observe",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "idempotency_key": {
@@ -11727,7 +11329,7 @@
     {
       "name": "agent.execution.v2.plans.create",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "ai_configuration": {
@@ -11823,7 +11425,7 @@
     {
       "name": "agent.execution.v2.plans.revise",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "ai_configuration": {
@@ -11922,7 +11524,7 @@
     {
       "name": "agent.execution.v2.plans.get",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "plan_id": {
@@ -12394,7 +11996,7 @@
     {
       "name": "agent.execution.v2.plans.list",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "page_size": {
@@ -12878,7 +12480,7 @@
     {
       "name": "agent.execution.v2.deployments.list",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "page_size": {
@@ -12916,7 +12518,7 @@
     {
       "name": "agent.execution.v2.deployments.get",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "deployment_id": {
@@ -12938,7 +12540,7 @@
     {
       "name": "agent.execution.v2.deployments.events",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "after_sequence": {
@@ -12981,7 +12583,7 @@
     {
       "name": "agent.execution.v2.runs.create",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "idempotency_key": {
@@ -13028,7 +12630,7 @@
     {
       "name": "agent.execution.v2.runs.get",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "record_kind": {
@@ -13271,7 +12873,7 @@
     {
       "name": "agent.execution.v2.runs.list",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "deployment_id": {
@@ -13526,7 +13128,7 @@
     {
       "name": "agent.execution.v2.runs.cancel",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "expected_revision": {
@@ -13773,7 +13375,7 @@
     {
       "name": "agent.execution.v2.runs.retry",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "expected_revision": {
@@ -13806,7 +13408,7 @@
     {
       "name": "agent.execution.v2.runs.events",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "after_sequence": {
@@ -14000,7 +13602,7 @@
     {
       "name": "agent.execution.v2.artifacts.get",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "artifact_id": {
@@ -14108,7 +13710,7 @@
     {
       "name": "agent.execution.v2.artifacts.download",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "artifact_id": {
@@ -14224,7 +13826,7 @@
     {
       "name": "agent.execution.v2.service_bindings.list",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "page_size": {
@@ -14262,7 +13864,7 @@
     {
       "name": "agent.execution.v2.service_bindings.get",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "binding_id": {
@@ -14284,7 +13886,7 @@
     {
       "name": "agent.execution.v2.service_bindings.invoke",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "binding_id": {
@@ -14325,7 +13927,7 @@
     {
       "name": "agent.execution.v2.secrets.create",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "idempotency_key": {
@@ -14397,7 +13999,7 @@
     {
       "name": "agent.execution.v2.secrets.get",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "revision": {
@@ -14453,7 +14055,7 @@
     {
       "name": "agent.execution.v2.secrets.list",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "page_size": {
@@ -14522,7 +14124,7 @@
     {
       "name": "agent.execution.v2.secrets.revoke",
       "auth": "owner",
-      "transport": "http_and_ws_request",
+      "transport": "http_only",
       "schema": {
         "request": {
           "expected_revision": {
@@ -14647,24 +14249,19 @@
       "transport": "http_only"
     },
     {
-      "name": "plugins.invoke.stream",
-      "auth": "owner",
-      "transport": "ws_stream_only"
-    },
-    {
       "name": "contacts.list",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "contacts.request",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "contacts.reactivate",
       "auth": "public",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "rooms.reactivate",
@@ -14674,292 +14271,292 @@
     {
       "name": "contacts.requests.accept",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "contacts.requests.reject",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "contacts.requests.delete",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "contacts.delete",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "contacts.update",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "blocks.list",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "blocks.add",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "blocks.remove",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "follows.list",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "follows.add",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "follows.remove",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "favorites.list",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "favorites.add",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "favorites.delete",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "favorites.delete_batch",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "reports.submit",
       "auth": "public",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "calls.create",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "calls.incoming",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "calls.get",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "calls.event",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "calls.active",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "calls.list",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "groups.create",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "groups.update",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "groups.invite",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "groups.join",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "groups.list",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "groups.members",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "groups.dissolve",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "groups.leave",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "groups.invite.reject",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "groups.member.remove",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "groups.member.mute",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "groups.member.unmute",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "groups.mute",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "groups.unmute",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "groups.invite_policy.update",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "channels.create",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "channels.update",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "channels.join",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "channels.invite_grant.create",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "channels.invite",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "channels.dissolve",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "channels.leave",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "channels.member.remove",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "channels.member.mute",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "channels.member.unmute",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "channels.join_request.approve",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "channels.join_request.reject",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "channels.mute",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "channels.unmute",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "channels.read_marker",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "channels.list",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "channels.members",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "channels.public.search",
       "auth": "public",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "channels.public.get",
       "auth": "public",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "channels.public.posts.list",
       "auth": "public",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "channels.public.join_request",
       "auth": "public",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "channels.public.join_result",
@@ -14969,62 +14566,62 @@
     {
       "name": "users.public_channels",
       "auth": "public",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "channels.posts.list",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "channels.posts.create",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "channels.posts.update",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "channels.posts.recall",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "channels.comments.recall",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "channels.comments.list",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "channels.comments.create",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "channels.post_reaction.toggle",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "channels.comment_reaction.toggle",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "channels.my_comments",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     },
     {
       "name": "channels.my_reactions",
       "auth": "owner",
-      "transport": "http_and_ws_request"
+      "transport": "http_only"
     }
   ]
 }

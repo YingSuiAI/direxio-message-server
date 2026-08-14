@@ -23,10 +23,10 @@ func Register(router *mux.Router, service *Service) {
 	product := httpapi.ProductHandler(serviceHTTPProductPort{service: service})
 	router.HandleFunc("/query", product).Methods(http.MethodPost, http.MethodOptions)
 	router.HandleFunc("/command", product).Methods(http.MethodPost, http.MethodOptions)
+	router.HandleFunc("/events", productEventsHandler(service)).Methods(http.MethodGet, http.MethodOptions)
 	router.HandleFunc("/agent/chat/conversations/{conversation_id}/turns", agentChatTurnCreateHandler(service)).Methods(http.MethodPost, http.MethodOptions)
 	router.HandleFunc("/agent/chat/conversations/{conversation_id}/turns/{turn_id}", agentChatTurnGetHandler(service)).Methods(http.MethodGet, http.MethodOptions)
 	router.HandleFunc("/agent/chat/conversations/{conversation_id}/turns/{turn_id}/events", agentChatTurnEventsHandler(service)).Methods(http.MethodGet, http.MethodOptions)
-	router.HandleFunc("/ws", realtimeWSHandler(service)).Methods(http.MethodGet, http.MethodOptions)
 	router.HandleFunc("/agent/voice/volc/custom-llm", voiceCustomLLMHandler(service)).Methods(http.MethodPost, http.MethodOptions)
 	router.HandleFunc("/agent/voice/webhook", voiceEventWebhookHandler(service)).Methods(http.MethodPost, http.MethodOptions)
 	// The process health endpoint gates deployment and component updates. Agent
@@ -100,10 +100,6 @@ func (p serviceHTTPProductPort) Authorize(ctx context.Context, token, action str
 
 func (p serviceHTTPProductPort) Handle(ctx context.Context, action string, params map[string]any) (any, *actionbase.Error) {
 	return p.service.Handle(ctx, action, params)
-}
-
-func (p serviceHTTPProductPort) CreateWSTicket(token string) (any, *actionbase.Error) {
-	return p.service.createRealtimeWSTicketForToken(token)
 }
 
 type serviceHTTPMCPPort struct{ service *Service }

@@ -90,8 +90,7 @@ func (r *Registry) Merge(module string, handlers map[string]Handler) error {
 	return nil
 }
 
-// Validate checks exact coverage. WS-stream-only actions are ordinary service
-// actions for registry purposes and therefore also require a handler.
+// Validate checks exact handler coverage for the published action contract.
 func (r *Registry) Validate() error {
 	for _, spec := range r.specs {
 		if _, special := r.routeSpecial[spec.Name]; special {
