@@ -45,7 +45,7 @@ func TestActionBindingIsExplicit(t *testing.T) {
 	for action, operation := range map[string]string{
 		"agent.execution.v2.plans.get": "plans_get", "agent.execution.v2.plans.list": "plans_list",
 		"agent.execution.v2.runs.get": "runs_get", "agent.execution.v2.runs.list": "runs_list", "agent.execution.v2.runs.cancel": "runs_cancel", "agent.execution.v2.runs.events": "runs_events",
-		"agent.execution.v2.artifacts.get": "artifacts_get", "agent.execution.v2.artifacts.download": "artifacts_download",
+		"agent.execution.v2.artifacts.get": "artifacts_get", "agent.execution.v2.artifacts.download": "artifacts_download", "agent.execution.v2.artifacts.delete": "artifacts_delete",
 	} {
 		binding, ok := actionBindingFor(action)
 		if !ok || binding.capabilityID != "agent.execution.v2" || binding.operation != operation {

@@ -2,15 +2,19 @@ package serviceapi
 
 import "testing"
 
-func TestExecutionV2PublishesOnlyRetainedCloudWorkerActions(t *testing.T) {
-	for _, bare := range []string{"plans.get", "plans.list", "runs.get", "runs.list", "runs.cancel", "runs.events", "artifacts.get", "artifacts.download"} {
+func TestExecutionV2PublishesOnlyRetainedActions(t *testing.T) {
+	for _, bare := range []string{"plans.get", "plans.list", "runs.get", "runs.list", "runs.cancel", "runs.events", "artifacts.get", "artifacts.download", "artifacts.delete"} {
 		name := executionV2Name(bare)
 		s, ok := ActionSpecFor(name)
 		if !ok || s.Auth != ActionAuthOwner || s.Transport != ActionTransportHTTPOnly || s.Schema == nil {
 			t.Fatalf("%s spec = %#v", name, s)
 		}
 		recordKind := s.Schema.Request["record_kind"]
-		if !recordKind.Required || recordKind.Type != "string" || recordKind.Presence == nil || recordKind.Presence.Present != "exact:cloud_worker" {
+		wantRecordKind := "exact:cloud_worker"
+		if bare == "artifacts.get" || bare == "artifacts.download" || bare == "artifacts.delete" {
+			wantRecordKind = "one_of:cloud_worker|local_sandbox"
+		}
+		if !recordKind.Required || recordKind.Type != "string" || recordKind.Presence == nil || recordKind.Presence.Present != wantRecordKind {
 			t.Fatalf("%s record_kind = %#v", name, recordKind)
 		}
 	}
@@ -43,7 +47,7 @@ func TestExecutionV2PublishesOnlyRetainedCloudWorkerActions(t *testing.T) {
 			t.Errorf("artifact download request.%s must be required", field)
 		}
 	}
-	if rule := download.Schema.Request["record_kind"].Presence; rule == nil || rule.Present != "exact:cloud_worker" {
+	if rule := download.Schema.Request["record_kind"].Presence; rule == nil || rule.Present != "one_of:cloud_worker|local_sandbox" {
 		t.Fatalf("artifact download record kind = %#v", download.Schema.Request["record_kind"])
 	}
 	if rule := download.Schema.Request["max_chunk_bytes"].Presence; rule == nil || rule.Present != "integer_1_to_524288" {
@@ -57,6 +61,14 @@ func TestExecutionV2PublishesOnlyRetainedCloudWorkerActions(t *testing.T) {
 		if !ok || !value.Required || value.Presence == nil || value.Presence.Present == "" {
 			t.Errorf("artifact download response.%s = %#v", field, value)
 		}
+	}
+	deleteSpec, _ := ActionSpecFor(executionV2Name("artifacts.delete"))
+	if len(deleteSpec.Schema.Request) != 3 || !deleteSpec.Schema.Request["idempotency_key"].Required ||
+		len(deleteSpec.Schema.Response) != 2 || !deleteSpec.Schema.Response["artifact"].Required || !deleteSpec.Schema.Response["deleted"].Required {
+		t.Fatalf("artifact delete schema is not closed: %#v", deleteSpec.Schema)
+	}
+	if rule := deleteSpec.Schema.Response["deleted"].Presence; rule == nil || rule.Present != "exact:true" {
+		t.Fatalf("artifact delete result = %#v", deleteSpec.Schema.Response["deleted"])
 	}
 }
 
@@ -89,6 +101,8 @@ func TestExecutionV2CloudWorkerResponseSchemasPinStrictPublicProjection(t *testi
 	}
 	artifactGet, _ := ActionSpecFor(executionV2Name("artifacts.get"))
 	assertCloudConditionalProperties(t, "artifacts.get.artifact", artifactGet.Schema.Response["artifact"].Properties, artifactFields)
+	artifactDelete, _ := ActionSpecFor(executionV2Name("artifacts.delete"))
+	assertCloudConditionalProperties(t, "artifacts.delete.artifact", artifactDelete.Schema.Response["artifact"].Properties, artifactFields)
 	runEvents, _ := ActionSpecFor(executionV2Name("runs.events"))
 	assertCloudConditionalProperties(t, "runs.events.events[]", runEvents.Schema.Response["events"].Items.Properties, eventFields)
 	if truncated := runEvents.Schema.Response["history_truncated"]; truncated.Type != "boolean" || !truncated.Required || truncated.Presence == nil || truncated.Presence.Present != "true_when_after_sequence_precedes_retained_history" {

@@ -75,12 +75,48 @@ func TestCloudWorkerExecutionV2ResultsMatchPinnedPublicFixture(t *testing.T) {
 		{"agent.execution.v2.artifacts.download", map[string]any{
 			"record_kind": "cloud_worker", "artifact_id": fixture.Artifacts[0]["artifact_id"], "offset_bytes": float64(0), "max_chunk_bytes": float64(512 << 10),
 		}, fixture.ArtifactDownload},
+		{"agent.execution.v2.artifacts.delete", map[string]any{
+			"record_kind": "cloud_worker", "artifact_id": fixture.Artifacts[0]["artifact_id"], "idempotency_key": "11111111-1111-4111-8111-111111111111",
+		}, map[string]any{"artifact": fixture.Artifacts[0], "deleted": true}},
 		{"agent.execution.v2.runs.events", runEventsRequest, map[string]any{"events": []any{fixture.RunEvent}, "next_sequence": fixture.RunEvent["sequence"], "history_truncated": false}},
 	}
 	for _, test := range tests {
 		t.Run(test.action, func(t *testing.T) {
 			if _, err := adaptActionResultForRequestWithAuthority(test.action, test.request, test.output, authority); err != nil {
 				t.Fatalf("fixture rejected: %v", err)
+			}
+		})
+	}
+}
+
+func TestArtifactResultsValidateBothRecordKindsAndDeleteReceipt(t *testing.T) {
+	fixture := loadCloudWorkerPublicFixture(t)
+	authority := cloudWorkerFixtureAuthority(t, fixture)
+	for _, kind := range []string{"cloud_worker", "local_sandbox"} {
+		request := map[string]any{"record_kind": kind, "artifact_id": fixture.Artifacts[0]["artifact_id"]}
+		if _, err := adaptActionResultForRequestWithAuthority("agent.execution.v2.artifacts.get", request, map[string]any{"artifact": fixture.Artifacts[0]}, authority); err != nil {
+			t.Fatalf("%s artifact result rejected: %v", kind, err)
+		}
+		request["idempotency_key"] = "11111111-1111-4111-8111-111111111111"
+		if _, err := adaptActionResultForRequestWithAuthority("agent.execution.v2.artifacts.delete", request, map[string]any{"artifact": fixture.Artifacts[0], "deleted": true}, authority); err != nil {
+			t.Fatalf("%s artifact delete result rejected: %v", kind, err)
+		}
+		downloadRequest := map[string]any{
+			"record_kind": kind, "artifact_id": fixture.Artifacts[0]["artifact_id"], "offset_bytes": float64(0), "max_chunk_bytes": float64(512 << 10),
+		}
+		if _, err := adaptActionResultForRequestWithAuthority("agent.execution.v2.artifacts.download", downloadRequest, fixture.ArtifactDownload, authority); err != nil {
+			t.Fatalf("%s artifact download result rejected: %v", kind, err)
+		}
+	}
+	request := map[string]any{"record_kind": "local_sandbox", "artifact_id": fixture.Artifacts[0]["artifact_id"], "idempotency_key": "11111111-1111-4111-8111-111111111111"}
+	for name, output := range map[string]map[string]any{
+		"missing deleted": {"artifact": fixture.Artifacts[0]},
+		"deleted false":   {"artifact": fixture.Artifacts[0], "deleted": false},
+		"unknown field":   {"artifact": fixture.Artifacts[0], "deleted": true, "replayed": true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := adaptActionResultForRequestWithAuthority("agent.execution.v2.artifacts.delete", request, output, authority); !errors.Is(err, ErrInvalidActionResult) {
+				t.Fatalf("invalid artifact delete result accepted: %v", err)
 			}
 		})
 	}

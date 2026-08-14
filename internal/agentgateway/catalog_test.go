@@ -78,7 +78,7 @@ func TestValidateCatalogPinsKnowledgeStatusQuotaSchema(t *testing.T) {
 
 func TestArtifactDownloadCatalogPinsExactAgentSchemas(t *testing.T) {
 	requirement := NewCatalogRequirement("agent.execution.v2.artifacts.download")
-	if got, want := hex.EncodeToString(requirement.InputSchemaDigest), "1f89699ab07b14d135619ee5f6b2ffd0d8d0821fb8f1ba236662814c0586706c"; got != want {
+	if got, want := hex.EncodeToString(requirement.InputSchemaDigest), "51612490caad49dd0ef450cb02a5826fc145b09643874991e89e85e01cf2bc3c"; got != want {
 		t.Fatalf("artifact download input schema digest = %s, want %s", got, want)
 	}
 	if got, want := hex.EncodeToString(requirement.ResultSchemaDigest), "6ea5feead715aa50feeff464e6da618564f9b6e422025c94743faf173478689d"; got != want {
@@ -99,8 +99,9 @@ func TestCloudWorkerExecutionCatalogPinsRecordKindInputSchemas(t *testing.T) {
 		{"agent.execution.v2.runs.list", "runs_list", `{"additionalProperties":false,"properties":{"page_size":{"type":"integer"},"page_token":{"type":"string"},"record_kind":{"enum":["cloud_worker"],"type":"string"}},"required":["record_kind"],"type":"object"}`},
 		{"agent.execution.v2.runs.cancel", "runs_cancel", `{"additionalProperties":false,"properties":{"expected_revision":{"type":"integer"},"idempotency_key":{"type":"string"},"record_kind":{"enum":["cloud_worker"],"type":"string"},"run_id":{"type":"string"}},"required":["record_kind","run_id","idempotency_key","expected_revision"],"type":"object"}`},
 		{"agent.execution.v2.runs.events", "runs_events", `{"additionalProperties":false,"properties":{"after_sequence":{"type":"integer"},"limit":{"type":"integer"},"record_kind":{"enum":["cloud_worker"],"type":"string"},"run_id":{"type":"string"}},"required":["record_kind","run_id"],"type":"object"}`},
-		{"agent.execution.v2.artifacts.get", "artifacts_get", `{"additionalProperties":false,"properties":{"artifact_id":{"type":"string"},"record_kind":{"enum":["cloud_worker"],"type":"string"}},"required":["record_kind","artifact_id"],"type":"object"}`},
-		{"agent.execution.v2.artifacts.download", "artifacts_download", `{"additionalProperties":false,"properties":{"artifact_id":{"type":"string"},"max_chunk_bytes":{"maximum":524288,"minimum":1,"type":"integer"},"offset_bytes":{"maximum":8388607,"minimum":0,"type":"integer"},"record_kind":{"enum":["cloud_worker"],"type":"string"}},"required":["record_kind","artifact_id","offset_bytes","max_chunk_bytes"],"type":"object"}`},
+		{"agent.execution.v2.artifacts.get", "artifacts_get", `{"additionalProperties":false,"properties":{"artifact_id":{"type":"string"},"record_kind":{"enum":["cloud_worker","local_sandbox"],"type":"string"}},"required":["record_kind","artifact_id"],"type":"object"}`},
+		{"agent.execution.v2.artifacts.download", "artifacts_download", `{"additionalProperties":false,"properties":{"artifact_id":{"type":"string"},"max_chunk_bytes":{"maximum":524288,"minimum":1,"type":"integer"},"offset_bytes":{"maximum":8388607,"minimum":0,"type":"integer"},"record_kind":{"enum":["cloud_worker","local_sandbox"],"type":"string"}},"required":["record_kind","artifact_id","offset_bytes","max_chunk_bytes"],"type":"object"}`},
+		{"agent.execution.v2.artifacts.delete", "artifacts_delete", `{"additionalProperties":false,"properties":{"artifact_id":{"type":"string"},"idempotency_key":{"type":"string"},"record_kind":{"enum":["cloud_worker","local_sandbox"],"type":"string"}},"required":["record_kind","artifact_id","idempotency_key"],"type":"object"}`},
 	}
 	for _, test := range tests {
 		t.Run(test.action, func(t *testing.T) {

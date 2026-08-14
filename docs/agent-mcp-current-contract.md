@@ -299,12 +299,15 @@ choice reflected by run state and does not block a terminal result. The receipt 
 identity plus terminal state/time/digest; it does not carry an assistant-message
 identity because the central continuation creates that message.
 
-Verified Cloud Worker output is retrievable only through the owner-authenticated
-`agent.execution.v2.artifacts.download` proxy. It is a bounded 512 KiB,
-offset-based read with exact per-chunk and whole-artifact SHA-256 metadata.
-Message Server returns the validated bytes and public identity/range fields;
-it never exposes the Agent's S3 locator, a pre-signed storage URL, retention
-ledger, Worker diagnostics, or provider credentials.
+Verified Cloud Worker and local-sandbox output is managed through the
+owner-authenticated `agent.execution.v2.artifacts.get/download/delete` proxy.
+Each request binds the artifact UUID and exact `cloud_worker` or
+`local_sandbox` record kind. Download is a bounded 512 KiB offset-based read
+with exact per-chunk and whole-artifact SHA-256 metadata. Delete requires a
+stable UUID idempotency key and returns the deleted public artifact plus
+`deleted=true`. Message Server returns only validated public artifact or
+identity/range fields; it never exposes a storage locator, signed URL,
+retention ledger, Worker diagnostics, or provider credentials.
 
 Cloud Worker `agent.execution.v2.runs.events` returns the exact
 `events`/`next_sequence`/`history_truncated` envelope. Agent retains a bounded

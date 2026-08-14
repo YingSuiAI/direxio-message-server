@@ -17,7 +17,7 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 )
 
-func TestExecutionV2ExternalAllowlistMatchesRetainedCloudWorkerActions(t *testing.T) {
+func TestExecutionV2ExternalAllowlistMatchesRetainedActions(t *testing.T) {
 	actions := make(map[string]bool, len(externalNativeActions))
 	for _, action := range externalNativeActions {
 		actions[action] = true
@@ -25,7 +25,7 @@ func TestExecutionV2ExternalAllowlistMatchesRetainedCloudWorkerActions(t *testin
 	for _, action := range []string{
 		"agent.execution.v2.plans.get", "agent.execution.v2.plans.list",
 		"agent.execution.v2.runs.get", "agent.execution.v2.runs.list", "agent.execution.v2.runs.cancel", "agent.execution.v2.runs.events",
-		"agent.execution.v2.artifacts.get", "agent.execution.v2.artifacts.download",
+		"agent.execution.v2.artifacts.get", "agent.execution.v2.artifacts.download", "agent.execution.v2.artifacts.delete",
 	} {
 		if !actions[action] {
 			t.Errorf("retained Cloud Worker action %s is missing from external routing", action)

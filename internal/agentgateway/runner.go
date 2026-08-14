@@ -1043,6 +1043,7 @@ var actionBindings = map[string]actionBinding{
 	"agent.execution.v2.runs.events":        {"agent.execution.v2", "runs_events"},
 	"agent.execution.v2.artifacts.get":      {"agent.execution.v2", "artifacts_get"},
 	"agent.execution.v2.artifacts.download": {"agent.execution.v2", "artifacts_download"},
+	"agent.execution.v2.artifacts.delete":   {"agent.execution.v2", "artifacts_delete"},
 
 	// Product actions use the Agent Skills capability as a typed bridge; the
 	// child capability and operation scopes are selected below.

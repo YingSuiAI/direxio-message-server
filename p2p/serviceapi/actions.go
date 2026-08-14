@@ -160,7 +160,7 @@ var actionSpecs = []ActionSpec{
 	{Name: "agent.channel_comments.list", Auth: ActionAuthOwner, Transport: ActionTransportHTTPOnly},
 	{Name: "agent.channel_comments.create", Auth: ActionAuthOwner, Transport: ActionTransportHTTPOnly},
 	{Name: "agent.summarize", Auth: ActionAuthOwner, Transport: ActionTransportHTTPOnly},
-	// execution.v2 exposes only the retained Agent-owned Cloud Worker records.
+	// execution.v2 exposes retained Cloud Worker records and Agent-owned artifacts.
 	{Name: executionV2Name("plans.get"), Auth: ActionAuthOwner, Transport: ActionTransportHTTPOnly, Schema: executionV2Schema("plans.get")},
 	{Name: executionV2Name("plans.list"), Auth: ActionAuthOwner, Transport: ActionTransportHTTPOnly, Schema: executionV2Schema("plans.list")},
 	{Name: executionV2Name("runs.get"), Auth: ActionAuthOwner, Transport: ActionTransportHTTPOnly, Schema: executionV2Schema("runs.get")},
@@ -169,6 +169,7 @@ var actionSpecs = []ActionSpec{
 	{Name: executionV2Name("runs.events"), Auth: ActionAuthOwner, Transport: ActionTransportHTTPOnly, Schema: executionV2Schema("runs.events")},
 	{Name: executionV2Name("artifacts.get"), Auth: ActionAuthOwner, Transport: ActionTransportHTTPOnly, Schema: executionV2Schema("artifacts.get")},
 	{Name: executionV2Name("artifacts.download"), Auth: ActionAuthOwner, Transport: ActionTransportHTTPOnly, Schema: executionV2Schema("artifacts.download")},
+	{Name: executionV2Name("artifacts.delete"), Auth: ActionAuthOwner, Transport: ActionTransportHTTPOnly, Schema: executionV2Schema("artifacts.delete")},
 
 	{Name: "plugins.catalog.list", Auth: ActionAuthOwner, Transport: ActionTransportHTTPOnly},
 	{Name: "plugins.installed.list", Auth: ActionAuthOwner, Transport: ActionTransportHTTPOnly},

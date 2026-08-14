@@ -307,7 +307,38 @@ func TestValidateChatAttachmentUploadRequests(t *testing.T) {
 	}
 }
 
-func TestValidateCloudWorkerArtifactDownloadRequest(t *testing.T) {
+func TestValidateArtifactGetRequest(t *testing.T) {
+	valid := map[string]any{"record_kind": "cloud_worker", "artifact_id": "9e728519-ea72-52cc-bb5a-8eb2860722b8"}
+	for _, kind := range []string{"cloud_worker", "local_sandbox"} {
+		request := cloneParams(valid)
+		request["record_kind"] = kind
+		if err := ValidateActionRequest("agent.execution.v2.artifacts.get", request); err != nil {
+			t.Fatalf("%s artifact get request rejected: %v", kind, err)
+		}
+	}
+	for name, mutation := range map[string]map[string]any{
+		"missing record kind": {"record_kind": nil},
+		"unknown record kind": {"record_kind": "generic"},
+		"bad artifact id":     {"artifact_id": "artifact-1"},
+		"unknown field":       {"s3_url": "s3://private/internal"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			request := cloneParams(valid)
+			for field, value := range mutation {
+				if value == nil {
+					delete(request, field)
+				} else {
+					request[field] = value
+				}
+			}
+			if err := ValidateActionRequest("agent.execution.v2.artifacts.get", request); !errors.Is(err, ErrInvalidActionRequest) {
+				t.Fatalf("invalid artifact get request accepted: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateArtifactDownloadRequest(t *testing.T) {
 	const artifactID = "9e728519-ea72-52cc-bb5a-8eb2860722b8"
 	valid := map[string]any{
 		"record_kind":     "cloud_worker",
@@ -317,6 +348,11 @@ func TestValidateCloudWorkerArtifactDownloadRequest(t *testing.T) {
 	}
 	if err := ValidateActionRequest("agent.execution.v2.artifacts.download", valid); err != nil {
 		t.Fatalf("canonical artifact download request rejected: %v", err)
+	}
+	local := cloneParams(valid)
+	local["record_kind"] = "local_sandbox"
+	if err := ValidateActionRequest("agent.execution.v2.artifacts.download", local); err != nil {
+		t.Fatalf("local sandbox artifact download request rejected: %v", err)
 	}
 
 	for name, mutation := range map[string]map[string]any{
@@ -345,6 +381,43 @@ func TestValidateCloudWorkerArtifactDownloadRequest(t *testing.T) {
 			}
 			if strings.Contains(err.Error(), "s3://private/internal") {
 				t.Fatal("request validation reflected a private storage address")
+			}
+		})
+	}
+}
+
+func TestValidateArtifactDeleteRequest(t *testing.T) {
+	valid := map[string]any{
+		"record_kind":     "cloud_worker",
+		"artifact_id":     "9e728519-ea72-52cc-bb5a-8eb2860722b8",
+		"idempotency_key": "11111111-1111-4111-8111-111111111111",
+	}
+	for _, kind := range []string{"cloud_worker", "local_sandbox"} {
+		request := cloneParams(valid)
+		request["record_kind"] = kind
+		if err := ValidateActionRequest("agent.execution.v2.artifacts.delete", request); err != nil {
+			t.Fatalf("%s artifact delete request rejected: %v", kind, err)
+		}
+	}
+	for name, mutation := range map[string]map[string]any{
+		"missing record kind":     {"record_kind": nil},
+		"unknown record kind":     {"record_kind": "generic"},
+		"bad artifact id":         {"artifact_id": "artifact-1"},
+		"missing idempotency key": {"idempotency_key": nil},
+		"bad idempotency key":     {"idempotency_key": "retry"},
+		"unknown field":           {"s3_url": "s3://private/internal"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			request := cloneParams(valid)
+			for field, value := range mutation {
+				if value == nil {
+					delete(request, field)
+				} else {
+					request[field] = value
+				}
+			}
+			if err := ValidateActionRequest("agent.execution.v2.artifacts.delete", request); !errors.Is(err, ErrInvalidActionRequest) {
+				t.Fatalf("invalid artifact delete request accepted: %v", err)
 			}
 		})
 	}

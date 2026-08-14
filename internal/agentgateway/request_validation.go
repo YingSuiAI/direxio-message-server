@@ -135,8 +135,12 @@ func ValidateActionRequest(action string, params map[string]any) error {
 		return validateCoreExtensionMutationRequest(action, params, "skill")
 	case "agent.core.mcp.remove", "agent.core.skills.remove":
 		return validateCoreExtensionRemoveRequest(action, params)
+	case "agent.execution.v2.artifacts.get":
+		return validateArtifactGetRequest(action, params)
 	case "agent.execution.v2.artifacts.download":
-		return validateCloudWorkerArtifactDownloadRequest(action, params)
+		return validateArtifactDownloadRequest(action, params)
+	case "agent.execution.v2.artifacts.delete":
+		return validateArtifactDeleteRequest(action, params)
 	case "agent.text_tools.config.get":
 		return rejectUnknownActionFields(action, params)
 	case "agent.memory.config.get", "agent.memory.status":
@@ -987,12 +991,25 @@ func actionObjectSlice(value any) ([]map[string]any, bool) {
 	return result, true
 }
 
-func validateCloudWorkerArtifactDownloadRequest(action string, params map[string]any) error {
+func validateArtifactGetRequest(action string, params map[string]any) error {
+	if err := rejectUnknownActionFields(action, params, "record_kind", "artifact_id"); err != nil {
+		return err
+	}
+	if params == nil || !validArtifactRecordKind(params["record_kind"]) {
+		return invalidActionRequest(action, "record_kind", "must be cloud_worker or local_sandbox")
+	}
+	if !canonicalActionUUID(params["artifact_id"]) {
+		return invalidActionRequest(action, "artifact_id", "must be a canonical UUID")
+	}
+	return nil
+}
+
+func validateArtifactDownloadRequest(action string, params map[string]any) error {
 	if err := rejectUnknownActionFields(action, params, "record_kind", "artifact_id", "offset_bytes", "max_chunk_bytes"); err != nil {
 		return err
 	}
-	if params == nil || params["record_kind"] != "cloud_worker" {
-		return invalidActionRequest(action, "record_kind", "must be exactly cloud_worker")
+	if params == nil || !validArtifactRecordKind(params["record_kind"]) {
+		return invalidActionRequest(action, "record_kind", "must be cloud_worker or local_sandbox")
 	}
 	if !canonicalActionUUID(params["artifact_id"]) {
 		return invalidActionRequest(action, "artifact_id", "must be a canonical UUID")
@@ -1004,6 +1021,26 @@ func validateCloudWorkerArtifactDownloadRequest(action string, params map[string
 		return invalidActionRequest(action, "max_chunk_bytes", "must be an integer from 1 to 524288")
 	}
 	return nil
+}
+
+func validateArtifactDeleteRequest(action string, params map[string]any) error {
+	if err := rejectUnknownActionFields(action, params, "record_kind", "artifact_id", "idempotency_key"); err != nil {
+		return err
+	}
+	if params == nil || !validArtifactRecordKind(params["record_kind"]) {
+		return invalidActionRequest(action, "record_kind", "must be cloud_worker or local_sandbox")
+	}
+	for _, field := range []string{"artifact_id", "idempotency_key"} {
+		if !canonicalActionUUID(params[field]) {
+			return invalidActionRequest(action, field, "must be a canonical UUID")
+		}
+	}
+	return nil
+}
+
+func validArtifactRecordKind(value any) bool {
+	kind, ok := value.(string)
+	return ok && (kind == "cloud_worker" || kind == "local_sandbox")
 }
 
 func validateTurnStopRequest(action string, params map[string]any) error {

@@ -147,8 +147,35 @@ func validateCloudWorkerActionResult(action string, request, output map[string]a
 		return validateCloudWorkerRequestedIdentity(request, value, "artifact_id", "")
 	case "agent.execution.v2.artifacts.download":
 		return validateCloudWorkerArtifactDownload(request, output, authority)
+	case "agent.execution.v2.artifacts.delete":
+		if err := cloudExact(output, []string{"artifact", "deleted"}, nil, "artifact delete envelope"); err != nil {
+			return err
+		}
+		if deleted, ok := output["deleted"].(bool); !ok || !deleted {
+			return cloudWorkerResultError("deleted must be true")
+		}
+		value, ok := output["artifact"].(map[string]any)
+		if !ok {
+			return cloudWorkerResultError("artifact must be an object")
+		}
+		if err := validateCloudWorkerArtifact(value); err != nil {
+			return err
+		}
+		if err := validateCloudWorkerAuthority(value, authority); err != nil {
+			return err
+		}
+		return validateCloudWorkerRequestedIdentity(request, value, "artifact_id", "")
 	default:
 		return cloudWorkerResultError("record_kind=cloud_worker is unsupported for %s", action)
+	}
+}
+
+func executionV2ArtifactAction(action string) bool {
+	switch strings.TrimSpace(action) {
+	case "agent.execution.v2.artifacts.get", "agent.execution.v2.artifacts.download", "agent.execution.v2.artifacts.delete":
+		return true
+	default:
+		return false
 	}
 }
 

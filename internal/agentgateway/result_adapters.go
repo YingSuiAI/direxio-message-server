@@ -64,7 +64,8 @@ func adaptActionResultForRequest(action string, request, output map[string]any) 
 
 func adaptActionResultForRequestWithAuthority(action string, request, output map[string]any, authority actionResultAuthority) (map[string]any, error) {
 	recordKind, _ := request["record_kind"].(string)
-	if strings.TrimSpace(recordKind) == "cloud_worker" {
+	if strings.TrimSpace(recordKind) == "cloud_worker" ||
+		(strings.TrimSpace(recordKind) == "local_sandbox" && executionV2ArtifactAction(action)) {
 		if err := validateCloudWorkerActionResult(strings.TrimSpace(action), request, output, authority); err != nil {
 			return nil, err
 		}

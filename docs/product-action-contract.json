@@ -12284,7 +12284,7 @@
             "type": "string",
             "required": true,
             "presence": {
-              "present": "exact:cloud_worker"
+              "present": "one_of:cloud_worker|local_sandbox"
             }
           }
         },
@@ -12395,7 +12395,7 @@
             "type": "string",
             "required": true,
             "presence": {
-              "present": "exact:cloud_worker"
+              "present": "one_of:cloud_worker|local_sandbox"
             }
           }
         },
@@ -12475,6 +12475,117 @@
             "required": true,
             "presence": {
               "present": "integer_1_to_8388608"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.execution.v2.artifacts.delete",
+      "auth": "owner",
+      "transport": "http_only",
+      "schema": {
+        "request": {
+          "artifact_id": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid"
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "canonical_uuid"
+            }
+          },
+          "record_kind": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "one_of:cloud_worker|local_sandbox"
+            }
+          }
+        },
+        "response": {
+          "artifact": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "account_generation": {
+                "type": "integer",
+                "presence": {
+                  "present": "positive_integer_equal_to_prepared_permission_generation"
+                }
+              },
+              "artifact_id": {
+                "type": "string",
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "created_at": {
+                "type": "string",
+                "presence": {
+                  "present": "rfc3339_nano"
+                }
+              },
+              "execution_id": {
+                "type": "string",
+                "presence": {
+                  "present": "canonical_uuid"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "presence": {
+                  "present": "approved_artifact_kind"
+                }
+              },
+              "media_type": {
+                "type": "string",
+                "presence": {
+                  "present": "nonempty_media_type"
+                }
+              },
+              "name": {
+                "type": "string",
+                "presence": {
+                  "present": "safe_display_name"
+                }
+              },
+              "owner_id": {
+                "type": "string",
+                "presence": {
+                  "present": "exact_prepared_permission_owner"
+                }
+              },
+              "sha256": {
+                "type": "string",
+                "presence": {
+                  "present": "lowercase_sha256"
+                }
+              },
+              "size_bytes": {
+                "type": "integer",
+                "presence": {
+                  "present": "nonnegative_integer"
+                }
+              },
+              "status": {
+                "type": "string",
+                "presence": {
+                  "present": "one_of:pending|verified|rejected"
+                }
+              }
+            }
+          },
+          "deleted": {
+            "type": "boolean",
+            "required": true,
+            "presence": {
+              "present": "exact:true"
             }
           }
         }

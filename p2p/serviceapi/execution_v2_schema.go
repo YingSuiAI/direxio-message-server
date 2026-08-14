@@ -14,6 +14,11 @@ func executionV2CloudWorkerRoute(request map[string]ActionFieldSchema) map[strin
 	return request
 }
 
+func executionV2ArtifactRoute(request map[string]ActionFieldSchema) map[string]ActionFieldSchema {
+	request["record_kind"] = ActionFieldSchema{Type: "string", Required: true, Presence: &ActionPresenceSchema{Present: "one_of:cloud_worker|local_sandbox"}}
+	return request
+}
+
 func cloudWorkerConditional(kind, rule string) ActionFieldSchema {
 	return ActionFieldSchema{Type: kind, Presence: &ActionPresenceSchema{Present: rule}}
 }
@@ -209,16 +214,24 @@ func executionV2Schema(name string) *ActionSchema {
 	case "runs.events":
 		return &ActionSchema{Request: executionV2CloudWorkerRoute(executionV2EventsRequest("run_id")), Response: executionV2CloudWorkerEventsResponse()}
 	case "artifacts.get":
-		request := executionV2CloudWorkerRoute(map[string]ActionFieldSchema{"artifact_id": {Type: "string", Required: true, Presence: &ActionPresenceSchema{Present: "canonical_uuid"}}})
+		request := executionV2ArtifactRoute(map[string]ActionFieldSchema{"artifact_id": {Type: "string", Required: true, Presence: &ActionPresenceSchema{Present: "canonical_uuid"}}})
 		return &ActionSchema{Request: request, Response: executionV2CloudWorkerObjectResponse("artifact", cloudWorkerArtifactProperties())}
 	case "artifacts.download":
-		request := map[string]ActionFieldSchema{
-			"record_kind":     {Type: "string", Required: true, Presence: &ActionPresenceSchema{Present: "exact:cloud_worker"}},
+		request := executionV2ArtifactRoute(map[string]ActionFieldSchema{
 			"artifact_id":     {Type: "string", Required: true, Presence: &ActionPresenceSchema{Present: "canonical_uuid"}},
 			"offset_bytes":    {Type: "integer", Required: true, Presence: &ActionPresenceSchema{Present: "integer_0_to_8388607"}},
 			"max_chunk_bytes": {Type: "integer", Required: true, Presence: &ActionPresenceSchema{Present: "integer_1_to_524288"}},
-		}
+		})
 		return &ActionSchema{Request: request, Response: cloudWorkerArtifactDownloadProperties()}
+	case "artifacts.delete":
+		request := executionV2ArtifactRoute(map[string]ActionFieldSchema{
+			"artifact_id":     {Type: "string", Required: true, Presence: &ActionPresenceSchema{Present: "canonical_uuid"}},
+			"idempotency_key": {Type: "string", Required: true, Presence: &ActionPresenceSchema{Present: "canonical_uuid"}},
+		})
+		return &ActionSchema{Request: request, Response: map[string]ActionFieldSchema{
+			"artifact": {Type: "object", Required: true, Properties: cloudWorkerArtifactProperties()},
+			"deleted":  {Type: "boolean", Required: true, Presence: &ActionPresenceSchema{Present: "exact:true"}},
+		}}
 	default:
 		return nil
 	}

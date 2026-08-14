@@ -275,11 +275,11 @@ They do not expose recipe/adapter/model/input-manifest pins, AMI/runtime
 implementation data, AWS credential revisions, or plan/run/quote/execution
 digests.
 
-Verified Cloud Worker deliverables are read only through
-`agent.execution.v2.artifacts.download`. The request is the closed
-`record_kind=cloud_worker`, `artifact_id`, `offset_bytes`, and
-`max_chunk_bytes` shape; every field is required and a chunk is limited to
-512 KiB. The offset is bounded by the Cloud Worker 8 MiB artifact hard limit;
+Verified Cloud Worker and local-sandbox deliverables use
+`agent.execution.v2.artifacts.get/download/delete`. Artifact requests bind
+`record_kind` to exactly `cloud_worker` or `local_sandbox` and one artifact
+UUID. Download additionally requires `offset_bytes` and `max_chunk_bytes`; a
+chunk is limited to 512 KiB and the offset is bounded by the 8 MiB artifact hard limit;
 each successful response advances by a non-empty chunk, and the last chunk
 sets EOF. The direct response carries only owner/account-generation and
 artifact/execution identity, canonical base64 bytes, chunk and whole-artifact
@@ -287,7 +287,9 @@ SHA-256, total/range metadata, and EOF. Message Server revalidates that closed
 shape, prepared owner authority, request identity, decoded chunk digest, and
 range continuity before returning it. S3 bucket/key/version, signed URLs,
 retention internals, Worker diagnostics, and provider errors are never part of
-the public contract.
+the public contract. Delete requires one stable UUID idempotency key and returns
+the deleted public artifact projection plus `deleted=true`; replaying the same
+key remains the same mutation.
 
 After Agent has frozen one terminal conversation result, it calls the private fixed
 `product.agent_execution.v1/record_completion` operation. This callback is
