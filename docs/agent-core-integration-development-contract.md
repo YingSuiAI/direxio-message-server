@@ -264,13 +264,13 @@ manufacture, weaken, or use a reference as authorization.
 
 For `record_kind=cloud_worker`, plan and run reads use closed provider-neutral
 projections. Plans expose the owner and request linkage, reusable-Worker
-preference, workspace, AWS account/region, compute/runtime request, grants,
-retention, live quote, and timestamps. Compute reports the selected instance
+preference, workspace, AWS account/region, compute/runtime request, one live
+proposal quote, and timestamps. Compute reports the selected instance
 type, vCPU, memory GiB, and volume GiB/type/IOPS/throughput. The quote reports
 hourly compute micros, total amount micros, maximum authorized micros,
 currency, source time, and expiry. Runs expose independent run and
 execution identities, plan revision, lifecycle state, Worker identity and
-persistence, cleanup summary, artifacts, failure summary, and timestamps.
+persistence, artifacts, failure summary, and timestamps.
 They do not expose recipe/adapter/model/input-manifest pins, AMI/runtime
 implementation data, AWS credential revisions, or plan/run/quote/execution
 digests.

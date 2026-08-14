@@ -103,10 +103,8 @@ Native Agent 当前边界：
   并保留时间线，删除会撤回指定事实；Message Server 只做闭集请求/结果校验与投影，
   不持久化事实。
 - Cloud Worker `agent.execution.v2.runs.events` 固定返回
-  `events`、`next_sequence`、`history_truncated`。只有 `worker_progress` 事件可携带
-  完整且有界的结构化 `progress`；普通生命周期事件禁止混入 progress。Message
-  Server 严格拒绝模型原文、stderr、路径、环境变量、secret 与对象存储地址等私有
-  字段；CPU 或内存值为 `0` 只表示 Worker 没有可信指标源，不代表零资源消耗。
+  `events`、`next_sequence`、`history_truncated`。事件只包含身份、revision、sequence、
+  type、时间、payload digest 和可选生命周期 status，不公开运行时 progress 或实现诊断。
   Agent 每个 run 最多保留 4096 个事件，游标早于保留窗口时显式返回
   `history_truncated=true`，不伪造完整历史；非截断页从请求游标下一条开始，页内
   后续事件必须连续。

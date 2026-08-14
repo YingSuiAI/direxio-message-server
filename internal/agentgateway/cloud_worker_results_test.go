@@ -8,7 +8,6 @@ import (
 	"sort"
 	"strings"
 	"testing"
-	"time"
 )
 
 type cloudWorkerPublicFixture struct {
@@ -87,7 +86,7 @@ func TestCloudWorkerExecutionV2ResultsMatchPinnedPublicFixture(t *testing.T) {
 	}
 }
 
-func TestCloudWorkerRunEventsPinBoundedSecretFreeProgressAndCursor(t *testing.T) {
+func TestCloudWorkerRunEventsPinCursor(t *testing.T) {
 	fixture := loadCloudWorkerPublicFixture(t)
 	authority := cloudWorkerFixtureAuthority(t, fixture)
 	request := cloudWorkerRequest("run_id", fixture.Run["run_id"])
@@ -96,18 +95,8 @@ func TestCloudWorkerRunEventsPinBoundedSecretFreeProgressAndCursor(t *testing.T)
 		t.Fatal("fixture run event sequence is invalid")
 	}
 	request["after_sequence"] = runEventSequence - 1
-	validProgress := func() map[string]any {
-		return map[string]any{
-			"phase": "running", "elapsed_ms": float64(1200), "last_activity_at": fixture.RunEvent["at"],
-			"cpu_time_ms": float64(800), "memory_high_water_bytes": float64(32 << 20),
-			"invocation_count": float64(2), "uploaded_bytes": float64(0), "output_truncated": false,
-		}
-	}
 	validEvent := func() map[string]any {
-		event := cloneParams(fixture.RunEvent)
-		event["type"] = "worker_progress"
-		event["progress"] = validProgress()
-		return event
+		return cloneParams(fixture.RunEvent)
 	}
 	validate := func(output map[string]any) error {
 		_, err := adaptActionResultForRequestWithAuthority("agent.execution.v2.runs.events", request, output, authority)
@@ -117,7 +106,7 @@ func TestCloudWorkerRunEventsPinBoundedSecretFreeProgressAndCursor(t *testing.T)
 		return map[string]any{"events": []any{event}, "next_sequence": event["sequence"], "history_truncated": false}
 	}
 	if err := validate(validOutput(validEvent())); err != nil {
-		t.Fatalf("valid worker progress rejected: %v", err)
+		t.Fatalf("valid run event rejected: %v", err)
 	}
 
 	for name, mutate := range map[string]func(map[string]any){
@@ -140,68 +129,6 @@ func TestCloudWorkerRunEventsPinBoundedSecretFreeProgressAndCursor(t *testing.T)
 		})
 	}
 
-	for _, field := range []string{"phase", "elapsed_ms", "last_activity_at", "cpu_time_ms", "memory_high_water_bytes", "invocation_count", "uploaded_bytes", "output_truncated"} {
-		t.Run("missing progress "+field, func(t *testing.T) {
-			event := validEvent()
-			delete(event["progress"].(map[string]any), field)
-			if err := validate(validOutput(event)); !errors.Is(err, ErrInvalidActionResult) {
-				t.Fatalf("incomplete progress accepted: %v", err)
-			}
-		})
-	}
-	for _, field := range []string{"text", "raw", "model_text", "secret", "stderr", "env", "s3_url", "bucket", "key"} {
-		t.Run("forbidden progress "+field, func(t *testing.T) {
-			event := validEvent()
-			event["progress"].(map[string]any)[field] = "protected-value"
-			err := validate(validOutput(event))
-			if !errors.Is(err, ErrInvalidActionResult) || strings.Contains(err.Error(), "protected-value") {
-				t.Fatalf("private progress field handling err=%v", err)
-			}
-		})
-	}
-
-	for name, mutate := range map[string]func(map[string]any){
-		"unknown phase":         func(progress map[string]any) { progress["phase"] = "shell_output" },
-		"padded phase":          func(progress map[string]any) { progress["phase"] = " running" },
-		"negative elapsed":      func(progress map[string]any) { progress["elapsed_ms"] = float64(-1) },
-		"elapsed over max":      func(progress map[string]any) { progress["elapsed_ms"] = float64(86400001) },
-		"cpu over max":          func(progress map[string]any) { progress["cpu_time_ms"] = float64(604800001) },
-		"memory over max":       func(progress map[string]any) { progress["memory_high_water_bytes"] = float64(68719476737) },
-		"invocations over max":  func(progress map[string]any) { progress["invocation_count"] = float64(1000001) },
-		"upload over max":       func(progress map[string]any) { progress["uploaded_bytes"] = float64(9437185) },
-		"invalid activity time": func(progress map[string]any) { progress["last_activity_at"] = "not-a-time" },
-		"activity after event": func(progress map[string]any) {
-			at, err := time.Parse(time.RFC3339Nano, fixture.RunEvent["at"].(string))
-			if err != nil {
-				t.Fatal(err)
-			}
-			progress["last_activity_at"] = at.Add(time.Second).Format(time.RFC3339Nano)
-		},
-		"non-boolean truncation": func(progress map[string]any) { progress["output_truncated"] = "false" },
-	} {
-		t.Run(name, func(t *testing.T) {
-			event := validEvent()
-			mutate(event["progress"].(map[string]any))
-			if err := validate(validOutput(event)); !errors.Is(err, ErrInvalidActionResult) {
-				t.Fatalf("invalid progress accepted: %v", err)
-			}
-		})
-	}
-
-	t.Run("worker progress requires progress", func(t *testing.T) {
-		event := validEvent()
-		delete(event, "progress")
-		if err := validate(validOutput(event)); !errors.Is(err, ErrInvalidActionResult) {
-			t.Fatalf("worker_progress without progress accepted: %v", err)
-		}
-	})
-	t.Run("lifecycle event forbids progress", func(t *testing.T) {
-		event := validEvent()
-		event["type"] = "execution_running"
-		if err := validate(validOutput(event)); !errors.Is(err, ErrInvalidActionResult) {
-			t.Fatalf("lifecycle event progress accepted: %v", err)
-		}
-	})
 	t.Run("truncated cursor may resume at retained history", func(t *testing.T) {
 		event := validEvent()
 		event["sequence"] = float64(7)
@@ -454,67 +381,6 @@ func TestCloudWorkerExecutionV2ResultsFailClosedOnShapeDrift(t *testing.T) {
 	// an ID or response shape.
 	if _, err := adaptActionResultForRequest("agent.execution.v2.plans.get", map[string]any{}, map[string]any{"plan": map[string]any{"legacy": true}}); err != nil {
 		t.Fatalf("generic Execution V2 result was routed through Cloud Worker validation: %v", err)
-	}
-}
-
-func TestCloudWorkerPublicProjectionHidesSecretLocatorsAndPinsCancelIntent(t *testing.T) {
-	fixture := loadCloudWorkerPublicFixture(t)
-	authority := cloudWorkerFixtureAuthority(t, fixture)
-
-	plan := cloneParams(fixture.Plan)
-	plan["secret_grants"] = []any{map[string]any{
-		"purpose": "model_api",
-	}}
-	if _, err := adaptActionResultForRequestWithAuthority(
-		"agent.execution.v2.plans.get",
-		cloudWorkerRequest("plan_id", plan["plan_id"]),
-		map[string]any{"plan": plan}, authority,
-	); err != nil {
-		t.Fatalf("purpose-only secret grant rejected: %v", err)
-	}
-	for _, forbidden := range []string{"configured", "count", "reference_id", "binding_digest", "secret_ref", "credential_id"} {
-		t.Run("secret grant "+forbidden, func(t *testing.T) {
-			drifted := cloneParams(plan)
-			drifted["secret_grants"] = []any{map[string]any{
-				"purpose": "model_api", forbidden: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-			}}
-			_, err := adaptActionResultForRequestWithAuthority(
-				"agent.execution.v2.plans.get",
-				cloudWorkerRequest("plan_id", drifted["plan_id"]),
-				map[string]any{"plan": drifted}, authority,
-			)
-			if !errors.Is(err, ErrInvalidActionResult) {
-				t.Fatalf("private secret locator %s was accepted: %v", forbidden, err)
-			}
-		})
-	}
-	quote, ok := fixture.Plan["quote"].(map[string]any)
-	if !ok {
-		t.Fatal("fixture quote is malformed")
-	}
-	if _, exposed := quote["basis_digest"]; exposed {
-		t.Fatal("public quote exposes the private authorization basis digest")
-	}
-
-	for _, mutation := range []struct {
-		name   string
-		mutate func(map[string]any)
-	}{
-		{"missing", func(run map[string]any) { delete(run, "cancellation_requested") }},
-		{"not boolean", func(run map[string]any) { run["cancellation_requested"] = "false" }},
-	} {
-		t.Run("cancellation_requested "+mutation.name, func(t *testing.T) {
-			run := cloneParams(fixture.Run)
-			mutation.mutate(run)
-			_, err := adaptActionResultForRequestWithAuthority(
-				"agent.execution.v2.runs.get",
-				cloudWorkerRequest("run_id", run["run_id"]),
-				map[string]any{"run": run}, authority,
-			)
-			if !errors.Is(err, ErrInvalidActionResult) {
-				t.Fatalf("invalid cancellation_requested was accepted: %v", err)
-			}
-		})
 	}
 }
 

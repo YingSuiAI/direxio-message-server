@@ -19,19 +19,6 @@ var cloudWorkerStates = map[string]bool{
 	"succeeded": true, "failed": true, "canceled": true, "rejected": true, "expired": true,
 }
 
-const (
-	maxCloudWorkerProgressElapsedMS       = int64((24 * time.Hour) / time.Millisecond)
-	maxCloudWorkerProgressCPUTimeMS       = int64((7 * 24 * time.Hour) / time.Millisecond)
-	maxCloudWorkerProgressMemoryBytes     = int64(64 << 30)
-	maxCloudWorkerProgressInvocationCount = int64(1_000_000)
-	maxCloudWorkerProgressUploadedBytes   = int64(9 << 20)
-)
-
-var cloudWorkerProgressPhases = map[string]bool{
-	"claimed": true, "preparing_inputs": true, "running": true,
-	"uploading_result": true, "completing": true,
-}
-
 func validateCloudWorkerActionResult(action string, request, output map[string]any, authority actionResultAuthority) error {
 	if output == nil {
 		return cloudWorkerResultError("response is missing")
@@ -201,8 +188,7 @@ func cloudWorkerPage(output map[string]any, key string) ([]map[string]any, error
 func validateCloudWorkerPlan(plan map[string]any) error {
 	required := []string{
 		"owner_id", "account_generation", "plan_id", "revision", "status", "execution_id", "task_id", "confirmation_id", "conversation_id", "turn_id",
-		"objective_summary", "proposal_reason", "persistent_worker_reuse", "workspace_mode", "aws", "compute", "limits", "network_grants", "secret_grants",
-		"artifact_retention_seconds", "quote", "created_at", "updated_at",
+		"objective_summary", "proposal_reason", "persistent_worker_reuse", "workspace_mode", "aws", "compute", "limits", "quote", "created_at", "updated_at",
 	}
 	if err := cloudExact(plan, required, nil, "plan"); err != nil {
 		return err
@@ -224,9 +210,6 @@ func validateCloudWorkerPlan(plan map[string]any) error {
 	if _, ok := plan["persistent_worker_reuse"].(bool); !ok {
 		return cloudWorkerResultError("plan persistent_worker_reuse must be a boolean")
 	}
-	if retention, ok := cloudInteger(plan["artifact_retention_seconds"]); !ok || retention <= 0 {
-		return cloudWorkerResultError("plan artifact retention is invalid")
-	}
 	if err := cloudTimestampOrder(plan, "created_at", "updated_at"); err != nil {
 		return err
 	}
@@ -239,19 +222,13 @@ func validateCloudWorkerPlan(plan map[string]any) error {
 	if err := validateCloudLimits(plan["limits"]); err != nil {
 		return err
 	}
-	if err := cloudStringArray(plan["network_grants"], "network_grants"); err != nil {
-		return err
-	}
-	if err := validateCloudSecretGrants(plan["secret_grants"]); err != nil {
-		return err
-	}
 	return validateCloudQuote(plan["quote"])
 }
 
 func validateCloudWorkerRun(run map[string]any) error {
 	required := []string{
 		"owner_id", "account_generation", "run_id", "execution_id", "plan_id", "plan_revision", "task_id", "confirmation_id", "conversation_id", "turn_id",
-		"status", "revision", "cancellation_requested", "worker_id", "persistent_worker", "cleanup", "artifact_ids", "failure_code", "failure_summary", "created_at", "updated_at",
+		"status", "revision", "worker_id", "persistent_worker", "artifact_ids", "failure_code", "failure_summary", "created_at", "updated_at",
 	}
 	if err := cloudExact(run, required, nil, "run"); err != nil {
 		return err
@@ -277,17 +254,11 @@ func validateCloudWorkerRun(run map[string]any) error {
 	if _, ok := run["failure_summary"].(string); !ok {
 		return cloudWorkerResultError("run failure_summary must be a string")
 	}
-	if _, ok := run["cancellation_requested"].(bool); !ok {
-		return cloudWorkerResultError("run cancellation_requested must be a boolean")
-	}
 	if _, ok := run["worker_id"].(string); !ok {
 		return cloudWorkerResultError("run worker_id must be a string")
 	}
 	if _, ok := run["persistent_worker"].(bool); !ok {
 		return cloudWorkerResultError("run persistent_worker must be a boolean")
-	}
-	if err := validateCloudCleanup(run["cleanup"]); err != nil {
-		return err
 	}
 	if err := cloudUUIDArray(run["artifact_ids"], "artifact_ids"); err != nil {
 		return err
@@ -364,7 +335,7 @@ func validateCloudWorkerArtifactDownload(request, result map[string]any, authori
 }
 
 func validateCloudWorkerEvent(event map[string]any) (int64, error) {
-	if err := cloudExact(event, []string{"event_id", "run_id", "owner_id", "account_generation", "revision", "sequence", "type", "at", "payload_digest"}, []string{"status", "progress"}, "event"); err != nil {
+	if err := cloudExact(event, []string{"event_id", "run_id", "owner_id", "account_generation", "revision", "sequence", "type", "at", "payload_digest"}, []string{"status"}, "event"); err != nil {
 		return 0, err
 	}
 	eventType, eventTypeOK := event["type"].(string)
@@ -375,17 +346,6 @@ func validateCloudWorkerEvent(event map[string]any) (int64, error) {
 	if status, present := event["status"]; present && !cloudWorkerStates[cloudString(status)] {
 		return 0, cloudWorkerResultError("event status is invalid")
 	}
-	progress, hasProgress := event["progress"]
-	if eventType == "worker_progress" {
-		if !hasProgress {
-			return 0, cloudWorkerResultError("worker_progress event is missing progress")
-		}
-		if err := validateCloudWorkerProgress(progress, event["at"]); err != nil {
-			return 0, err
-		}
-	} else if hasProgress {
-		return 0, cloudWorkerResultError("lifecycle event contains progress")
-	}
 	revision, ok := cloudInteger(event["revision"])
 	if !ok || revision <= 0 {
 		return 0, cloudWorkerResultError("event revision is invalid")
@@ -395,41 +355,6 @@ func validateCloudWorkerEvent(event map[string]any) (int64, error) {
 		return 0, cloudWorkerResultError("event sequence is invalid")
 	}
 	return sequence, nil
-}
-
-func validateCloudWorkerProgress(value, eventAtValue any) error {
-	progress, ok := value.(map[string]any)
-	if !ok || cloudExact(progress, []string{
-		"phase", "elapsed_ms", "last_activity_at", "cpu_time_ms", "memory_high_water_bytes",
-		"invocation_count", "uploaded_bytes", "output_truncated",
-	}, nil, "progress") != nil {
-		return cloudWorkerResultError("progress is invalid")
-	}
-	phase, ok := progress["phase"].(string)
-	if !ok || phase != strings.TrimSpace(phase) || !cloudWorkerProgressPhases[phase] {
-		return cloudWorkerResultError("progress phase is invalid")
-	}
-	for key, maximum := range map[string]int64{
-		"elapsed_ms":              maxCloudWorkerProgressElapsedMS,
-		"cpu_time_ms":             maxCloudWorkerProgressCPUTimeMS,
-		"memory_high_water_bytes": maxCloudWorkerProgressMemoryBytes,
-		"invocation_count":        maxCloudWorkerProgressInvocationCount,
-		"uploaded_bytes":          maxCloudWorkerProgressUploadedBytes,
-	} {
-		number, valid := cloudInteger(progress[key])
-		if !valid || number < 0 || number > maximum {
-			return cloudWorkerResultError("progress %s is invalid", key)
-		}
-	}
-	if _, ok := progress["output_truncated"].(bool); !ok {
-		return cloudWorkerResultError("progress output_truncated is invalid")
-	}
-	lastActivityAt, lastActivityOK := cloudTime(progress["last_activity_at"])
-	eventAt, eventAtOK := cloudTime(eventAtValue)
-	if !lastActivityOK || !eventAtOK || lastActivityAt.After(eventAt) {
-		return cloudWorkerResultError("progress last_activity_at is invalid")
-	}
-	return nil
 }
 
 func validateCloudWorkerAuthority(value map[string]any, authority actionResultAuthority) error {
@@ -505,20 +430,6 @@ func validateCloudLimits(value any) error {
 	return nil
 }
 
-func validateCloudSecretGrants(value any) error {
-	items, ok := value.([]any)
-	if !ok {
-		return cloudWorkerResultError("secret_grants must be an array")
-	}
-	for _, value := range items {
-		grant, ok := value.(map[string]any)
-		if !ok || cloudExact(grant, []string{"purpose"}, nil, "secret grant") != nil || !cloudNonemptyString(grant["purpose"]) || len(cloudString(grant["purpose"])) > 64 {
-			return cloudWorkerResultError("secret grant is invalid")
-		}
-	}
-	return nil
-}
-
 func validateCloudQuote(value any) error {
 	quote, ok := value.(map[string]any)
 	if !ok || cloudExact(quote, []string{"amount_micros", "compute_micros_per_hour", "currency", "source_time", "expires_at", "maximum_authorized_cost_micros"}, nil, "quote") != nil || quote["currency"] != "USD" {
@@ -531,21 +442,6 @@ func validateCloudQuote(value any) error {
 	expires, expiresOK := cloudTime(quote["expires_at"])
 	if !amountOK || !computeOK || !maximumOK || amount < 0 || compute <= 0 || maximum < amount || !sourceOK || !expiresOK || !expires.After(source) {
 		return cloudWorkerResultError("quote cost or validity window is invalid")
-	}
-	return nil
-}
-
-func validateCloudCleanup(value any) error {
-	cleanup, ok := value.(map[string]any)
-	if !ok || cloudExact(cleanup, []string{"verified_destroyed", "resources_total", "resources_verified_destroyed"}, []string{"verified_at"}, "cleanup") != nil {
-		return cloudWorkerResultError("cleanup is invalid")
-	}
-	verified, ok := cleanup["verified_destroyed"].(bool)
-	total, totalOK := cloudInteger(cleanup["resources_total"])
-	destroyed, destroyedOK := cloudInteger(cleanup["resources_verified_destroyed"])
-	_, hasVerifiedAt := cleanup["verified_at"]
-	if !ok || !totalOK || !destroyedOK || total < 0 || destroyed < 0 || destroyed > total || verified != (total > 0 && destroyed == total) || verified != hasVerifiedAt || hasVerifiedAt && !cloudTimestamp(cleanup["verified_at"]) {
-		return cloudWorkerResultError("cleanup evidence is inconsistent")
 	}
 	return nil
 }
@@ -644,19 +540,6 @@ func cloudTimestampOrder(value map[string]any, first, second string) error {
 	updated, updatedOK := cloudTime(value[second])
 	if !createdOK || !updatedOK || updated.Before(created) {
 		return cloudWorkerResultError("timestamps are invalid")
-	}
-	return nil
-}
-
-func cloudStringArray(value any, name string) error {
-	items, ok := value.([]any)
-	if !ok {
-		return cloudWorkerResultError("%s must be an array", name)
-	}
-	for _, item := range items {
-		if !cloudNonemptyString(item) {
-			return cloudWorkerResultError("%s contains an invalid string", name)
-		}
 	}
 	return nil
 }

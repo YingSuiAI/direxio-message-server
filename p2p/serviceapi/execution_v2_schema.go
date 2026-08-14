@@ -80,11 +80,6 @@ func cloudWorkerPlanProperties() map[string]ActionFieldSchema {
 		"limits": cloudWorkerObject("strict_hard_limits", map[string]ActionFieldSchema{
 			"max_runtime_seconds": cloudWorkerNested("integer", "positive_integer"),
 		}),
-		"network_grants": cloudWorkerArray("strict_approved_network_grants", ActionFieldSchema{Type: "string", Required: true}),
-		"secret_grants": cloudWorkerArray("strict_purpose_only_secret_grants_without_references", ActionFieldSchema{Type: "object", Required: true, Properties: map[string]ActionFieldSchema{
-			"purpose": cloudWorkerNested("string", "nonempty_bounded_64"),
-		}}),
-		"artifact_retention_seconds": cloudWorkerConditional("integer", "positive_integer"),
 		"quote": cloudWorkerObject("strict_quote_and_owner_hard_limit", map[string]ActionFieldSchema{
 			"amount_micros":                  cloudWorkerNested("integer", "nonnegative_integer"),
 			"compute_micros_per_hour":        cloudWorkerNested("integer", "positive_integer"),
@@ -100,32 +95,25 @@ func cloudWorkerPlanProperties() map[string]ActionFieldSchema {
 
 func cloudWorkerRunProperties() map[string]ActionFieldSchema {
 	return map[string]ActionFieldSchema{
-		"owner_id":               cloudWorkerConditional("string", "exact_prepared_permission_owner"),
-		"account_generation":     cloudWorkerConditional("integer", "positive_integer_equal_to_prepared_permission_generation"),
-		"run_id":                 cloudWorkerConditional("string", "canonical_uuid"),
-		"execution_id":           cloudWorkerConditional("string", "canonical_uuid"),
-		"plan_id":                cloudWorkerConditional("string", "canonical_uuid"),
-		"plan_revision":          cloudWorkerConditional("integer", "positive_integer"),
-		"task_id":                cloudWorkerConditional("string", "canonical_uuid"),
-		"confirmation_id":        cloudWorkerConditional("string", "canonical_uuid"),
-		"conversation_id":        cloudWorkerConditional("string", "canonical_uuid"),
-		"turn_id":                cloudWorkerConditional("string", "canonical_uuid"),
-		"status":                 cloudWorkerConditional("string", "cloud_worker_execution_state"),
-		"revision":               cloudWorkerConditional("integer", "positive_integer"),
-		"cancellation_requested": cloudWorkerConditional("boolean", "authoritative_cancel_intent_flag"),
-		"worker_id":              cloudWorkerConditional("string", "empty_until_worker_assigned"),
-		"persistent_worker":      cloudWorkerConditional("boolean", "authoritative_worker_lifecycle_flag"),
-		"cleanup": cloudWorkerObject("strict_cleanup_summary", map[string]ActionFieldSchema{
-			"verified_destroyed":           cloudWorkerNested("boolean", "true_only_after_all_resources_destroyed"),
-			"verified_at":                  {Type: "string", Presence: &ActionPresenceSchema{Omitted: "cleanup_not_verified", Present: "rfc3339_nano_when_verified"}},
-			"resources_total":              cloudWorkerNested("integer", "nonnegative_integer"),
-			"resources_verified_destroyed": cloudWorkerNested("integer", "between_zero_and_resources_total"),
-		}),
-		"artifact_ids":    cloudWorkerArray("canonical_uuid_array", ActionFieldSchema{Type: "string", Required: true, Presence: &ActionPresenceSchema{Present: "canonical_uuid"}}),
-		"failure_code":    cloudWorkerConditional("string", "redacted_failure_code_or_empty"),
-		"failure_summary": cloudWorkerConditional("string", "redacted_failure_summary_or_empty"),
-		"created_at":      cloudWorkerConditional("string", "rfc3339_nano"),
-		"updated_at":      cloudWorkerConditional("string", "rfc3339_nano_not_before_created_at"),
+		"owner_id":           cloudWorkerConditional("string", "exact_prepared_permission_owner"),
+		"account_generation": cloudWorkerConditional("integer", "positive_integer_equal_to_prepared_permission_generation"),
+		"run_id":             cloudWorkerConditional("string", "canonical_uuid"),
+		"execution_id":       cloudWorkerConditional("string", "canonical_uuid"),
+		"plan_id":            cloudWorkerConditional("string", "canonical_uuid"),
+		"plan_revision":      cloudWorkerConditional("integer", "positive_integer"),
+		"task_id":            cloudWorkerConditional("string", "canonical_uuid"),
+		"confirmation_id":    cloudWorkerConditional("string", "canonical_uuid"),
+		"conversation_id":    cloudWorkerConditional("string", "canonical_uuid"),
+		"turn_id":            cloudWorkerConditional("string", "canonical_uuid"),
+		"status":             cloudWorkerConditional("string", "cloud_worker_execution_state"),
+		"revision":           cloudWorkerConditional("integer", "positive_integer"),
+		"worker_id":          cloudWorkerConditional("string", "empty_until_worker_assigned"),
+		"persistent_worker":  cloudWorkerConditional("boolean", "authoritative_worker_lifecycle_flag"),
+		"artifact_ids":       cloudWorkerArray("canonical_uuid_array", ActionFieldSchema{Type: "string", Required: true, Presence: &ActionPresenceSchema{Present: "canonical_uuid"}}),
+		"failure_code":       cloudWorkerConditional("string", "redacted_failure_code_or_empty"),
+		"failure_summary":    cloudWorkerConditional("string", "redacted_failure_summary_or_empty"),
+		"created_at":         cloudWorkerConditional("string", "rfc3339_nano"),
+		"updated_at":         cloudWorkerConditional("string", "rfc3339_nano_not_before_created_at"),
 	}
 }
 
@@ -173,23 +161,6 @@ func cloudWorkerEventProperties() map[string]ActionFieldSchema {
 		"at":                 cloudWorkerConditional("string", "rfc3339_nano"),
 		"payload_digest":     cloudWorkerConditional("string", "lowercase_sha256"),
 		"status":             {Type: "string", Presence: &ActionPresenceSchema{Omitted: "event_has_no_state_transition", Present: "cloud_worker_execution_state"}},
-		"progress": {
-			Type: "object",
-			Presence: &ActionPresenceSchema{
-				Omitted: "type_is_not_worker_progress",
-				Present: "required_when_type_is_worker_progress;forbidden_otherwise;strict_secret_free_snapshot",
-			},
-			Properties: map[string]ActionFieldSchema{
-				"phase":                   cloudWorkerNested("string", "one_of:claimed|preparing_inputs|running|uploading_result|completing"),
-				"elapsed_ms":              cloudWorkerNested("integer", "integer_0_to_86400000"),
-				"last_activity_at":        cloudWorkerNested("string", "rfc3339_nano_not_after_event_at"),
-				"cpu_time_ms":             cloudWorkerNested("integer", "integer_0_to_604800000"),
-				"memory_high_water_bytes": cloudWorkerNested("integer", "integer_0_to_68719476736"),
-				"invocation_count":        cloudWorkerNested("integer", "integer_0_to_1000000"),
-				"uploaded_bytes":          cloudWorkerNested("integer", "integer_0_to_9437184"),
-				"output_truncated":        cloudWorkerNested("boolean", "authoritative_runtime_output_truncation_flag"),
-			},
-		},
 	}
 }
 

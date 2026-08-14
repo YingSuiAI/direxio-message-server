@@ -119,15 +119,14 @@ func TestExecutionV2ActionsAreOwnerHTTPAndWSWithStrictMutations(t *testing.T) {
 func TestExecutionV2CloudWorkerConditionalResponseSchemasPinStrictPublicProjection(t *testing.T) {
 	planFields := []string{
 		"owner_id", "account_generation", "plan_id", "revision", "status", "execution_id", "task_id", "confirmation_id", "conversation_id", "turn_id",
-		"objective_summary", "proposal_reason", "persistent_worker_reuse", "workspace_mode", "aws", "compute", "limits", "network_grants", "secret_grants",
-		"artifact_retention_seconds", "quote", "created_at", "updated_at",
+		"objective_summary", "proposal_reason", "persistent_worker_reuse", "workspace_mode", "aws", "compute", "limits", "quote", "created_at", "updated_at",
 	}
 	runFields := []string{
 		"owner_id", "account_generation", "run_id", "execution_id", "plan_id", "plan_revision", "task_id", "confirmation_id", "conversation_id", "turn_id",
-		"status", "revision", "cancellation_requested", "worker_id", "persistent_worker", "cleanup", "artifact_ids", "failure_code", "failure_summary", "created_at", "updated_at",
+		"status", "revision", "worker_id", "persistent_worker", "artifact_ids", "failure_code", "failure_summary", "created_at", "updated_at",
 	}
 	artifactFields := []string{"owner_id", "account_generation", "artifact_id", "execution_id", "kind", "name", "media_type", "size_bytes", "sha256", "status", "created_at"}
-	eventFields := []string{"event_id", "run_id", "owner_id", "account_generation", "revision", "sequence", "type", "at", "payload_digest", "status", "progress"}
+	eventFields := []string{"event_id", "run_id", "owner_id", "account_generation", "revision", "sequence", "type", "at", "payload_digest", "status"}
 
 	planGet, _ := ActionSpecFor(executionV2Name("plans.get"))
 	assertCloudConditionalProperties(t, "plans.get.plan", planGet.Schema.Response["plan"].Properties, planFields)
@@ -150,31 +149,6 @@ func TestExecutionV2CloudWorkerConditionalResponseSchemasPinStrictPublicProjecti
 	assertCloudConditionalProperties(t, "runs.events.events[]", runEvents.Schema.Response["events"].Items.Properties, eventFields)
 	if truncated := runEvents.Schema.Response["history_truncated"]; truncated.Type != "boolean" || !truncated.Required || truncated.Presence == nil || truncated.Presence.Present != "true_when_after_sequence_precedes_retained_history" {
 		t.Fatalf("runs.events history_truncated schema=%#v", truncated)
-	}
-	progress := runEvents.Schema.Response["events"].Items.Properties["progress"]
-	if progress.Type != "object" || progress.Presence == nil || progress.Presence.Present != "required_when_type_is_worker_progress;forbidden_otherwise;strict_secret_free_snapshot" {
-		t.Fatalf("runs.events progress schema=%#v", progress)
-	}
-	progressFields := map[string]string{
-		"phase":      "one_of:claimed|preparing_inputs|running|uploading_result|completing",
-		"elapsed_ms": "integer_0_to_86400000", "last_activity_at": "rfc3339_nano_not_after_event_at",
-		"cpu_time_ms": "integer_0_to_604800000", "memory_high_water_bytes": "integer_0_to_68719476736",
-		"invocation_count": "integer_0_to_1000000", "uploaded_bytes": "integer_0_to_9437184",
-		"output_truncated": "authoritative_runtime_output_truncation_flag",
-	}
-	if len(progress.Properties) != len(progressFields) {
-		t.Fatalf("runs.events progress fields=%#v", progress.Properties)
-	}
-	for field, rule := range progressFields {
-		value, ok := progress.Properties[field]
-		if !ok || !value.Required || value.Presence == nil || value.Presence.Present != rule {
-			t.Errorf("runs.events progress.%s=%#v", field, value)
-		}
-	}
-	for _, forbidden := range []string{"text", "raw", "model_text", "secret", "stderr", "env", "s3_url", "bucket", "key"} {
-		if _, exposed := progress.Properties[forbidden]; exposed {
-			t.Errorf("runs.events progress exposes private field %q", forbidden)
-		}
 	}
 	sequenceRule := runEvents.Schema.Response["events"].Items.Properties["sequence"].Presence
 	if sequenceRule == nil || sequenceRule.Present != "required_when_record_kind=cloud_worker;positive_contiguous_after_previous;first_equals_after_sequence_plus_one_unless_history_truncated" {
@@ -208,27 +182,6 @@ func TestExecutionV2CloudWorkerConditionalResponseSchemasPinStrictPublicProjecti
 	for _, retired := range []string{"digest", "basis_digest"} {
 		if _, exposed := quote.Properties[retired]; exposed {
 			t.Fatalf("public quote exposes retired field %q", retired)
-		}
-	}
-	secretGrant := planGet.Schema.Response["plan"].Properties["secret_grants"].Items
-	if secretGrant == nil || !secretGrant.Properties["purpose"].Required {
-		t.Fatalf("secret grant purpose-only schema = %#v", secretGrant)
-	}
-	for _, forbidden := range []string{"configured", "count", "reference_id", "binding_digest", "secret_ref", "credential_id"} {
-		if _, exposed := secretGrant.Properties[forbidden]; exposed {
-			t.Errorf("secret grant exposes private locator %q", forbidden)
-		}
-	}
-	for _, action := range []string{"runs.get", "runs.list", "runs.cancel"} {
-		spec, _ := ActionSpecFor(executionV2Name(action))
-		var properties map[string]ActionFieldSchema
-		if action == "runs.list" {
-			properties = spec.Schema.Response["runs"].Items.Properties
-		} else {
-			properties = spec.Schema.Response["run"].Properties
-		}
-		if field := properties["cancellation_requested"]; field.Type != "boolean" || field.Presence == nil {
-			t.Errorf("%s cancellation_requested schema = %#v", action, field)
 		}
 	}
 	artifact := artifactGet.Schema.Response["artifact"].Properties

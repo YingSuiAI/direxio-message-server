@@ -272,14 +272,14 @@ Agent installations, their credentials, or the Extension Runner into a Worker.
 The closed Cloud Worker plan projection contains owner/account generation,
 plan/revision/status, execution/task/confirmation/conversation/turn identity,
 the objective and proposal reason, persistent-worker reuse preference,
-workspace mode, AWS account/region, compute and runtime limits, grants,
-artifact retention, the live quote, and timestamps. Compute includes selected
+workspace mode, AWS account/region, compute and runtime limits, the single live
+proposal quote, and timestamps. Compute includes selected
 instance type, vCPU, memory GiB, and volume GiB/type/IOPS/throughput; quote
 includes hourly compute micros, total and maximum-authorized micros, currency,
 source time, and expiry. The closed run projection
 contains the same authority and conversation linkage, run/execution/plan
-identity and plan revision, status/revision/cancel intent, Worker identity and
-persistence, cleanup summary, artifact ids, failure summary, and timestamps.
+identity and plan revision, status/revision, Worker identity and persistence,
+artifact ids, failure summary, and timestamps.
 Neither projection exposes recipe/adapter/model/input-manifest pins, AMI or
 runtime implementation details, credential revisions, or authorization
 digests. Run and execution identifiers are independent identities.
@@ -312,17 +312,9 @@ Cloud Worker `agent.execution.v2.runs.events` returns the exact
 `after_sequence` precedes the retained window and the returned cursor starts at
 the oldest retained event. A non-truncated page starts at `after_sequence+1`;
 all events after the first item in either page form are contiguous.
-`worker_progress` is the only event type that may
-carry `progress`, and it must carry the complete secret-free snapshot:
-`phase`, `elapsed_ms`, `last_activity_at`, `cpu_time_ms`,
-`memory_high_water_bytes`, `invocation_count`, `uploaded_bytes`, and
-`output_truncated`. Phase is one of `claimed`, `preparing_inputs`, `running`,
-`uploading_result`, or `completing`; all counters are nonnegative and bounded by
-the generated ProductCore contract. A zero CPU or memory value means the Worker
-had no verified runtime metric source; it does not assert zero resource use.
-Lifecycle events must not carry progress.
-Model text, stderr, paths, environment values, secrets, and object-storage
-identities are rejected rather than projected to Message Server or clients.
+Events carry only identity, revision, sequence, type, time, payload digest, and
+an optional lifecycle status. Runtime progress snapshots and implementation
+diagnostics are not part of the public event shape.
 
 ## Consumer Boundaries
 

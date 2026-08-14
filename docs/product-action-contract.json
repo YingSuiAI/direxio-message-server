@@ -11662,13 +11662,6 @@
                   "present": "required_when_record_kind=cloud_worker;positive_integer_equal_to_prepared_permission_generation"
                 }
               },
-              "artifact_retention_seconds": {
-                "type": "integer",
-                "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;positive_integer"
-                }
-              },
               "aws": {
                 "type": "object",
                 "properties": {
@@ -11794,17 +11787,6 @@
                   "present": "required_when_record_kind=cloud_worker;strict_hard_limits"
                 }
               },
-              "network_grants": {
-                "type": "array",
-                "items": {
-                  "type": "string",
-                  "required": true
-                },
-                "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;strict_approved_network_grants"
-                }
-              },
               "objective_summary": {
                 "type": "string",
                 "presence": {
@@ -11899,26 +11881,6 @@
                   "present": "required_when_record_kind=cloud_worker;positive_integer"
                 }
               },
-              "secret_grants": {
-                "type": "array",
-                "items": {
-                  "type": "object",
-                  "required": true,
-                  "properties": {
-                    "purpose": {
-                      "type": "string",
-                      "required": true,
-                      "presence": {
-                        "present": "nonempty_bounded_64"
-                      }
-                    }
-                  }
-                },
-                "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;strict_purpose_only_secret_grants_without_references"
-                }
-              },
               "status": {
                 "type": "string",
                 "presence": {
@@ -12002,13 +11964,6 @@
                   "presence": {
                     "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
                     "present": "required_when_record_kind=cloud_worker;positive_integer_equal_to_prepared_permission_generation"
-                  }
-                },
-                "artifact_retention_seconds": {
-                  "type": "integer",
-                  "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;positive_integer"
                   }
                 },
                 "aws": {
@@ -12136,17 +12091,6 @@
                     "present": "required_when_record_kind=cloud_worker;strict_hard_limits"
                   }
                 },
-                "network_grants": {
-                  "type": "array",
-                  "items": {
-                    "type": "string",
-                    "required": true
-                  },
-                  "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;strict_approved_network_grants"
-                  }
-                },
                 "objective_summary": {
                   "type": "string",
                   "presence": {
@@ -12238,26 +12182,6 @@
                   "presence": {
                     "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
                     "present": "required_when_record_kind=cloud_worker;positive_integer"
-                  }
-                },
-                "secret_grants": {
-                  "type": "array",
-                  "items": {
-                    "type": "object",
-                    "required": true,
-                    "properties": {
-                      "purpose": {
-                        "type": "string",
-                        "required": true,
-                        "presence": {
-                          "present": "nonempty_bounded_64"
-                        }
-                      }
-                    }
-                  },
-                  "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;strict_purpose_only_secret_grants_without_references"
                   }
                 },
                 "status": {
@@ -12495,50 +12419,6 @@
                   "present": "required_when_record_kind=cloud_worker;canonical_uuid_array"
                 }
               },
-              "cancellation_requested": {
-                "type": "boolean",
-                "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;authoritative_cancel_intent_flag"
-                }
-              },
-              "cleanup": {
-                "type": "object",
-                "properties": {
-                  "resources_total": {
-                    "type": "integer",
-                    "required": true,
-                    "presence": {
-                      "present": "nonnegative_integer"
-                    }
-                  },
-                  "resources_verified_destroyed": {
-                    "type": "integer",
-                    "required": true,
-                    "presence": {
-                      "present": "between_zero_and_resources_total"
-                    }
-                  },
-                  "verified_at": {
-                    "type": "string",
-                    "presence": {
-                      "omitted": "cleanup_not_verified",
-                      "present": "rfc3339_nano_when_verified"
-                    }
-                  },
-                  "verified_destroyed": {
-                    "type": "boolean",
-                    "required": true,
-                    "presence": {
-                      "present": "true_only_after_all_resources_destroyed"
-                    }
-                  }
-                },
-                "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;strict_cleanup_summary"
-                }
-              },
               "confirmation_id": {
                 "type": "string",
                 "presence": {
@@ -12738,50 +12618,6 @@
                     "present": "required_when_record_kind=cloud_worker;canonical_uuid_array"
                   }
                 },
-                "cancellation_requested": {
-                  "type": "boolean",
-                  "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;authoritative_cancel_intent_flag"
-                  }
-                },
-                "cleanup": {
-                  "type": "object",
-                  "properties": {
-                    "resources_total": {
-                      "type": "integer",
-                      "required": true,
-                      "presence": {
-                        "present": "nonnegative_integer"
-                      }
-                    },
-                    "resources_verified_destroyed": {
-                      "type": "integer",
-                      "required": true,
-                      "presence": {
-                        "present": "between_zero_and_resources_total"
-                      }
-                    },
-                    "verified_at": {
-                      "type": "string",
-                      "presence": {
-                        "omitted": "cleanup_not_verified",
-                        "present": "rfc3339_nano_when_verified"
-                      }
-                    },
-                    "verified_destroyed": {
-                      "type": "boolean",
-                      "required": true,
-                      "presence": {
-                        "present": "true_only_after_all_resources_destroyed"
-                      }
-                    }
-                  },
-                  "presence": {
-                    "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                    "present": "required_when_record_kind=cloud_worker;strict_cleanup_summary"
-                  }
-                },
                 "confirmation_id": {
                   "type": "string",
                   "presence": {
@@ -12963,50 +12799,6 @@
                 "presence": {
                   "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
                   "present": "required_when_record_kind=cloud_worker;canonical_uuid_array"
-                }
-              },
-              "cancellation_requested": {
-                "type": "boolean",
-                "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;authoritative_cancel_intent_flag"
-                }
-              },
-              "cleanup": {
-                "type": "object",
-                "properties": {
-                  "resources_total": {
-                    "type": "integer",
-                    "required": true,
-                    "presence": {
-                      "present": "nonnegative_integer"
-                    }
-                  },
-                  "resources_verified_destroyed": {
-                    "type": "integer",
-                    "required": true,
-                    "presence": {
-                      "present": "between_zero_and_resources_total"
-                    }
-                  },
-                  "verified_at": {
-                    "type": "string",
-                    "presence": {
-                      "omitted": "cleanup_not_verified",
-                      "present": "rfc3339_nano_when_verified"
-                    }
-                  },
-                  "verified_destroyed": {
-                    "type": "boolean",
-                    "required": true,
-                    "presence": {
-                      "present": "true_only_after_all_resources_destroyed"
-                    }
-                  }
-                },
-                "presence": {
-                  "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
-                  "present": "required_when_record_kind=cloud_worker;strict_cleanup_summary"
                 }
               },
               "confirmation_id": {
@@ -13241,71 +13033,6 @@
                   "presence": {
                     "omitted": "allowed_only_for_generic_execution_v2;rejected_when_record_kind=cloud_worker",
                     "present": "required_when_record_kind=cloud_worker;lowercase_sha256"
-                  }
-                },
-                "progress": {
-                  "type": "object",
-                  "properties": {
-                    "cpu_time_ms": {
-                      "type": "integer",
-                      "required": true,
-                      "presence": {
-                        "present": "integer_0_to_604800000"
-                      }
-                    },
-                    "elapsed_ms": {
-                      "type": "integer",
-                      "required": true,
-                      "presence": {
-                        "present": "integer_0_to_86400000"
-                      }
-                    },
-                    "invocation_count": {
-                      "type": "integer",
-                      "required": true,
-                      "presence": {
-                        "present": "integer_0_to_1000000"
-                      }
-                    },
-                    "last_activity_at": {
-                      "type": "string",
-                      "required": true,
-                      "presence": {
-                        "present": "rfc3339_nano_not_after_event_at"
-                      }
-                    },
-                    "memory_high_water_bytes": {
-                      "type": "integer",
-                      "required": true,
-                      "presence": {
-                        "present": "integer_0_to_68719476736"
-                      }
-                    },
-                    "output_truncated": {
-                      "type": "boolean",
-                      "required": true,
-                      "presence": {
-                        "present": "authoritative_runtime_output_truncation_flag"
-                      }
-                    },
-                    "phase": {
-                      "type": "string",
-                      "required": true,
-                      "presence": {
-                        "present": "one_of:claimed|preparing_inputs|running|uploading_result|completing"
-                      }
-                    },
-                    "uploaded_bytes": {
-                      "type": "integer",
-                      "required": true,
-                      "presence": {
-                        "present": "integer_0_to_9437184"
-                      }
-                    }
-                  },
-                  "presence": {
-                    "omitted": "type_is_not_worker_progress",
-                    "present": "required_when_type_is_worker_progress;forbidden_otherwise;strict_secret_free_snapshot"
                   }
                 },
                 "revision": {

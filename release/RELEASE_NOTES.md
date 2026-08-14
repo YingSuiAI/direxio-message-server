@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v1.1.48
+
+1. Align Cloud Worker plan and run projections with the simplified Agent-owned SSH execution shape.
+2. Keep one live proposal quote through confirmation and remove the retired runtime progress projection.
+
 ## v1.1.47
 
 1. Remove the legacy node-bound Cloud Worker deployment wiring so Workers use the Agent-owned dynamic SSH execution path.

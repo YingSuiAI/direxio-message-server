@@ -31,15 +31,6 @@
     "limits": {
       "max_runtime_seconds": 3600
     },
-    "network_grants": [
-      "controlled_https_egress"
-    ],
-    "secret_grants": [
-      {
-        "purpose": "model_api_key"
-      }
-    ],
-    "artifact_retention_seconds": 3600,
     "quote": {
       "amount_micros": 230000,
       "compute_micros_per_hour": 100000,
@@ -66,17 +57,11 @@
     "revision": 9,
     "worker_id": "99999999-9999-4999-8999-999999999999",
     "persistent_worker": true,
-    "cleanup": {
-      "verified_destroyed": false,
-      "resources_total": 1,
-      "resources_verified_destroyed": 0
-    },
     "artifact_ids": [
       "9e728519-ea72-52cc-bb5a-8eb2860722b8"
     ],
     "failure_code": "",
     "failure_summary": "",
-    "cancellation_requested": false,
     "created_at": "2026-08-07T10:00:00.123456Z",
     "updated_at": "2026-08-07T10:11:00.123456Z"
   },
