@@ -51,10 +51,10 @@ func TestCoreConfirmationSchemasPinCloudWorkerIdentityRevisionAndQuote(t *testin
 				}
 			}
 			quote := binding["quote"]
-			if quote.Type != "object" || quote.Presence == nil || len(quote.Properties) != 4 {
+			if quote.Type != "object" || quote.Presence == nil || len(quote.Properties) != 6 {
 				t.Fatalf("conditional Cloud Worker quote=%#v", quote)
 			}
-			for _, field := range []string{"amount_micros", "currency", "expires_at", "maximum_authorized_cost_micros"} {
+			for _, field := range []string{"amount_micros", "compute_micros_per_hour", "currency", "source_time", "expires_at", "maximum_authorized_cost_micros"} {
 				if !quote.Properties[field].Required {
 					t.Errorf("Cloud Worker quote.%s must be required", field)
 				}

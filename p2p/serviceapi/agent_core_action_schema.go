@@ -156,7 +156,9 @@ func coreConfirmationResponseFields() map[string]ActionFieldSchema {
 		"plan_revision":       cloudOnlyInteger("positive_integer_required_for_cloud_worker.execute"),
 		"quote": cloudOnlyObject("required_for_cloud_worker.execute;live_quote_display_and_authority", map[string]ActionFieldSchema{
 			"amount_micros":                  cloudWorkerNested("integer", "nonnegative_integer"),
+			"compute_micros_per_hour":        cloudWorkerNested("integer", "positive_integer"),
 			"currency":                       cloudWorkerNested("string", "exact:USD"),
+			"source_time":                    cloudWorkerNested("string", "rfc3339_nano"),
 			"expires_at":                     cloudWorkerNested("string", "rfc3339_nano"),
 			"maximum_authorized_cost_micros": cloudWorkerNested("integer", "integer_greater_than_or_equal_to_amount"),
 		}),

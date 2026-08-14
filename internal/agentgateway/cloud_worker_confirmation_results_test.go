@@ -65,6 +65,12 @@ func TestCloudWorkerConfirmationActionsFailClosedOnRetiredFieldsAndAuthorityDrif
 		{"invalid quote maximum", func(confirmation map[string]any) {
 			confirmation["binding"].(map[string]any)["quote"].(map[string]any)["maximum_authorized_cost_micros"] = float64(1)
 		}},
+		{"missing hourly compute quote", func(confirmation map[string]any) {
+			delete(confirmation["binding"].(map[string]any)["quote"].(map[string]any), "compute_micros_per_hour")
+		}},
+		{"missing quote source time", func(confirmation map[string]any) {
+			delete(confirmation["binding"].(map[string]any)["quote"].(map[string]any), "source_time")
+		}},
 		{"operation drift", func(confirmation map[string]any) {
 			confirmation["binding"].(map[string]any)["operation_domain"] = "extension.execute"
 		}},

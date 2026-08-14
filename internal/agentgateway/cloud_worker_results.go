@@ -477,7 +477,7 @@ func validateCloudAWS(value any) error {
 
 func validateCloudCompute(value any) error {
 	object, ok := value.(map[string]any)
-	required := []string{"instance_type", "volume_gib", "volume_type", "volume_iops", "volume_throughput_mib"}
+	required := []string{"instance_type", "vcpu", "memory_gib", "volume_gib", "volume_type", "volume_iops", "volume_throughput_mib"}
 	if !ok || cloudExact(object, required, nil, "compute") != nil {
 		return cloudWorkerResultError("compute binding is invalid")
 	}
@@ -486,7 +486,7 @@ func validateCloudCompute(value any) error {
 			return cloudWorkerResultError("compute %s is invalid", key)
 		}
 	}
-	for _, key := range []string{"volume_gib", "volume_iops", "volume_throughput_mib"} {
+	for _, key := range []string{"vcpu", "memory_gib", "volume_gib", "volume_iops", "volume_throughput_mib"} {
 		if number, ok := cloudInteger(object[key]); !ok || number <= 0 {
 			return cloudWorkerResultError("compute %s is invalid", key)
 		}
@@ -521,14 +521,15 @@ func validateCloudSecretGrants(value any) error {
 
 func validateCloudQuote(value any) error {
 	quote, ok := value.(map[string]any)
-	if !ok || cloudExact(quote, []string{"amount_micros", "currency", "source_time", "expires_at", "maximum_authorized_cost_micros"}, nil, "quote") != nil || quote["currency"] != "USD" {
+	if !ok || cloudExact(quote, []string{"amount_micros", "compute_micros_per_hour", "currency", "source_time", "expires_at", "maximum_authorized_cost_micros"}, nil, "quote") != nil || quote["currency"] != "USD" {
 		return cloudWorkerResultError("quote is invalid")
 	}
 	amount, amountOK := cloudInteger(quote["amount_micros"])
+	compute, computeOK := cloudInteger(quote["compute_micros_per_hour"])
 	maximum, maximumOK := cloudInteger(quote["maximum_authorized_cost_micros"])
 	source, sourceOK := cloudTime(quote["source_time"])
 	expires, expiresOK := cloudTime(quote["expires_at"])
-	if !amountOK || !maximumOK || amount < 0 || maximum < amount || !sourceOK || !expiresOK || !expires.After(source) {
+	if !amountOK || !computeOK || !maximumOK || amount < 0 || compute <= 0 || maximum < amount || !sourceOK || !expiresOK || !expires.After(source) {
 		return cloudWorkerResultError("quote cost or validity window is invalid")
 	}
 	return nil

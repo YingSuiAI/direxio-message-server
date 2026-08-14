@@ -251,12 +251,15 @@ func validateCloudWorkerConfirmation(confirmation map[string]any, authority acti
 
 func validateCloudConfirmationQuote(value any) error {
 	quote, ok := value.(map[string]any)
-	if !ok || cloudExact(quote, []string{"amount_micros", "currency", "expires_at", "maximum_authorized_cost_micros"}, nil, "confirmation quote") != nil || quote["currency"] != "USD" {
+	if !ok || cloudExact(quote, []string{"amount_micros", "compute_micros_per_hour", "currency", "source_time", "expires_at", "maximum_authorized_cost_micros"}, nil, "confirmation quote") != nil || quote["currency"] != "USD" {
 		return cloudWorkerResultError("confirmation quote is invalid")
 	}
 	amount, amountOK := cloudInteger(quote["amount_micros"])
+	compute, computeOK := cloudInteger(quote["compute_micros_per_hour"])
 	maximum, maximumOK := cloudInteger(quote["maximum_authorized_cost_micros"])
-	if !amountOK || !maximumOK || amount < 0 || maximum < amount || !cloudTimestamp(quote["expires_at"]) {
+	source, sourceOK := cloudTime(quote["source_time"])
+	expires, expiresOK := cloudTime(quote["expires_at"])
+	if !amountOK || !computeOK || !maximumOK || amount < 0 || compute <= 0 || maximum < amount || !sourceOK || !expiresOK || !expires.After(source) {
 		return cloudWorkerResultError("confirmation quote is invalid")
 	}
 	return nil

@@ -1469,6 +1469,13 @@
                           "present": "nonnegative_integer"
                         }
                       },
+                      "compute_micros_per_hour": {
+                        "type": "integer",
+                        "required": true,
+                        "presence": {
+                          "present": "positive_integer"
+                        }
+                      },
                       "currency": {
                         "type": "string",
                         "required": true,
@@ -1488,6 +1495,13 @@
                         "required": true,
                         "presence": {
                           "present": "integer_greater_than_or_equal_to_amount"
+                        }
+                      },
+                      "source_time": {
+                        "type": "string",
+                        "required": true,
+                        "presence": {
+                          "present": "rfc3339_nano"
                         }
                       }
                     },
@@ -1752,6 +1766,13 @@
                             "present": "nonnegative_integer"
                           }
                         },
+                        "compute_micros_per_hour": {
+                          "type": "integer",
+                          "required": true,
+                          "presence": {
+                            "present": "positive_integer"
+                          }
+                        },
                         "currency": {
                           "type": "string",
                           "required": true,
@@ -1771,6 +1792,13 @@
                           "required": true,
                           "presence": {
                             "present": "integer_greater_than_or_equal_to_amount"
+                          }
+                        },
+                        "source_time": {
+                          "type": "string",
+                          "required": true,
+                          "presence": {
+                            "present": "rfc3339_nano"
                           }
                         }
                       },
@@ -2026,6 +2054,13 @@
                           "present": "nonnegative_integer"
                         }
                       },
+                      "compute_micros_per_hour": {
+                        "type": "integer",
+                        "required": true,
+                        "presence": {
+                          "present": "positive_integer"
+                        }
+                      },
                       "currency": {
                         "type": "string",
                         "required": true,
@@ -2045,6 +2080,13 @@
                         "required": true,
                         "presence": {
                           "present": "integer_greater_than_or_equal_to_amount"
+                        }
+                      },
+                      "source_time": {
+                        "type": "string",
+                        "required": true,
+                        "presence": {
+                          "present": "rfc3339_nano"
                         }
                       }
                     },
@@ -2296,6 +2338,13 @@
                           "present": "nonnegative_integer"
                         }
                       },
+                      "compute_micros_per_hour": {
+                        "type": "integer",
+                        "required": true,
+                        "presence": {
+                          "present": "positive_integer"
+                        }
+                      },
                       "currency": {
                         "type": "string",
                         "required": true,
@@ -2315,6 +2364,13 @@
                         "required": true,
                         "presence": {
                           "present": "integer_greater_than_or_equal_to_amount"
+                        }
+                      },
+                      "source_time": {
+                        "type": "string",
+                        "required": true,
+                        "presence": {
+                          "present": "rfc3339_nano"
                         }
                       }
                     },
@@ -11646,6 +11702,20 @@
                       "present": "nonempty"
                     }
                   },
+                  "memory_gib": {
+                    "type": "integer",
+                    "required": true,
+                    "presence": {
+                      "present": "positive_integer"
+                    }
+                  },
+                  "vcpu": {
+                    "type": "integer",
+                    "required": true,
+                    "presence": {
+                      "present": "positive_integer"
+                    }
+                  },
                   "volume_gib": {
                     "type": "integer",
                     "required": true,
@@ -11779,6 +11849,13 @@
                     "required": true,
                     "presence": {
                       "present": "nonnegative_integer"
+                    }
+                  },
+                  "compute_micros_per_hour": {
+                    "type": "integer",
+                    "required": true,
+                    "presence": {
+                      "present": "positive_integer"
                     }
                   },
                   "currency": {
@@ -11967,6 +12044,20 @@
                         "present": "nonempty"
                       }
                     },
+                    "memory_gib": {
+                      "type": "integer",
+                      "required": true,
+                      "presence": {
+                        "present": "positive_integer"
+                      }
+                    },
+                    "vcpu": {
+                      "type": "integer",
+                      "required": true,
+                      "presence": {
+                        "present": "positive_integer"
+                      }
+                    },
                     "volume_gib": {
                       "type": "integer",
                       "required": true,
@@ -12099,6 +12190,13 @@
                       "required": true,
                       "presence": {
                         "present": "nonnegative_integer"
+                      }
+                    },
+                    "compute_micros_per_hour": {
+                      "type": "integer",
+                      "required": true,
+                      "presence": {
+                        "present": "positive_integer"
                       }
                     },
                     "currency": {

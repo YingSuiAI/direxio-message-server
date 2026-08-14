@@ -70,6 +70,8 @@ func cloudWorkerPlanProperties() map[string]ActionFieldSchema {
 		}),
 		"compute": cloudWorkerObject("strict_worker_compute", map[string]ActionFieldSchema{
 			"instance_type":         cloudWorkerNested("string", "nonempty"),
+			"vcpu":                  cloudWorkerNested("integer", "positive_integer"),
+			"memory_gib":            cloudWorkerNested("integer", "positive_integer"),
 			"volume_gib":            cloudWorkerNested("integer", "positive_integer"),
 			"volume_type":           cloudWorkerNested("string", "nonempty"),
 			"volume_iops":           cloudWorkerNested("integer", "positive_integer"),
@@ -85,6 +87,7 @@ func cloudWorkerPlanProperties() map[string]ActionFieldSchema {
 		"artifact_retention_seconds": cloudWorkerConditional("integer", "positive_integer"),
 		"quote": cloudWorkerObject("strict_quote_and_owner_hard_limit", map[string]ActionFieldSchema{
 			"amount_micros":                  cloudWorkerNested("integer", "nonnegative_integer"),
+			"compute_micros_per_hour":        cloudWorkerNested("integer", "positive_integer"),
 			"currency":                       cloudWorkerNested("string", "exact:USD"),
 			"source_time":                    cloudWorkerNested("string", "rfc3339_nano"),
 			"expires_at":                     cloudWorkerNested("string", "rfc3339_nano_after_source_time"),

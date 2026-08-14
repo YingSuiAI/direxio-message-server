@@ -21,6 +21,8 @@
     },
     "compute": {
       "instance_type": "c7i.large",
+      "vcpu": 2,
+      "memory_gib": 4,
       "volume_gib": 32,
       "volume_type": "gp3",
       "volume_iops": 3000,
@@ -40,6 +42,7 @@
     "artifact_retention_seconds": 3600,
     "quote": {
       "amount_micros": 230000,
+      "compute_micros_per_hour": 100000,
       "currency": "USD",
       "source_time": "2026-08-07T10:00:00.123456Z",
       "expires_at": "2026-08-07T10:15:00.123456Z",
@@ -103,7 +106,9 @@
       "plan_revision": 1,
       "quote": {
         "amount_micros": 230000,
+        "compute_micros_per_hour": 100000,
         "currency": "USD",
+        "source_time": "2026-08-07T10:00:00.123456Z",
         "expires_at": "2026-08-07T10:15:00.123456Z",
         "maximum_authorized_cost_micros": 300000
       }

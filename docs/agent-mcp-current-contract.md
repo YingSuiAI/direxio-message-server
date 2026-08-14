@@ -273,7 +273,10 @@ The closed Cloud Worker plan projection contains owner/account generation,
 plan/revision/status, execution/task/confirmation/conversation/turn identity,
 the objective and proposal reason, persistent-worker reuse preference,
 workspace mode, AWS account/region, compute and runtime limits, grants,
-artifact retention, the live quote, and timestamps. The closed run projection
+artifact retention, the live quote, and timestamps. Compute includes selected
+instance type, vCPU, memory GiB, and volume GiB/type/IOPS/throughput; quote
+includes hourly compute micros, total and maximum-authorized micros, currency,
+source time, and expiry. The closed run projection
 contains the same authority and conversation linkage, run/execution/plan
 identity and plan revision, status/revision/cancel intent, Worker identity and
 persistence, cleanup summary, artifact ids, failure summary, and timestamps.

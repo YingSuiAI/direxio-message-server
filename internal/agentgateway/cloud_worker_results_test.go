@@ -396,6 +396,8 @@ func TestCloudWorkerExecutionV2ResultsFailClosedOnShapeDrift(t *testing.T) {
 		{"retired recipe", func(plan map[string]any) { plan["recipe_id"] = "ephemeral-pi-task" }},
 		{"producer status drift", func(plan map[string]any) { plan["status"] = "queued" }},
 		{"invalid generation", func(plan map[string]any) { plan["account_generation"] = float64(0) }},
+		{"missing compute vcpu", func(plan map[string]any) { delete(plan["compute"].(map[string]any), "vcpu") }},
+		{"missing hourly compute quote", func(plan map[string]any) { delete(plan["quote"].(map[string]any), "compute_micros_per_hour") }},
 	}
 
 	t.Run("persistent terminal run does not require destruction", func(t *testing.T) {

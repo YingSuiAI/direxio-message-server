@@ -191,10 +191,16 @@ func TestExecutionV2CloudWorkerConditionalResponseSchemasPinStrictPublicProjecti
 		}
 	}
 	quote := planGet.Schema.Response["plan"].Properties["quote"]
+	compute := planGet.Schema.Response["plan"].Properties["compute"]
 	if status := planGet.Schema.Response["plan"].Properties["status"]; status.Presence == nil || status.Presence.Present != "required_when_record_kind=cloud_worker;exact:waiting_user" {
 		t.Fatalf("Cloud Worker plan status schema=%#v", status)
 	}
-	for _, field := range []string{"amount_micros", "currency", "source_time", "expires_at", "maximum_authorized_cost_micros"} {
+	for _, field := range []string{"instance_type", "vcpu", "memory_gib", "volume_gib", "volume_type", "volume_iops", "volume_throughput_mib"} {
+		if !compute.Properties[field].Required {
+			t.Errorf("compute.%s is not strict when compute is present", field)
+		}
+	}
+	for _, field := range []string{"amount_micros", "compute_micros_per_hour", "currency", "source_time", "expires_at", "maximum_authorized_cost_micros"} {
 		if !quote.Properties[field].Required {
 			t.Errorf("quote.%s is not strict when quote is present", field)
 		}
