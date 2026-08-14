@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -83,5 +84,23 @@ func TestStopDurableTurnUsesReceiptIdentityAndRevision(t *testing.T) {
 	defer server.Close()
 	if err := stopDurableTurn(context.Background(), server.URL, "owner-token", map[string]any{"turn_id": turnID, "revision": float64(4)}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestWriteJSONFileCreatesPrivateAudit(t *testing.T) {
+	path := t.TempDir() + "/audit.json"
+	if err := writeJSONFile(path, map[string]any{"turn_post_count": 1}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("audit mode = %o", info.Mode().Perm())
+	}
+	var audit map[string]any
+	if err := readJSON(path, &audit); err != nil || audit["turn_post_count"] != float64(1) {
+		t.Fatalf("audit = %#v err=%v", audit, err)
 	}
 }

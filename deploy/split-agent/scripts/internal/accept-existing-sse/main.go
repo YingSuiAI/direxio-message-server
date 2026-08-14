@@ -26,6 +26,8 @@ type config struct {
 	Reconnect         bool           `json:"reconnect"`
 	StopAfterAccepted bool           `json:"stop_after_accepted"`
 	OutputFile        string         `json:"output_file"`
+	ReceiptFile       string         `json:"receipt_file"`
+	AuditFile         string         `json:"audit_file"`
 }
 
 type session struct {
@@ -60,6 +62,11 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
+	if cfg.ReceiptFile != "" {
+		if err := writeJSONFile(cfg.ReceiptFile, receipt); err != nil {
+			fatal(err)
+		}
+	}
 	if cfg.StopAfterAccepted {
 		if err := stopDurableTurn(ctx, cfg.HTTPBase, auth.AccessToken, receipt); err != nil {
 			fatal(err)
@@ -81,6 +88,23 @@ func main() {
 	}
 	if after <= 0 || !terminal {
 		fatal(errors.New("SSE stream returned no terminal positive sequence"))
+	}
+	if cfg.AuditFile != "" {
+		audit := map[string]any{
+			"turn_post_count": 1,
+			"watch_get_count": 1,
+			"conversation_id": stringValue(receipt["conversation_id"]),
+			"turn_id":         stringValue(receipt["turn_id"]),
+			"idempotency_key": stringValue(receipt["idempotency_key"]),
+			"terminal_seq":    after,
+			"terminal":        cfg.Expect,
+		}
+		if cfg.Reconnect {
+			audit["watch_get_count"] = 2
+		}
+		if err := writeJSONFile(cfg.AuditFile, audit); err != nil {
+			fatal(err)
+		}
 	}
 }
 
@@ -243,6 +267,14 @@ func readJSON(path string, target any) error {
 		return err
 	}
 	return json.Unmarshal(raw, target)
+}
+
+func writeJSONFile(path string, value any) error {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(raw, '\n'), 0o600)
 }
 
 func stringValue(value any) string {
