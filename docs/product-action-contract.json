@@ -11816,9 +11816,9 @@
                   },
                   "max_tokens": {
                     "type": "integer",
-                    "required": true,
                     "presence": {
-                      "present": "positive_integer"
+                      "omitted": "current_plan_has_no_cumulative_model_token_budget",
+                      "present": "positive_integer_for_legacy_plan_only"
                     }
                   }
                 },
@@ -12300,9 +12300,9 @@
                     },
                     "max_tokens": {
                       "type": "integer",
-                      "required": true,
                       "presence": {
-                        "present": "positive_integer"
+                        "omitted": "current_plan_has_no_cumulative_model_token_budget",
+                        "present": "positive_integer_for_legacy_plan_only"
                       }
                     }
                   },
@@ -13869,6 +13869,240 @@
             "presence": {
               "present": "integer_1_to_8388608"
             }
+          }
+        }
+      }
+    },
+    {
+      "name": "agent.execution.v2.deliverables.list",
+      "auth": "owner",
+      "transport": "http_and_ws_request",
+      "schema": {
+        "request": {
+          "page_size": {
+            "type": "integer",
+            "presence": {
+              "omitted": "server_default_20",
+              "present": "integer_1_to_20"
+            }
+          },
+          "page_token": {
+            "type": "string",
+            "presence": {
+              "omitted": "first_page",
+              "present": "opaque_bounded_4096"
+            }
+          },
+          "record_kind": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "exact:cloud_worker"
+            }
+          }
+        },
+        "response": {
+          "deliverables": {
+            "type": "array",
+            "required": true,
+            "items": {
+              "type": "object",
+              "required": true,
+              "properties": {
+                "account_generation": {
+                  "type": "integer",
+                  "required": true,
+                  "presence": {
+                    "present": "positive_integer_equal_to_prepared_permission_generation"
+                  }
+                },
+                "artifact_id": {
+                  "type": "string",
+                  "required": true,
+                  "presence": {
+                    "present": "canonical_uuid"
+                  }
+                },
+                "artifact_status": {
+                  "type": "string",
+                  "required": true,
+                  "presence": {
+                    "present": "exact:verified"
+                  }
+                },
+                "completed_at": {
+                  "type": "string",
+                  "required": true,
+                  "presence": {
+                    "present": "rfc3339_nano_not_before_created_at"
+                  }
+                },
+                "confirmation_id": {
+                  "type": "string",
+                  "required": true,
+                  "presence": {
+                    "present": "canonical_uuid"
+                  }
+                },
+                "conversation_id": {
+                  "type": "string",
+                  "required": true,
+                  "presence": {
+                    "present": "canonical_uuid"
+                  }
+                },
+                "created_at": {
+                  "type": "string",
+                  "required": true,
+                  "presence": {
+                    "present": "rfc3339_nano"
+                  }
+                },
+                "download": {
+                  "type": "object",
+                  "required": true,
+                  "properties": {
+                    "action": {
+                      "type": "string",
+                      "required": true,
+                      "presence": {
+                        "present": "exact:agent.execution.v2.artifacts.download"
+                      }
+                    },
+                    "artifact_id": {
+                      "type": "string",
+                      "required": true,
+                      "presence": {
+                        "present": "canonical_uuid_equal_to_parent_artifact"
+                      }
+                    },
+                    "max_chunk_bytes": {
+                      "type": "integer",
+                      "required": true,
+                      "presence": {
+                        "present": "exact:524288"
+                      }
+                    },
+                    "offset_bytes": {
+                      "type": "integer",
+                      "required": true,
+                      "presence": {
+                        "present": "exact:0"
+                      }
+                    },
+                    "record_kind": {
+                      "type": "string",
+                      "required": true,
+                      "presence": {
+                        "present": "exact:cloud_worker"
+                      }
+                    }
+                  }
+                },
+                "execution_id": {
+                  "type": "string",
+                  "required": true,
+                  "presence": {
+                    "present": "canonical_uuid_equal_to_run_id"
+                  }
+                },
+                "kind": {
+                  "type": "string",
+                  "required": true,
+                  "presence": {
+                    "present": "approved_artifact_kind"
+                  }
+                },
+                "media_type": {
+                  "type": "string",
+                  "required": true,
+                  "presence": {
+                    "present": "nonempty_media_type"
+                  }
+                },
+                "name": {
+                  "type": "string",
+                  "required": true,
+                  "presence": {
+                    "present": "safe_display_name"
+                  }
+                },
+                "objective_summary": {
+                  "type": "string",
+                  "required": true,
+                  "presence": {
+                    "present": "safe_display_text"
+                  }
+                },
+                "owner_id": {
+                  "type": "string",
+                  "required": true,
+                  "presence": {
+                    "present": "exact_prepared_permission_owner"
+                  }
+                },
+                "plan_id": {
+                  "type": "string",
+                  "required": true,
+                  "presence": {
+                    "present": "canonical_uuid"
+                  }
+                },
+                "retention_expires_at": {
+                  "type": "string",
+                  "required": true,
+                  "presence": {
+                    "present": "rfc3339_nano_after_created_at"
+                  }
+                },
+                "run_id": {
+                  "type": "string",
+                  "required": true,
+                  "presence": {
+                    "present": "canonical_uuid_equal_to_execution_id"
+                  }
+                },
+                "run_status": {
+                  "type": "string",
+                  "required": true,
+                  "presence": {
+                    "present": "exact:succeeded"
+                  }
+                },
+                "sha256": {
+                  "type": "string",
+                  "required": true,
+                  "presence": {
+                    "present": "lowercase_sha256"
+                  }
+                },
+                "size_bytes": {
+                  "type": "integer",
+                  "required": true,
+                  "presence": {
+                    "present": "positive_integer"
+                  }
+                },
+                "task_id": {
+                  "type": "string",
+                  "required": true,
+                  "presence": {
+                    "present": "canonical_uuid"
+                  }
+                },
+                "turn_id": {
+                  "type": "string",
+                  "required": true,
+                  "presence": {
+                    "present": "canonical_uuid"
+                  }
+                }
+              }
+            }
+          },
+          "next_page_token": {
+            "type": "string",
+            "required": true
           }
         }
       }

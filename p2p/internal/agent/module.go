@@ -184,11 +184,12 @@ func (m *Module) Handlers() map[string]actionbase.Handler {
 		return nil
 	}
 	handlers := map[string]actionbase.Handler{
-		actionPassword:            m.accountPassword,
-		actionMatrixSessionCreate: m.createMatrixSession,
-		actionConfigGet:           m.getConfig,
-		actionConfigUpdate:        m.updateConfig,
-		"agent.chat.stream":       streamOnly,
+		actionPassword:                         m.accountPassword,
+		actionMatrixSessionCreate:              m.createMatrixSession,
+		actionConfigGet:                        m.getConfig,
+		actionConfigUpdate:                     m.updateConfig,
+		"agent.chat.stream":                    streamOnly,
+		"agent.execution.v2.deliverables.list": m.listDeliverables,
 	}
 	for _, action := range runtimeActions {
 		handlers[action] = m.invoke(action)

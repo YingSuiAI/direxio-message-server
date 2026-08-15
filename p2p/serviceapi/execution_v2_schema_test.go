@@ -3,7 +3,7 @@ package serviceapi
 import "testing"
 
 func TestExecutionV2ActionsAreOwnerHTTPAndWSWithStrictMutations(t *testing.T) {
-	want := []string{"projects.analyze", "analyses.get", "targets.list", "targets.get", "targets.import", "targets.reserve", "targets.observe", "plans.create", "plans.revise", "plans.get", "plans.list", "deployments.list", "deployments.get", "deployments.events", "runs.create", "runs.get", "runs.list", "runs.cancel", "runs.retry", "runs.events", "artifacts.get", "artifacts.download", "service_bindings.list", "service_bindings.get", "service_bindings.invoke", "secrets.create", "secrets.get", "secrets.list", "secrets.revoke"}
+	want := []string{"projects.analyze", "analyses.get", "targets.list", "targets.get", "targets.import", "targets.reserve", "targets.observe", "plans.create", "plans.revise", "plans.get", "plans.list", "deployments.list", "deployments.get", "deployments.events", "runs.create", "runs.get", "runs.list", "runs.cancel", "runs.retry", "runs.events", "artifacts.get", "artifacts.download", "deliverables.list", "service_bindings.list", "service_bindings.get", "service_bindings.invoke", "secrets.create", "secrets.get", "secrets.list", "secrets.revoke"}
 	for _, bare := range want {
 		name := executionV2Name(bare)
 		s, ok := ActionSpecFor(name)
@@ -62,6 +62,32 @@ func TestExecutionV2ActionsAreOwnerHTTPAndWSWithStrictMutations(t *testing.T) {
 		if !ok || !value.Required || value.Presence == nil || value.Presence.Present == "" {
 			t.Errorf("artifact download response.%s = %#v", field, value)
 		}
+	}
+	deliverables, _ := ActionSpecFor(executionV2Name("deliverables.list"))
+	if len(deliverables.Schema.Request) != 3 || len(deliverables.Schema.Response) != 2 {
+		t.Fatalf("deliverables list schema is not closed: %#v", deliverables.Schema)
+	}
+	if kind := deliverables.Schema.Request["record_kind"]; !kind.Required || kind.Presence == nil || kind.Presence.Present != "exact:cloud_worker" {
+		t.Fatalf("deliverables record kind = %#v", kind)
+	}
+	if size := deliverables.Schema.Request["page_size"]; size.Required || size.Presence == nil || size.Presence.Present != "integer_1_to_20" {
+		t.Fatalf("deliverables page size = %#v", size)
+	}
+	item := deliverables.Schema.Response["deliverables"].Items
+	if item == nil || len(item.Properties) != 22 {
+		t.Fatalf("deliverables item schema = %#v", item)
+	}
+	for _, field := range []string{
+		"owner_id", "account_generation", "artifact_id", "execution_id", "run_id", "plan_id", "task_id", "confirmation_id", "conversation_id", "turn_id",
+		"objective_summary", "run_status", "name", "kind", "media_type", "size_bytes", "sha256", "artifact_status", "created_at", "completed_at", "retention_expires_at", "download",
+	} {
+		if value, ok := item.Properties[field]; !ok || !value.Required {
+			t.Errorf("deliverables item.%s = %#v", field, value)
+		}
+	}
+	downloadDescriptor := item.Properties["download"]
+	if len(downloadDescriptor.Properties) != 5 || downloadDescriptor.Properties["action"].Presence.Present != "exact:agent.execution.v2.artifacts.download" || downloadDescriptor.Properties["max_chunk_bytes"].Presence.Present != "exact:524288" {
+		t.Fatalf("deliverables download descriptor = %#v", downloadDescriptor)
 	}
 	runGet, _ := ActionSpecFor(executionV2Name("runs.get"))
 	if stages := runGet.Schema.Response["stages"]; stages.Required || stages.Presence == nil || stages.Presence.Omitted != "record_kind=cloud_worker" {
@@ -131,6 +157,12 @@ func TestExecutionV2CloudWorkerConditionalResponseSchemasPinStrictPublicProjecti
 
 	planGet, _ := ActionSpecFor(executionV2Name("plans.get"))
 	assertCloudConditionalProperties(t, "plans.get.plan", planGet.Schema.Response["plan"].Properties, planFields)
+	limits := planGet.Schema.Response["plan"].Properties["limits"].Properties
+	if legacy := limits["max_tokens"]; legacy.Required || legacy.Presence == nil ||
+		legacy.Presence.Omitted != "current_plan_has_no_cumulative_model_token_budget" ||
+		legacy.Presence.Present != "positive_integer_for_legacy_plan_only" {
+		t.Fatalf("plans.get limits.max_tokens = %#v", legacy)
+	}
 	if got := planGet.Schema.Response["plan"].Properties["proposal_reason"].Presence.Present; got != "required_when_record_kind=cloud_worker;one_of:explicit_user_cloud|central_delegation|local_budget_exceeded" {
 		t.Fatalf("plans.get proposal_reason presence=%q", got)
 	}

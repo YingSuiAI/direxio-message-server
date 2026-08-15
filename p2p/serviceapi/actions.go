@@ -201,6 +201,7 @@ var actionSpecs = []ActionSpec{
 	{Name: executionV2Name("runs.events"), Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: executionV2Schema("runs.events")},
 	{Name: executionV2Name("artifacts.get"), Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: executionV2Schema("artifacts.get")},
 	{Name: executionV2Name("artifacts.download"), Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: executionV2Schema("artifacts.download")},
+	{Name: executionV2Name("deliverables.list"), Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: executionV2Schema("deliverables.list")},
 	{Name: executionV2Name("service_bindings.list"), Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: executionV2Schema("service_bindings.list")},
 	{Name: executionV2Name("service_bindings.get"), Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: executionV2Schema("service_bindings.get")},
 	{Name: executionV2Name("service_bindings.invoke"), Auth: ActionAuthOwner, Transport: ActionTransportHTTPAndWS, Schema: executionV2Schema("service_bindings.invoke")},

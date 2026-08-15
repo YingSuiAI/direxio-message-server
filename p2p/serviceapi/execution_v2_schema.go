@@ -97,8 +97,14 @@ func cloudWorkerPlanProperties() map[string]ActionFieldSchema {
 		}),
 		"limits": cloudWorkerObject("strict_hard_limits", map[string]ActionFieldSchema{
 			"max_runtime_seconds": cloudWorkerNested("integer", "positive_integer"),
-			"max_tokens":          cloudWorkerNested("integer", "positive_integer"),
-			"max_output_bytes":    cloudWorkerNested("integer", "positive_integer"),
+			"max_tokens": {
+				Type: "integer",
+				Presence: &ActionPresenceSchema{
+					Omitted: "current_plan_has_no_cumulative_model_token_budget",
+					Present: "positive_integer_for_legacy_plan_only",
+				},
+			},
+			"max_output_bytes": cloudWorkerNested("integer", "positive_integer"),
 		}),
 		"network_grants": cloudWorkerArray("strict_approved_network_grants", ActionFieldSchema{Type: "string", Required: true}),
 		"secret_grants": cloudWorkerArray("strict_purpose_only_secret_grants_without_references", ActionFieldSchema{Type: "object", Required: true, Properties: map[string]ActionFieldSchema{
@@ -182,6 +188,41 @@ func cloudWorkerArtifactDownloadProperties() map[string]ActionFieldSchema {
 		"size_bytes":         cloudWorkerNested("integer", "integer_1_to_8388608"),
 		"next_offset_bytes":  cloudWorkerNested("integer", "offset_plus_decoded_chunk_length_strictly_advancing_not_above_size"),
 		"eof":                cloudWorkerNested("boolean", "true_exactly_when_next_offset_equals_size"),
+	}
+}
+
+func cloudWorkerDeliverableProperties() map[string]ActionFieldSchema {
+	return map[string]ActionFieldSchema{
+		"owner_id":             cloudWorkerNested("string", "exact_prepared_permission_owner"),
+		"account_generation":   cloudWorkerNested("integer", "positive_integer_equal_to_prepared_permission_generation"),
+		"artifact_id":          cloudWorkerNested("string", "canonical_uuid"),
+		"execution_id":         cloudWorkerNested("string", "canonical_uuid_equal_to_run_id"),
+		"run_id":               cloudWorkerNested("string", "canonical_uuid_equal_to_execution_id"),
+		"plan_id":              cloudWorkerNested("string", "canonical_uuid"),
+		"task_id":              cloudWorkerNested("string", "canonical_uuid"),
+		"confirmation_id":      cloudWorkerNested("string", "canonical_uuid"),
+		"conversation_id":      cloudWorkerNested("string", "canonical_uuid"),
+		"turn_id":              cloudWorkerNested("string", "canonical_uuid"),
+		"objective_summary":    cloudWorkerNested("string", "safe_display_text"),
+		"run_status":           cloudWorkerNested("string", "exact:succeeded"),
+		"name":                 cloudWorkerNested("string", "safe_display_name"),
+		"kind":                 cloudWorkerNested("string", "approved_artifact_kind"),
+		"media_type":           cloudWorkerNested("string", "nonempty_media_type"),
+		"size_bytes":           cloudWorkerNested("integer", "positive_integer"),
+		"sha256":               cloudWorkerNested("string", "lowercase_sha256"),
+		"artifact_status":      cloudWorkerNested("string", "exact:verified"),
+		"created_at":           cloudWorkerNested("string", "rfc3339_nano"),
+		"completed_at":         cloudWorkerNested("string", "rfc3339_nano_not_before_created_at"),
+		"retention_expires_at": cloudWorkerNested("string", "rfc3339_nano_after_created_at"),
+		"download": {
+			Type: "object", Required: true, Properties: map[string]ActionFieldSchema{
+				"action":          cloudWorkerNested("string", "exact:agent.execution.v2.artifacts.download"),
+				"record_kind":     cloudWorkerNested("string", "exact:cloud_worker"),
+				"artifact_id":     cloudWorkerNested("string", "canonical_uuid_equal_to_parent_artifact"),
+				"offset_bytes":    cloudWorkerNested("integer", "exact:0"),
+				"max_chunk_bytes": cloudWorkerNested("integer", "exact:524288"),
+			},
+		},
 	}
 }
 
@@ -432,6 +473,19 @@ func executionV2Schema(name string) *ActionSchema {
 			"max_chunk_bytes": {Type: "integer", Required: true, Presence: &ActionPresenceSchema{Present: "integer_1_to_524288"}},
 		}
 		return &ActionSchema{Request: request, Response: cloudWorkerArtifactDownloadProperties()}
+	case "deliverables.list":
+		request := map[string]ActionFieldSchema{
+			"record_kind": {Type: "string", Required: true, Presence: &ActionPresenceSchema{Present: "exact:cloud_worker"}},
+			"page_size":   {Type: "integer", Presence: &ActionPresenceSchema{Omitted: "server_default_20", Present: "integer_1_to_20"}},
+			"page_token":  {Type: "string", Presence: &ActionPresenceSchema{Omitted: "first_page", Present: "opaque_bounded_4096"}},
+		}
+		return &ActionSchema{Request: request, Response: map[string]ActionFieldSchema{
+			"deliverables": {
+				Type: "array", Required: true,
+				Items: &ActionFieldSchema{Type: "object", Required: true, Properties: cloudWorkerDeliverableProperties()},
+			},
+			"next_page_token": {Type: "string", Required: true},
+		}}
 	case "service_bindings.list":
 		request := executionV2PageRequest()
 		request["project_id"] = ActionFieldSchema{Type: "string"}
