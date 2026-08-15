@@ -1053,7 +1053,7 @@ func validateTurnSteerResult(request, value map[string]any) error {
 		return fmt.Errorf("%w: steer receipt does not match the request", ErrInvalidActionResult)
 	}
 	state, _ := value["state"].(string)
-	if state != "accepted" && state != "running" {
+	if state != "accepted" && state != "running" && state != "waiting_confirmation" {
 		return fmt.Errorf("%w: steered turn is not active", ErrInvalidActionResult)
 	}
 	return nil

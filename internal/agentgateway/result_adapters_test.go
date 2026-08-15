@@ -710,6 +710,11 @@ func TestTurnSteerResultPublishesAuthoritativeTurnAndMutationReceipt(t *testing.
 	if !reflect.DeepEqual(got, result) {
 		t.Fatalf("steer result = %#v, want %#v", got, result)
 	}
+	waiting := cloneParams(result)
+	waiting["state"] = "waiting_confirmation"
+	if _, err := adaptActionResultForRequest("agent.chat.turn.steer", request, waiting); err != nil {
+		t.Fatalf("waiting-confirmation steer result rejected: %v", err)
+	}
 	for name, mutate := range map[string]func(map[string]any){
 		"wrong receipt": func(value map[string]any) { value["steer_idempotency_key"] = "55555555-5555-4555-8555-555555555555" },
 		"terminal":      func(value map[string]any) { value["state"] = "completed" },

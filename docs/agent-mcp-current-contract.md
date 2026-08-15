@@ -127,7 +127,8 @@ capability live.
   internal `turn_id`, and `expected_revision`; it returns the same exact
   ten-field authoritative metadata. It never calls the generic capability
   `CancelOperation` RPC.
-- Generating Native turns accept same-turn guidance only through
+- Generating Native turns and confirmation-waiting turns whose Cloud Worker
+  task is already queued or running accept same-turn guidance only through
   `agent.chat.turn.steer`, bound to `agent.chat.v1/steer_turn`. The mutation
   sends exactly a new UUID `idempotency_key`, the authoritative `turn_id`, its
   positive `expected_revision`, and one bounded non-empty `instruction`.
