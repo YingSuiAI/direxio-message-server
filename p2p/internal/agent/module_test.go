@@ -390,21 +390,29 @@ func TestTurnSteerUsesTypedMutationWithExactSameTurnFields(t *testing.T) {
 	runner := &requestValidationRunner{}
 	module := New(Config{Runner: runner})
 	params := map[string]any{
-		"idempotency_key":   "11111111-1111-4111-8111-111111111111",
-		"turn_id":           "22222222-2222-4222-8222-222222222222",
-		"expected_revision": int64(3),
-		"instruction":       "use the added constraint immediately",
+		"idempotency_key":         "11111111-1111-4111-8111-111111111111",
+		"turn_id":                 "22222222-2222-4222-8222-222222222222",
+		"expected_revision":       int64(3),
+		"instruction":             "use the added constraint immediately",
+		"accepted_attachment_ids": []any{"33333333-3333-4333-8333-333333333333"},
 	}
 	if _, actionErr := module.Handlers()["agent.chat.turn.steer"](context.Background(), params); actionErr != nil {
 		t.Fatalf("typed turn steer failed: %v", actionErr)
 	}
-	if runner.invokeCalls != 1 || runner.lastAction != "agent.chat.turn.steer" || len(runner.lastParams) != 4 {
+	if runner.invokeCalls != 1 || runner.lastAction != "agent.chat.turn.steer" || len(runner.lastParams) != 5 {
 		t.Fatalf("typed turn steer dispatch = calls %d action %q params %#v", runner.invokeCalls, runner.lastAction, runner.lastParams)
 	}
 	for field, want := range params {
+		if field == "accepted_attachment_ids" {
+			continue
+		}
 		if runner.lastParams[field] != want {
 			t.Errorf("typed turn steer %s = %#v, want %#v", field, runner.lastParams[field], want)
 		}
+	}
+	attachments, ok := runner.lastParams["accepted_attachment_ids"].([]any)
+	if !ok || len(attachments) != 1 || attachments[0] != "33333333-3333-4333-8333-333333333333" {
+		t.Errorf("typed turn steer attachments = %#v", runner.lastParams["accepted_attachment_ids"])
 	}
 }
 

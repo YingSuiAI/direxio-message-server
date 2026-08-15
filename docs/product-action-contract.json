@@ -10034,6 +10034,19 @@
       "transport": "http_only",
       "schema": {
         "request": {
+          "accepted_attachment_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "presence": {
+                "present": "canonical_uuid"
+              }
+            },
+            "presence": {
+              "omitted": "text_only_guidance",
+              "present": "unique;at_most_4;owned_committed_attachments"
+            }
+          },
           "expected_revision": {
             "type": "integer",
             "required": true,

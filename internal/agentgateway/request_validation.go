@@ -1062,7 +1062,7 @@ func validateTurnStopRequest(action string, params map[string]any) error {
 }
 
 func validateTurnSteerRequest(action string, params map[string]any) error {
-	if err := rejectUnknownActionFields(action, params, "idempotency_key", "turn_id", "expected_revision", "instruction"); err != nil {
+	if err := rejectUnknownActionFields(action, params, "idempotency_key", "turn_id", "expected_revision", "instruction", "accepted_attachment_ids"); err != nil {
 		return err
 	}
 	if params == nil {
@@ -1079,6 +1079,22 @@ func validateTurnSteerRequest(action string, params map[string]any) error {
 	instruction, ok := params["instruction"].(string)
 	if !ok || strings.TrimSpace(instruction) == "" || len(instruction) > maxChatMessageBytes || !utf8.ValidString(instruction) {
 		return invalidActionRequest(action, "instruction", "must be non-empty UTF-8 of at most 1048576 bytes")
+	}
+	if value, present := params["accepted_attachment_ids"]; present {
+		ids, ok := actionStringSlice(value)
+		if !ok || len(ids) > maxChatAttachments {
+			return invalidActionRequest(action, "accepted_attachment_ids", "must contain at most 4 canonical UUIDs")
+		}
+		seen := make(map[string]struct{}, len(ids))
+		for _, id := range ids {
+			if !canonicalActionUUID(id) {
+				return invalidActionRequest(action, "accepted_attachment_ids", "must contain at most 4 canonical UUIDs")
+			}
+			if _, duplicate := seen[id]; duplicate {
+				return invalidActionRequest(action, "accepted_attachment_ids", "must not contain duplicates")
+			}
+			seen[id] = struct{}{}
+		}
 	}
 	return nil
 }

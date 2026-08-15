@@ -135,9 +135,12 @@ capability live.
   task is already queued or running accept same-turn guidance only through
   `agent.chat.turn.steer`, bound to `agent.chat.v1/steer_turn`. The mutation
   sends exactly a new UUID `idempotency_key`, the authoritative `turn_id`, its
-  positive `expected_revision`, and one bounded non-empty `instruction`.
-  Agent Core persists the instruction, invalidates the current provider lease,
-  and regenerates the same turn immediately. The result retains the original
+  positive `expected_revision`, one bounded non-empty `instruction`, and
+  optionally up to four unique committed attachment UUIDs in
+  `accepted_attachment_ids`. Text and attachments form one same-turn guidance
+  mutation. Agent Core persists the instruction and attachment references,
+  invalidates the current provider lease, and regenerates the same turn
+  immediately. The result retains the original
   start idempotency identity and adds the exact `steer_idempotency_key`
   receipt. Message Server never creates, queues, or starts a successor turn.
 - Native Agent deployment planning treats an empty target inventory as a signal

@@ -259,15 +259,16 @@ func TestTransformTurnSteerRequestPassesExactTypedMutation(t *testing.T) {
 		t.Fatal("agent.chat.turn.steer binding is missing")
 	}
 	raw, err := transformCapabilityRequest("agent.chat.turn.steer", "transport-operation", map[string]any{
-		"idempotency_key":   "11111111-1111-4111-8111-111111111111",
-		"turn_id":           "22222222-2222-4222-8222-222222222222",
-		"expected_revision": int64(3),
-		"instruction":       "focus on the latest guidance",
+		"idempotency_key":         "11111111-1111-4111-8111-111111111111",
+		"turn_id":                 "22222222-2222-4222-8222-222222222222",
+		"expected_revision":       int64(3),
+		"instruction":             "focus on the latest guidance",
+		"accepted_attachment_ids": []any{"33333333-3333-4333-8333-333333333333"},
 	}, binding)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []byte(`{"expected_revision":3,"idempotency_key":"11111111-1111-4111-8111-111111111111","instruction":"focus on the latest guidance","turn_id":"22222222-2222-4222-8222-222222222222"}`)
+	want := []byte(`{"accepted_attachment_ids":["33333333-3333-4333-8333-333333333333"],"expected_revision":3,"idempotency_key":"11111111-1111-4111-8111-111111111111","instruction":"focus on the latest guidance","turn_id":"22222222-2222-4222-8222-222222222222"}`)
 	if !bytes.Equal(raw, want) {
 		t.Fatalf("typed turn steer input = %s, want %s", raw, want)
 	}

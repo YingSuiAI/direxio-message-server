@@ -579,8 +579,12 @@ func TestTurnControlRequestsRequireCanonicalClosedShapes(t *testing.T) {
 	if err := ValidateActionRequest("agent.chat.turn.steer", map[string]any{
 		"idempotency_key": mutationID, "turn_id": turnID,
 		"expected_revision": json.Number("2"), "instruction": "answer the newest constraint first",
+		"accepted_attachment_ids": []any{
+			"44444444-4444-4444-8444-444444444444",
+			"55555555-5555-4555-8555-555555555555",
+		},
 	}); err != nil {
-		t.Fatalf("canonical steer rejected: %v", err)
+		t.Fatalf("canonical steer with attachments rejected: %v", err)
 	}
 	if err := ValidateActionRequest("agent.chat.turns.list", map[string]any{"conversation_id": conversationID, "page_token": "", "limit": json.Number("20")}); err != nil {
 		t.Fatalf("canonical list rejected: %v", err)
@@ -600,6 +604,9 @@ func TestTurnControlRequestsRequireCanonicalClosedShapes(t *testing.T) {
 		{"agent.chat.turn.steer", map[string]any{"idempotency_key": mutationID, "turn_id": turnID, "expected_revision": 2}},
 		{"agent.chat.turn.steer", map[string]any{"idempotency_key": mutationID, "turn_id": turnID, "expected_revision": 2, "instruction": "   "}},
 		{"agent.chat.turn.steer", map[string]any{"idempotency_key": mutationID, "turn_id": turnID, "expected_revision": 2, "instruction": "guide", "message": "alias"}},
+		{"agent.chat.turn.steer", map[string]any{"idempotency_key": mutationID, "turn_id": turnID, "expected_revision": 2, "instruction": "guide", "accepted_attachment_ids": []any{"attachment-1"}}},
+		{"agent.chat.turn.steer", map[string]any{"idempotency_key": mutationID, "turn_id": turnID, "expected_revision": 2, "instruction": "guide", "accepted_attachment_ids": []any{mutationID, mutationID}}},
+		{"agent.chat.turn.steer", map[string]any{"idempotency_key": mutationID, "turn_id": turnID, "expected_revision": 2, "instruction": "guide", "accepted_attachment_ids": []any{mutationID, turnID, conversationID, "44444444-4444-4444-8444-444444444444", "55555555-5555-4555-8555-555555555555"}}},
 		{"agent.chat.turns.list", map[string]any{"conversation_id": "conversation-1"}},
 		{"agent.chat.turns.list", map[string]any{"conversation_id": conversationID, "next_cursor": "legacy"}},
 		{"agent.chat.turns.list", map[string]any{"conversation_id": conversationID, "limit": 0}},
