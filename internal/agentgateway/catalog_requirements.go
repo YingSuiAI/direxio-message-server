@@ -54,7 +54,7 @@ var expectedCatalogSchemaDigests = map[string]catalogSchemaDigest{
 	"agent.chat.stream": {
 		inputHex:  "2ccc801e7bb77acc1fff9ec217651b73408b1ce5ca0c39fd620f1b98c85a0fcf",
 		resultHex: "e517caf92e89459a4b9e6318b519765499bfa0e30c077c0bf004cfd852ea5545",
-		eventHex:  "da2612caf8a8dcc572b79ff0dd1d06f10cc91975a71c3c6d24d7c45b99bfc77b",
+		eventHex:  "70ab97550d615e88efd09b33c54b335877397dde631d86fc74e83c2bd2886724",
 	},
 	"agent.chat.attachment.begin": {
 		inputHex:  "8ca4c5efd311f5793aaabbab7813c8e8588f844b8cc1a0b9d0ec3a396be06e47",

@@ -10,8 +10,8 @@ import (
 func TestCurrentBuildInfoUsesCanonicalReleaseVersion(t *testing.T) {
 	got := CurrentBuildInfo()
 
-	if got.Version != "v1.1.56" {
-		t.Fatalf("Version = %q, want v1.1.56", got.Version)
+	if got.Version != "v1.1.57" {
+		t.Fatalf("Version = %q, want v1.1.57", got.Version)
 	}
 	if got.SchemaVersion != 2 {
 		t.Fatalf("SchemaVersion = %d, want 2", got.SchemaVersion)

@@ -449,6 +449,26 @@ func TestNativeChatProgressProjectsWaitingConfirmation(t *testing.T) {
 	}
 }
 
+func TestNativeChatProgressProjectsWorkerStatusOnce(t *testing.T) {
+	progress := &capv1.WatchOperationEvent{
+		OperationId: durableTestStartID,
+		Sequence:    5,
+		Event: &capv1.WatchOperationEvent_Progress{Progress: &capv1.ProgressEvent{EventJson: []byte(
+			`{"kind":"worker_status","idempotency_key":"` + durableTestStartID + `","conversation_id":"` + durableTestConversationID + `","turn_id":"` + durableTestTurnID + `","revision":4,"execution_id":"33333333-3333-4333-8333-333333333333","status":"provisioning","created_at":"2026-08-15T03:13:30.123Z"}`,
+		)}},
+	}
+	event, terminal, err := nativeEventFromProto(progress, actionResultAuthority{})
+	if err != nil || terminal || event == nil || event.Event != "worker_status" || event.Seq != 5 {
+		t.Fatalf("worker status progress = event %#v terminal %v err %v", event, terminal, err)
+	}
+	if len(event.Data) != 9 || event.Data["kind"] != "worker_status" ||
+		event.Data["execution_id"] != "33333333-3333-4333-8333-333333333333" ||
+		event.Data["status"] != "provisioning" || event.Data["created_at"] != "2026-08-15T03:13:30.123Z" ||
+		event.Data["sequence"] != int64(5) {
+		t.Fatalf("worker status payload = %#v", event.Data)
+	}
+}
+
 func TestNativeChatProgressRejectsWaitingConfirmationSchemaDrift(t *testing.T) {
 	base := map[string]any{
 		"kind": "waiting_confirmation", "idempotency_key": durableTestStartID,

@@ -809,6 +809,8 @@ func nativeEventFromProto(event *capv1.WatchOperationEvent, authority actionResu
 			return &agentstream.Event{Event: "tool", Seq: sequence, Data: payload}, false, nil
 		case "waiting_confirmation":
 			return &agentstream.Event{Event: "waiting_confirmation", Seq: sequence, Data: payload}, false, nil
+		case "worker_status":
+			return &agentstream.Event{Event: "worker_status", Seq: sequence, Data: payload}, false, nil
 		case "error":
 			return &agentstream.Event{Event: "error", Seq: sequence, Data: payload}, true, fmt.Errorf("agent operation failed")
 		case "done":

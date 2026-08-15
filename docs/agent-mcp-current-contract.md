@@ -105,6 +105,10 @@ capability live.
   durable event. Non-waiting events cannot carry confirmation, execution, or
   waiting status authority, and waiting events cannot mix text, tool call,
   tool result, response, or error fields.
+- Cloud Worker lifecycle changes cross the same durable stream once as
+  `worker_status`, carrying only canonical turn identity, `execution_id`, one
+  canonical lifecycle `status`, and `created_at`. Message Server forwards the
+  event without polling, reinterpretation, or fallback.
 - A terminal capability `ErrorEvent` has no business turn identity and is
   never projected directly. Message Server resolves the current
   `agent.chat.turns.list` ledger, matches the exact conversation and original

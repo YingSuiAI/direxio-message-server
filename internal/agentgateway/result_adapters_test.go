@@ -369,6 +369,7 @@ func TestValidateChatStreamWaitingConfirmationRequiresExactAuthority(t *testing.
 	for field, value := range map[string]any{
 		"text": "not allowed", "tool_call": map[string]any{}, "tool_result": map[string]any{},
 		"response": map[string]any{}, "error_code": "not_allowed", "error_summary": "not allowed",
+		"created_at": "2026-08-15T03:13:30Z",
 	} {
 		t.Run("mixed_"+field, func(t *testing.T) {
 			invalid := maps.Clone(event)
@@ -379,7 +380,7 @@ func TestValidateChatStreamWaitingConfirmationRequiresExactAuthority(t *testing.
 		})
 	}
 
-	for _, kind := range []string{"accepted", "started", "delta", "tool_call", "tool_result", "done", "error"} {
+	for _, kind := range []string{"accepted", "started", "delta", "tool_call", "tool_result", "worker_status", "done", "error"} {
 		t.Run("authority_on_"+kind, func(t *testing.T) {
 			invalid := maps.Clone(event)
 			invalid["kind"] = kind
@@ -388,6 +389,48 @@ func TestValidateChatStreamWaitingConfirmationRequiresExactAuthority(t *testing.
 			}
 			if err := validateChatStreamEvent(invalid, actionResultAuthority{}); !errors.Is(err, ErrInvalidActionResult) {
 				t.Fatalf("confirmation authority on %s accepted: %v", kind, err)
+			}
+		})
+	}
+}
+
+func TestValidateChatStreamWorkerStatusRequiresExactAuthority(t *testing.T) {
+	event := map[string]any{
+		"kind":            "worker_status",
+		"idempotency_key": durableTestStartID,
+		"conversation_id": durableTestConversationID,
+		"turn_id":         durableTestTurnID,
+		"revision":        float64(4),
+		"sequence":        int64(5),
+		"execution_id":    "33333333-3333-4333-8333-333333333333",
+		"status":          "queued",
+		"created_at":      "2026-08-15T03:13:30.123Z",
+	}
+	for _, status := range []string{"queued", "provisioning", "running", "succeeded", "failed", "canceled", "rejected", "expired"} {
+		candidate := maps.Clone(event)
+		candidate["status"] = status
+		if err := validateChatStreamEvent(candidate, actionResultAuthority{}); err != nil {
+			t.Fatalf("worker status %s rejected: %v", status, err)
+		}
+	}
+
+	for name, mutate := range map[string]func(map[string]any){
+		"missing execution": func(value map[string]any) { delete(value, "execution_id") },
+		"invalid execution": func(value map[string]any) { value["execution_id"] = "not-a-uuid" },
+		"missing status":    func(value map[string]any) { delete(value, "status") },
+		"unknown status":    func(value map[string]any) { value["status"] = "stopping" },
+		"missing timestamp": func(value map[string]any) { delete(value, "created_at") },
+		"invalid timestamp": func(value map[string]any) { value["created_at"] = "yesterday" },
+		"confirmation": func(value map[string]any) {
+			value["confirmation_id"] = "11111111-1111-4111-8111-111111111111"
+		},
+		"mixed text": func(value map[string]any) { value["text"] = "not allowed" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := maps.Clone(event)
+			mutate(candidate)
+			if err := validateChatStreamEvent(candidate, actionResultAuthority{}); !errors.Is(err, ErrInvalidActionResult) {
+				t.Fatalf("invalid worker status accepted: %v", err)
 			}
 		})
 	}
