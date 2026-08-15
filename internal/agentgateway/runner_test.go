@@ -295,6 +295,32 @@ func TestNativeEventsFromResultProjectsCanonicalChatResponse(t *testing.T) {
 	}
 }
 
+func TestNativeChatStreamPreservesReasoningOnDeltaAndDone(t *testing.T) {
+	deltaJSON := []byte(`{"kind":"delta","idempotency_key":"` + durableTestStartID + `","conversation_id":"` + durableTestConversationID + `","turn_id":"` + durableTestTurnID + `","revision":2,"reasoning_content":"partial reasoning"}`)
+	delta, terminal, err := nativeEventFromProto(&capv1.WatchOperationEvent{
+		OperationId: durableTestStartID,
+		Sequence:    6,
+		Event:       &capv1.WatchOperationEvent_Progress{Progress: &capv1.ProgressEvent{EventJson: deltaJSON}},
+	}, actionResultAuthority{})
+	if err != nil || terminal || delta == nil || delta.Event != "delta" || delta.Data["reasoning_content"] != "partial reasoning" {
+		t.Fatalf("reasoning delta = event %#v terminal %v err %v", delta, terminal, err)
+	}
+	if _, present := delta.Data["text"]; present {
+		t.Fatalf("reasoning-only delta gained text: %#v", delta.Data)
+	}
+
+	response := durableChatResponseForTest("answer", nil, nil, nil)
+	response["message"].(map[string]any)["reasoning_content"] = "complete reasoning"
+	resultJSON, err := json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := nativeEventsFromResult(resultJSON, 7, durableTestStartID, actionResultAuthority{})
+	if err != nil || len(events) != 1 || events[0].Event != "done" || events[0].Data["reasoning_content"] != "complete reasoning" {
+		t.Fatalf("reasoning done events = %#v, err %v", events, err)
+	}
+}
+
 func TestNativeEventsFromResultProjectsExecutionArtifactReference(t *testing.T) {
 	reference := validExecutionArtifactReferenceForTest()
 	result, err := json.Marshal(durableChatResponseForTest("done", []any{reference}, nil, nil))

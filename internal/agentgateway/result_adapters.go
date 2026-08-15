@@ -1475,14 +1475,14 @@ var canonicalDurableChatResponseFields = map[string]struct{}{
 }
 
 var canonicalChatMessageFields = map[string]struct{}{
-	"id": {}, "role": {}, "content": {}, "tool_calls": {}, "tool_results": {},
+	"id": {}, "role": {}, "content": {}, "reasoning_content": {}, "tool_calls": {}, "tool_results": {},
 	"created_at": {}, "model_profile_id": {}, "related_task_ids": {},
 	"related_plan_ids": {}, "references": {}, "tool_summaries": {},
 }
 
 var canonicalChatStreamEventFields = map[string]struct{}{
 	"kind": {}, "idempotency_key": {}, "conversation_id": {}, "turn_id": {},
-	"revision": {}, "text": {},
+	"revision": {}, "text": {}, "reasoning_content": {},
 	"tool_call": {}, "tool_result": {}, "response": {},
 	"error_code": {}, "error_summary": {}, "sequence": {},
 	"confirmation_id": {}, "execution_id": {}, "status": {}, "created_at": {},
@@ -1497,6 +1497,9 @@ func chatResult(value map[string]any) map[string]any {
 	message, _ := value["message"].(map[string]any)
 	if text, ok := message["content"].(string); ok && text != "" {
 		result["text"] = text
+	}
+	if reasoning, ok := message["reasoning_content"].(string); ok && reasoning != "" {
+		result["reasoning_content"] = reasoning
 	}
 	if toolCalls, present := message["tool_calls"]; present {
 		result["tool_calls"] = toolCalls
@@ -1558,6 +1561,11 @@ func validateCanonicalChatResult(value map[string]any, authority actionResultAut
 	if content, present := message["content"]; present {
 		if _, ok := content.(string); !ok {
 			return fmt.Errorf("%w: chat message content must be a string", ErrInvalidActionResult)
+		}
+	}
+	if reasoning, present := message["reasoning_content"]; present {
+		if _, ok := reasoning.(string); !ok {
+			return fmt.Errorf("%w: chat message reasoning_content must be a string", ErrInvalidActionResult)
 		}
 	}
 	if toolCalls, present := message["tool_calls"]; present {
@@ -1636,6 +1644,14 @@ func validateConversationHistoryReferences(output map[string]any, authority acti
 		return fmt.Errorf("%w: conversation history messages must be an array", ErrInvalidActionResult)
 	}
 	for index, message := range messages {
+		if reasoning, present := message["reasoning_content"]; present {
+			if _, ok := reasoning.(string); !ok {
+				return fmt.Errorf("%w: conversation history message %d reasoning_content must be a string", ErrInvalidActionResult, index)
+			}
+			if message["role"] != "assistant" {
+				return fmt.Errorf("%w: conversation history message %d reasoning_content belongs only to an assistant", ErrInvalidActionResult, index)
+			}
+		}
 		references, present := message["references"]
 		if !present {
 			return fmt.Errorf("%w: conversation history message %d references are missing", ErrInvalidActionResult, index)
@@ -2001,6 +2017,14 @@ func validateChatStreamEvent(value map[string]any, authority actionResultAuthori
 			return fmt.Errorf("%w: chat stream event sequence must be non-negative", ErrInvalidActionResult)
 		}
 	}
+	if reasoning, present := value["reasoning_content"]; present {
+		if _, ok := reasoning.(string); !ok {
+			return fmt.Errorf("%w: chat stream event reasoning_content must be a string", ErrInvalidActionResult)
+		}
+		if kind != "delta" && kind != "done" {
+			return fmt.Errorf("%w: only delta and done chat stream events may carry reasoning_content", ErrInvalidActionResult)
+		}
+	}
 	authorityFields := []string{"confirmation_id", "execution_id", "status", "created_at"}
 	switch kind {
 	case "waiting_confirmation":
@@ -2067,7 +2091,7 @@ func validateChatStreamEvent(value map[string]any, authority actionResultAuthori
 	if kind != "done" {
 		return fmt.Errorf("%w: only a done chat stream event may carry response", ErrInvalidActionResult)
 	}
-	for _, field := range []string{"text", "tool_calls", "references", "related_task_ids", "related_plan_ids", "message"} {
+	for _, field := range []string{"text", "reasoning_content", "tool_calls", "references", "related_task_ids", "related_plan_ids", "message"} {
 		if _, duplicate := value[field]; duplicate {
 			return fmt.Errorf("%w: chat stream field %s duplicates the canonical response", ErrInvalidActionResult, field)
 		}

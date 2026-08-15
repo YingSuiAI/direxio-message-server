@@ -296,6 +296,68 @@ func TestChatResultPromotesServerAuthoredExecutionLinkage(t *testing.T) {
 	}
 }
 
+func TestReasoningContentUsesExistingChatShapes(t *testing.T) {
+	response := canonicalChatResponseForTest("answer", nil, nil, nil)
+	response["message"].(map[string]any)["reasoning_content"] = "complete reasoning"
+	got, err := adaptActionResult("agent.chat", response)
+	if err != nil || got["reasoning_content"] != "complete reasoning" {
+		t.Fatalf("chat reasoning projection = %#v, err %v", got, err)
+	}
+
+	invalidResponse := canonicalChatResponseForTest("answer", nil, nil, nil)
+	invalidResponse["message"].(map[string]any)["reasoning_content"] = []any{"not", "a string"}
+	if _, err := adaptActionResult("agent.chat", invalidResponse); !errors.Is(err, ErrInvalidActionResult) {
+		t.Fatalf("non-string chat reasoning accepted: %v", err)
+	}
+
+	history := map[string]any{
+		"conversation": map[string]any{"conversation_id": durableTestConversationID},
+		"messages": []any{map[string]any{
+			"role": "assistant", "content": "answer", "reasoning_content": "complete reasoning", "references": []any{},
+		}},
+	}
+	projectedHistory, err := adaptActionResult("agent.chat.conversations.get", history)
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages := projectedHistory["messages"].([]any)
+	if messages[0].(map[string]any)["reasoning_content"] != "complete reasoning" {
+		t.Fatalf("history reasoning projection = %#v", projectedHistory)
+	}
+	for name, message := range map[string]map[string]any{
+		"wrong type": {"role": "assistant", "reasoning_content": true, "references": []any{}},
+		"user role":  {"role": "user", "reasoning_content": "private", "references": []any{}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := map[string]any{"conversation": map[string]any{}, "messages": []any{message}}
+			if _, err := adaptActionResult("agent.chat.conversations.get", candidate); !errors.Is(err, ErrInvalidActionResult) {
+				t.Fatalf("invalid history reasoning accepted: %v", err)
+			}
+		})
+	}
+
+	delta := map[string]any{
+		"kind": "delta", "idempotency_key": durableTestStartID,
+		"conversation_id": durableTestConversationID, "turn_id": durableTestTurnID,
+		"revision": float64(2), "reasoning_content": "partial reasoning",
+	}
+	if err := validateChatStreamEvent(delta, actionResultAuthority{}); err != nil {
+		t.Fatalf("reasoning-only delta rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(map[string]any){
+		"wrong type": func(event map[string]any) { event["reasoning_content"] = 1 },
+		"wrong kind": func(event map[string]any) { event["kind"] = "started" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := maps.Clone(delta)
+			mutate(candidate)
+			if err := validateChatStreamEvent(candidate, actionResultAuthority{}); !errors.Is(err, ErrInvalidActionResult) {
+				t.Fatalf("invalid stream reasoning accepted: %v", err)
+			}
+		})
+	}
+}
+
 func TestChatResultRejectsAlternateDuplicateAndConflictingLocations(t *testing.T) {
 	taskID := "11111111-1111-4111-8111-111111111111"
 	canonical := canonicalChatResponseForTest("done", nil, []any{taskID}, nil)

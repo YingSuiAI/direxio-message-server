@@ -47,6 +47,9 @@ the exact Agent-owned turn ledger entry. Its `/events` child is
 `Last-Event-ID` resumes after that sequence, and both cursors must agree when
 sent together. Every `data` object carries `action`, the exact Agent-authored
 event name/data, turn/idempotency/conversation identity, revision, and `seq`.
+An existing `delta` event may carry `reasoning_content` without ordinary
+`text`; terminal `done` and assistant messages returned by conversation
+history carry the complete optional `reasoning_content` string.
 The stream sends 15-second comment heartbeats and closes after `done`, `error`,
 or `cancelled`. Disconnect detaches only that Watch and never cancels or
 re-admits the durable operation. Turn stop and confirmations remain separate

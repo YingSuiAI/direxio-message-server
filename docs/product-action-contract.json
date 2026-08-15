@@ -10523,6 +10523,9 @@
                   "type": "integer",
                   "required": true
                 },
+                "reasoning_content": {
+                  "type": "string"
+                },
                 "references": {
                   "type": "array",
                   "required": true,

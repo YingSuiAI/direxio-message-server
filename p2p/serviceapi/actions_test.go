@@ -377,6 +377,9 @@ func TestNativeAgentReferenceSchemaMatchesStrictProducerShape(t *testing.T) {
 	if got := messages.Items.Properties["references"].Items.Properties["record_kind"]; got.Presence == nil || got.Presence.Present != "exact:local_sandbox;required_for_execution_artifact" {
 		t.Fatalf("conversation history artifact record kind = %#v", got)
 	}
+	if got := messages.Items.Properties["reasoning_content"]; got.Type != "string" || got.Required {
+		t.Fatalf("conversation history reasoning_content schema = %#v", got)
+	}
 }
 
 func TestNativeAgentAttachmentsUseClosedUploadSchemas(t *testing.T) {
