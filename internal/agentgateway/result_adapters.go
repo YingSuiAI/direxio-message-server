@@ -1485,7 +1485,7 @@ var canonicalChatStreamEventFields = map[string]struct{}{
 	"revision": {}, "text": {}, "reasoning_content": {},
 	"tool_call": {}, "tool_result": {}, "response": {},
 	"error_code": {}, "error_summary": {}, "sequence": {},
-	"confirmation_id": {}, "execution_id": {}, "status": {}, "created_at": {},
+	"confirmation_id": {}, "execution_id": {}, "status": {}, "phase": {}, "created_at": {},
 }
 
 // chatResult projects only the canonical Agent ChatResponse shape. Assistant
@@ -2025,10 +2025,10 @@ func validateChatStreamEvent(value map[string]any, authority actionResultAuthori
 			return fmt.Errorf("%w: only delta and done chat stream events may carry reasoning_content", ErrInvalidActionResult)
 		}
 	}
-	authorityFields := []string{"confirmation_id", "execution_id", "status", "created_at"}
+	authorityFields := []string{"confirmation_id", "execution_id", "status", "phase", "created_at"}
 	switch kind {
 	case "waiting_confirmation":
-		for _, field := range []string{"text", "tool_call", "tool_result", "response", "error_code", "error_summary", "created_at"} {
+		for _, field := range []string{"text", "phase", "tool_call", "tool_result", "response", "error_code", "error_summary", "created_at"} {
 			if _, present := value[field]; present {
 				return fmt.Errorf("%w: waiting confirmation event must not carry %s", ErrInvalidActionResult, field)
 			}
@@ -2058,6 +2058,12 @@ func validateChatStreamEvent(value map[string]any, authority actionResultAuthori
 		case "queued", "provisioning", "running", "succeeded", "failed", "canceled", "rejected", "expired":
 		default:
 			return fmt.Errorf("%w: worker status event status is invalid", ErrInvalidActionResult)
+		}
+		if phaseValue, present := value["phase"]; present {
+			phase, ok := phaseValue.(string)
+			if status != "running" || !ok || !validWorkerProgressPhase(phase) {
+				return fmt.Errorf("%w: worker status event phase is invalid", ErrInvalidActionResult)
+			}
 		}
 		createdAt, ok := value["created_at"].(string)
 		if !ok {
@@ -2144,6 +2150,15 @@ func promoteChatResultFields(target map[string]any, authority actionResultAuthor
 	}
 	delete(target, "response")
 	return nil
+}
+
+func validWorkerProgressPhase(value string) bool {
+	switch value {
+	case "preparing_environment", "provisioning_worker", "connecting_worker", "executing_remote_task", "collecting_result", "verifying_service":
+		return true
+	default:
+		return false
+	}
 }
 
 func webSearchConfigResult(value map[string]any) map[string]any {

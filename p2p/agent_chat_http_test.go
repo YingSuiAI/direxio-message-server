@@ -160,6 +160,21 @@ func TestAgentChatSSEPreservesCancelledTerminal(t *testing.T) {
 	}
 }
 
+func TestAgentChatSSEPreservesWorkerPhase(t *testing.T) {
+	response := httptest.NewRecorder()
+	event := agentstream.StreamEvent{
+		TurnID: testHTTPTurnID, IdempotencyKey: testHTTPOperationID,
+		ConversationID: testHTTPConversationID, Revision: 3, Seq: 9,
+		Event: "worker_status", Data: map[string]any{
+			"kind": "worker_status", "status": "running", "phase": "executing_remote_task",
+		},
+	}
+	terminal, err := writeAgentChatSSE(response, event)
+	if err != nil || terminal || !strings.Contains(response.Body.String(), `"phase":"executing_remote_task"`) {
+		t.Fatalf("worker phase terminal=%v err=%v body=%q", terminal, err, response.Body.String())
+	}
+}
+
 func TestAgentChatSSERejectsConflictingResumeCursors(t *testing.T) {
 	runner := &httpChatRunner{}
 	service := NewService(Config{ServerName: "example.test", AccountGeneration: 7, NativeAgentRunner: runner})

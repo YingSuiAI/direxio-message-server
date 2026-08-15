@@ -107,8 +107,14 @@ capability live.
   tool result, response, or error fields.
 - Cloud Worker lifecycle changes cross the same durable stream once as
   `worker_status`, carrying only canonical turn identity, `execution_id`, one
-  canonical lifecycle `status`, and `created_at`. Message Server forwards the
-  event without polling, reinterpretation, or fallback.
+  canonical lifecycle `status`, and `created_at`. While work is active, the
+  event may additionally carry the display-only `phase` value
+  with `status=running`: `preparing_environment`, `provisioning_worker`,
+  `connecting_worker`, `executing_remote_task`, `collecting_result`, or
+  `verifying_service`.
+  Missing phase remains valid; phase never changes lifecycle status,
+  terminality, or steer authority. Message Server forwards the event without
+  polling, reinterpretation, or fallback.
 - A terminal capability `ErrorEvent` has no business turn identity and is
   never projected directly. Message Server resolves the current
   `agent.chat.turns.list` ledger, matches the exact conversation and original

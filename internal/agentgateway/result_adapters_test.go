@@ -475,14 +475,28 @@ func TestValidateChatStreamWorkerStatusRequiresExactAuthority(t *testing.T) {
 			t.Fatalf("worker status %s rejected: %v", status, err)
 		}
 	}
+	for _, phase := range []string{"preparing_environment", "provisioning_worker", "connecting_worker", "executing_remote_task", "collecting_result", "verifying_service"} {
+		candidate := maps.Clone(event)
+		candidate["status"], candidate["phase"] = "running", phase
+		if err := validateChatStreamEvent(candidate, actionResultAuthority{}); err != nil {
+			t.Fatalf("worker phase %s rejected: %v", phase, err)
+		}
+	}
 
 	for name, mutate := range map[string]func(map[string]any){
 		"missing execution": func(value map[string]any) { delete(value, "execution_id") },
 		"invalid execution": func(value map[string]any) { value["execution_id"] = "not-a-uuid" },
 		"missing status":    func(value map[string]any) { delete(value, "status") },
 		"unknown status":    func(value map[string]any) { value["status"] = "stopping" },
-		"missing timestamp": func(value map[string]any) { delete(value, "created_at") },
-		"invalid timestamp": func(value map[string]any) { value["created_at"] = "yesterday" },
+		"unknown phase": func(value map[string]any) {
+			value["status"], value["phase"] = "running", "downloading"
+		},
+		"non-string phase": func(value map[string]any) {
+			value["status"], value["phase"] = "running", 1
+		},
+		"phase while queued": func(value map[string]any) { value["phase"] = "preparing_environment" },
+		"missing timestamp":  func(value map[string]any) { delete(value, "created_at") },
+		"invalid timestamp":  func(value map[string]any) { value["created_at"] = "yesterday" },
 		"confirmation": func(value map[string]any) {
 			value["confirmation_id"] = "11111111-1111-4111-8111-111111111111"
 		},
@@ -495,6 +509,15 @@ func TestValidateChatStreamWorkerStatusRequiresExactAuthority(t *testing.T) {
 				t.Fatalf("invalid worker status accepted: %v", err)
 			}
 		})
+	}
+
+	other := maps.Clone(event)
+	other["kind"], other["phase"] = "delta", "executing_remote_task"
+	delete(other, "execution_id")
+	delete(other, "status")
+	delete(other, "created_at")
+	if err := validateChatStreamEvent(other, actionResultAuthority{}); !errors.Is(err, ErrInvalidActionResult) {
+		t.Fatalf("non-worker phase accepted: %v", err)
 	}
 }
 
