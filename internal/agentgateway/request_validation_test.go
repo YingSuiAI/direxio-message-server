@@ -570,9 +570,8 @@ func TestTurnControlRequestsRequireCanonicalClosedShapes(t *testing.T) {
 	turnID := "11111111-1111-4111-8111-111111111111"
 	conversationID := "22222222-2222-4222-8222-222222222222"
 	if err := ValidateActionRequest("agent.chat.turn.stop", map[string]any{
-		"idempotency_key":   mutationID,
-		"turn_id":           turnID,
-		"expected_revision": json.Number("2"),
+		"idempotency_key": mutationID,
+		"turn_id":         turnID,
 	}); err != nil {
 		t.Fatalf("canonical stop rejected: %v", err)
 	}
@@ -596,11 +595,12 @@ func TestTurnControlRequestsRequireCanonicalClosedShapes(t *testing.T) {
 		action string
 		params map[string]any
 	}{
-		{"agent.chat.turn.stop", map[string]any{"turn_id": turnID, "expected_revision": 2}},
-		{"agent.chat.turn.stop", map[string]any{"idempotency_key": mutationID, "turn_id": "turn-1", "expected_revision": 2}},
-		{"agent.chat.turn.stop", map[string]any{"idempotency_key": mutationID, "turn_id": "00000000-0000-0000-0000-000000000000", "expected_revision": 2}},
-		{"agent.chat.turn.stop", map[string]any{"idempotency_key": mutationID, "turn_id": turnID, "expected_revision": 0}},
-		{"agent.chat.turn.stop", map[string]any{"idempotency_key": mutationID, "turn_id": turnID, "expected_revision": 2, "conversation_id": conversationID}},
+		{"agent.chat.turn.stop", map[string]any{"turn_id": turnID}},
+		{"agent.chat.turn.stop", map[string]any{"idempotency_key": mutationID}},
+		{"agent.chat.turn.stop", map[string]any{"idempotency_key": mutationID, "turn_id": "turn-1"}},
+		{"agent.chat.turn.stop", map[string]any{"idempotency_key": mutationID, "turn_id": "00000000-0000-0000-0000-000000000000"}},
+		{"agent.chat.turn.stop", map[string]any{"idempotency_key": mutationID, "turn_id": turnID, "expected_revision": 2}},
+		{"agent.chat.turn.stop", map[string]any{"idempotency_key": mutationID, "turn_id": turnID, "conversation_id": conversationID}},
 		{"agent.chat.turn.steer", map[string]any{"idempotency_key": mutationID, "turn_id": turnID, "expected_revision": 2}},
 		{"agent.chat.turn.steer", map[string]any{"idempotency_key": mutationID, "turn_id": turnID, "expected_revision": 2, "instruction": "   "}},
 		{"agent.chat.turn.steer", map[string]any{"idempotency_key": mutationID, "turn_id": turnID, "expected_revision": 2, "instruction": "guide", "message": "alias"}},

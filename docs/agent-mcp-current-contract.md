@@ -133,8 +133,8 @@ capability live.
   request fingerprints, model/profile data, credential material, and execution
   snapshots remain Agent-private; aliases, extra fields, and malformed UUIDs
   fail closed at both proxy boundaries. `agent.chat.turn.stop` is the typed
-  `agent.chat.v1/stop_turn` mutation and accepts exactly `idempotency_key`,
-  internal `turn_id`, and `expected_revision`; it returns the same exact
+  `agent.chat.v1/stop_turn` mutation and accepts exactly `idempotency_key`
+  and the internal `turn_id`; it returns the same exact
   ten-field authoritative metadata. It never calls the generic capability
   `CancelOperation` RPC.
 - Generating Native turns and confirmation-waiting turns whose Cloud Worker

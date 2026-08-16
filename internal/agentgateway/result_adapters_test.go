@@ -790,9 +790,8 @@ func TestTurnStopResultPublishesExactAuthoritativeMetadata(t *testing.T) {
 		"updated_at":       "2026-08-06T01:02:04Z",
 	}
 	got, err := adaptActionResultForRequest("agent.chat.turn.stop", map[string]any{
-		"idempotency_key":   "44444444-4444-4444-8444-444444444444",
-		"turn_id":           turnID,
-		"expected_revision": float64(2),
+		"idempotency_key": "44444444-4444-4444-8444-444444444444",
+		"turn_id":         turnID,
 	}, result)
 	if err != nil {
 		t.Fatal(err)

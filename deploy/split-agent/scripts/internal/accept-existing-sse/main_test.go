@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 func TestStartOnceAndResumeSSEWithoutDuplicate(t *testing.T) {
@@ -66,7 +68,7 @@ func TestReadSSEFrameRejectsEnvelopeMismatch(t *testing.T) {
 	}
 }
 
-func TestStopDurableTurnUsesReceiptIdentityAndRevision(t *testing.T) {
+func TestStopDurableTurnUsesRevisionlessReceiptIdentity(t *testing.T) {
 	const turnID = "11111111-1111-4111-8111-111111111111"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
@@ -76,13 +78,14 @@ func TestStopDurableTurnUsesReceiptIdentityAndRevision(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatal(err)
 		}
-		if body.Action != "agent.chat.turn.stop" || body.Params["turn_id"] != turnID || body.Params["expected_revision"] != float64(4) {
+		idempotencyKey, ok := body.Params["idempotency_key"].(string)
+		if body.Action != "agent.chat.turn.stop" || len(body.Params) != 2 || body.Params["turn_id"] != turnID || !ok || uuid.Validate(idempotencyKey) != nil {
 			t.Fatalf("stop request = %#v", body)
 		}
 		_, _ = w.Write([]byte(`{}`))
 	}))
 	defer server.Close()
-	if err := stopDurableTurn(context.Background(), server.URL, "owner-token", map[string]any{"turn_id": turnID, "revision": float64(4)}); err != nil {
+	if err := stopDurableTurn(context.Background(), server.URL, "owner-token", map[string]any{"turn_id": turnID}); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -457,10 +457,10 @@ func TestNativeAgentTurnControlPublishesDistinctStartAndInternalIdentities(t *te
 	if !ok || stop.Schema == nil {
 		t.Fatal("agent.chat.turn.stop must publish a schema")
 	}
-	if len(stop.Schema.Request) != 3 {
+	if len(stop.Schema.Request) != 2 {
 		t.Fatalf("turn stop request is not closed: %#v", stop.Schema.Request)
 	}
-	for _, field := range []string{"idempotency_key", "turn_id", "expected_revision"} {
+	for _, field := range []string{"idempotency_key", "turn_id"} {
 		if !stop.Schema.Request[field].Required {
 			t.Errorf("turn stop request field %s must be required", field)
 		}

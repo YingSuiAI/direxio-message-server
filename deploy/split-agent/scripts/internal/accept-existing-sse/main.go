@@ -229,12 +229,11 @@ func readSSEFrame(scanner *bufio.Scanner) (map[string]any, bool, error) {
 
 func stopDurableTurn(ctx context.Context, base, token string, receipt map[string]any) error {
 	turnID := stringValue(receipt["turn_id"])
-	revision := integer(receipt["revision"])
-	if uuid.Validate(turnID) != nil || revision <= 0 {
+	if uuid.Validate(turnID) != nil {
 		return errors.New("turn receipt has invalid stop identity")
 	}
 	return postAction(ctx, base, token, "agent.chat.turn.stop", map[string]any{
-		"idempotency_key": uuid.NewString(), "turn_id": turnID, "expected_revision": revision,
+		"idempotency_key": uuid.NewString(), "turn_id": turnID,
 	})
 }
 

@@ -365,18 +365,17 @@ func TestTextToolsActionsAreAllowlistedAndValidatedBeforeDispatch(t *testing.T) 
 	}
 }
 
-func TestTurnStopUsesTypedMutationWithExactConcurrencyFields(t *testing.T) {
+func TestTurnStopUsesTypedRevisionlessMutation(t *testing.T) {
 	runner := &requestValidationRunner{}
 	module := New(Config{Runner: runner})
 	params := map[string]any{
-		"idempotency_key":   "11111111-1111-4111-8111-111111111111",
-		"turn_id":           "22222222-2222-4222-8222-222222222222",
-		"expected_revision": int64(3),
+		"idempotency_key": "11111111-1111-4111-8111-111111111111",
+		"turn_id":         "22222222-2222-4222-8222-222222222222",
 	}
 	if _, actionErr := module.Handlers()["agent.chat.turn.stop"](context.Background(), params); actionErr != nil {
 		t.Fatalf("typed turn stop failed: %v", actionErr)
 	}
-	if runner.invokeCalls != 1 || runner.lastAction != "agent.chat.turn.stop" || len(runner.lastParams) != 3 {
+	if runner.invokeCalls != 1 || runner.lastAction != "agent.chat.turn.stop" || len(runner.lastParams) != 2 {
 		t.Fatalf("typed turn stop dispatch = calls %d action %q params %#v", runner.invokeCalls, runner.lastAction, runner.lastParams)
 	}
 	for field, want := range params {

@@ -240,14 +240,13 @@ func TestTransformTurnStopRequestPassesExactTypedMutation(t *testing.T) {
 		t.Fatal("agent.chat.turn.stop binding is missing")
 	}
 	raw, err := transformCapabilityRequest("agent.chat.turn.stop", "transport-operation", map[string]any{
-		"idempotency_key":   "11111111-1111-4111-8111-111111111111",
-		"turn_id":           "22222222-2222-4222-8222-222222222222",
-		"expected_revision": int64(3),
+		"idempotency_key": "11111111-1111-4111-8111-111111111111",
+		"turn_id":         "22222222-2222-4222-8222-222222222222",
 	}, binding)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []byte(`{"expected_revision":3,"idempotency_key":"11111111-1111-4111-8111-111111111111","turn_id":"22222222-2222-4222-8222-222222222222"}`)
+	want := []byte(`{"idempotency_key":"11111111-1111-4111-8111-111111111111","turn_id":"22222222-2222-4222-8222-222222222222"}`)
 	if !bytes.Equal(raw, want) {
 		t.Fatalf("typed turn stop input = %s, want %s", raw, want)
 	}

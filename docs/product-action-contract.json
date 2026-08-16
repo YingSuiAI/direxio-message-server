@@ -9938,13 +9938,6 @@
       "transport": "http_only",
       "schema": {
         "request": {
-          "expected_revision": {
-            "type": "integer",
-            "required": true,
-            "presence": {
-              "present": "positive_integer"
-            }
-          },
           "idempotency_key": {
             "type": "string",
             "required": true,

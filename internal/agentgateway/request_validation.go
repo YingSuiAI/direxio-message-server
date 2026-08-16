@@ -1044,7 +1044,7 @@ func validArtifactRecordKind(value any) bool {
 }
 
 func validateTurnStopRequest(action string, params map[string]any) error {
-	if err := rejectUnknownActionFields(action, params, "idempotency_key", "turn_id", "expected_revision"); err != nil {
+	if err := rejectUnknownActionFields(action, params, "idempotency_key", "turn_id"); err != nil {
 		return err
 	}
 	if params == nil {
@@ -1054,9 +1054,6 @@ func validateTurnStopRequest(action string, params map[string]any) error {
 		if !canonicalActionUUID(params[field]) {
 			return invalidActionRequest(action, field, "must be a canonical UUID")
 		}
-	}
-	if !positiveInteger(params["expected_revision"]) {
-		return invalidActionRequest(action, "expected_revision", "must be a positive integer")
 	}
 	return nil
 }

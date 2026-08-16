@@ -181,9 +181,8 @@ func nativeAgentAttachmentUploadProjectionSchema() map[string]ActionFieldSchema 
 func nativeAgentTurnStopSchema() *ActionSchema {
 	return &ActionSchema{
 		Request: map[string]ActionFieldSchema{
-			"idempotency_key":   {Type: "string", Required: true, Presence: &ActionPresenceSchema{Present: "canonical_uuid"}},
-			"turn_id":           {Type: "string", Required: true, Presence: &ActionPresenceSchema{Present: "canonical_uuid"}},
-			"expected_revision": {Type: "integer", Required: true, Presence: &ActionPresenceSchema{Present: "positive_integer"}},
+			"idempotency_key": {Type: "string", Required: true, Presence: &ActionPresenceSchema{Present: "canonical_uuid"}},
+			"turn_id":         {Type: "string", Required: true, Presence: &ActionPresenceSchema{Present: "canonical_uuid"}},
 		},
 		Response: nativeAgentTurnMetadataSchema(),
 	}

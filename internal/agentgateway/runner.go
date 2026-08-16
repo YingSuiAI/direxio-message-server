@@ -1130,6 +1130,12 @@ func transformCapabilityRequest(action, operationID string, params map[string]an
 		}
 		input = canonical
 	}
+	if action == "agent.chat.turn.stop" {
+		input = map[string]any{
+			"idempotency_key": input["idempotency_key"],
+			"turn_id":         input["turn_id"],
+		}
+	}
 	if action == "agent.models.list" {
 		modelKind, exists := input["model_kind"]
 		if !exists {
