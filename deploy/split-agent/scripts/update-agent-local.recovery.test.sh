@@ -21,9 +21,9 @@ message_image_id=sha256:$(printf '1%.0s' {1..64})
 live_image_id=sha256:$(printf '9%.0s' {1..64})
 other_image_id=sha256:$(printf '8%.0s' {1..64})
 target_image_id=sha256:$(printf '7%.0s' {1..64})
-revision_89=$(printf '8%.0s' {1..40})
-revision_90=$(printf '9%.0s' {1..40})
-revision_91=$(printf '7%.0s' {1..40})
+revision_90=$(printf '8%.0s' {1..40})
+revision_91=$(printf '9%.0s' {1..40})
+revision_92=$(printf '7%.0s' {1..40})
 
 fake_bin=$tmp/bin
 mkdir -p "$fake_bin"
@@ -45,7 +45,7 @@ container_json() {
   fi
   [ "$DOCKER_FIXTURE_SCENARIO" != bad_project ] || [ "$service" != agent ] || project=other-stack
   [ "$DOCKER_FIXTURE_SCENARIO" != bad_service ] || [ "$service" != extension-runner ] || service=agent
-  [ "$DOCKER_FIXTURE_SCENARIO" != bad_config_image ] || [ "$id" != "$LIVE_CORE_ID" ] || config_image=docker.io/dirextalk/agent:v1.0.90
+  [ "$DOCKER_FIXTURE_SCENARIO" != bad_config_image ] || [ "$id" != "$LIVE_CORE_ID" ] || config_image=docker.io/dirextalk/agent:v1.0.91
   printf '[{"Id":"%s","Image":"%s","Config":{"Image":"%s","Labels":{"com.docker.compose.project":"%s","com.docker.compose.service":"%s"}},"State":{"Status":"%s","Health":{"Status":"%s"}}}]\n' \
     "$id" "$image_id" "$config_image" "$project" "$service" "$status" "$health"
 }
@@ -85,12 +85,12 @@ case "${1:-}" in
           "$LIVE_IMAGE_ID")
             case "${4:-}" in
               --format)
-                if [[ "${5:-}" == *revision* ]]; then printf 'v1.0.90|%s\n' "$REVISION_90"; else printf 'v1.0.90\n'; fi
+                if [[ "${5:-}" == *revision* ]]; then printf 'v1.0.91|%s\n' "$REVISION_91"; else printf 'v1.0.91\n'; fi
                 ;;
               *) printf '[]\n' ;;
             esac
             ;;
-          fixture-target) printf 'v1.0.91|%s|%s\n' "$TARGET_IMAGE_ID" "$REVISION_91" ;;
+          fixture-target) printf 'v1.0.92|%s|%s\n' "$TARGET_IMAGE_ID" "$REVISION_92" ;;
           *) exit 1 ;;
         esac
         ;;
@@ -101,13 +101,13 @@ case "${1:-}" in
     ;;
   exec)
     case "${2:-}" in
-      "$LIVE_AGENT_ID"|"$LIVE_EXTENSION_ID"|"$LIVE_CORE_ID") printf 'v1.0.90\n' ;;
-      "$NEW_AGENT_ID"|"$NEW_EXTENSION_ID"|"$NEW_CORE_ID") printf 'v1.0.91\n' ;;
+      "$LIVE_AGENT_ID"|"$LIVE_EXTENSION_ID"|"$LIVE_CORE_ID") printf 'v1.0.91\n' ;;
+      "$NEW_AGENT_ID"|"$NEW_EXTENSION_ID"|"$NEW_CORE_ID") printf 'v1.0.92\n' ;;
       *) exit 1 ;;
     esac
     ;;
   run)
-    case " $* " in *" $LIVE_IMAGE_ID "*) printf 'v1.0.90\n';; *) printf 'v1.0.91\n';; esac
+    case " $* " in *" $LIVE_IMAGE_ID "*) printf 'v1.0.91\n';; *) printf 'v1.0.92\n';; esac
     ;;
   compose)
     shift
@@ -125,25 +125,17 @@ case "${1:-}" in
         ;;
       run)
         service=${@: -1}
-        if [ "$service" = agent-secret-init ]; then
-          if grep -Fq 'core_aws_enabled:' "$DOCKER_FIXTURE_OUT/agent-config.yaml"; then
-            log 'materialized restored Agent config'
-          else
-            log 'materialized migrated Agent config'
-          fi
-        else
-          [ "$service" = agent-migrate ]
-          grep -Fqx 'DIREXTALK_AGENT_VERSION=v1.0.90' "$DOCKER_FIXTURE_OUT/.env"
-          grep -Fqx "DIREXTALK_AGENT_SOURCE_REVISION=$REVISION_90" "$DOCKER_FIXTURE_OUT/.env"
-          grep -Fqx "container.1.id=$LIVE_AGENT_ID" "$DOCKER_FIXTURE_OUT/.cleanup-receipt"
-          grep -Fqx "container.2.id=$LIVE_EXTENSION_ID" "$DOCKER_FIXTURE_OUT/.cleanup-receipt"
-          grep -Fqx "container.3.id=$LIVE_CORE_ID" "$DOCKER_FIXTURE_OUT/.cleanup-receipt"
-          env_identity=$(stat -c '%d:%i:%u' "$DOCKER_FIXTURE_OUT/.env")
-          env_sha=$(sha256sum "$DOCKER_FIXTURE_OUT/.env" | awk '{print $1}')
-          grep -Fqx "control.env_identity=$env_identity" "$DOCKER_FIXTURE_OUT/.cleanup-receipt"
-          grep -Fqx "control.env_sha256=$env_sha" "$DOCKER_FIXTURE_OUT/.cleanup-receipt"
-          log 'migration saw recovered v1.0.90 baseline'
-        fi
+        [ "$service" = agent-migrate ]
+        grep -Fqx 'DIREXTALK_AGENT_VERSION=v1.0.91' "$DOCKER_FIXTURE_OUT/.env"
+        grep -Fqx "DIREXTALK_AGENT_SOURCE_REVISION=$REVISION_91" "$DOCKER_FIXTURE_OUT/.env"
+        grep -Fqx "container.1.id=$LIVE_AGENT_ID" "$DOCKER_FIXTURE_OUT/.cleanup-receipt"
+        grep -Fqx "container.2.id=$LIVE_EXTENSION_ID" "$DOCKER_FIXTURE_OUT/.cleanup-receipt"
+        grep -Fqx "container.3.id=$LIVE_CORE_ID" "$DOCKER_FIXTURE_OUT/.cleanup-receipt"
+        env_identity=$(stat -c '%d:%i:%u' "$DOCKER_FIXTURE_OUT/.env")
+        env_sha=$(sha256sum "$DOCKER_FIXTURE_OUT/.env" | awk '{print $1}')
+        grep -Fqx "control.env_identity=$env_identity" "$DOCKER_FIXTURE_OUT/.cleanup-receipt"
+        grep -Fqx "control.env_sha256=$env_sha" "$DOCKER_FIXTURE_OUT/.cleanup-receipt"
+        log 'migration saw recovered v1.0.91 baseline'
         ;;
       up)
         log 'compose up'
@@ -164,26 +156,15 @@ make_fixture() {
   chmod 700 "$out"
   cat >"$out/.env" <<EOF
 DIREXTALK_AGENT_IMAGE=docker.io/dirextalk/agent:latest
-DIREXTALK_AGENT_VERSION=v1.0.89
-DIREXTALK_AGENT_SOURCE_REVISION=$revision_89
+DIREXTALK_AGENT_VERSION=v1.0.90
+DIREXTALK_AGENT_SOURCE_REVISION=$revision_90
 DIREXTALK_AGENT_CONFIG_FILE=$out/agent-config.yaml
 UNRELATED_ENV=preserve-me
 EOF
   cat >"$out/agent-config.yaml" <<EOF
 instance_id: test
-core_aws_enabled: true
-capability_enabled: true
-capability_grpc_listen: 0.0.0.0:50052
-capability_ca_cert_file: /run/secrets/ca-cert.pem
-capability_tls_cert_file: /run/secrets/agent-server-cert.pem
-capability_tls_key_file: /run/secrets/agent-server-key.pem
-capability_token_file: /run/secrets/ms_to_agent_token
-capability_peer_common_name: message-server-client
-capability_peer_instance_id: stale-message-server
-capability_max_concurrent_query: 32
-capability_max_concurrent_watch: 128
-agent_http_enabled: false
-agent_http_listen: 127.0.0.1:8082
+agent_http_enabled: true
+agent_http_listen: 0.0.0.0:8082
 EOF
   chmod 400 "$out/.env"
   env_identity=$(stat -c '%d:%i:%u' "$out/.env")
@@ -229,9 +210,29 @@ run_wrapper() {
     LIVE_AGENT_ID="$live_agent_id" LIVE_EXTENSION_ID="$live_extension_id" LIVE_CORE_ID="$live_core_id" \
     NEW_AGENT_ID="$new_agent_id" NEW_EXTENSION_ID="$new_extension_id" NEW_CORE_ID="$new_core_id" \
     MESSAGE_IMAGE_ID="$message_image_id" LIVE_IMAGE_ID="$live_image_id" OTHER_IMAGE_ID="$other_image_id" TARGET_IMAGE_ID="$target_image_id" \
-    REVISION_90="$revision_90" REVISION_91="$revision_91" \
-    "$script" "$root/out" v1.0.91 v1.1.39
+    REVISION_91="$revision_91" REVISION_92="$revision_92" \
+    "$script" "$root/out" v1.0.92 v1.1.39
 }
+
+for invalid_config in retired missing wrong duplicate; do
+  root=$tmp/config_$invalid_config
+  make_fixture "$root"
+  chmod 600 "$root/out/agent-config.yaml"
+  case "$invalid_config" in
+    retired) printf '%s\n' 'capability_enabled: true' >>"$root/out/agent-config.yaml" ;;
+    missing) sed -i '/^agent_http_enabled:/d' "$root/out/agent-config.yaml" ;;
+    wrong) sed -i 's/^agent_http_enabled: true$/agent_http_enabled: false/' "$root/out/agent-config.yaml" ;;
+    duplicate) printf '%s\n' 'agent_http_listen: 0.0.0.0:8082' >>"$root/out/agent-config.yaml" ;;
+  esac
+  chmod 400 "$root/out/agent-config.yaml"
+  cp "$root/out/agent-config.yaml" "$root/original.agent-config.yaml"
+  if run_wrapper "$root" success >"$root/stdout" 2>"$root/stderr"; then
+    echo "$invalid_config Agent config unexpectedly passed" >&2
+    exit 1
+  fi
+  cmp "$root/original.agent-config.yaml" "$root/out/agent-config.yaml"
+  [ ! -f "$root/docker.log" ] || { echo "$invalid_config Agent config reached Docker" >&2; exit 1; }
+done
 
 success_root=$tmp/success
 make_fixture "$success_root"
@@ -239,10 +240,9 @@ cp "$success_root/out/.env" "$success_root/original.env"
 cp "$success_root/out/.cleanup-receipt" "$success_root/original.receipt"
 cp "$success_root/out/agent-config.yaml" "$success_root/original.agent-config.yaml"
 run_wrapper "$success_root" success >"$success_root/stdout" 2>"$success_root/stderr"
-grep -Fqx 'migration saw recovered v1.0.90 baseline' "$success_root/docker.log"
-grep -Fqx 'materialized migrated Agent config' "$success_root/docker.log"
-grep -Fqx 'DIREXTALK_AGENT_VERSION=v1.0.91' "$success_root/out/.env"
-grep -Fqx "DIREXTALK_AGENT_SOURCE_REVISION=$revision_91" "$success_root/out/.env"
+grep -Fqx 'migration saw recovered v1.0.91 baseline' "$success_root/docker.log"
+grep -Fqx 'DIREXTALK_AGENT_VERSION=v1.0.92' "$success_root/out/.env"
+grep -Fqx "DIREXTALK_AGENT_SOURCE_REVISION=$revision_92" "$success_root/out/.env"
 grep -Fqx 'UNRELATED_ENV=preserve-me' "$success_root/out/.env"
 grep -Fqx "container.1.id=$new_agent_id" "$success_root/out/.cleanup-receipt"
 grep -Fqx "container.2.id=$new_extension_id" "$success_root/out/.cleanup-receipt"
@@ -258,28 +258,21 @@ cmp "$success_root/original.env.stable" "$success_root/final.env.stable"
 sed -E '/^control\.env_(identity|sha256)=|^container\.[123]\.id=/d' "$success_root/original.receipt" >"$success_root/original.receipt.stable"
 sed -E '/^control\.env_(identity|sha256)=|^container\.[123]\.id=/d' "$success_root/out/.cleanup-receipt" >"$success_root/final.receipt.stable"
 cmp "$success_root/original.receipt.stable" "$success_root/final.receipt.stable"
-if grep -Fq 'core_aws_enabled:' "$success_root/out/agent-config.yaml"; then
-  echo 'successful Agent update retained core_aws_enabled' >&2
-  exit 1
-fi
+cmp "$success_root/original.agent-config.yaml" "$success_root/out/agent-config.yaml"
 grep -Fqx 'agent_http_enabled: true' "$success_root/out/agent-config.yaml"
 grep -Fqx 'agent_http_listen: 0.0.0.0:8082' "$success_root/out/agent-config.yaml"
-if grep -Eq '^(capability_enabled|capability_grpc_listen|capability_ca_cert_file|capability_tls_cert_file|capability_tls_key_file|capability_token_file|capability_peer_common_name|capability_peer_instance_id|capability_max_concurrent_query|capability_max_concurrent_watch):' "$success_root/out/agent-config.yaml"; then
-  echo 'successful Agent update retained the retired Message Server-to-Agent capability listener' >&2
-  exit 1
-fi
 
 restarting_root=$tmp/agent_restarting
 make_fixture "$restarting_root"
 run_wrapper "$restarting_root" agent_restarting >"$restarting_root/stdout" 2>"$restarting_root/stderr"
-grep -Fqx 'migration saw recovered v1.0.90 baseline' "$restarting_root/docker.log"
-grep -Fqx 'DIREXTALK_AGENT_VERSION=v1.0.91' "$restarting_root/out/.env"
+grep -Fqx 'migration saw recovered v1.0.91 baseline' "$restarting_root/docker.log"
+grep -Fqx 'DIREXTALK_AGENT_VERSION=v1.0.92' "$restarting_root/out/.env"
 
 unhealthy_extension_root=$tmp/extension_unhealthy
 make_fixture "$unhealthy_extension_root"
 run_wrapper "$unhealthy_extension_root" extension_unhealthy >"$unhealthy_extension_root/stdout" 2>"$unhealthy_extension_root/stderr"
-grep -Fqx 'migration saw recovered v1.0.90 baseline' "$unhealthy_extension_root/docker.log"
-grep -Fqx 'DIREXTALK_AGENT_VERSION=v1.0.91' "$unhealthy_extension_root/out/.env"
+grep -Fqx 'migration saw recovered v1.0.91 baseline' "$unhealthy_extension_root/docker.log"
+grep -Fqx 'DIREXTALK_AGENT_VERSION=v1.0.92' "$unhealthy_extension_root/out/.env"
 
 for scenario in bad_project bad_service bad_config_image bad_image_id agent_exited agent_dead agent_paused runner_restarting; do
   root=$tmp/$scenario

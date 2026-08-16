@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v1.1.62
+
+1. Remove the retired ProductCore-to-Agent MCP gateway test surface and require current direct Agent HTTP settings during Agent updates instead of migrating legacy gateway configuration.
+
 ## v1.1.52
 
 1. Refresh the Agent config material volume after removing the retired AWS key, and rematerialize the original config during rollback.

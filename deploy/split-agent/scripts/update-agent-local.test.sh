@@ -16,7 +16,10 @@ grep -Fq 'rollback_agent' "$script"
 grep -Fq 'agent_http_enabled: true' "$script"
 grep -Fq 'agent_http_listen: 0.0.0.0:8082' "$script"
 grep -Fq 'capability_grpc_listen' "$script"
-grep -Fq 'agent-secret-init' "$script"
+if grep -Eq 'config_backup|config_restore|agent-secret-init|materializ' "$script"; then
+  echo 'retired Agent config migration remains' >&2
+  exit 1
+fi
 if grep -Eq 'attestation|RepoDigests|@sha256' "$script"; then
   echo 'superseded Agent image attestation contract remains' >&2
   exit 1
