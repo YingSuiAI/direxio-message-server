@@ -24,9 +24,6 @@ func Register(router *mux.Router, service *Service) {
 	router.HandleFunc("/query", product).Methods(http.MethodPost, http.MethodOptions)
 	router.HandleFunc("/command", product).Methods(http.MethodPost, http.MethodOptions)
 	router.HandleFunc("/events", productEventsHandler(service)).Methods(http.MethodGet, http.MethodOptions)
-	router.HandleFunc("/agent/chat/conversations/{conversation_id}/turns", agentChatTurnCreateHandler(service)).Methods(http.MethodPost, http.MethodOptions)
-	router.HandleFunc("/agent/chat/conversations/{conversation_id}/turns/{turn_id}", agentChatTurnGetHandler(service)).Methods(http.MethodGet, http.MethodOptions)
-	router.HandleFunc("/agent/chat/conversations/{conversation_id}/turns/{turn_id}/events", agentChatTurnEventsHandler(service)).Methods(http.MethodGet, http.MethodOptions)
 	router.HandleFunc("/agent/voice/volc/custom-llm", voiceCustomLLMHandler(service)).Methods(http.MethodPost, http.MethodOptions)
 	router.HandleFunc("/agent/voice/webhook", voiceEventWebhookHandler(service)).Methods(http.MethodPost, http.MethodOptions)
 	// The process health endpoint gates deployment and component updates. Agent
@@ -38,11 +35,7 @@ func Register(router *mux.Router, service *Service) {
 
 func voiceEventWebhookHandler(service *Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if service != nil && service.externalNativeAgent {
-			if service.voiceCallbackRelay == nil || service.voiceCallbackRelayInitErr != nil {
-				http.Error(w, "voice unavailable", http.StatusServiceUnavailable)
-				return
-			}
+		if service != nil && service.voiceCallbackRelay != nil && service.voiceCallbackRelayInitErr == nil {
 			service.voiceCallbackRelay.handle(w, r, "/agent/voice/webhook")
 			return
 		}
@@ -52,11 +45,7 @@ func voiceEventWebhookHandler(service *Service) http.HandlerFunc {
 
 func voiceCustomLLMHandler(service *Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if service != nil && service.externalNativeAgent {
-			if service.voiceCallbackRelay == nil || service.voiceCallbackRelayInitErr != nil {
-				http.Error(w, "voice unavailable", http.StatusServiceUnavailable)
-				return
-			}
+		if service != nil && service.voiceCallbackRelay != nil && service.voiceCallbackRelayInitErr == nil {
 			service.voiceCallbackRelay.handle(w, r, "/agent/voice/volc/custom-llm")
 			return
 		}

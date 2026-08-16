@@ -13,6 +13,12 @@
 		file_server
 	}
 
+	handle /agent/v1/* {
+		reverse_proxy agent:8082 {
+			flush_interval -1
+		}
+	}
+
 	handle {
 		reverse_proxy message-server:8008
 	}

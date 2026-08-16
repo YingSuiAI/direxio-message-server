@@ -103,11 +103,6 @@ x-runner-storage-init: &runner-storage-init
 x-message-capability-environment: &message-capability-environment
   P2P_PLUGIN_DOCKER_ENABLED: "false"
   P2P_PLUGIN_BACKEND_BASE_URL: http://message-server:8008
-  P2P_AGENT_CAPABILITY_ADDR: agent:50052
-  P2P_AGENT_CAPABILITY_CA_FILE: /run/capability/ca-cert.pem
-  P2P_AGENT_CAPABILITY_CLIENT_CERT_FILE: /run/capability/ms-client-cert.pem
-  P2P_AGENT_CAPABILITY_CLIENT_KEY_FILE: /run/capability/ms-client-key.pem
-  P2P_AGENT_CAPABILITY_TOKEN_FILE: /run/capability/ms-to-agent.token
   P2P_AGENT_VOICE_CALLBACK_URL: ${DIREXTALK_AGENT_VOICE_CALLBACK_URL:-https://agent:8444}
   P2P_AGENT_VOICE_CALLBACK_AUTH_TOKEN_FILE: /run/capability/agent-voice-relay.token
   P2P_AGENT_VOICE_CALLBACK_CA_FILE: /run/capability/ca-cert.pem
@@ -122,7 +117,7 @@ x-message-capability-environment: &message-capability-environment
   P2P_PRODUCT_CAPABILITY_SERVER_CERT_FILE: /run/capability/ms-server-cert.pem
   P2P_PRODUCT_CAPABILITY_SERVER_KEY_FILE: /run/capability/ms-server-key.pem
   P2P_PRODUCT_CAPABILITY_TOKEN_FILE: /run/capability/agent-to-ms.token
-  P2P_AGENT_CAPABILITY_PEER_COMMON_NAME: agent-client
+  P2P_PRODUCT_CAPABILITY_PEER_COMMON_NAME: agent-client
 
 services:
   # TURN uses coturn's established shared-secret REST credential mechanism.
@@ -240,7 +235,7 @@ services:
     restart: unless-stopped
     environment:
       AGENT_HEALTHCHECK_SERVER_NAME: ${DIREXTALK_AGENT_TLS_SERVER_NAME:-dirextalk-agent}
-    expose: ["9443", "50052", "8444"]
+    expose: ["9443", "8444", "8082"]
     volumes:
       - agent_config_material:/etc/dirextalk-agent:ro
       - agent_secret_material:/run/secrets:ro
@@ -264,7 +259,7 @@ services:
         target: /var/lib/dirextalk-agent/static-sites
         bind:
           create_host_path: false
-    networks: [agent_private, agent_database, agent_caller, agent_egress]
+    networks: [agent_private, agent_database, agent_caller, agent_egress, message_public]
     depends_on:
       agent-migrate:
         condition: service_completed_successfully
@@ -566,9 +561,9 @@ networks:
     internal: true
   message_public:
     # Rootless Docker's published-port forwarding requires the service to be
-    # attached to one non-internal bridge. This network is intentionally
-    # dedicated to message-server; every Agent/database network remains
-    # internal and no other service joins this public edge.
+    # attached to one non-internal bridge. Caddy reaches message-server and
+    # the Agent HTTP data plane only through this shared edge; no container
+    # publishes the Agent port on the host.
     name: ${DIREXTALK_MESSAGE_PUBLIC_NETWORK:?set a fresh message public network name}
     internal: false
   message_database:

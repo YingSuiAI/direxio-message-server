@@ -173,6 +173,17 @@ EOF
 instance_id: test
 core_aws_enabled: true
 capability_enabled: true
+capability_grpc_listen: 0.0.0.0:50052
+capability_ca_cert_file: /run/secrets/ca-cert.pem
+capability_tls_cert_file: /run/secrets/agent-server-cert.pem
+capability_tls_key_file: /run/secrets/agent-server-key.pem
+capability_token_file: /run/secrets/ms_to_agent_token
+capability_peer_common_name: message-server-client
+capability_peer_instance_id: stale-message-server
+capability_max_concurrent_query: 32
+capability_max_concurrent_watch: 128
+agent_http_enabled: false
+agent_http_listen: 127.0.0.1:8082
 EOF
   chmod 400 "$out/.env"
   env_identity=$(stat -c '%d:%i:%u' "$out/.env")
@@ -251,7 +262,12 @@ if grep -Fq 'core_aws_enabled:' "$success_root/out/agent-config.yaml"; then
   echo 'successful Agent update retained core_aws_enabled' >&2
   exit 1
 fi
-grep -Fqx 'capability_enabled: true' "$success_root/out/agent-config.yaml"
+grep -Fqx 'agent_http_enabled: true' "$success_root/out/agent-config.yaml"
+grep -Fqx 'agent_http_listen: 0.0.0.0:8082' "$success_root/out/agent-config.yaml"
+if grep -Eq '^(capability_enabled|capability_grpc_listen|capability_ca_cert_file|capability_tls_cert_file|capability_tls_key_file|capability_token_file|capability_peer_common_name|capability_peer_instance_id|capability_max_concurrent_query|capability_max_concurrent_watch):' "$success_root/out/agent-config.yaml"; then
+  echo 'successful Agent update retained the retired Message Server-to-Agent capability listener' >&2
+  exit 1
+fi
 
 restarting_root=$tmp/agent_restarting
 make_fixture "$restarting_root"

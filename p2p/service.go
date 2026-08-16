@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	agentgateway "github.com/YingSuiAI/dirextalk-message-server/internal/agentgateway"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/dirextalkdomain"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/dirextalkmcp"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/dirextalktransport"
@@ -51,8 +50,6 @@ type Config struct {
 	P2PEventRetentionPruneOnWrite   bool
 	PushRules                       PushRuleManager
 	PluginRunner                    PluginRunner
-	NativeAgentRunner               NativeAgentRunner
-	NativeAgentGateway              *agentgateway.Client
 	// NativeAgentVoiceCallbackURL is the HTTPS base URL of the private Agent
 	// callback listener.  In external Native Agent mode public voice callback
 	// paths are relayed here; they never fall back to a local voice runtime.
@@ -65,21 +62,13 @@ type Config struct {
 	NativeAgentVoiceCallbackHTTPClient     *http.Client
 	NativeAgentVoiceCallbackMaxBodyBytes   int64
 	NativeAgentVoiceCallbackTimeout        time.Duration
-	// NativeAgentGrantPrivateKey is held only by message-server, which signs
-	// capability grants before forwarding Agent operations. Product and Agent
-	// receive the public verification key only.
+	// NativeAgentGrantPrivateKey signs short-lived owner session tickets and
+	// Product Capability grants. Clients and Agent receive only signed tokens
+	// or the public verification key.
 	NativeAgentGrantPrivateKey []byte
-	// NativeAgentRequiredActions extends the fail-closed external catalog
-	// baseline. Deployments use it to opt in optional voice/AWS/execution
-	// capabilities without making disabled features poison readiness.
-	NativeAgentRequiredActions []string
-	// NativeAgentCatalogProbe is a test/deployment seam for a bounded catalog
-	// probe when the concrete gateway client is supplied elsewhere. Production
-	// normally leaves it nil and uses NativeAgentRunner's ProbeCatalog method.
-	NativeAgentCatalogProbe   func(context.Context, []agentgateway.CatalogRequirement) error
-	ReleaseController         releasecontrol.Controller
-	CentralVersionSource      releasecontrol.CentralVersionSource
-	CentralAgentVersionSource releasecontrol.CentralAgentVersionSource
+	ReleaseController          releasecontrol.Controller
+	CentralVersionSource       releasecontrol.CentralVersionSource
+	CentralAgentVersionSource  releasecontrol.CentralAgentVersionSource
 	// AllowAccountDeleteWithoutUpdater is an explicit standalone deployment
 	// opt-in. Production deployments with an updater keep the fail-closed
 	// watchdog; isolated local stacks rely on the durable Agent/message-server
@@ -136,8 +125,6 @@ type Service struct {
 	agentModule               *agentmodule.Module
 	voiceCallbackRelay        *voiceCallbackRelay
 	voiceCallbackRelayInitErr error
-	externalNativeAgent       bool
-	nativeAgentCatalog        *nativeAgentCatalogReadiness
 	mcpModule                 *mcpmodule.Module
 	mcpCapabilities           *dirextalkmcp.Service
 	preparedMatrixStore       dirextalktransport.PreparedMatrixMutationStore
@@ -250,9 +237,6 @@ func NewServiceWithStoreAndTransport(ctx context.Context, cfg Config, store Stor
 	}
 	shouldPersist := !ok || !state.Initialized || strings.TrimSpace(state.Password) == ""
 	service := newService(cfg, store, transport, state, ok)
-	if err := service.agentModule.ReadyError(); err != nil {
-		return nil, err
-	}
 	if err := service.pluginsModule.CheckStore(ctx); err != nil {
 		return nil, err
 	}
@@ -304,7 +288,7 @@ func (s *Service) ensureAgentRoom(ctx context.Context) (bool, error) {
 			if err := s.ensureAgentRoomPowerLevels(ctx, currentRoomID, ownerMXID, agentMXID); err != nil {
 				return false, err
 			}
-			if err := s.publishAgentStatusState(ctx, currentRoomID, agentMXID, agentMXID, s.nativeAgentOnline()); err != nil {
+			if err := s.publishAgentStatusState(ctx, currentRoomID, agentMXID, agentMXID, false); err != nil {
 				return false, err
 			}
 			if err := s.ensureAgentRoomPushRule(ctx, currentRoomID, ownerMXID); err != nil {
@@ -336,7 +320,7 @@ func (s *Service) ensureAgentRoom(ctx context.Context) (bool, error) {
 	if err := s.ensureAgentRoomAgentMember(ctx, roomID, ownerMXID, agentMXID, agentIdentity); err != nil {
 		return false, err
 	}
-	if err := s.publishAgentStatusState(ctx, roomID, agentMXID, agentMXID, s.nativeAgentOnline()); err != nil {
+	if err := s.publishAgentStatusState(ctx, roomID, agentMXID, agentMXID, false); err != nil {
 		return false, err
 	}
 	if err := s.ensureAgentRoomPushRule(ctx, roomID, ownerMXID); err != nil {
@@ -643,9 +627,6 @@ func newService(cfg Config, store Store, transport Transport, state portalState,
 	if databaseStore, ok := store.(*p2pstorage.DatabaseStore); ok {
 		service.preparedMatrixStore = dirextalktransport.NewPostgresPreparedMatrixMutationStore(databaseStore.DB())
 	}
-	// Native Agent is always an external capability in the fresh split
-	// deployment. There is no local runtime selection branch.
-	service.externalNativeAgent = true
 	service.voiceCallbackRelay, service.voiceCallbackRelayInitErr = newVoiceCallbackRelay(voiceCallbackRelayConfig{
 		URL:               cfg.NativeAgentVoiceCallbackURL,
 		AuthToken:         cfg.NativeAgentVoiceCallbackAuthToken,
@@ -658,17 +639,6 @@ func newService(cfg Config, store Store, transport Transport, state portalState,
 		Timeout:           cfg.NativeAgentVoiceCallbackTimeout,
 		AccountGeneration: accountGeneration,
 	})
-	if cfg.NativeAgentRunner == nil && cfg.NativeAgentGateway != nil {
-		cfg.NativeAgentGateway.SetAccountGeneration(accountGeneration)
-		cfg.NativeAgentRunner = agentgateway.NewRunner(cfg.NativeAgentGateway, agentgateway.RunnerConfig{
-			OwnerID: func() string { return service.OwnerMXID() },
-			AccountGeneration: func() int64 {
-				return service.accountGeneration
-			},
-			GrantPrivateKey: cfg.NativeAgentGrantPrivateKey,
-			GrantScopes:     nativeAgentGrantScopes,
-		})
-	}
 	service.eventsModule = eventsmodule.New(service.store, eventsmodule.Config{
 		RetentionMaxRows:      cfg.P2PEventRetentionMaxRows,
 		RetentionPruneOnWrite: cfg.P2PEventRetentionPruneOnWrite,
@@ -913,12 +883,11 @@ func newService(cfg Config, store Store, transport Transport, state portalState,
 		Now:                   time.Now,
 	})
 	service.mcpCapabilities = service.mcpModule.Service()
-	service.configureNativeAgentCatalogReadiness(cfg)
 	service.agentModule = agentmodule.New(agentmodule.Config{
-		Runner:    cfg.NativeAgentRunner,
-		Account:   serviceAgentAccountPort{service: service},
-		OwnerID:   service.OwnerMXID,
-		Readiness: service.nativeAgentCatalogReadinessError,
+		Account:           serviceAgentAccountPort{service: service},
+		OwnerID:           service.OwnerMXID,
+		AccountGeneration: service.accountGeneration,
+		TicketPrivateKey:  cfg.NativeAgentGrantPrivateKey,
 	})
 	service.actions = service.actionHandlers()
 	if memoryStore, ok := store.(*p2pstorage.MemoryStore); ok {
@@ -1060,32 +1029,6 @@ func (s *Service) publishCurrentAgentStatusState(ctx context.Context) error {
 	agentMXID := s.agentMXIDLocked()
 	s.mu.Unlock()
 	return s.publishAgentStatusState(ctx, roomID, agentMXID, agentMXID, false)
-}
-
-func (s *Service) nativeAgentReady() bool {
-	if s == nil || s.nativeAgentCatalog == nil {
-		return false
-	}
-	ready, _ := s.nativeAgentCatalog.readyState()
-	return ready
-}
-
-func (s *Service) nativeAgentOnline() bool {
-	if s == nil {
-		return false
-	}
-	s.mu.Lock()
-	enabled := s.agentConfig.Enabled
-	s.mu.Unlock()
-	return enabled && s.nativeAgentReady()
-}
-
-func (s *Service) publishNativeAgentReadinessState(ctx context.Context, online bool) error {
-	s.mu.Lock()
-	roomID := s.agentRoomID
-	agentMXID := s.agentMXIDLocked()
-	s.mu.Unlock()
-	return s.publishAgentStatusState(ctx, roomID, agentMXID, agentMXID, online)
 }
 
 func (s *Service) publishAgentStatusState(ctx context.Context, roomID, senderMXID, agentMXID string, online bool) error {

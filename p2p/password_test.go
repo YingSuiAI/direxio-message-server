@@ -114,10 +114,6 @@ func TestAgentMatrixSessionCreateUsesAgentIdentity(t *testing.T) {
 	issuer := &recordingMatrixSessionIssuer{}
 	service.SetMatrixSessionIssuer(issuer)
 	mustHandle[map[string]any](t, service, "agent.config.update", map[string]any{
-		"native_agent_identity": map[string]any{
-			"display_name": "Ying Local",
-			"avatar_url":   "mxc://ying",
-		},
 		"online_agent_identity": map[string]any{
 			"display_name": "Dirextalk Agent",
 			"avatar_url":   "mxc://online-agent",

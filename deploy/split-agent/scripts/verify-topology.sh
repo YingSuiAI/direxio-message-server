@@ -36,12 +36,16 @@ DIREXTALK_MESSAGE_TLS_MODE=edge-terminated \
 DIREXTALK_MESSAGE_SERVER_NAME=message.example.com \
 DIREXTALK_MESSAGE_CLIENT_BASE_URL=https://message.example.com \
 DIREXTALK_RELEASE_CATALOG_ORIGIN=https://imadmin.dirextalk.ai \
+DIREXTALK_MESSAGE_SERVER_IMAGE=docker.io/dirextalk/message-server:latest \
+DIREXTALK_AGENT_IMAGE=docker.io/dirextalk/agent:latest \
   docker compose --env-file "$env_file" -f compose.yaml -f compose.production.yaml config --quiet
 DIREXTALK_SPLIT_COMPOSE_MODE=production \
 DIREXTALK_MESSAGE_TLS_MODE=edge-terminated \
 DIREXTALK_MESSAGE_SERVER_NAME=message.example.com \
 DIREXTALK_MESSAGE_CLIENT_BASE_URL=https://message.example.com \
 DIREXTALK_RELEASE_CATALOG_ORIGIN=https://imadmin.dirextalk.ai \
+DIREXTALK_MESSAGE_SERVER_IMAGE=docker.io/dirextalk/message-server:latest \
+DIREXTALK_AGENT_IMAGE=docker.io/dirextalk/agent:latest \
   docker compose --env-file "$env_file" -f compose.yaml -f compose.production.yaml config --format json >"$production_rendered"
 
 agent_instance=$(sed -n 's/^DIREXTALK_AGENT_INSTANCE_ID=//p' "$env_file")
@@ -98,7 +102,6 @@ master_key="$run_dir/provision/core-secret-master-key"
 [ "$(stat -c '%u' "$master_key")" = "$(id -u)" ]
 printf 'core_secret_master_key_path=%s\n' "$master_key" | cmp -s - <(grep '^core_secret_master_key_path=' "$run_dir/provision/.manifest")
 printf 'product_capability_instance_id: %s\n' "$agent_instance" | cmp -s - <(grep '^product_capability_instance_id:' "$run_dir/provision/agent-config.yaml")
-printf 'capability_peer_instance_id: %s\n' "$message_instance" | cmp -s - <(grep '^capability_peer_instance_id:' "$run_dir/provision/agent-config.yaml")
 printf 'capability_account_generation: %s\n' "$account_generation" | cmp -s - <(grep '^capability_account_generation:' "$run_dir/provision/agent-config.yaml")
 printf 'product_capability_account_generation: %s\n' "$account_generation" | cmp -s - <(grep '^product_capability_account_generation:' "$run_dir/provision/agent-config.yaml")
 grep -Fqx 'core_secret_master_key_file: /run/secrets/core_secret_master_key' "$run_dir/provision/agent-config.yaml"
@@ -213,13 +216,22 @@ jq -e --arg http "$http_bind" '
 
 jq -e '
   .services.agent.ports == null and
-  .services.agent["expose"] == ["9443","50052","8444"] and
+  .services.agent["expose"] == ["9443","8444","8082"] and
   .services["message-server"].expose == ["50053"] and
   .services.postgres.ports == null and
   (.services | has("agent-postgres") | not) and
   (.services | has("message-postgres") | not) and
   (.services | has("qdrant") | not)
 ' "$rendered" >/dev/null
+
+jq -e '
+  (.services["message-server"].environment.P2P_AGENT_CAPABILITY_ADDR == null) and
+  (.services["message-server"].environment.P2P_AGENT_CAPABILITY_TOKEN_FILE == null)
+' "$rendered" >/dev/null
+if grep -Eq '^capability_(enabled|grpc_listen|token_file|peer_)' "$run_dir/provision/agent-config.yaml"; then
+  echo 'retired Message Server-to-Agent capability proxy configuration survived provisioning' >&2
+  exit 1
+fi
 
 jq -e '
   (.services["message-server"].image == "docker.io/dirextalk/message-server:latest") and
@@ -390,7 +402,7 @@ jq -e '
   (.services.postgres.networks.agent_database.aliases == ["agent-postgres"]) and
   (.services.postgres.networks.message_database.aliases == ["message-postgres"]) and
   (.services.postgres.image | test("^docker.io/pgvector/pgvector:pg18@sha256:[0-9a-f]{64}$")) and
-  ((.services.agent.networks | keys) | sort) == ["agent_caller","agent_database","agent_egress","agent_private"] and
+  ((.services.agent.networks | keys) | sort) == ["agent_caller","agent_database","agent_egress","agent_private","message_public"] and
   ((.services["message-server"].networks | keys) | sort) == ["agent_caller","message_database","message_private","message_public"] and
   ((.services.agent.networks | has("message_database")) | not) and
   ((.services["message-server"].networks | has("agent_database")) | not) and
@@ -402,8 +414,14 @@ jq -e '
   ([.services.postgres.tmpfs[] | select(test("^/run/dirextalk-postgres-secrets:.*mode=0700.*uid=0.*gid=0$"))] | length) == 1 and
   ([.services.postgres.configs[] | select(.target == "/usr/local/bin/dirextalk-postgres-entrypoint" and .mode == "0555")] | length) == 1 and
   ([.services.postgres.configs[] | select(.target == "/docker-entrypoint-initdb.d/10-dirextalk-databases.sh" and .mode == "0555")] | length) == 1 and
-  ([.services | to_entries[] | select(.key != "message-server") | .value.networks // {} | keys[] | select(. == "message_public")] | length) == 0
+  ([.services | to_entries[] | select(.key != "message-server" and .key != "agent") | .value.networks // {} | keys[] | select(. == "message_public")] | length) == 0
 ' "$rendered" >/dev/null
+
+grep -Fqx 'agent_http_enabled: true' "$run_dir/provision/agent-config.yaml"
+grep -Fqx 'agent_http_listen: 0.0.0.0:8082' "$run_dir/provision/agent-config.yaml"
+grep -Eq 'handle[[:space:]]+/agent/v1/\*' "$stack_dir/Caddyfile.static-sites.example"
+grep -Eq 'reverse_proxy[[:space:]]+agent:8082' "$stack_dir/Caddyfile.static-sites.example"
+grep -Eq 'flush_interval[[:space:]]+-1' "$stack_dir/Caddyfile.static-sites.example"
 
 jq -e '
   ([.services["message-server"].volumes[] | select(.target == "/run/capability-private" and .read_only == true)] | length) == 1 and

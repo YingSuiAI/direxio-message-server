@@ -6,12 +6,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
-	"sync"
 	"testing"
 
-	"github.com/YingSuiAI/dirextalk-message-server/internal/agentgateway"
-	"github.com/YingSuiAI/dirextalk-message-server/internal/agentstream"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/dirextalkdomain"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/dirextalkplugin"
 	channelsmodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/channels"
@@ -25,102 +21,7 @@ type pluginInstance = dirextalkplugin.Instance
 type portalCredentialsFile = portalmodule.Credentials
 type reportRecord = dirextalkdomain.ReportRecord
 
-// testExternalNativeRunner is a test-only stand-in for the split Agent
-// capability. Production constructors remain fail-closed when no runner is
-// configured; persistence tests inject this fixture explicitly.
-type testExternalNativeRunner struct {
-	mu     sync.Mutex
-	config map[string]any
-}
-
-func newTestExternalNativeRunner() *testExternalNativeRunner {
-	return &testExternalNativeRunner{config: map[string]any{
-		"native_agent_identity": map[string]any{
-			"display_name": "Agent",
-			"avatar_url":   "",
-		},
-		"enabled":              true,
-		"mcp_blocked_room_ids": []string(nil),
-	}}
-}
-
-func (r *testExternalNativeRunner) Apply(context.Context, string) error { return nil }
-
-func (r *testExternalNativeRunner) ProbeCatalog(context.Context, []agentgateway.CatalogRequirement) error {
-	return nil
-}
-
-func (r *testExternalNativeRunner) Invoke(_ context.Context, action string, params map[string]any) (map[string]any, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if action == "agent.account.deprovision" {
-		return map[string]any{"status": "deprovisioned"}, nil
-	}
-	if action == "agent.config.update" {
-		for _, key := range []string{"native_agent_identity", "enabled", "mcp_blocked_room_ids"} {
-			if value, ok := params[key]; ok {
-				if key == "mcp_blocked_room_ids" {
-					value = normalizeTestStringList(value)
-				}
-				r.config[key] = value
-			}
-		}
-	}
-	return cloneTestMap(r.config), nil
-}
-
-func (r *testExternalNativeRunner) Stream(context.Context, string, map[string]any, func(agentstream.Event) error) error {
-	return nil
-}
-
-func withTestExternalAgent(cfg Config) Config {
-	if cfg.NativeAgentRunner == nil {
-		cfg.NativeAgentRunner = newTestExternalNativeRunner()
-	}
-	return cfg
-}
-
-func cloneTestMap(values map[string]any) map[string]any {
-	cloned := make(map[string]any, len(values))
-	for key, value := range values {
-		cloned[key] = value
-	}
-	return cloned
-}
-
-func normalizeTestStringList(value any) []string {
-	switch values := value.(type) {
-	case []string:
-		return normalizeTestStringValues(values)
-	case []any:
-		out := make([]string, 0, len(values))
-		for _, value := range values {
-			if text, ok := value.(string); ok {
-				out = append(out, text)
-			}
-		}
-		return normalizeTestStringValues(out)
-	default:
-		return nil
-	}
-}
-
-func normalizeTestStringValues(values []string) []string {
-	seen := make(map[string]struct{}, len(values))
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value == "" {
-			continue
-		}
-		if _, exists := seen[value]; exists {
-			continue
-		}
-		seen[value] = struct{}{}
-		out = append(out, value)
-	}
-	return out
-}
+func withTestExternalAgent(cfg Config) Config { return cfg }
 
 func mustHandle[T any](t *testing.T, service *Service, action string, params map[string]any) T {
 	t.Helper()

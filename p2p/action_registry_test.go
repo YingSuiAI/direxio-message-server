@@ -22,21 +22,14 @@ func TestActionRegistryCoversPublicAndAgentActions(t *testing.T) {
 	}
 }
 
-func TestModelProfileTestActionIsPubliclyRegistered(t *testing.T) {
-	const action = "agent.model_profiles.test"
-	spec, ok := serviceapi.ActionSpecFor(action)
-	if !ok {
-		t.Fatalf("%s is missing from the public ProductCore action contract", action)
-	}
-	if spec.Auth != serviceapi.ActionAuthOwner || spec.Transport != serviceapi.ActionTransportHTTPOnly {
-		t.Fatalf("%s metadata = %#v, want owner HTTP action", action, spec)
-	}
-	if spec.Schema == nil || !spec.Schema.Request["idempotency_key"].Required || !spec.Schema.Request["profile_id"].Required || !spec.Schema.Response["reachable"].Required || !spec.Schema.Response["error_code"].Required {
-		t.Fatalf("%s schema = %#v, want strict test request and response", action, spec.Schema)
-	}
-	service := NewService(Config{ServerName: "example.com"})
-	if _, ok := service.actions[action]; !ok {
-		t.Fatalf("%s has no registered ProductCore handler", action)
+func TestNativeAgentBusinessActionsAreNotProductActions(t *testing.T) {
+	for _, action := range []string{
+		"agent.chat", "agent.chat.turn.stop", "agent.core.confirmations.list",
+		"agent.workers.list", "agent.model_profiles.test", "agent.memory.status",
+	} {
+		if _, ok := serviceapi.ActionSpecFor(action); ok {
+			t.Errorf("direct Agent data-plane action %q remains in ProductCore", action)
+		}
 	}
 }
 

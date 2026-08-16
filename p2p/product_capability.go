@@ -14,32 +14,6 @@ import (
 	p2pstorage "github.com/YingSuiAI/dirextalk-message-server/p2p/storage"
 )
 
-func nativeAgentGrantScopes(action string) []string {
-	// Product scopes are deliberately action-exact. The Agent capability
-	// descriptor adds its own required scope during grant construction; this
-	// callback contributes only the nested Product scope needed by invoke_product.
-	scopes := map[string][]string{
-		"agent.account.deprovision": {"agent:account:deprovision"},
-		"agent.config.get":          {"agent:config:read"},
-		"agent.config.update":       {"agent:config:write"},
-		// Chat/stream roots may discover the read-only Product tools needed to
-		// ground a response.  Product mutations are intentionally absent from
-		// this baseline grant; they must be introduced by an explicit owner
-		// confirmation flow instead of being silently available to model output.
-		"agent.chat":                    {"agent:product:execute", "product:contacts:read", "product:rooms:read", "product:messages:read", "product:members:read", "product:channels:read"},
-		"agent.chat.stream":             {"agent:product:execute", "product:contacts:read", "product:rooms:read", "product:messages:read", "product:members:read", "product:channels:read"},
-		"agent.contacts.list":           {"agent:product:execute", "product:contacts:read"},
-		"agent.contacts.search":         {"agent:product:execute", "product:contacts:read"},
-		"agent.rooms.search":            {"agent:product:execute", "product:rooms:read"},
-		"agent.messages.list":           {"agent:product:execute", "product:messages:read"},
-		"agent.messages.send":           {"agent:product:execute", "product:messages:write"},
-		"agent.room_members.list":       {"agent:product:execute", "product:members:read"},
-		"agent.channel_posts.list":      {"agent:product:execute", "product:channels:read"},
-		"agent.channel_comments.list":   {"agent:product:execute", "product:channels:read"},
-		"agent.channel_comments.create": {"agent:product:execute", "product:channels:write"},
-	}
-	return append([]string(nil), scopes[strings.TrimSpace(action)]...)
-}
 
 // ProductCapabilityDatabase exposes the already-migrated shared PostgreSQL
 // handle for durable capability operation records. It is intentionally narrow:

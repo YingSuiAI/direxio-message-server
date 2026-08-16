@@ -23,7 +23,7 @@ func TestActionContractArtifactMatchesActionSpecs(t *testing.T) {
 }
 
 func TestActionSpecCopiesDeepCloneNestedSchemas(t *testing.T) {
-	const action = "agent.models.list"
+	const action = "agent.session.create"
 
 	want, ok := ActionSpecFor(action)
 	if !ok || want.Schema == nil {
@@ -34,17 +34,15 @@ func TestActionSpecCopiesDeepCloneNestedSchemas(t *testing.T) {
 		t.Fatalf("marshal baseline action spec: %v", err)
 	}
 	got, _ := ActionSpecFor(action)
-	modelKind := got.Schema.Request["model_kind"]
-	if modelKind.Presence == nil {
-		t.Fatal("model catalog kind must publish presence metadata")
+	sessionID := got.Schema.Request["session_id"]
+	if sessionID.Presence == nil {
+		t.Fatal("session ID must publish presence metadata")
 	}
-	modelKind.Presence.Omitted = "mutated"
-	got.Schema.Request["model_kind"] = modelKind
-	providers := got.Schema.Response["providers"]
-	provider := providers.Items.Properties["provider"]
-	provider.Type = "mutated"
-	providers.Items.Properties["provider"] = provider
-	got.Schema.Response["providers"] = providers
+	sessionID.Presence.Omitted = "mutated"
+	got.Schema.Request["session_id"] = sessionID
+	scopes := got.Schema.Response["scopes"]
+	scopes.Items.Type = "mutated"
+	got.Schema.Response["scopes"] = scopes
 
 	fresh, _ := ActionSpecFor(action)
 	freshJSON, err := json.Marshal(fresh)
@@ -66,11 +64,9 @@ func TestActionSpecCopiesDeepCloneNestedSchemas(t *testing.T) {
 			continue
 		}
 		found = true
-		contractProviders := spec.Schema.Response["providers"]
-		contractProvider := contractProviders.Items.Properties["provider"]
-		contractProvider.Required = false
-		contractProviders.Items.Properties["provider"] = contractProvider
-		spec.Schema.Response["providers"] = contractProviders
+		contractScopes := spec.Schema.Response["scopes"]
+		contractScopes.Items.Required = true
+		spec.Schema.Response["scopes"] = contractScopes
 		break
 	}
 	if !found {

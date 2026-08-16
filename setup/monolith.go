@@ -22,7 +22,6 @@ import (
 	"github.com/YingSuiAI/dirextalk-message-server/clientapi/api"
 	"github.com/YingSuiAI/dirextalk-message-server/federationapi"
 	federationAPI "github.com/YingSuiAI/dirextalk-message-server/federationapi/api"
-	agentgateway "github.com/YingSuiAI/dirextalk-message-server/internal/agentgateway"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/caching"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/httputil"
 	productcapability "github.com/YingSuiAI/dirextalk-message-server/internal/productcapability"
@@ -115,18 +114,16 @@ func (m *Monolith) AddAllPublicRoutes(
 		AllowAccountDeleteWithoutUpdater:       boolEnv("P2P_ALLOW_ACCOUNT_DELETE_WITHOUT_UPDATER"),
 		NativeAgentVoiceCallbackURL:            firstNonEmptyEnv("P2P_AGENT_VOICE_CALLBACK_URL", "DIREXTALK_AGENT_VOICE_CALLBACK_URL"),
 		NativeAgentVoiceCallbackAuthToken:      readOptionalSecretEnv("P2P_AGENT_VOICE_CALLBACK_AUTH_TOKEN_FILE", "DIREXTALK_AGENT_VOICE_CALLBACK_AUTH_TOKEN_FILE"),
-		NativeAgentVoiceCallbackCAFile:         firstNonEmptyEnv("P2P_AGENT_VOICE_CALLBACK_CA_FILE", "P2P_AGENT_CAPABILITY_CA_FILE", "DIREXTALK_CAPABILITY_CA_FILE"),
-		NativeAgentVoiceCallbackClientCertFile: firstNonEmptyEnv("P2P_AGENT_VOICE_CALLBACK_CLIENT_CERT_FILE", "P2P_AGENT_CAPABILITY_CLIENT_CERT_FILE", "DIREXTALK_MS_CLIENT_CERT_FILE"),
-		NativeAgentVoiceCallbackClientKeyFile:  firstNonEmptyEnv("P2P_AGENT_VOICE_CALLBACK_CLIENT_KEY_FILE", "P2P_AGENT_CAPABILITY_CLIENT_KEY_FILE", "DIREXTALK_MS_CLIENT_KEY_FILE"),
+		NativeAgentVoiceCallbackCAFile:         firstNonEmptyEnv("P2P_AGENT_VOICE_CALLBACK_CA_FILE", "DIREXTALK_CAPABILITY_CA_FILE"),
+		NativeAgentVoiceCallbackClientCertFile: firstNonEmptyEnv("P2P_AGENT_VOICE_CALLBACK_CLIENT_CERT_FILE", "DIREXTALK_MS_CLIENT_CERT_FILE"),
+		NativeAgentVoiceCallbackClientKeyFile:  firstNonEmptyEnv("P2P_AGENT_VOICE_CALLBACK_CLIENT_KEY_FILE", "DIREXTALK_MS_CLIENT_KEY_FILE"),
 		NativeAgentVoiceCallbackServerName:     firstNonEmptyEnv("P2P_AGENT_VOICE_CALLBACK_SERVER_NAME", "DIREXTALK_AGENT_TLS_SERVER_NAME"),
 	}
-	nativeGateway, grantPrivateKey, nativeGatewayErr := nativeAgentGatewayFromEnv()
-	if nativeGatewayErr != nil {
-		logrus.WithError(nativeGatewayErr).Fatal("invalid external native Agent gateway configuration")
+	grantPrivateKey, grantPrivateKeyErr := capabilityGrantPrivateKeyFromEnv()
+	if grantPrivateKeyErr != nil {
+		logrus.WithError(grantPrivateKeyErr).Fatal("invalid capability grant signing key")
 	}
-	p2pConfig.NativeAgentGateway = nativeGateway
 	p2pConfig.NativeAgentGrantPrivateKey = grantPrivateKey
-	p2pConfig.NativeAgentRequiredActions = commaSeparatedEnv("P2P_NATIVE_AGENT_REQUIRED_ACTIONS", "DIREXTALK_NATIVE_AGENT_REQUIRED_ACTIONS")
 	matrixHistoryBaseURL := matrixHistoryReaderBaseURL(p2pConfig.Homeserver)
 	matrixProfileResolver := p2p.NewHTTPMatrixProfileResolver(matrixHistoryBaseURL, nil)
 	p2pTransport := p2p.NewDendriteTransport(cfg.Global.ServerName, cfg.Global.KeyID, cfg.Global.PrivateKey, m.RoomserverAPI)
@@ -135,7 +132,6 @@ func (m *Monolith) AddAllPublicRoutes(
 	if err != nil {
 		logrus.WithError(err).Fatal("P2P integrated AS persistent state is required")
 	}
-	processCtx.RegisterShutdownCallback(p2pService.StopNativeAgentCatalogProbe)
 	p2pTransport.SetBlockedDirectMessageChecker(p2pService.BlockedDirectMessage)
 	cfg.ClientAPI.DirextalkBlockChecker = p2pService.BlockedDirectMessage
 	cfg.FederationAPI.DirextalkBlockChecker = func(ctx context.Context, roomID string, senderID spec.SenderID) (bool, error) {
@@ -187,13 +183,6 @@ func (m *Monolith) AddAllPublicRoutes(
 	p2p.RegisterWellKnown(routers.PortalWellKnown, p2pService)
 	if err := startProductCapabilityServer(processCtx, p2pService, grantPrivateKey); err != nil {
 		logrus.WithError(err).Fatal("failed to start Product Capability service")
-	}
-	if nativeGateway != nil {
-		processCtx.RegisterShutdownCallback(func() {
-			if err := nativeGateway.Close(); err != nil {
-				logrus.WithError(err).Warn("external Native Agent gateway shutdown failed")
-			}
-		})
 	}
 
 	if m.RelayAPI != nil {
@@ -257,40 +246,6 @@ func startProductCapabilityServer(processCtx *process.ProcessContext, service *p
 	return nil
 }
 
-func nativeAgentGatewayFromEnv() (*agentgateway.Client, []byte, error) {
-	addr := strings.TrimSpace(firstNonEmptyEnv("P2P_AGENT_CAPABILITY_ADDR", "DIREXTALK_AGENT_CAPABILITY_ADDR"))
-	grantKey, grantErr := capabilityGrantPrivateKeyFromEnv()
-	if grantErr != nil {
-		return nil, nil, grantErr
-	}
-	if addr == "" {
-		return nil, nil, errors.New("external Native Agent capability address is required")
-	}
-	config := &agentgateway.Config{
-		ServerAddr:        addr,
-		CACertFile:        firstNonEmptyEnv("P2P_AGENT_CAPABILITY_CA_FILE", "DIREXTALK_CAPABILITY_CA_FILE"),
-		ClientCertFile:    firstNonEmptyEnv("P2P_AGENT_CAPABILITY_CLIENT_CERT_FILE", "DIREXTALK_MS_CLIENT_CERT_FILE"),
-		ClientKeyFile:     firstNonEmptyEnv("P2P_AGENT_CAPABILITY_CLIENT_KEY_FILE", "DIREXTALK_MS_CLIENT_KEY_FILE"),
-		TokenFile:         firstNonEmptyEnv("P2P_AGENT_CAPABILITY_TOKEN_FILE", "DIREXTALK_MS_TO_AGENT_TOKEN_FILE"),
-		InstanceID:        firstNonEmptyEnv("P2P_MESSAGE_SERVER_INSTANCE_ID", "DIREXTALK_MESSAGE_SERVER_INSTANCE_ID"),
-		AccountGeneration: 1,
-	}
-	for name, value := range map[string]string{"CA": config.CACertFile, "client cert": config.ClientCertFile, "client key": config.ClientKeyFile, "token": config.TokenFile, "instance id": config.InstanceID} {
-		if strings.TrimSpace(value) == "" {
-			return nil, nil, fmt.Errorf("external Agent gateway %s is required", name)
-		}
-	}
-	client, err := agentgateway.New(config)
-	if err != nil {
-		return nil, nil, err
-	}
-	if len(grantKey) != ed25519.PrivateKeySize {
-		_ = client.Close()
-		return nil, nil, errors.New("capability grant private key must be exactly 64 bytes")
-	}
-	return client, grantKey, nil
-}
-
 func productCapabilityConfigFromEnv(listenAddr string, grantPublicKey, grantPrivateKey []byte, db *sql.DB) (*productcapability.Config, error) {
 	accountGeneration, generationErr := accountGenerationFromEnv()
 	if generationErr != nil {
@@ -304,7 +259,7 @@ func productCapabilityConfigFromEnv(listenAddr string, grantPublicKey, grantPriv
 		TokenFile:                 firstNonEmptyEnv("P2P_PRODUCT_CAPABILITY_TOKEN_FILE", "DIREXTALK_AGENT_TO_MS_TOKEN_FILE"),
 		InstanceID:                firstNonEmptyEnv("P2P_MESSAGE_SERVER_INSTANCE_ID", "DIREXTALK_MESSAGE_SERVER_INSTANCE_ID"),
 		PeerInstanceID:            firstNonEmptyEnv("P2P_AGENT_INSTANCE_ID", "DIREXTALK_AGENT_INSTANCE_ID"),
-		PeerCommonName:            firstNonEmptyEnv("P2P_AGENT_CAPABILITY_PEER_COMMON_NAME", "DIREXTALK_AGENT_CAPABILITY_PEER_COMMON_NAME"),
+		PeerCommonName:            firstNonEmptyEnv("P2P_PRODUCT_CAPABILITY_PEER_COMMON_NAME", "DIREXTALK_AGENT_CAPABILITY_PEER_COMMON_NAME"),
 		ExpectedAccountGeneration: accountGeneration,
 		GrantPublicKey:            grantPublicKey,
 		GrantPrivateKey:           grantPrivateKey,
@@ -392,21 +347,6 @@ func boolEnv(name string) bool {
 	value := strings.TrimSpace(os.Getenv(name))
 	parsed, err := strconv.ParseBool(value)
 	return err == nil && parsed
-}
-
-func commaSeparatedEnv(names ...string) []string {
-	raw := firstNonEmptyEnv(names...)
-	if raw == "" {
-		return nil
-	}
-	parts := strings.Split(raw, ",")
-	values := make([]string, 0, len(parts))
-	for _, part := range parts {
-		if value := strings.TrimSpace(part); value != "" {
-			values = append(values, value)
-		}
-	}
-	return values
 }
 
 func p2pDatabaseOptions(cfg *config.Dendrite) *config.DatabaseOptions {

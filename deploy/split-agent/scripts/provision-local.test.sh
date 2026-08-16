@@ -109,6 +109,8 @@ fi
 grep -Eq '^postgresql://dirextalk_message_server:[0-9a-f]{48}@message-postgres:5432/dirextalk_message_server\?sslmode=disable$' "$generated_dir/message-database-url"
 grep -Eq '^postgresql://dirextalk_agent:[0-9a-f]{48}@agent-postgres:5432/dirextalk_agent\?sslmode=disable$' "$generated_dir/agent-database-url"
 grep -Fqx 'core_knowledge_vector_dimension: 1536' "$generated_dir/agent-config.yaml"
+grep -Fqx 'agent_http_enabled: true' "$generated_dir/agent-config.yaml"
+grep -Fqx 'agent_http_listen: 0.0.0.0:8082' "$generated_dir/agent-config.yaml"
 if grep -Eiq 'qdrant|core_knowledge_content_quota_bytes' "$generated_dir/agent-config.yaml"; then
   echo "retired Knowledge storage configuration survived fresh-state provisioning" >&2
   exit 1

@@ -190,13 +190,30 @@ if [ -n "$local_image_ref" ]; then
   docker image tag "$target_image_id" "$image" >/dev/null || die 'could not bind local Agent image to the receipt channel'
   rollback_needed=true
 fi
-retired_config_count=$(grep -Ec '^core_aws_enabled:[[:space:]]*(true|false)[[:space:]]*$' "$agent_config" || true)
-[ "$retired_config_count" -le 1 ] || die 'Agent config contains duplicate retired core_aws_enabled keys'
-if [ "$retired_config_count" -eq 1 ]; then
+retired_config_pattern='^(core_aws_enabled|capability_enabled|capability_grpc_listen|capability_ca_cert_file|capability_tls_cert_file|capability_tls_key_file|capability_token_file|capability_peer_common_name|capability_peer_instance_id|capability_max_concurrent_query|capability_max_concurrent_watch):'
+retired_config_count=$(grep -Ec "$retired_config_pattern" "$agent_config" || true)
+http_enabled_count=$(grep -Ec '^agent_http_enabled:' "$agent_config" || true)
+http_listen_count=$(grep -Ec '^agent_http_listen:' "$agent_config" || true)
+[ "$http_enabled_count" -le 1 ] || die 'Agent config contains duplicate agent_http_enabled keys'
+[ "$http_listen_count" -le 1 ] || die 'Agent config contains duplicate agent_http_listen keys'
+http_config_current=false
+if [ "$http_enabled_count" -eq 1 ] && [ "$http_listen_count" -eq 1 ] &&
+    grep -Fqx 'agent_http_enabled: true' "$agent_config" &&
+    grep -Fqx 'agent_http_listen: 0.0.0.0:8082' "$agent_config"; then
+  http_config_current=true
+fi
+if [ "$retired_config_count" -gt 0 ] || [ "$http_config_current" = false ]; then
   config_backup=$(mktemp "$out/.agent-config.rollback.XXXXXX")
   cp --preserve=mode,ownership -- "$agent_config" "$config_backup"
   next_config=$(mktemp "$out/.agent-config.XXXXXX")
-  awk '$0 !~ /^core_aws_enabled:[[:space:]]*(true|false)[[:space:]]*$/' "$agent_config" >"$next_config"
+  awk '
+    $0 ~ /^(core_aws_enabled|capability_enabled|capability_grpc_listen|capability_ca_cert_file|capability_tls_cert_file|capability_tls_key_file|capability_token_file|capability_peer_common_name|capability_peer_instance_id|capability_max_concurrent_query|capability_max_concurrent_watch|agent_http_enabled|agent_http_listen):/ {next}
+    {print}
+    END {
+      print "agent_http_enabled: true"
+      print "agent_http_listen: 0.0.0.0:8082"
+    }
+  ' "$agent_config" >"$next_config"
   chmod 400 "$next_config"
   mv -f -- "$next_config" "$agent_config"
   config_restore_needed=true

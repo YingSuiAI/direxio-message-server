@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -37,7 +38,7 @@ func productEventsHandler(service *Service) http.HandlerFunc {
 			httpapi.WriteError(w, statusError(http.StatusNotAcceptable, "Accept must include text/event-stream"))
 			return
 		}
-		afterSeq, err := agentChatAfterSeq(r)
+		afterSeq, err := productAfterSeq(r)
 		if err != nil {
 			httpapi.WriteError(w, badRequest(err.Error()))
 			return
@@ -96,6 +97,54 @@ func productEventsHandler(service *Service) http.HandlerFunc {
 			}
 		}
 	}
+}
+
+func productAfterSeq(r *http.Request) (int64, error) {
+	queryValues, queryPresent := r.URL.Query()["after_seq"]
+	query := ""
+	if queryPresent {
+		if len(queryValues) != 1 {
+			return 0, fmt.Errorf("after_seq must appear once")
+		}
+		query = strings.TrimSpace(queryValues[0])
+	}
+	header, headerPresent := r.Header["Last-Event-Id"]
+	headerValue := ""
+	if headerPresent {
+		if len(header) != 1 {
+			return 0, fmt.Errorf("Last-Event-ID must appear once")
+		}
+		headerValue = strings.TrimSpace(header[0])
+	}
+	parse := func(value, name string) (int64, error) {
+		parsed, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || parsed < 0 {
+			return 0, fmt.Errorf("%s must be a non-negative integer", name)
+		}
+		return parsed, nil
+	}
+	if !queryPresent && !headerPresent {
+		return 0, nil
+	}
+	var querySeq, headerSeq int64
+	var err error
+	if queryPresent {
+		if querySeq, err = parse(query, "after_seq"); err != nil {
+			return 0, err
+		}
+	}
+	if headerPresent {
+		if headerSeq, err = parse(headerValue, "Last-Event-ID"); err != nil {
+			return 0, err
+		}
+	}
+	if queryPresent && headerPresent && querySeq != headerSeq {
+		return 0, fmt.Errorf("after_seq and Last-Event-ID must agree")
+	}
+	if headerPresent {
+		return headerSeq, nil
+	}
+	return querySeq, nil
 }
 
 func authorizeOwnerHTTP(service *Service, r *http.Request) (context.Context, bool) {

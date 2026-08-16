@@ -85,40 +85,28 @@ plugin catalog、生命周期、配置或 invoke 路径。插件未启用时不�
 
 Native Agent 当前边界：
 
-- `dirextalk-agent` 拥有模型与加密凭据、对话/turn、Knowledge/长期记忆、
-  Tasks、调度、Skills/MCP、AWS、Execution V2 和 runner 数据；Message Server
-  不挂载或解释这些表和数据卷。
-- Flutter 继续使用现有 `agent.*` actions；文本 turn 通过 HTTP POST 和 SSE。
-  Chat 只转发完整的 `model_profile_id`、`model_profile_revision`、
-  `credential_version` 三元组；inline profile、历史消息、工具凭据及嵌套
-  credential-like 字段在到达 Agent 前拒绝。
-- `agent.models.list` 返回 provider catalog；model-profile actions 返回持久化
-  profiles。Tavily 只从 Agent 加密配置读取，Knowledge upload 要求整文件
-  SHA-256，搜索分页返回并固定 embedding provenance；长期记忆与对话摘要分离。
-- 自动用户事实记忆通过 `agent.memory.config.get/update/status` 和
-  `agent.memory.facts.update/delete` 代理到 Agent
-  `agent.memory.v1`。新实例默认关闭；只有 Agent 验证当前向量模型和密钥有效后，
-  owner 才能显式开启。关闭会停止新的事实提取及结构化事实/时间线召回，但保留
-  已有事实、冲突时间线、Knowledge 资料和对话历史。事实编辑会替换指定的活动事实
-  并保留时间线，删除会撤回指定事实；Message Server 只做闭集请求/结果校验与投影，
-  不持久化事实。
-- Cloud Worker `agent.execution.v2.runs.events` 固定返回
-  `events`、`next_sequence`、`history_truncated`。事件只包含身份、revision、sequence、
-  type、时间、payload digest 和可选生命周期 status，不公开运行时 progress 或实现诊断。
-  Agent 每个 run 最多保留 4096 个事件，游标早于保留窗口时显式返回
-  `history_truncated=true`，不伪造完整历史；非截断页从请求游标下一条开始，页内
-  后续事件必须连续。
-- Product Capability 是 Agent 回调产品数据的独立 mTLS 方向，handler 不得同步
-  回调 Agent。两向调用都绑定 owner、account generation、scope、operation 和
-  call-chain，检测到循环即失败。
-- `deploy/split-agent/compose.yaml` 使用一个 Agent 镜像启动 Core、extension
-  runner、Core Runner 三个隔离容器；Message Server 与 Agent 可共用 PostgreSQL
-  集群，但必须使用互不可读的角色和 database/schema。Agent 只支持 fresh-state，
-  不做嵌入式数据导入、双写或回退。
+- `dirextalk-agent` 唯一拥有模型与加密凭据、对话/turn、附件、确认、
+  Knowledge/长期记忆、Tasks、调度、Skills/MCP、AWS、Worker、Execution V2、
+  静态站点、运行时和制品数据；Message Server 不挂载、代理或解释这些数据。
+- Flutter 先用 owner access token 调用 `agent.session.create`，再携带 15 分钟短期
+  ticket 访问同域 `/agent/v1/*`。Caddy 保留完整路径并直接反代 `agent:8082`；
+  Agent 端口不发布到主机，也不向客户端下发长期 service token。
+- Agent 写操作使用普通 HTTP POST，持久化 admission 后立即返回 `202`；SSE 独立
+  连接并支持序列游标恢复，历史与状态由 Agent GET 权威回读。断开 SSE 只停止观察，
+  不取消或重放 durable operation。
+- ProductCore 只保留 `agent.password`、`agent.matrix_session.create` 与
+  `agent.session.create` 三个控制面 action。旧 chat、附件、confirmation、Worker、
+  配置/模型/记忆/Skills/MCP/AWS/Execution V2 代理、schema pin 和同步 Watch 已删除，
+  不保留兼容别名或双路径。
+- Product Capability 仍是 Agent 异步回调 Matrix/ProductCore 的独立 mTLS 方向；
+  handler 不得同步回调 Agent。Execution completion 只写最小 receipt/invalidation，
+  结果、Worker 与制品继续由 Agent 权威持有。
+- `deploy/split-agent/compose.yaml` 使用同一 Agent 镜像启动 Core 与 runner；
+  Message Server 与 Agent 可共用 PostgreSQL 集群，但使用互不可读的角色和
+  database/schema。Agent 先启动并健康，Message Server 后启动。
 
-完整字段、readiness 和限制以 [当前 Agent/MCP 合约](agent-mcp-current-contract.md)、
-[Agent Core 集成合约](agent-core-integration-development-contract.md) 与生成的
-[`product-action-contract.json`](product-action-contract.json) 为准。
+完整字段和 HTTP/SSE 语义以 [当前 Agent/MCP 合约](agent-mcp-current-contract.md) 与
+[Agent Core 集成合约](agent-core-integration-development-contract.md) 为准。
 
 官方 Ops 插件 `io.dirextalk.ops` 面向单机私有部署运维，动作包括 `ops.status.get`、`ops.containers.list`、`ops.logs.tail`、`ops.backups.list`、`ops.backup.create`、`ops.backup.status`、`ops.backup.download_chunk`、`ops.backup.delete`、`ops.cleanup.plan`、`ops.cleanup.run`、`ops.rooms.cleanup.plan`、`ops.rooms.cleanup.run`、`ops.media.orphans.plan`、`ops.migration.export`、`ops.restore.plan`、`ops.restore.run`。Ops 是唯一允许由 Docker runner 挂载 Docker socket 和专用备份 volume 的官方插件；启用时注入 `OPS_BACKUP_ROOT`、`OPS_MAX_BACKUPS`、`OPS_MESSAGE_SERVER_CONTAINER`、`OPS_POSTGRES_CONTAINER`、`OPS_POSTGRES_USER`、`OPS_POSTGRES_PASSWORD`。备份创建可异步返回任务并通过 `ops.backup.status` 轮询进度；备份下载通过 `ops.backup.download_chunk` 分片返回，客户端本地保存文件。`ops.restore.run` 必须显式传入 `confirm="restore_backup"`，用于从已有备份包恢复 Postgres dump。第一版清理必须先 plan 后 confirm：聊天记录清理只做本地缓存、隐藏/归档计划和受控安全操作，不允许 Ops 插件直接 SQL 删除 Matrix 事件表；媒体清理默认只清缓存或明确孤儿文件，仍被消息/频道引用的媒体不删除。
 
@@ -145,11 +133,10 @@ Native Agent 当前边界：
 - `internal/dirextalkdomain`：跨包共享的产品 value records 和纯 domain helper，例如 portal/agent config、conversation records、member/channel records、blocks、calls、favorites、reports、P2P event bounds 等；业务 response DTO 由各自的 `p2p/internal` 模块持有。
 - `internal/dirextalkplugin`：非 Agent plugin catalog/instance/job/secret record shapes；`p2p/internal/plugins` 拥有 plugin action orchestration、Docker runner 和 Native Agent/plugin 隔离规则。
 - `p2p/projector.go`、`p2p/projector_ports.go`：只保留投影公开 facade、账户生命周期门禁和 Matrix/业务模块适配；纯投影 helper 由 `internal/dirextalkprojection` 持有。
-- `p2p/internal/agent` 与 `internal/agentgateway`：Message Server 的 Native Agent
-  facade、action/stream adapter 和受认证 Capability gRPC client。任务、确认、
-  调度、模型、知识、Skills/MCP、AWS 与 Execution V2 均由外部 Agent 拥有；
-  Message Server 不在本机执行第三方 Skill、项目代码或 shell，也不暴露原始
-  SSM/SSH/AWS passthrough。
+- `p2p/internal/agent`：只持有 password/Matrix session 控制和短期 Agent ticket
+  签发；Message Server 不再有 Native Agent action/stream adapter 或 owner 方向
+  Capability gRPC client。任务、确认、调度、模型、知识、Skills/MCP、AWS 与
+  Execution V2 均由外部 Agent 拥有。
 - `p2p/consumer.go`：保留订阅 consumer 的公开 facade，实现在 `p2p/internal/projector`。
 - `internal/productpolicy`：Matrix Client-Server 写入前的 Dirextalk 产品策略校验。
 
@@ -331,7 +318,7 @@ Agent/API：
 
 - Agent token 不再有动态权限表，只能通过 product body-action 访问 `agent.matrix_session.create`，并可访问标准 `POST /mcp` MCP endpoint；其他 protected action 只认 owner `access_token`。本地 bridge 使用 `agent.matrix_session.create` 得到的 Matrix session 监听 agents room 并回写消息。
 - MCP capability 是 owner-scoped 代理能力：`agent_token` 只负责授权标准 MCP endpoint，联系人、房间、成员、消息和频道内容工具按 portal owner 视角执行，并在 Matrix 读写前校验 joined membership。标准 `POST /mcp` 使用 MCP Streamable HTTP JSON-RPC，支持 `initialize`、`tools/list`、`tools/call`，只接受 `Authorization: Bearer <agent_token>`，拒绝 query-string token，校验 `Origin`，并且不会把入站 bearer token 传给下游 capability。Native Agent 内置 Dirextalk tools 与标准 `POST /mcp` 共用 `internal/dirextalkmcp` registry/service；固定 `mcp.*` body action 已删除。详见 [当前 Agent 和 MCP 合约](agent-mcp-current-contract.md)。
-- Native Agent 对话是独立于 Online Agent Matrix room 的 `agent.*` 业务；普通调用走 owner-protected action，文本 turn 流式调用走 HTTP POST / SSE。Message Server 把两者代理到外部 `dirextalk-agent`，只发布已通过 mTLS、account-generation、schema catalog 和 readiness 检查的能力。durable stream 的 request/result/event schema 均精确 pin；`waiting_confirmation` 在通用事件身份之外只携带 `confirmation_id`、`execution_id` 与固定 waiting status，不公开 `attempt_id`，也不与 text/tool/result/response/error 混合。Agent authored `turn_id` 与 App start `idempotency_key` 分离投影，`agent.chat.turn.stop` 通过 revisionless typed `stop_turn` 执行而不复用通用 operation cancel，生成中的追加指令通过 revision-scoped typed `agent.chat.turn.steer` 立即引导同一 turn，禁止排队 successor turn。模型 profile、持久化对话、知识/长期记忆、Skills/MCP、调度和 Execution V2 均由 Agent 拥有，详见 [当前 Agent 和 MCP 合约](agent-mcp-current-contract.md) 与 [Agent Core 集成合约](agent-core-integration-development-contract.md)。
+- Native Agent 对话、附件、确认、Worker 和其他 runtime 数据统一走同域 `/agent/v1/*` 直达 Agent。Message Server 只签发 15 分钟 owner/account-generation/scope 绑定 ticket，不代理、重算或同步等待 Agent 业务。写入 POST 返回 `202`，SSE 独立恢复，历史/状态由 Agent GET 权威回读；详见 [当前 Agent 和 MCP 合约](agent-mcp-current-contract.md) 与 [Agent Core 集成合约](agent-core-integration-development-contract.md)。
 - `agent.matrix_session.create` 使用 owner `access_token` 或 `agent_token` 调用，用于本地 cc-connect/gateway 获取 `@agent:<server>` 的 Matrix Client-Server session；它不返回 owner Matrix session，也不回显 `agent_token` 或 portal password。
 - Agent 在线状态对 owner 客户端只暴露一个 Matrix 房间状态字段：真实 `agent_room_id` 内的 `io.dirextalk.agent.status`，state key 为 `@agent:<server>`，content 只含 `online`。运行中的本地 bridge 通过 `@agent:<server>` Matrix session 发布 `online=true/false`；服务端不能从 Agent 配置、`/sync` 或 WS session 推断在线，只在启动/修复 agents room 或禁用 Agent 配置时写 `online=false` 兜底。`sync.bootstrap` 只返回 `agent_room_id` 供客户端定位房间，不再返回 `agent_online`；SSE Product event 不发送 `agent.presence`。`agent.status`/`agents.status` 已删除，客户端不得再调用。
 - Agent 预览和最终可恢复正文都通过 Matrix 消息/编辑回写；客户端展示 Matrix timeline 的聚合编辑结果，不消费 `server.agent_stream`。

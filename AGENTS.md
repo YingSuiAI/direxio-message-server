@@ -1,8 +1,8 @@
 # Dirextalk Message Server
 
 This Go service is the backend contract authority for Dirextalk Matrix APIs,
-ProductCore actions, policy, projections, external MCP, and the proxy boundary
-to the separately deployed Native Agent runtime.
+ProductCore actions, policy, projections, external MCP, and the account-control
+boundary for the separately deployed Native Agent runtime.
 
 ## Read By Scope
 
@@ -26,9 +26,10 @@ Read only the references needed by the touched behavior. Current code, generated
 - `internal/dirextalkmatrix`, `internal/dirextalkprojection`, `internal/dirextalkstate`, and `internal/dirextalkdomain` own shared Matrix reads, projection helpers, state builders, and domain records.
 - `p2p/consumer.go` and `p2p/projector.go` turn roomserver output into Dirextalk projections and product events.
 - `internal/dirextalkmcp` is the shared registry and invocation layer for Native Agent tools and `POST /mcp`.
-- `p2p/internal/agent` and `internal/agentgateway` authenticate and proxy the
-  stable Flutter-facing Agent actions/streams to `dirextalk-agent`; they do not
-  contain an Agent runtime or Agent-owned database.
+- `p2p/internal/agent` owns only Agent password/Matrix-session controls and
+  short-lived owner data-plane ticket issuance. Caddy routes same-origin
+  `/agent/v1/*` directly to `dirextalk-agent`; Message Server has no Agent
+  business-action proxy or Agent-owned database.
 
 Trace changes through entry point, auth, policy, durable state, Matrix writes, roomserver output, projection, sync/federation visibility, and client contract. Keep behavior in the owning package and preserve existing public interfaces unless the task changes them.
 
@@ -45,12 +46,13 @@ Trace changes through entry point, auth, policy, durable state, Matrix writes, r
   metadata does not split current behavior.
 - Remote public lookup validates Matrix IDs and uses the request-provided `remote_node_base_url`; never derive an outbound URL from a room ID.
 - Keep secrets and bearer tokens out of storage records, logs, errors, command arguments, docs, and tests unless the contract explicitly stores a protected hash/reference.
-- Flutter connects only to Message Server. Native Agent execution, profiles,
-  credentials, conversations, Knowledge/memory, Tasks, schedules, Skills/MCP,
-  AWS, Execution V2, and runner state belong to `dirextalk-agent`.
-- Chat forwards only the complete profile ID/revision/credential-version pins;
-  reject inline profiles, credentials, client history, and credential-like keys
-  before any HTTP, WS, replay, or cancellation path reaches the Agent.
+- Flutter uses one public origin. Login/account controls go to Message Server;
+  `/agent/v1/*` goes through Caddy directly to Agent with a short-lived owner,
+  account-generation, and scope-bound ticket. No Agent internal address or
+  long-lived service token is sent to Flutter.
+- Native Agent execution, profiles, credentials, conversations,
+  Knowledge/memory, Tasks, schedules, Skills/MCP, AWS, Execution V2, and runner
+  state belong to `dirextalk-agent` and are not projected through ProductCore.
 - Agent and Message Server may share a PostgreSQL cluster only through separate
   roles and databases/schemas. Product Capability handlers never synchronously
   call back into Agent; call-chain loops fail closed.

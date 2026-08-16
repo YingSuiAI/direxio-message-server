@@ -1,341 +1,83 @@
-# Current Agent and MCP Contract
+# Current Agent and MCP contract
 
-> Current code, generated contract metadata, and focused tests are the authority.
-> Detailed external Agent Core and Execution V2 requirements are recorded in
-> [`agent-core-integration-development-contract.md`](agent-core-integration-development-contract.md)
-> and [`adr/2026-07-31-execution-orchestration-v2.md`](adr/2026-07-31-execution-orchestration-v2.md).
-> Native Agent execution and data are owned by the separately deployed
-> `dirextalk-agent` service and are capability/readiness gated.
-
-This document is the backend-owned current contract for Dirextalk Agent state, Native Agent, and external MCP access. It describes existing behavior; it does not add a compatibility surface.
-
-Registration, schemas, or documentation alone never make an action or
-capability live.
+Current code and generated contract metadata are authoritative. The cross-
+service topology is defined in
+[`agent-core-integration-development-contract.md`](agent-core-integration-development-contract.md).
 
 ## External MCP
 
-- External MCP clients use the standard Streamable HTTP endpoint `POST /mcp`. `/_p2p/mcp` is unavailable.
-- Requests are MCP JSON-RPC and currently support `initialize`, `tools/list`, and `tools/call`.
-- Authentication is `Authorization: Bearer <agent_token>`. The owner access token is not accepted, bearer tokens in query parameters are rejected, and the inbound bearer token must not be forwarded in tool arguments or to downstream services.
-- The endpoint validates `Origin`. `GET /mcp` returns method not allowed while server-to-client streaming is unused.
-- Fixed `mcp.*` body actions are removed from `/_p2p/query` and `/_p2p/command`. Any `mcp.*` action identifiers that remain in backend packages are internal capability identifiers, not callable product actions.
-- `POST /mcp` and Native Agent built-in Dirextalk tools share the backend `internal/dirextalkmcp` registry, schemas, pagination, room authorization, DTOs, and invocation service. Durable member `membership` uses the Matrix enum and only `join` means joined; `joined` is reserved for operation/result `status`. Room and contact discovery return only active joined conversations. Message history/send, room-member listing, channel-post listing, and channel-comment listing/creation reject pending, joining, left, unknown, or otherwise non-joined rooms before any Matrix read or write. Room-member results contain only `membership=join` members. The configured real Agent room is checked against its current Matrix `join` membership. Room IDs in `mcp_blocked_room_ids` are filtered from discovery and rejected on direct access.
+- External MCP clients use Streamable HTTP at `POST /mcp`; `/_p2p/mcp` is not
+  available.
+- Requests are MCP JSON-RPC and support `initialize`, `tools/list`, and
+  `tools/call`.
+- Authentication is `Authorization: Bearer <agent_token>`. Owner access tokens
+  and query-string bearer tokens are rejected. The inbound token is never
+  forwarded in arguments or downstream requests.
+- Origin is validated. `GET /mcp` is method-not-allowed while server-to-client
+  MCP streaming is unused.
+- Fixed `mcp.*` ProductCore body actions remain deleted.
+- `POST /mcp` and Agent's Dirextalk product tools share
+  `internal/dirextalkmcp` registry schemas, pagination, authorization, DTOs,
+  and invocation logic. Matrix membership must be exactly `join`; pending,
+  joining, left, unknown, and blocked rooms are rejected before Matrix reads or
+  writes.
 
-## Agent Room Status
+## Matrix Agent room
 
-- The configured `agent_room_id` is a real private Matrix room containing the owner and local `@agent:<server>` user.
-- Bridge availability is Matrix room state type `io.dirextalk.agent.status`, state key `@agent:<server>`, with content field `online`.
-- The running bridge publishes `online=true` or `online=false` through its Matrix session. Server startup or repair and `agent.config.update enabled=false` may publish `online=false` as a safe fallback.
-- The server does not infer bridge availability from Agent configuration, `/sync`, realtime WebSocket lifetime, or Matrix presence. `sync.bootstrap` returns `agent_room_id`, not `agent_online`, and does not emit `agent.presence`.
-- `agent.config.get` returns two mode-specific Agent identities: `native_agent_identity` for Ying / Native Agent and `online_agent_identity` for Your Agent / Matrix bridge Agent. Each identity contains `display_name` and `avatar_url`. These nested objects are the only identity fields accepted or returned by `agent.config.update`; flat identity fields are not part of the current contract.
-- Native Agent runtime config receives only `native_agent_identity`. The runtime must not receive or persist `online_agent_identity`.
-- Model, system prompt, and context-window configuration belong only to Agent model profiles; `agent.config` does not duplicate them.
-- `agent.matrix_session.create` uses `online_agent_identity` for the Matrix Agent session profile. Updating `online_agent_identity` also synchronizes the local `@agent:<server>` Matrix global profile and the configured Agent room's `m.room.member` profile. Updating only `native_agent_identity` does not touch Matrix. If the desired config is saved but Matrix profile/member synchronization fails, `agent.config.update` returns `agent_identity_sync_failed`; a later `agent.config.get` still returns the saved desired identity.
+- `agent_room_id` is a private Matrix room containing the owner and local
+  `@agent:<server>` user.
+- Bridge availability is Matrix state `io.dirextalk.agent.status` with state key
+  `@agent:<server>` and one `online` field. Message Server does not infer it
+  from Native Agent HTTP/SSE connections.
+- `agent.matrix_session.create` is an Agent-token control action that returns a
+  Matrix session for the local Agent identity. It never returns the owner
+  Matrix session, portal password, or Agent bearer token.
+- `agent.password` is owner-only account control. It is not a Native Agent
+  runtime credential.
 
-## Native Agent Ownership
+## Native Agent owner data plane
 
-- `dirextalk-agent` owns Native Agent conversations, models, encrypted provider credentials, knowledge and long-term memory, tasks, schedules, Skills/MCP lifecycle, Execution V2, AWS state, and runtime data. `dirextalk-message-server` owns the Flutter-facing owner-authenticated `agent.*` actions plus the text-turn POST/SSE façade, and proxies them to the external Agent Capability gRPC service. Flutter never connects to `dirextalk-agent` directly. A text mutation is admitted only by `POST /_p2p/agent/chat/conversations/{conversation_id}/turns`; `GET` on the returned turn and `/events` locations are read-only Agent-ledger/Watch projections, and SSE reconnect never repeats the mutation.
-- Native Agent's two-layer memory implementation is internal to `dirextalk-agent`: conversation summary/recent messages form working memory, while conflict-resolved current user facts plus their append-only timeline and semantic Knowledge form long-term recall on every turn. Message Server forwards only the current prompt and immutable profile pins; it does not extract facts, store the fact timeline, inject client history, or add a fallback memory path. This changes no ProductCore action or stream schema.
-- The message server exposes product contacts, rooms, members, messages, and channel content back to the Agent through the separate Product Capability gRPC service. A Product Capability handler must not synchronously call back into Agent. Both directions carry the authenticated owner, account generation, granted scopes, operation identity, and call-chain fence; loops fail closed.
-- Native Agent is not installed, enabled, configured, or invoked through `plugins.*`. Backend `plugins.*` actions remain for non-Agent plugins.
-- Model-backed Native Agent `agent.chat` and `agent.chat.stream` require the owner-selected `model_profile_id` together with positive `model_profile_revision` and `credential_version` pins. The durable stream may also carry explicit local MCP selections bound to an installed/enabled installation UUID, its exact source version or commit, active content digest, and a non-empty exact tool allowlist. The model chooses among only those selected local tools and server-owned intrinsics; local execution failure never authorizes a Cloud Worker retry. The message server forwards these immutable pins unchanged; inline profiles, tool credentials, client profile aliases, and default-profile fallback are rejected before capability execution. Compression and other server-owned workflows retain their separately documented default behavior. Flutter configures profiles through the proxied model-profile actions and sends only profile identifiers and exact revision pins; it does not persist or send inline API keys after server-profile synchronization. Model API keys are write-only and must not be returned, logged, or injected into unrelated extension/runtime state.
-- Native Agent BYOK web search uses an Agent-owned encrypted Tavily credential.
-  Owners read safe state with `agent.web_search.config.get`, update it with
-  revision-checked `agent.web_search.config.update`, and verify it with
-  `agent.web_search.test`. The API key is accepted only by config update, is
-  write-only, and is never returned through config, test, chat, logs, errors,
-  durable turns, or events. Readback exposes only configured state and the
-  non-secret fixed hint `configured`.
-- The current Web Search provider set is exactly `tavily`. Additional providers
-  require provider-specific schemas, validation, adapters, and encrypted
-  fields; neither ProductCore nor Agent exposes an arbitrary key/value
-  credential store.
-- Chat and stream requests do not accept `tool_credentials`; the compiled
-  `web_search` Eino tool is available only from enabled, configured Agent-owned
-  web-search state. This is a single credential path, not a request fallback.
-- Web search performs one bounded HTTPS Tavily request (a local injected endpoint is only a test seam), rejects redirects, trims queries to 1,000 Unicode characters, clamps and re-enforces `max_results` to 1–10, limits provider bodies to 2 MiB, and applies a 15-second timeout. Responses contain only bounded answer/title/content previews, URLs, scores, and provider metadata. Provider bodies and credential values are not returned on errors.
-- Typed selection tools are Agent-owned and are exposed only through the
-  owner-authenticated ProductCore actions `agent.text_tools.config.get`,
-  `agent.text_tools.config.update`, and `agent.text_tools.execute`. Config get
-  has empty parameters. Config update is a revision-checked, idempotent
-  full-list replacement of at most 32 ordered tools, with at most six enabled;
-  it may add, delete, or reorder stable default IDs (`translation`, `summary`, `explanation`,
-  `search`) and UUID custom IDs. Execute accepts exactly `tool_id`, a
-  bounded selected-text value, and required `output_language` (`zh` or `en`),
-  which fixes the output language for both default and custom tools; it never accepts a prompt, model/profile,
-  history, or credential field. Results expose only bounded output and at most
-  five bounded `{title,url,snippet}` sources. Message Server has no text-tool
-  database or runtime fallback, and a possibly dispatched config mutation is
-  reconciled with config get rather than automatically replayed.
-- `text_tools.server` is advertised only when the registered
-  `agent.text_tools.v1` capability is ready with all three operations and the
-  exact pinned request/result schema identities.
-- Image text tools are a separate owner-authenticated, one-shot typed surface:
-  `agent.image_tools.upload.begin`, `agent.image_tools.upload.append`,
-  `agent.image_tools.upload.commit`, `agent.image_tools.extract_text`, and
-  `agent.image_tools.translate_text`. Flutter downloads and decrypts Matrix
-  media, then uploads only JPEG, PNG, or WebP bytes through the bounded 8 MiB,
-  1 MiB-chunk flow. The contract never accepts an MXC/HTTP URL, local path,
-  data URI, inline prompt/history, selected text, model/profile identifier, or
-  credential field. A committed source has revision 1 and is owner/account-
-  generation scoped, expires after the Agent-defined short lifetime, and is
-  consumed by exactly one extraction or translation execution. Translation
-  requires a canonical BCP-47 target locale; successful execution returns only
-  the request/source identity, optional target locale, and at most 64 KiB of
-  UTF-8 text (which may be empty). Message Server stores no image or OCR state,
-  pins `agent.image_tools.v1` schemas on each live lookup, and deliberately does
-  not add this optional capability to the ordinary model/chat readiness gate.
-- Durable Native Agent turn digests and events are secret-free. Reconnect and
-  resume requests never carry, persist, or reconstruct a credential from turn
-  state; the Agent resolves web-search configuration through its encrypted
-  owner-scoped store.
-- With persistent server conversation memory, the client sends only the current `message`, canonical `conversation_id`, one canonical `idempotency_key`, and committed attachment references. Reconnect reuses the same idempotency key with the latest `after_seq`; `turn_id`, `client_message_id`, `request_id`, and `prompt` are not start-stream aliases. It does not replay `messages`; the server rejects such history, loads the authoritative transcript, automatically summarizes older context against the model token budget, and generates the first successful conversation title with a redacted first-instruction fallback.
-- Agent-authored durable progress is the only source of the internal turn
-  identity. Every business event, including `accepted`, carries the same
-  canonical `idempotency_key`, `conversation_id`, `turn_id`, and a positive
-  authoritative `revision`; the ProductCore request correlation `id` and the
-  capability protocol operation ID are never projected as `turn_id`. The
-  `stream_chat` result and nested done response use `idempotency_key`, not a
-  `request_id` alias. Input, result, and event schema digests are all pinned by
-  Message Server readiness. A local MCP/Skill confirmation pause is projected
-  as the non-terminal `waiting_confirmation` event with exact
-  `confirmation_id`, `execution_id`, and
-  `status=waiting_confirmation`; it is never represented as an empty tool
-  event or inferred from model text. `attempt_id` is not part of the public
-  durable event. Non-waiting events cannot carry confirmation, execution, or
-  waiting status authority, and waiting events cannot mix text, tool call,
-  tool result, response, or error fields.
-- Cloud Worker lifecycle changes cross the same durable stream once as
-  `worker_status`, carrying only canonical turn identity, `execution_id`, one
-  canonical lifecycle `status`, and `created_at`. While work is active, the
-  event may additionally carry the display-only `phase` value
-  with `status=running`: `preparing_environment`, `provisioning_worker`,
-  `connecting_worker`, `executing_remote_task`, `collecting_result`, or
-  `verifying_service`.
-  Missing phase remains valid; phase never changes lifecycle status,
-  terminality, or steer authority. Message Server forwards the event without
-  polling, reinterpretation, or fallback.
-- A terminal capability `ErrorEvent` has no business turn identity and is
-  never projected directly. Message Server resolves the current
-  `agent.chat.turns.list` ledger, matches the exact conversation and original
-  start idempotency key, and publishes the failed turn's authoritative
-  `turn_id`, `revision`, `terminal_code`, and `terminal_summary`. This also
-  closes an `after_seq` reconnect that observes only the capability terminal.
-  If no exact failed turn exists, Message Server returns only the sanitized
-  capability failure and does not fabricate a turn identity or infer a code
-  from error text.
-- Durable turn reconciliation uses `agent.chat.turns.list` with one canonical
-  conversation UUID, an optional opaque page token of at most 4,096 bytes, and
-  an optional limit from 1 through 1,000. Each returned turn is the exact
-  ten-field public metadata projection: internal `turn_id`, original start
-  `idempotency_key`, `conversation_id`, `state`, `revision`, `last_sequence`,
-  `terminal_code`, `terminal_summary`, `created_at`, and `updated_at`. Prompt,
-  request fingerprints, model/profile data, credential material, and execution
-  snapshots remain Agent-private; aliases, extra fields, and malformed UUIDs
-  fail closed at both proxy boundaries. `agent.chat.turn.stop` is the typed
-  `agent.chat.v1/stop_turn` mutation and accepts exactly `idempotency_key`
-  and the internal `turn_id`; it returns the same exact
-  ten-field authoritative metadata. It never calls the generic capability
-  `CancelOperation` RPC.
-- Generating Native turns and confirmation-waiting turns whose Cloud Worker
-  task is already queued or running accept same-turn guidance only through
-  `agent.chat.turn.steer`, bound to `agent.chat.v1/steer_turn`. The mutation
-  sends exactly a new UUID `idempotency_key`, the authoritative `turn_id`, its
-  positive `expected_revision`, one bounded non-empty `instruction`, and
-  optionally up to four unique committed attachment UUIDs in
-  `accepted_attachment_ids`. Text and attachments form one same-turn guidance
-  mutation. Agent Core persists the instruction and attachment references,
-  invalidates the current provider lease, and regenerates the same turn
-  immediately. The result retains the original
-  start idempotency identity and adds the exact `steer_idempotency_key`
-  receipt. Message Server never creates, queues, or starts a successor turn.
-- Native Agent deployment planning treats an empty target inventory as a signal
-  to compare and reserve a new AWS target, not as a terminal error. The bounded
-  target-reservation tool creates only a logical revision-1 reservation; EC2
-  creation remains an owner-confirmed `resource_purchase` stage. AI runtime
-  plans ask the owner to choose an existing server-owned API-key secret
-  reference or an interactive authorization gate and never collect secret
-  plaintext in chat.
-- If AWS credential inventory is empty, Native Agent fails closed and does not
-  reserve a target. The Agent-owned AWS credential API contract remains, but
-  the current Flutter release does not expose its management UI. A listed
-  credential is eligible only when `verified_revision == revision`. Credential
-  and model-secret readback exposes configured state and conservative display
-  hints only; display masks are never accepted as replacement secret values.
-- `skills.server` is advertised only when the external Agent registry publishes
-  the full Skills lifecycle. `mcp` is advertised only when MCP lifecycle
-  operations are published. A product-capability bridge by itself advertises
-  neither token.
-- Managed Node MCP discovery uses the explicit `npm` source and an immutable
-  `registry_version` plus `registry_sha256` pin. Its transport is
-  `stdio_node`; the inspected stdio entry has `runtime=node`, and inspection
-  accepts no Node build receipt, network grant, secret grant, or client secret
-  input. The Node build receipt is Agent-authored only after publication and
-  is returned on the published version as exactly `package_name`,
-  `package_version`, `artifact_bytes`, `file_count`, `node_version`,
-  `npm_version`, `lifecycle_scripts_disabled`, and `native_addons_absent`.
-  `lifecycle_scripts_disabled=true` attests that dependency resolution and
-  offline installation both disabled lifecycle execution; package declarations
-  may remain in the immutable source artifact. The superseded
-  `lifecycle_scripts_absent` field, a false value, or any ninth field is
-  rejected.
-  Internal artifact, entry, lock, and input digests are not ProductCore fields.
-  Capacity failures expose only the stable safe codes
-  `extension_install_busy`, `extension_installation_limit`, and
-  `extension_node_storage_quota`; raw Agent sentinels and private details are
-  never reflected to the client.
-- Skill discovery accepts the Agent-owned `builtin`, `skills_sh`, and `github`
-  sources and only `kind=skill` with `transport=skill_static`. MCP discovery
-  separately accepts `official_registry`, `smithery`, `glama`, `github`, and
-  `npm`, only `kind=mcp`, and only `stdio_static`, `streamable_http`, or
-  `stdio_node`. The generated ProductCore schemas and Message Server request
-  validation keep these action families disjoint; a candidate, source,
-  transport, or inspection execution branch from the other family is rejected
-  before the Agent call. Built-in Skills are ordinary pinned installation
-  records: Flutter may inspect, install, update, or remove them, while Message
-  Server remains a schema-validating proxy and never reseeds or executes Skill
-  content. Agent restart does not reinstall a built-in Skill the owner removed.
-- The current Flutter release hides AWS management/planning UI, and the
-  external Agent registry release-hides AWS-specific Skills: they are not
-  listed, selected explicitly or by intent, added to bootstrap metadata, or
-  injected into the Native Agent prompt. Message Server does not recreate an
-  embedded Planning Skill catalog or runtime fallback for this visibility gate.
-- Supported model-provider identifiers are `openai`, `anthropic`, `deepseek`, `gemini`, `xai`, `openai_compatible`, and `openrouter`. `litellm`, `vertex`, and unknown identifiers are rejected; clients use `openai_compatible` for custom compatible endpoints.
-- `agent.models.list` is the provider/runtime catalog backed by Agent Core
-  `agent.info.v1/list_models`; it returns `models` and `providers` and remains
-  separate from `agent.model_profiles.list`, which returns persisted `profiles` from
-  `agent.models.v1/list_models`. An omitted `model_kind` is canonicalized to
-  `conversation` at the gateway boundary. The catalog preserves upstream
-  `input_modalities` only when the
-  provider explicitly returns it on the model or its `architecture`. The
-  server normalizes known `text` and `image` values and never infers image
-  support from a model ID, name, provider, or URL. A client may preselect its
-  image-input control from this metadata, while an existing saved profile's
-  explicit modalities remain authoritative.
-- Native Agent knowledge is an owner-scoped server surface. Source upload uses
-  `agent.knowledge.sources.list`, `.delete`, `agent.knowledge.upload.start`,
-  `.chunk`, and `.finish`; V1 accepts valid UTF-8 `text/plain`,
-  `text/markdown`, and `application/json` files up to 16 MiB, with
-  canonical base64 chunks no larger than 256 KiB. `upload.start` requires the
-  complete content SHA-256 before any session is created; upload progress is
-  byte-based, and a source is `ready` only after all vectors and the source
-  record commit atomically. The current owner default embedding profile is
-  resolved by the server, and knowledge actions never accept or return model
-  credentials, provider settings, or base URLs. Config reads/writes expose the
-  non-secret profile id/revision, model, collection digest, and config revision;
-  search pages additionally expose the exact embedding generation and replay
-  those values from opaque cursor snapshots. Retained Knowledge content has a
-  64 MiB owner quota. `agent.knowledge.status` strictly projects the Agent-owned
-  source lifecycle counters `ready_count`, `uploading_count`, `indexing_count`,
-  `failed_count`, and `cleanup_pending_count`, their `checked_at` timestamp, and
-  the `quota_used_bytes`, `quota_limit_bytes`, `quota_remaining_bytes`, and
-  `max_source_bytes` counters. Agent `RESOURCE_EXHAUSTED` failures carrying
-  `details.code=knowledge_quota_exceeded` map to ProductCore HTTP 413 with both
-  `code` and `error_code` set to `knowledge_quota_exceeded`.
-- Automatic user-fact memory is the single long-term-memory truth mapped to
-  `agent.memory.v1`: `agent.memory.config.get`,
-  `agent.memory.config.update`, `agent.memory.status`,
-  `agent.memory.facts.update`, and `agent.memory.facts.delete`. Fresh state is
-  disabled. Enabling requires Agent to prove a configured active embedding
-  profile; the gateway preserves the typed precondition failure. Status
-  exposes the non-secret embedding profile/model identity, revision, bounded
-  current facts, separate effective/observed timeline clocks, and
-  pending/failed observation counters. Fact edits replace the exact active fact
-  while preserving its semantic key and append timeline history; deletion
-  retracts the exact active fact. Both mutations are owner-scoped and
-  idempotent. Message Server validates and projects this closed contract but
-  never extracts, stores, or recalls facts itself.
-- Successful `agent.chat` responses and Native Agent stream `done` payloads may include additive `related_task_ids`, `related_plan_ids`, and strict `references[]`. Message Server promotes only fields authored by Agent at the top level, on the assistant message, or in the nested stream response; it never synthesizes a reference from a related id. Room references derived from successful built-in Dirextalk tool results use `kind=room`, `room_id`, optional `room_type=direct|group|channel`, `title`, and optional `preview`; channel-post references use `kind=channel_post`, `room_id`, `channel_id`, `post_id`, `title`, and optional `preview`. Every Cloud Worker execution reference carries kind, account generation, task id, and plan id/revision. A plan adds only status; a run adds run id/revision, independent execution id, optional canonical Worker UUID, and status; a confirmation adds confirmation id/revision and state. Cross-kind fields and digests are rejected. Generic Execution V2 references retain their separate digest-bearing schema. References are informational projections, not confirmation authority; they preserve producer order, reject duplicates or unknown fields/kinds, never include message `event_id`, and are not inferred from model-authored text or third-party/runtime tool output.
-- `mcp.channel_posts.list` and the Agent-side `dirextalk_channel_posts_list` result envelope include both top-level `channel_id` and `room_id`, allowing a post reference to identify its product channel and Matrix room without parsing post content.
+- Flutter first calls owner-only ProductCore action `agent.session.create`, then
+  sends the returned 15-minute ticket to same-origin `/agent/v1/*` routes.
+- Message Server no longer registers or proxies Native Agent business actions.
+  Chat, attachments, confirmations, Workers, models/config, credentials,
+  memory/Knowledge, Tasks/schedules, Skills/MCP, static sites, image/text/web
+  tools, voice, runtime, AWS, and Execution V2 are direct Agent HTTP APIs.
+- Writes are ordinary POST admissions returning `202`; observation is separate
+  resumable SSE; history and state are authoritative Agent GETs. SSE disconnect
+  cancels only the watch.
+- Client retries preserve the exact operation identity and idempotency tuple.
+  Stop uses turn plus idempotency identity; revision CAS is reserved for steer,
+  attachments, and other genuinely concurrent mutations.
+- Agent owns prompt/profile validation, encrypted credentials, reasoning and
+  transcript persistence, long-term memory, Worker progress, domains/TLS,
+  static-site releases, and artifact bytes. Message Server does not inspect,
+  reshape, or store them.
+- Native Agent is not installed, enabled, configured, or invoked through
+  `plugins.*`; those actions remain for non-Agent plugins only.
 
-### Native Agent schedule chat tools
+## Product Capability callback
 
-- Interactive Native Agent turns expose bounded read-only
-  `native_agent_schedules_list`, `native_agent_schedules_get`,
-  `native_agent_schedule_runs_list`, and `native_agent_schedule_runs_get`
-  tools. When the Agent conversation/schedule store is composed, a durable
-  turn also receives the Core-owned `agent.schedule.create` intrinsic for
-  natural-language creation of one-time or recurring schedules.
-- `agent.schedule.create` is internal to Agent Core. It is not a new
-  ProductCore action or a Product Capability callback. The model supplies only
-  bounded schedule intent, trigger, timezone, and timeout arguments; Core
-  injects owner, account generation, conversation, and pinned model profile
-  authority from the fenced `TurnLease` and commits the schedule with the turn
-  receipt.
-- ProductCore `agent.core.schedules.*` actions are the only owner-authenticated
-  CRUD/runtime surface. Native turns do not expose schedule update, pause,
-  resume, delete, or trigger mutations to the model. The read tools and Core
-  create intrinsic remain separate from the restricted scheduled-runner
-  allowlist and from the Online Agent Matrix room/timeline; the scheduled
-  runner cannot call mutation tools.
+Agent reaches contacts, rooms, members, messages, and channel content through
+the private Product Capability gRPC service. It is an Agent-to-Message-Server
+direction with mTLS, direction token, peer/account-generation identity,
+operation identity, scoped grants, and call-chain loop rejection.
 
-## Execution Orchestration V2 (contract and release gate)
+Handlers never synchronously call Agent. Execution completion is an async,
+private callback that records only a minimal receipt and Product event. The
+client then reads authoritative conversation, Worker, and artifact state from
+Agent.
 
-The detailed normative contract is
-[`agent-core-integration-development-contract.md`](agent-core-integration-development-contract.md);
-the accepted architecture decision is
-[`adr/2026-07-31-execution-orchestration-v2.md`](adr/2026-07-31-execution-orchestration-v2.md).
-V2 planning is declarative and side-effect free; remote mutations use the
-Agent-owned typed coordinator with durable receipts and explicit uncertainty.
-The Message Server is only the authenticated product proxy and does not execute
-third-party shell/code/Skills or expose raw SSM/SSH/AWS passthrough. Agent owns
-Worker selection, provisioning, reuse, and execution; Message Server exposes
-only the provider-neutral Worker projection and does not copy local Native
-Agent installations, their credentials, or the Extension Runner into a Worker.
+## Consumer boundaries
 
-The closed Cloud Worker plan projection contains owner/account generation,
-plan/revision/status, execution/task/confirmation/conversation/turn identity,
-the objective and proposal reason, persistent-worker reuse preference,
-workspace mode, AWS account/region, compute and runtime limits, the single live
-proposal quote, and timestamps. Compute includes selected
-instance type, vCPU, memory GiB, and volume GiB/type/IOPS/throughput; quote
-includes hourly compute micros, total and maximum-authorized micros, currency,
-source time, and expiry. The closed run projection
-contains the same authority and conversation linkage, run/execution/plan
-identity and plan revision, status/revision, Worker identity and persistence,
-artifact ids, failure summary, and timestamps.
-Neither projection exposes recipe/adapter/model/input-manifest pins, AMI or
-runtime implementation details, credential revisions, or authorization
-digests. Run and execution identifiers are independent identities.
-
-Every `execution.v2.*` capability and ProductCore action is published only
-after its authenticated route, durable PostgreSQL state, typed
-executor/transport, focused tests, and explicit readiness/enablement all pass.
-The final Execution V2 schema is registered by the Agent migration registry,
-but runtime capability/readiness remains separately gated; action registration,
-schemas, and docs alone are not live. Cloud Worker offers originate only in an
-Agent conversation and use generic `agent.core.confirmations.*`; the former
-Execution V2 confirmation aliases and public `runs.reconcile` are absent.
-Worker completion reaches Message Server only through the private fixed
-`product.agent_execution.v1/record_completion` receipt callback after Agent
-result validation. Worker retention or cleanup is an independent lifecycle
-choice reflected by run state and does not block a terminal result. The receipt carries execution and turn
-identity plus terminal state/time/digest; it does not carry an assistant-message
-identity because the central continuation creates that message.
-
-Verified Cloud Worker and local-sandbox output is managed through the
-owner-authenticated `agent.execution.v2.artifacts.get/download/delete` proxy.
-Each request binds the artifact UUID and exact `cloud_worker` or
-`local_sandbox` record kind. Download is a bounded 512 KiB offset-based read
-with exact per-chunk and whole-artifact SHA-256 metadata. Delete requires a
-stable UUID idempotency key and returns the deleted public artifact plus
-`deleted=true`. Message Server returns only validated public artifact or
-identity/range fields; it never exposes a storage locator, signed URL,
-retention ledger, Worker diagnostics, or provider credentials.
-
-Cloud Worker `agent.execution.v2.runs.events` returns the exact
-`events`/`next_sequence`/`history_truncated` envelope. Agent retains a bounded
-4096-event history per run; `history_truncated=true` means the requested
-`after_sequence` precedes the retained window and the returned cursor starts at
-the oldest retained event. A non-truncated page starts at `after_sequence+1`;
-all events after the first item in either page form are contiguous.
-Events carry only identity, revision, sequence, type, time, payload digest, and
-an optional lifecycle status. Runtime progress snapshots and implementation
-diagnostics are not part of the public event shape.
-
-## Consumer Boundaries
-
-- `dirextalk-connect` owns the local conversation bridge. It consumes the Matrix session and real `agent_room_id` for message sync/send and consumes the deployed `https://<server>/mcp` endpoint only through a runtime capability that supports connect-managed MCP. Host-managed runtimes keep MCP enrollment in their host runtime.
-- `dirextalk-deployer` creates the Agent Matrix session, writes service-scoped `dirextalk-connect` configuration, records the canonical `/mcp` endpoint and Agent bearer credential, and generates only the runtime-specific MCP artifacts allowed by the capability registry.
-- Neither consumer owns MCP business logic. They must not recreate a local MCP CLI, daemon, proxy, stdio bridge, listening port, fixed `mcp.*` product action path, or alternate endpoint.
-- Flutter reads Online Agent availability from Matrix state in `agent_room_id` and uses backend-owned `agent.*` actions and native stream frames for Native Agent. It does not call fixed `mcp.*` product actions.
+- ProductCore exposes exactly five `agent.*` control actions:
+  `agent.password`, `agent.matrix_session.create`, `agent.session.create`,
+  `agent.config.get`, and `agent.config.update`. The config pair is limited to
+  Message Server-owned Online Matrix identity, enablement, and MCP blocked-room
+  policy; it is not a Native Agent runtime proxy.
+- Agent bearer token remains valid only for `agent.matrix_session.create` and
+  standard `POST /mcp`; it cannot mint an owner Agent data-plane ticket.
+- Native Agent tickets are short-lived, owner/account-generation/scope bound,
+  and never persisted or logged by Message Server.
+- No removed ProductCore Agent action, gRPC owner proxy, schema pin table,
+  synchronous Watch, or compatibility alias may be reintroduced.

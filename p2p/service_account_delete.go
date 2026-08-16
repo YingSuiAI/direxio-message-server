@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/YingSuiAI/dirextalk-message-server/internal/releasecontrol"
-	"github.com/google/uuid"
 )
 
 const accountDeleteConfirmValue = "delete_account"
@@ -58,15 +57,10 @@ func (s *Service) deleteAccount(ctx context.Context, params map[string]any) (any
 			s.finishAccountDeletion()
 		}
 	}()
-	// Deprovisioning is intentionally monotonic. Arm the updater watchdog (or
-	// the explicit standalone-mode fence) before the first destructive call.
-	// Once armed, any later failure remains deprovisioned and is retried; it is
-	// unsafe to advertise "running" after Agent DB/external purge may have
-	// committed.
+	// Native Agent account deprovisioning is a direct data-plane operation and
+	// must complete before the client invokes this Message Server control-plane
+	// deletion. Arm the updater before deleting Message Server-owned state.
 	if apiErr := s.setAccountDesiredStateDeprovisioned(ctx); apiErr != nil {
-		return nil, apiErr
-	}
-	if apiErr := s.deprovisionExternalAgent(ctx); apiErr != nil {
 		return nil, apiErr
 	}
 	result, apiErr := s.deleteAccountAfterDesiredState(ctx)
@@ -75,46 +69,6 @@ func (s *Service) deleteAccount(ctx context.Context, params map[string]any) (any
 	}
 	success = true
 	return result, nil
-}
-
-// deprovisionExternalAgent is the first destructive-account-delete step in a
-// split deployment. Agent-owned data must be purged and acknowledged before
-// message-server begins Matrix/database cleanup; otherwise a partial delete
-// could leave private Native Agent data behind. The operation id is stable for
-// the current owner/generation so retries resume the same Agent ledger entry.
-func (s *Service) deprovisionExternalAgent(ctx context.Context) *apiError {
-	if s == nil {
-		return statusError(http.StatusServiceUnavailable, "external Agent deprovision capability unavailable")
-	}
-	handler := s.actions["agent.account.deprovision"]
-	if handler == nil {
-		return statusError(http.StatusServiceUnavailable, "external Agent deprovision capability unavailable")
-	}
-	s.mu.Lock()
-	owner := strings.TrimSpace(s.ownerMXID)
-	s.mu.Unlock()
-	generation := s.accountGeneration
-	if owner == "" || generation == 0 {
-		return statusError(http.StatusUnauthorized, "account identity is unavailable")
-	}
-	operationID := uuid.NewSHA1(uuid.NameSpaceOID, []byte("dirextalk:agent-deprovision:\x00"+owner+"\x00"+fmt.Sprint(generation))).String()
-	result, actionErr := handler(ctx, map[string]any{
-		"operation_id":    operationID,
-		"confirm":         "deprovision_account",
-		"idempotency_key": operationID,
-	})
-	if actionErr != nil {
-		return codedError(http.StatusBadGateway, "agent_deprovision_failed", "Agent account deprovision was not confirmed")
-	}
-	resultMap, ok := result.(map[string]any)
-	if !ok {
-		return codedError(http.StatusBadGateway, "agent_deprovision_unconfirmed", "Agent account deprovision was not confirmed")
-	}
-	status := strings.ToLower(strings.TrimSpace(actionbaseString(resultMap["status"])))
-	if status != "deprovisioned" && status != "completed" && status != "purged" {
-		return codedError(http.StatusBadGateway, "agent_deprovision_unconfirmed", "Agent account deprovision was not confirmed")
-	}
-	return nil
 }
 
 func (s *Service) deleteAccountAfterDesiredState(ctx context.Context) (any, *apiError) {

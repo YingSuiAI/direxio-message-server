@@ -1,342 +1,132 @@
-# External Agent Core Integration Contract
+# Native Agent data-plane contract
 
 Status: current split-service contract
 
-This document defines the Message Server side of the Native Agent integration.
-The Agent implementation, storage schema, and versioned Capability API are
-owned by `dirextalk-agent` and `dirextalk-capability-api`. Current code,
-generated ProductCore action metadata, Protobuf descriptors, and focused tests
-override narrative documentation.
+This document defines the Message Server boundary. Agent routes and payloads
+are owned by `dirextalk-agent`; the Flutter client consumes those routes through
+the same public origin.
 
-## 1. Topology and ownership
+## Topology and ownership
 
-- Flutter connects only to `dirextalk-message-server` with the normal owner
-  `access_token`. It never receives an Agent service address, service token,
-  client certificate, database credential, or direct upload endpoint.
-- `dirextalk-message-server` owns ProductCore authentication, the public
-  `agent.*` action envelope, Native Agent text HTTP/SSE transport, product
-  policy, Matrix state, and product capabilities.
-- `dirextalk-agent` is the only Native Agent runtime. It owns conversations,
-  model profiles and provider credentials, knowledge and long-term memory,
-  tasks, schedules, confirmations, Skills/MCP installations, Execution V2,
-  AWS configuration, and Agent runtime data.
-- Online Agent remains the private Matrix `agent_room_id` conversation. Native
-  Agent remains the ProductCore `agent.*` HTTP/SSE surface. The two transports
-  do not share history or online-state inference.
-- Message Server contains no in-process Native Agent runner, Agent database
-  schema, model provider, knowledge index, scheduler, extension runner, or
-  Execution V2 coordinator.
+- Message Server owns login, portal/account control, Matrix/ProductCore, the
+  standard external `POST /mcp`, and short-lived Agent session ticket issuance.
+- Agent owns its HTTP data plane: conversations, turns, reasoning/events,
+  attachments, confirmations, Worker lifecycle, models and credentials,
+  memory/Knowledge, Tasks/schedules, Skills/MCP, static sites, runtime tools,
+  AWS state, and Execution V2 artifacts.
+- Caddy routes `/agent/v1/*` directly to the Docker service name `agent:8082`
+  without stripping the path. The Agent port is exposed only to the shared
+  Compose edge network and is never host-published or sent to the client.
+- Flutter uses the public Message Server domain for both control and data
+  planes. It never receives an Agent internal address, long-lived Agent service
+  token, client certificate, or database credential.
+- Message Server contains no Agent business-action proxy, schema projection,
+  synchronous Watch, conversation store, Worker adapter, or catalog digest
+  table. Superseded ProductCore `agent.*` business actions are not aliases for
+  the direct data plane.
 
-## 2. Public client contract
+## Session ticket
 
-Native Agent text turns use one owner-authenticated HTTP mutation followed by
-one read-only SSE attachment. Message Server maps both to the external Agent
-Capability gRPC catalog and does not keep a second turn/event store.
+An authenticated owner obtains a ticket through the existing ProductCore
+envelope with action `agent.session.create`. The optional request field
+`session_id` is a canonical UUID; omitting it creates a new UUID. The exact
+response fields are:
 
-`POST /_p2p/agent/chat/conversations/{conversation_id}/turns` accepts the
-closed `agent.chat.stream` business request without `conversation_id` in the
-body. It returns `202 Accepted`, a stable turn receipt, and a `Location` header
-only after Agent has persisted the accepted event. The UUID
-`idempotency_key` is the durable capability operation identity, so replaying
-the exact request cannot create a second turn and a conflicting request is
-`409`.
+- `ticket`: compact Ed25519 JWS/JWT;
+- `expires_at`: UTC RFC3339 expiry;
+- `base_path`: `/agent/v1`;
+- `session_id`: canonical UUID;
+- `scopes`: the explicit current owner-client Agent scope set.
 
-`GET /_p2p/agent/chat/conversations/{conversation_id}/turns/{turn_id}` reads
-the exact Agent-owned turn ledger entry. Its `/events` child is
-`text/event-stream`: durable positive sequence is the SSE `id`, `after_seq` or
-`Last-Event-ID` resumes after that sequence, and both cursors must agree when
-sent together. Every `data` object carries `action`, the exact Agent-authored
-event name/data, turn/idempotency/conversation identity, revision, and `seq`.
-An existing `delta` event may carry `reasoning_content` without ordinary
-`text`; terminal `done` and assistant messages returned by conversation
-history carry the complete optional `reasoning_content` string.
-The stream sends 15-second comment heartbeats and closes after `done`, `error`,
-or `cancelled`. Disconnect detaches only that Watch and never cancels or
-re-admits the durable operation. Turn stop and confirmations remain separate
-HTTP mutations.
+The ticket lifetime is 15 minutes. Its claims are exactly `iss`, `aud`, `sub`,
+`account_generation`, `session_id`, `nonce`, `scope`, `iat`, and `exp`.
+`iss` is `dirextalk-message-server`, `aud` is `dirextalk-agent-data`, `sub` is
+the portal owner MXID, and owner/account generation are server-derived. The
+signing key is the existing capability-grant Ed25519 key; only its public key
+is mounted into Agent.
 
-`agent.backends.get` keeps the current response envelope:
+Agent rejects expired tickets with `401 AGENT_TICKET_EXPIRED`. Missing scope,
+foreign owner, or stale account generation is `403`. The client cannot choose
+or widen scopes. Tickets and Authorization headers must not be logged.
 
-```json
-{
-  "core": {
-    "available": true,
-    "configured": true,
-    "status": "ready",
-    "instance_id": "...",
-    "api_version": "...",
-    "release_version": "v1.0.0",
-    "capabilities": [],
-    "supported_model_providers": []
-  },
-  "embedded": {
-    "available": false,
-    "configured": false,
-    "status": "disabled",
-    "capabilities": [],
-    "supported_model_providers": []
-  }
-}
-```
+## HTTP and SSE semantics
 
-`core` is the only executable Native Agent backend. `embedded` is a disabled
-diagnostic value and is never selected, retried, or used as a fallback.
-Completed discovery with an unavailable Core is an explicit error/retry state,
-not a loading state.
+- A business mutation is a normal HTTP `POST`. Agent persists admission before
+  returning `202 Accepted` with the frozen `operation_id`, `turn_id` where
+  applicable, and `idempotency_key`; the request does not wait for execution or
+  stream completion.
+- An unknown POST outcome is resolved by authoritative GET or by replaying the
+  identical frozen request and idempotency tuple. A retry never creates a new
+  key, revision, or parameter set.
+- Streaming output uses a separate `text/event-stream` GET. Event sequence is
+  durable and resumes after `Last-Event-ID` or `after_seq`; Agent history and
+  status GETs are authoritative after reconnect or app restart.
+- Caddy preserves the full path, Host, forwarding headers, and Authorization.
+  Its Agent reverse proxy uses `flush_interval -1` and no short stream read
+  timeout or response buffering.
+- Disconnecting an SSE request cancels only that observation. It never cancels,
+  repeats, or changes the durable operation.
+- Stop binds only the original `turn_id` and `idempotency_key`. Steer and
+  attachment mutations use revision CAS only where their concurrent state
+  actually requires it.
+- Reasoning is Agent-owned history. Each turn segment remains independently
+  recoverable and foldable by the client; a later steer does not overwrite an
+  earlier reasoning segment.
 
-The Core `capabilities` array is generated from the Agent registry descriptors
-that passed publication readiness. Client-facing tokens are projections of
-real registered operations, not configuration guesses. The current tokens are:
+## Product collaboration
 
-```text
-agent.info
-config
-conversation
-model.profile
-model_profiles.server
-model_roles.server
-knowledge
-memory.server
-static_sites.server
-workers.server
-task
-schedules.server
-confirmation
-skills.server
-mcp
-aws.control
-voice.server
-text_tools.server
-execution.v2
-execution.v2.plan
-execution.v2.run
-execution.v2.observe
-execution.v2.provision
-execution.v2.bindings
-execution.v2.secrets
-execution.v2.transport.aws_ssm
-execution.v2.transport.http_api
-```
+Agent may call Message Server's private Product Capability gRPC service to read
+or mutate Matrix/ProductCore state. That direction retains mTLS, direction
+token, Agent peer identity, account-generation fence, operation identity, and
+call-chain loop rejection. Product Capability handlers never synchronously
+call Agent. Follow-up work is an Agent-owned async event/callback.
 
-A token is omitted when its backing descriptor or required operation is not
-published. In particular, a Product Capability bridge alone does not publish
-`skills.server` or `mcp`. Registration, schema presence, or documentation alone
-never makes an action live.
+The private `product.agent_execution.v1/record_completion` callback stores only
+the minimal completion receipt and one owner realtime invalidation. Result
+text, Worker state, artifacts, quotes, and AWS details remain Agent authority;
+Flutter treats the Product event as an invalidation and reads Agent state.
 
-`memory.server` covers durable Native conversation/history support and remains
-the client availability gate for the adjacent automatic-memory controls. The
-five public memory actions bind exactly to `agent.memory.v1/get_config`,
-`update_config`, `status`, `update_fact`, and `delete_fact`. The descriptor
-schemas are digest-pinned; config updates require UUID idempotency plus expected
-revision, fact mutations require an exact fact UUID plus UUID idempotency, and
-result projection is closed over non-secret model readiness, facts, timeline,
-and observation counters.
+The external MCP endpoint is separate: `POST /mcp` authenticates the existing
+Agent bearer token and exposes Message Server-owned Dirextalk tools. It is not
+the Native Agent data plane and does not restore removed ProductCore actions.
 
-`static_sites.server` is published only when the ready
-`agent.static_sites.v1` descriptor contains both `list_releases` and
-`delete_release`. Flutter gates the server-backed release inventory on this
-token. Its only public ProductCore actions are `agent.static_sites.list` and
-`agent.static_sites.delete`; static HTML publication remains an Agent tool
-operation rather than a second Message Server action.
+## Data, deletion, and deployment
 
-`workers.server` is published only when the ready `agent.worker.v1` descriptor
-contains `list_workers`, `get_worker`, `destroy_worker`, `bind_domain`, and
-`unbind_domain`. The matching owner actions are `agent.workers.list`,
-`agent.workers.get`, `agent.workers.destroy`, `agent.workers.bind_domain`, and
-`agent.workers.unbind_domain`. Worker identity and the explicit mutation
-confirmation are forwarded unchanged; AWS ownership and Route 53 read-back
-remain Agent responsibilities. Domains use the Worker's ordinary public IPv4
-and do not require an EIP. Every listed or fetched Worker status includes
-`availability=available|unavailable`; an unavailable status may include a
-sanitized `error`. The public Worker identity remains the same eight fields.
+Message Server and Agent may share a PostgreSQL cluster only through separate
+roles and databases/schemas. Neither service reads or mutates the other's
+tables. Agent attachments, credentials, conversations, Worker records, and
+artifacts never enter Message Server storage.
 
-The model-profile sync/list contract includes
-`default_tool_client_profile_id`. An empty value means no tool default; a
-non-empty value must identify a conversation-kind profile in the same
-authoritative profile set. This distinct role is part of the readiness proof
-behind `model_profiles.server` and `model_roles.server`.
+For account deletion the client first completes the Agent direct
+`agent:account:deprovision` operation, then invokes Message Server portal
+account deletion. Message Server does not synchronously call Agent during its
+destructive control-plane transaction.
 
-## 3. Capability protocols
+Fresh deployment enables Agent HTTP on `0.0.0.0:8082`, joins Agent to
+`message_public`, and exposes but does not publish container port 8082. Caddy's
+`/agent/v1/*` handler precedes the Message Server catch-all while preserving
+the `/.sites/*` static-site handler. Agent starts and becomes healthy before
+Message Server. Update flows replace Agent first, then restart/update Message
+Server so downstream Product Capability and public routing observe the current
+Agent.
 
-Message Server to Agent uses the versioned Agent Capability gRPC service over
-mTLS plus a deployment-generated service token. Agent to Message Server uses a
-separate Product Capability gRPC service with its own peer identity and grant.
-The private Message Server-to-Agent channel explicitly bypasses process-wide
-HTTP(S) proxy settings and connects only through the capability network. Its
-catalog probe budget exceeds the gRPC minimum connection window so the first
-mTLS connection and authenticated catalog RPC can complete within one probe.
-Both directions enforce:
+The integration is fresh-state only. Do not add embedded runtime fallback,
+dual routes, action aliases, proxy compatibility, legacy import, or schema
+recalculation in Message Server.
 
-- authenticated peer instance identity and account generation;
-- server-derived owner identity and explicit granted scopes;
-- operation ID, canonical request digest, and bounded idempotency window;
-- call-chain ID, root operation ID, route, maximum depth, and loop rejection;
-- request/result schema digests, durable-stream event schema digests, and advertised readiness;
-- bounded deadlines, message sizes, concurrency, and sanitized errors.
+## Focused acceptance
 
-For a durable operation, the bounded CallContext deadline authorizes each
-admission or control RPC; it is not a total execution or observation timeout.
-Message Server renews the Watch admission context and its domain-separated
-control grant after Start succeeds. The live Watch is then owned by the client
-client connection lifecycle and may outlive that admission deadline. A Watch is
-detached after 30 consecutive minutes without a persisted event, on client
-disconnect, or on explicit stream cancellation; detaching never cancels the
-durable operation. Message Server reports an observation-only interruption with
-`execution_continues=true` plus the exact turn identity, revision, and sequence;
-observation resumes from that persisted sequence cursor. This interruption is
-not a terminal turn failure.
-
-Product Capability handlers must never synchronously call Agent. When a
-workflow needs asynchronous follow-up, it records an event or durable callback
-request and returns. A retry must retain the original immutable operation and
-owner fences; it must not cross into a same-name replacement account or peer.
-
-## 4. Data and secrets
-
-Message Server and Agent may use the same PostgreSQL cluster, but they use
-separate database roles and schema/database ownership. Neither service role may
-connect to, read, or mutate the other's private database or tables. The split
-deployment uses one PostgreSQL container and volume attached to both isolated
-database networks, with one network-specific hostname per application. Each
-application receives only its own non-superuser role DSN; the PostgreSQL
-cluster-admin credential is a third protected secret mounted only into the
-database service. Agent migrations are run only by the Agent role; Message
-Server migrations do not create Agent tables.
-
-This project uses a fresh-state baseline. There is no embedded-Agent row
-upgrade, dual write, fallback store, compatibility adapter, or historical
-database import. Account deletion may purge both services after revalidating
-the owner and account-generation fence.
-
-Provider keys, AWS credentials, service tokens, private keys, and database
-passwords never appear in ProductCore responses, logs, errors, operation
-digests, command arguments, or Git. Flutter writes provider credentials once
-through the model-profile action, verifies redacted readback, clears its local
-credential snapshot, and subsequently sends only exact profile/revision pins.
-
-## 5. Readiness and failure semantics
-
-Message Server publishes Native Agent actions only after a bounded catalog
-probe proves every required action and schema. A successful proof is a short
-lease. The probe loop renews before expiry with enough margin for both the
-probe interval and timeout.
-
-For each required operation, the probe verifies that input and result schema
-JSON is present, each advertised schema digest matches its bytes, and pinned
-Agent Core schema identities match the current contract. Durable streams also
-pin their event schema and digest. Rehashing the catalog does not make an
-empty, incompatible, or stale schema acceptable; schema contents are never
-included in readiness errors or logs.
-
-A failed proactive renewal may retain the previous proof only until that same
-account generation's lease expires. Initial failure, expired lease, peer or
-account-generation change, schema mismatch, authentication failure, or loop
-detection fails closed. Unrelated Matrix/ProductCore traffic remains served,
-while Native Agent calls return an explicit unavailable response.
-
-The health path must not oscillate merely because a healthy lease was allowed
-to expire before its next scheduled probe. Tests use a fake clock to cross
-multiple lease boundaries and cover renewal failure, expiry, recovery, stop,
-and account replacement.
-
-## 6. Execution V2 boundary
-
-Execution V2 state, plans, runs, artifacts, typed provider ports,
-reconciliation, and uncertainty handling are Agent-owned. User authorization
-uses only the generic Agent CoreConfirmation actions; Execution V2 does not
-publish confirmation aliases. Message Server authenticates and proxies the
-published ProductCore actions. It does not expose raw SSH, SSM, AWS SDK,
-arbitrary URL, shell, or Docker-socket passthrough.
-
-Every mutation requires a UUID idempotency key. Mutations of an existing object
-also require the exact expected revision. After an HTTP mutation may have
-been dispatched, Flutter does not replay it over HTTP; it reads the durable
-Agent state. Provider reconciliation is an Agent background-controller concern,
-not a public `runs.reconcile` operation.
-
-Cloud Worker plans are proposed inside an Agent-owned Native conversation, not
-created by an App action. Message Server forwards the complete server-authored
-`related_task_ids`, `related_plan_ids`, and strict Execution V2 references in
-unary and streaming history/results. A reference carries account generation
-and exact task/plan revision linkage. A plan reference adds only status; a run
-reference carries its run revision, independent run/execution ids, optional
-canonical Worker UUID, and status; a confirmation reference carries its confirmation id,
-revision, and state. Cloud Worker references contain no cross-kind fields or digests; generic
-Execution V2 references retain their separate schema. Message Server does not
-manufacture, weaken, or use a reference as authorization.
-
-A completed local sandbox tool may add one durable `execution_artifact`
-reference to unary chat, terminal stream, and reconstructed conversation
-history. Its exact public fields are `kind`, prepared `account_generation`,
-`record_kind=local_sandbox`, artifact and execution UUIDs, safe relative name,
-media type, size, and SHA-256. Message Server validates and forwards this
-server-authored reference without reconstructing storage identity or bytes;
-Flutter uses it only to call the authenticated Execution V2 artifact actions.
-
-For `record_kind=cloud_worker`, plan and run reads use closed provider-neutral
-projections. Plans expose the owner and request linkage, reusable-Worker
-preference, workspace, AWS account/region, compute/runtime request, one live
-proposal quote, and timestamps. Compute reports the selected instance
-type, vCPU, memory GiB, and volume GiB/type/IOPS/throughput. The quote reports
-hourly compute micros, total amount micros, maximum authorized micros,
-currency, source time, and expiry. Runs expose independent run and
-execution identities, plan revision, lifecycle state, Worker identity and
-persistence, artifacts, failure summary, and timestamps.
-They do not expose recipe/adapter/model/input-manifest pins, AMI/runtime
-implementation data, AWS credential revisions, or plan/run/quote/execution
-digests.
-
-Verified Cloud Worker and local-sandbox deliverables use
-`agent.execution.v2.artifacts.get/download/delete`. Artifact requests bind
-`record_kind` to exactly `cloud_worker` or `local_sandbox` and one artifact
-UUID. Download additionally requires `offset_bytes` and `max_chunk_bytes`; a
-chunk is limited to 512 KiB and the offset is bounded by the 8 MiB artifact hard limit;
-each successful response advances by a non-empty chunk, and the last chunk
-sets EOF. The direct response carries only owner/account-generation and
-artifact/execution identity, canonical base64 bytes, chunk and whole-artifact
-SHA-256, total/range metadata, and EOF. Message Server revalidates that closed
-shape, prepared owner authority, request identity, decoded chunk digest, and
-range continuity before returning it. S3 bucket/key/version, signed URLs,
-retention internals, Worker diagnostics, and provider errors are never part of
-the public contract. Delete requires one stable UUID idempotency key and returns
-the deleted public artifact projection plus `deleted=true`; replaying the same
-key remains the same mutation.
-
-After Agent has frozen one terminal conversation result, it calls the private fixed
-`product.agent_execution.v1/record_completion` operation. This callback is
-not advertised in the Product Capability catalog and accepts no user/model
-Permission. The existing mTLS, direction token, Agent peer identity, fresh
-call-chain route, and positive account generation still apply; owner identity
-is injected from `Service.OwnerMXID()` rather than request JSON.
-
-Message Server atomically stores one minimal receipt and one
-`agent.execution.v2.completed` realtime invalidation. Exact event/execution and
-payload replay succeeds idempotently; a different payload conflicts. The
-receipt contains only event/execution/run/conversation/turn identity, terminal
-state, completion time, and payload digest. Worker persistence and cleanup are
-independent lifecycle state and do not gate this callback. The receipt contains no result-message
-identity because the central continuation owns the eventual assistant message,
-and contains no result body, quote, artifact details, S3 address, AWS
-resource identity, secret, or Worker diagnostics. Flutter treats the realtime
-event only as an invalidation and reads authoritative history and Execution V2
-state back from Agent.
-
-## 7. Required verification
-
-A releasable revision must pass:
-
-- Agent registry/discovery tests proving only registered operations produce
-  client capability tokens;
-- Message Server catalog, mTLS/token, owner/generation, digest, loop, deadline,
-  and proxy adapter tests;
-- Flutter tests for `core=ready` with `embedded=disabled`, Core unavailable,
-  transport timeout, retry, model-profile synchronization, memory, schedules,
-  voice, and Native Agent stream send/resume;
-- database-role isolation and fresh migration tests;
-- a real split-stack test spanning more than two catalog TTLs without a health
-  gap, followed by model profile, conversation, knowledge/memory, and schedule
-  readback through the Flutter-facing Message Server contract.
-
-Release artifacts are versioned together by immutable image digests and a
-matching Flutter build. Rollback restores a compatible Agent image and Agent
-data snapshot together; Message Server never attempts to interpret Agent rows.
+- `agent.session.create` signature, owner, account-generation, scopes,
+  session/nonce, and 15-minute expiry tests;
+- ProductCore routing proves owner acceptance and Agent-token rejection for
+  ticket issuance;
+- generated ProductCore action contract contains only the five Message
+  Server-owned control actions: `agent.password`,
+  `agent.matrix_session.create`, `agent.session.create`, `agent.config.get`,
+  and `agent.config.update`; the two config actions own only Online Matrix
+  identity, enablement, and MCP blocked-room policy, never Agent runtime data;
+- split Compose/provision/Caddy tests prove `agent:8082`, same-origin path
+  preservation, unbuffered SSE, no host-published Agent port, and Agent-before-
+  Message-Server startup;
+- Agent, Flutter, and real device/emulator tests own the direct POST, SSE
+  resume, history, attachment, confirmation, and Worker workflows.

@@ -2,9 +2,7 @@ package p2p
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"os"
 	"testing"
 
 	"github.com/YingSuiAI/dirextalk-message-server/internal/dirextalkdomain"
@@ -30,19 +28,17 @@ func (store *failOnceAgentExecutionCompletionStore) RecordAgentExecutionCompleti
 
 func serviceCompletionReceipt(t *testing.T, service *Service) dirextalkdomain.AgentExecutionCompletionReceipt {
 	t.Helper()
-	raw, err := os.ReadFile("../internal/agentgateway/testdata/cloud_worker_public_v1.json")
-	if err != nil {
-		t.Fatal(err)
+	receipt := dirextalkdomain.AgentExecutionCompletionReceipt{
+		EventID: "bb58e65f-f277-5ac2-b958-1cf6c151cbef",
+		OwnerID: service.OwnerMXID(), AccountGeneration: 7,
+		ExecutionID:    "7e3937bb-c334-5360-90f9-931322e7fd88",
+		RunID:          "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+		ConversationID: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+		TurnID:         "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+		TerminalState:  "succeeded",
+		CompletedAt:    "2026-08-07T10:11:00.123456Z",
 	}
-	var fixture struct {
-		Completion dirextalkdomain.AgentExecutionCompletionReceipt `json:"completion"`
-	}
-	if err := json.Unmarshal(raw, &fixture); err != nil {
-		t.Fatal(err)
-	}
-	receipt := fixture.Completion
-	receipt.OwnerID = service.OwnerMXID()
-	receipt.AccountGeneration = 7
+	receipt.PayloadDigest, _ = dirextalkdomain.CanonicalAgentExecutionCompletionDigest(receipt)
 	if err := receipt.Validate(); err != nil {
 		t.Fatalf("Cloud Worker completion fixture is invalid: %v", err)
 	}

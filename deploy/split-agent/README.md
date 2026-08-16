@@ -7,12 +7,12 @@ This directory is the fresh-data deployment boundary for the split architecture:
   `:8008` plus a loopback host binding; Caddy owns public HTTPS. Explicit
   direct-TLS modes additionally enable internal `:8448` and its loopback host
   binding (the local acceptance example uses 18008/18448).
-- message-server owns Matrix/ProductCore, the public action envelope, the
-  external Native Agent facade, and Product Capability on private port 50053.
+- message-server owns Matrix/ProductCore, account control and short-lived Agent
+  ticket issuance, external MCP, and Product Capability on private port 50053.
 - Container-local health probes explicitly disable ambient HTTP(S) proxy use;
   loopback readiness must never be redirected to an outbound proxy.
-- dirextalk-agent owns Native Agent Core on private port 9443 and Agent
-  Capability on private port 50052.
+- dirextalk-agent owns Native Agent Core and the direct HTTP data plane on
+  container port 8082.
 - Agent and message-server share one PostgreSQL container, cluster, and data
   volume while using distinct non-superuser roles, owned databases, protected
   DSNs, and private database networks. PostgreSQL alone joins both database
@@ -27,13 +27,14 @@ This directory is the fresh-data deployment boundary for the split architecture:
   starts all three Agent runtime containers from one image.
 - Agent Knowledge vectors live in the Agent-owned PostgreSQL database through
   pgvector. Agent egress is used only for configured provider HTTPS calls.
-- A dedicated non-internal `message_public` bridge is attached only to
-  message-server because rootless Docker needs one non-internal bridge for
-  host-port forwarding. Agent, database, and capability networks stay
-  internal; no other service joins this edge network.
+- The non-internal `message_public` bridge is attached only to message-server
+  and Agent. Caddy sends ordinary traffic to message-server and same-origin
+  `/agent/v1/*` to the Agent service name; Agent port 8082 is never published
+  on the host. Database and runner networks remain isolated.
 - The canonical production mode is `edge-terminated`: message-server listens
   only on HTTP `:8008`, publishes that listener only on host loopback, and is
-  reachable from Caddy only through the dedicated `message_public` bridge.
+  reachable from Caddy through `message_public`; Agent joins the same bridge
+  only for the `/agent/v1/*` reverse proxy.
   Caddy alone owns public ports 80/443 and ACME state; the canonical client URL
   remains `https://<DIREXTALK_MESSAGE_SERVER_NAME>`. No certificate or private
   key is provisioned into message-server in this mode. `local` and `external`
@@ -48,9 +49,11 @@ This directory is the fresh-data deployment boundary for the split architecture:
   image-provided SSH/SCP runtime; it does not expose a Worker listener or
   require S3, KMS, a custom AMI, a model relay, or an edge proxy.
 
-The two gRPC directions use the neutral Capability API with mTLS, one exact
-direction token per direction, instance/generation metadata, and Ed25519
-grants. `message-server-init` creates the private CA and issues the initial
+Agent reaches Message Server through the Product Capability gRPC direction
+with mTLS, its exact direction token, instance/generation metadata, and Ed25519
+grants. Message Server has no reverse Agent Capability gRPC client. The
+separate voice callback relay retains its existing mTLS client identity.
+`message-server-init` creates the private CA and issues the required
 certificates exactly once for each fresh stack. Its CA signing key is kept in
 an init-only volume, the grant private key is mounted only in message-server,
 and Agent receives only the issued material it requires.
@@ -64,8 +67,8 @@ existing resource is a hard failure, even when the output directory is new.
 Because the default Compose shape always starts the Agent, extension-runner,
 and Core-runner containers, complete the root-owned host preparation in the
 section below first and load its generated env file before provisioning.
-Each run receives a fresh random account generation shared by message-server,
-Agent Capability, and Product Capability peer metadata:
+Each run receives a fresh random account generation shared by Message Server,
+the Agent HTTP ticket verifier, and Product Capability peer metadata:
 
     cd /home/adam/dirextalk/dirextalk-message-server
     export DIREXTALK_MESSAGE_HTTP_BIND=${DIREXTALK_MESSAGE_HTTP_BIND:-18008}
@@ -442,8 +445,8 @@ the same host-port variables written to `.env`):
 
     curl --fail "http://127.0.0.1:${DIREXTALK_MESSAGE_HTTP_BIND}/_p2p/health"
 
-No Agent Core, Agent Capability, Product Capability, or PostgreSQL port is
-published to the host.
+No Agent HTTP/Core, Product Capability, or PostgreSQL port is published to the
+host.
 
 message-server uses a read-only rootfs, drops all Linux capabilities except
 the narrowly required `DAC_READ_SEARCH` read-only bind-secret access, and sets
@@ -496,47 +499,7 @@ from the protected host directory and sends them once through authenticated
 typed APIs; no provider key value is placed in Compose YAML, Agent mounts, or
 logs.
 
-## Model, embedding, Knowledge, and memory acceptance
-
-The deployment config enables Knowledge in the fresh Agent PostgreSQL database
-with pgvector and a generated embedding profile UUID. The default vector
-dimension is 1536; set
-`DIREXTALK_CORE_KNOWLEDGE_VECTOR_DIMENSION` when provisioning a new stack if
-the selected OpenRouter-compatible embedding model returns another fixed
-dimension (1–2000). Dimension is immutable for the fresh Agent database and the
-acceptance helper verifies the configured value while performing a real
-embedding/index/search cycle. Model profiles are mutable
-Agent-owned database records, so provision the OpenRouter chat and embedding
-profiles through the authenticated Core/Capability API using the protected key
-files. The embedding profile request must use the exact generated
-core_knowledge_embedding_profile_id from agent-config.yaml; the chat profile
-may use a separate UUID. Then run:
-
-1. live provider model catalog before save, model profile sync/list/get, and a
-   second model catalog read through the stored client profile (responses must
-   be non-empty, report configured credentials, and omit key bytes);
-2. one chat request through message-server using the exact persisted profile
-   ID/revision/credential-version triple, followed by an identical
-   idempotency retry, plus a live Tavily-backed `web_search` tool turn whose
-   persisted successful tool result is verified independently;
-3. conversation create/list/get with persisted message-history readback;
-4. Knowledge source upload, index task completion, semantic search, restart,
-   and delete;
-5. long-term memory create, update/re-index/search, then automatic recall of a
-   unique stored marker in the first turn of a fresh conversation after Agent
-   restart, followed by delete.
-
-Interactive Native Agent chat currently auto-recalls only long-term Memory; it
-does not automatically inject ordinary uploaded Knowledge. The Knowledge gate
-therefore proves only the real upload/index/status/search path and its returned
-source marker; it is not evidence of chat-time Knowledge grounding or automatic
-RAG.
-
-Use the same embedding API key for OpenRouter-compatible embeddings when the
-provider permits it; keep the two protected host files separate so rotation
-does not require a YAML change.
-
-### Disposable local end-to-end acceptance
+## Direct Agent first-fresh acceptance
 
 After building and starting a fresh local stack, run the public-interface
 acceptance lane (never pass key values as arguments):
@@ -548,51 +511,21 @@ acceptance lane (never pass key values as arguments):
 
 The model IDs can also be supplied with
 `DIREXTALK_ACCEPTANCE_CHAT_MODEL` and
-`DIREXTALK_ACCEPTANCE_EMBEDDING_MODEL`. The helper reads the protected
-`openrouter-api-key`, `embedding-api-key`, `tavily-api-key`, and
-portal-password files, and all request/session/response/log files are mode
-0400 under a mode-0700 temporary workspace. It talks only to message-server
-`/_p2p/query` and `/_p2p/health`; it never calls an Agent listener
-directly and never prints a token.
+`DIREXTALK_ACCEPTANCE_EMBEDDING_MODEL`. The helper obtains the owner session
+through Message Server, creates a 15-minute Agent ticket, and then uses only
+same-origin `/agent/v1/*` routes. In local development,
+`DIREXTALK_ACCEPTANCE_MESSAGE_BASE_URL` may point at the disposable Caddy edge;
+the helper uses that one origin for both planes and never accepts an Agent
+private address.
 
-The lane verifies both health listeners, Compose port/network isolation,
-OpenRouter live/stored-profile model catalogs, chat and embedding profile sync,
-redacted configured profile list/get readback, stored Tavily configuration/test
-across Agent restart, a real Native Agent chat that persists a successful
-Tavily `web_search` tool result, automatic Knowledge embedding binding, native
-chat plus identical-turn replay, conversation create/list/get and message
-history, Product contacts and
-prepared-message exact-once replay, forged-owner rejection, Knowledge upload
-and automatic indexing/search, long-term memory update/re-index/search and
-fresh-conversation automatic recall
-after Agent restart, source/memory deletion, database-role/table/pgvector
-isolation, and a key/log/config canary. By default it also performs the
-final `portal.account.delete` and verifies the sealed Agent, deprovision ledger,
-business-table purge, including Agent-owned vector rows; post-delete checks use
-only Compose exec. There is intentionally no
-`agent.knowledge.index` workaround: a binding mismatch is a hard contract
-failure.
-
-The dedicated split-Agent batch lane creates each Native Agent text turn with
-exactly one HTTP POST, reads its durable SSE events, intentionally disconnects,
-and resumes with `after_seq` plus `Last-Event-ID` without repeating the
-mutation. It also verifies terminal cancellation and authoritative history
-readback; a unary `agent.chat` response does not stand in for that evidence.
-
-For the final persistent-account acceptance, set
-`DIREXTALK_ACCEPTANCE_ACCOUNT_DELETE=false`. This keeps the configured model
-profiles, Tavily configuration, and conversation records while still deleting
-the temporary Knowledge source and long-term memory created by the lane. The
-account-delete, post-delete health/rejection, database purge, and
-deprovision-ledger assertions are then
-skipped. `DIREXTALK_ACCEPTANCE_ACCOUNT_DELETE` defaults to `true`; setting
-`DIREXTALK_ACCEPTANCE_CLEANUP_AFTER=true` while account deletion is disabled is
-rejected, so a persistent acceptance cannot accidentally purge its namespace.
-
-Set `DIREXTALK_ACCEPTANCE_CLEANUP_AFTER=true` to purge the exact disposable
-namespace after a successful run. The helper does not create AWS resources or
-exercise live Voice credentials; AWS acceptance requires a separate approved
-disposable-account runbook.
+The lane verifies Message Server and Agent health, ticket-authenticated catalog
+readiness, asynchronous model-profile sync, identical frozen mutation replay,
+`202` turn admission, independent SSE observation, disconnect/resume with both
+`after_seq` and `Last-Event-ID`, and authoritative conversation/turn history
+readback. It never restores a ProductCore Agent business action, waits for a
+turn inside the POST, creates AWS resources, deletes an account, or prints a
+token or model credential. Knowledge, memory, attachments, confirmations, and
+Worker acceptance are owned by their direct Agent and Flutter workflow lanes.
 
 Run the focused static/mock boundary check with:
 
@@ -665,14 +598,16 @@ Public TLS termination is a separate, tracked Compose project in
 digest-pinned through `DIREXTALK_CADDY_IMAGE_IMMUTABLE`, read-only, drops all
 Linux capabilities, then adds only `NET_BIND_SERVICE` so the official Caddy
 binary's file capability can bind ports 80/443 while `no-new-privileges` is
-enabled, and joins only the fresh message-server `message_public` network.
+enabled, and joins only the fresh `message_public` network shared by
+message-server and Agent.
 Caddy data
 and config are explicitly named external volumes. The Caddyfile is a reviewed,
 mode-0400 regular file and, for the canonical edge-terminated contract, must
 reserve `/.sites/*` before the backend proxy, serve the Agent-owned
 `DIREXTALK_STATIC_SITES_ROOT/public` subtree from `/srv/dirextalk-sites`
-read-only with the fixed sandbox CSP, and reverse-proxy all remaining traffic
-only to `message-server:8008`. `Caddyfile.static-sites.example` is the current
+read-only with the fixed sandbox CSP, route `/agent/v1/*` without stripping the
+path to `agent:8082` with unbuffered SSE, and reverse-proxy all remaining
+traffic to `message-server:8008`. `Caddyfile.static-sites.example` is the current
 reviewed shape. The default host root is `/var/lib/dirextalk-static-sites`;
 it and its `public`/`.staging` children are owned by Agent UID/GID 65532.
 Single-file HTML is stored directly as `index.html`; no archive is created.

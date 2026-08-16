@@ -6,20 +6,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/YingSuiAI/dirextalk-message-server/internal/agentstream"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/dirextalkdomain"
 	agentmodule "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/agent"
 )
 
-// NativeAgentRunner is the external Native Agent capability boundary.
-type NativeAgentRunner interface {
-	Apply(context.Context, string) error
-	Invoke(context.Context, string, map[string]any) (map[string]any, error)
-	Stream(context.Context, string, map[string]any, func(agentstream.Event) error) error
-}
-
-// serviceAgentAccountPort retains Service-owned locking, Matrix sessions and
-// durable portal writes while internal/agent owns the ProductCore workflow.
+// serviceAgentAccountPort exposes only Message Server-owned account/session
+// controls. Native Agent business operations use the direct HTTP data plane.
 type serviceAgentAccountPort struct{ service *Service }
 
 func (p serviceAgentAccountPort) Password() string {
@@ -39,7 +31,6 @@ func (p serviceAgentAccountPort) CreateMatrixSession(ctx context.Context, params
 	onlineIdentity := agentmodule.OnlineAgentIdentity(p.service.agentConfig)
 	homeserver := p.service.homeserver
 	p.service.mu.Unlock()
-	displayName := onlineIdentity.DisplayName
 	session := agentmodule.MatrixSession{
 		DeviceID:   requestedDeviceID,
 		UserID:     userID,
@@ -48,7 +39,7 @@ func (p serviceAgentAccountPort) CreateMatrixSession(ctx context.Context, params
 	if issuer == nil {
 		return session, nil
 	}
-	token, err := issuer.EnsureMatrixSession(ctx, userID, displayName, onlineIdentity.AvatarURL, requestedDeviceID, false)
+	token, err := issuer.EnsureMatrixSession(ctx, userID, onlineIdentity.DisplayName, onlineIdentity.AvatarURL, requestedDeviceID, false)
 	if err != nil {
 		return agentmodule.MatrixSession{}, internalError(err)
 	}
@@ -79,39 +70,35 @@ func (p serviceAgentAccountPort) UpdateConfig(ctx context.Context, mutate func(a
 }
 
 func (p serviceAgentAccountPort) SyncOnlineIdentity(ctx context.Context, identity dirextalkdomain.AgentIdentityConfig) *apiError {
-	return p.service.syncOnlineAgentIdentity(ctx, identity)
-}
-
-func (s *Service) syncOnlineAgentIdentity(ctx context.Context, identity dirextalkdomain.AgentIdentityConfig) *apiError {
 	identity = agentmodule.OnlineAgentIdentity(dirextalkdomain.AgentConfig{OnlineAgentIdentity: identity})
-	s.mu.Lock()
-	issuer := s.sessions
-	agentMXID := s.agentMXIDLocked()
-	s.mu.Unlock()
+	p.service.mu.Lock()
+	issuer := p.service.sessions
+	agentMXID := p.service.agentMXIDLocked()
+	p.service.mu.Unlock()
 	if updater, ok := issuer.(MatrixProfileUpdater); ok && updater != nil {
 		if err := updater.UpdateMatrixProfile(ctx, agentMXID, identity.DisplayName, identity.AvatarURL); err != nil {
 			return agentIdentitySyncError(err)
 		}
 	}
-	changed, err := s.ensureAgentRoom(ctx)
+	changed, err := p.service.ensureAgentRoom(ctx)
 	if err != nil {
 		return agentIdentitySyncError(err)
 	}
 	if changed {
-		s.mu.Lock()
-		state := s.portalStateLocked()
-		s.mu.Unlock()
-		if store := s.portalStore(); store != nil {
+		p.service.mu.Lock()
+		state := p.service.portalStateLocked()
+		p.service.mu.Unlock()
+		if store := p.service.portalStore(); store != nil {
 			if err := store.SavePortal(ctx, state); err != nil {
 				return internalError(err)
 			}
 		}
 	}
-	s.mu.Lock()
-	roomID := strings.TrimSpace(s.agentRoomID)
-	transport := s.transport
-	agentMXID = s.agentMXIDLocked()
-	s.mu.Unlock()
+	p.service.mu.Lock()
+	roomID := strings.TrimSpace(p.service.agentRoomID)
+	transport := p.service.transport
+	agentMXID = p.service.agentMXIDLocked()
+	p.service.mu.Unlock()
 	if transport == nil || roomID == "" {
 		return nil
 	}
@@ -121,16 +108,13 @@ func (s *Service) syncOnlineAgentIdentity(ctx context.Context, identity dirextal
 	return nil
 }
 
-func agentIdentitySyncError(err error) *apiError {
+func agentIdentitySyncError(error) *apiError {
 	return codedError(http.StatusBadGateway, "agent_identity_sync_failed", "agent identity was saved but Matrix sync failed")
 }
 
 func (p serviceAgentAccountPort) PublishOffline(ctx context.Context) *apiError {
 	if err := p.service.publishCurrentAgentStatusState(ctx); err != nil {
 		return transportWriteError(err)
-	}
-	if p.service.nativeAgentCatalog != nil {
-		p.service.nativeAgentCatalog.recordPublished(false)
 	}
 	return nil
 }

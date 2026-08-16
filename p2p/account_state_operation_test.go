@@ -47,7 +47,6 @@ func TestAccountDeleteWaitsForInFlightProductWriteBeforeReset(t *testing.T) {
 	}
 	service := newService(Config{
 		ServerName:        "example.com",
-		NativeAgentRunner: &externalDeprovisionRunner{},
 		ReleaseController: &recordingReleaseController{},
 	}, store, nil, portalState{}, false)
 	service.SetAccountDeactivator(&recordingAccountDeactivator{})

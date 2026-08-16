@@ -36,5 +36,12 @@ jq -e --arg root "$run_dir/static-sites/public" '
 grep -Eq 'handle_path[[:space:]]+/\.sites/\*' "$stack_dir/Caddyfile.static-sites.example"
 grep -Eq 'root[[:space:]]+\*[[:space:]]+/srv/dirextalk-sites' "$stack_dir/Caddyfile.static-sites.example"
 grep -Eq "Content-Security-Policy.*sandbox;.*script-src 'none';.*connect-src 'none';.*form-action 'none'" "$stack_dir/Caddyfile.static-sites.example"
+grep -Eq 'handle[[:space:]]+/agent/v1/\*' "$stack_dir/Caddyfile.static-sites.example"
+grep -Eq 'reverse_proxy[[:space:]]+agent:8082' "$stack_dir/Caddyfile.static-sites.example"
+grep -Eq 'flush_interval[[:space:]]+-1' "$stack_dir/Caddyfile.static-sites.example"
+if grep -Eq 'handle_path[[:space:]]+/agent/v1/\*' "$stack_dir/Caddyfile.static-sites.example"; then
+  echo 'Agent data-plane proxy must preserve the /agent/v1 path' >&2
+  exit 1
+fi
 
 printf '%s\n' 'static-site edge Compose and Caddy contract passed'

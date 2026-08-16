@@ -1,6 +1,7 @@
 package p2p
 
 import (
+	"crypto/ed25519"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -65,6 +66,39 @@ func TestAgentMatrixSessionCreateAllowsAgentToken(t *testing.T) {
 	}
 }
 
+func TestAgentSessionCreateRequiresOwnerAccessToken(t *testing.T) {
+	_, privateKey, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(Config{ServerName: "example.com", AccountGeneration: 7, NativeAgentGrantPrivateKey: privateKey})
+	router := newP2PTestRouter(service)
+	body := map[string]any{"action": "agent.session.create", "params": map[string]any{}}
+
+	agentRequest := jsonRequest(t, "/_p2p/command", body)
+	agentRequest.Header.Set("Authorization", "Bearer "+service.AgentToken())
+	agentResponse := httptest.NewRecorder()
+	router.ServeHTTP(agentResponse, agentRequest)
+	if agentResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("agent token must not mint data-plane tickets, got %d body=%s", agentResponse.Code, agentResponse.Body.String())
+	}
+
+	ownerRequest := jsonRequest(t, "/_p2p/command", body)
+	ownerRequest.Header.Set("Authorization", "Bearer "+service.AccessToken())
+	ownerResponse := httptest.NewRecorder()
+	router.ServeHTTP(ownerResponse, ownerRequest)
+	if ownerResponse.Code != http.StatusOK {
+		t.Fatalf("owner ticket issuance failed: %d body=%s", ownerResponse.Code, ownerResponse.Body.String())
+	}
+	var got map[string]any
+	if err := json.Unmarshal(ownerResponse.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["ticket"] == "" || got["base_path"] != "/agent/v1" || got["session_id"] == "" {
+		t.Fatalf("unexpected ticket response: %#v", got)
+	}
+}
+
 func TestProtectedHTTPRetainedActionRejectsMissingBearer(t *testing.T) {
 	service := NewService(Config{ServerName: "example.com"})
 	router := newP2PTestRouter(service)
@@ -79,19 +113,6 @@ func TestProtectedHTTPRetainedActionRejectsMissingBearer(t *testing.T) {
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d body=%s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestEventsEndpointIsRemoved(t *testing.T) {
-	service := NewService(Config{ServerName: "example.com"})
-	router := newP2PTestRouter(service)
-
-	req := httptest.NewRequest(http.MethodGet, "/_p2p/events?since=0", nil)
-	req.Header.Set("Authorization", "Bearer "+service.AccessToken())
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("expected removed events endpoint to return 404, got %d body=%s", rec.Code, rec.Body.String())
 	}
 }
 

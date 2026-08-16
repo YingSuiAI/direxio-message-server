@@ -493,6 +493,10 @@ read_and_validate_inputs() {
     require_regular_owned "$public_ca" || return 1
   fi
   grep -Eq '(^|[[:space:]])reverse_proxy[[:space:]]+message-server:8008([[:space:]]|$)' "$caddyfile" || fail "edge-terminated Caddyfile must proxy to message-server:8008" || return 1
+  grep -Eq 'handle[[:space:]]+/agent/v1/\*' "$caddyfile" || fail "Caddyfile must route /agent/v1/* before the backend proxy" || return 1
+  grep -Eq '(^|[[:space:]])reverse_proxy[[:space:]]+agent:8082([[:space:]]|$)' "$caddyfile" || fail "Caddyfile must proxy the Agent data plane to agent:8082" || return 1
+  grep -Eq 'flush_interval[[:space:]]+-1' "$caddyfile" || fail "Caddyfile must flush Agent SSE events without proxy buffering" || return 1
+  ! grep -Eq 'handle_path[[:space:]]+/agent/v1/\*' "$caddyfile" || fail "Caddyfile must preserve the /agent/v1 path" || return 1
   grep -Eq 'handle_path[[:space:]]+/\.sites/\*' "$caddyfile" || fail "Caddyfile must reserve /.sites/* before the backend proxy" || return 1
   grep -Eq 'root[[:space:]]+\*[[:space:]]+/srv/dirextalk-sites' "$caddyfile" || fail "Caddyfile must serve the reviewed static-site mount" || return 1
   grep -Eq "Content-Security-Policy.*sandbox;.*script-src 'none';.*connect-src 'none';.*form-action 'none'" "$caddyfile" || fail "Caddyfile static sites require the reviewed sandbox CSP" || return 1

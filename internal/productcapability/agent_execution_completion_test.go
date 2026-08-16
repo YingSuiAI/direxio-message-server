@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
-	"os"
 	"testing"
 	"time"
 
@@ -17,22 +16,18 @@ import (
 
 func completionRequest(t *testing.T) ([]byte, dirextalkdomain.AgentExecutionCompletionReceipt) {
 	t.Helper()
-	fixtureRaw, err := os.ReadFile("../agentgateway/testdata/cloud_worker_public_v1.json")
+	receipt := dirextalkdomain.AgentExecutionCompletionReceipt{
+		EventID:        "bb58e65f-f277-5ac2-b958-1cf6c151cbef",
+		ExecutionID:    "7e3937bb-c334-5360-90f9-931322e7fd88",
+		RunID:          "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+		ConversationID: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+		TurnID:         "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+		TerminalState:  "succeeded",
+		CompletedAt:    "2026-08-07T10:11:00.123456Z",
+	}
+	receipt.PayloadDigest, _ = dirextalkdomain.CanonicalAgentExecutionCompletionDigest(receipt)
+	raw, err := json.Marshal(receipt)
 	if err != nil {
-		t.Fatal(err)
-	}
-	var fixture struct {
-		Completion map[string]any `json:"completion"`
-	}
-	if err := json.Unmarshal(fixtureRaw, &fixture); err != nil || fixture.Completion == nil {
-		t.Fatalf("decode Cloud Worker completion fixture: %v", err)
-	}
-	raw, err := json.Marshal(fixture.Completion)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var receipt dirextalkdomain.AgentExecutionCompletionReceipt
-	if err := json.Unmarshal(raw, &receipt); err != nil {
 		t.Fatal(err)
 	}
 	wantDigest, err := dirextalkdomain.CanonicalAgentExecutionCompletionDigest(receipt)

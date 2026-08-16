@@ -55,7 +55,7 @@ func TestAccountDeleteRequiresExplicitConfirmation(t *testing.T) {
 
 func TestAccountDeleteLeavesContactsDissolvesOwnedRoomsAndDeprovisions(t *testing.T) {
 	transport := &recordingTransport{}
-	service := NewServiceWithTransport(Config{ServerName: "example.com", NativeAgentRunner: &externalDeprovisionRunner{}}, transport)
+	service := NewServiceWithTransport(Config{ServerName: "example.com"}, transport)
 	deactivator := &recordingAccountDeactivator{}
 	deprovisioner := &recordingAccountDeprovisioner{}
 	releaseController := &recordingReleaseController{}
@@ -128,7 +128,7 @@ func TestAccountDeleteLeavesContactsDissolvesOwnedRoomsAndDeprovisions(t *testin
 func TestAccountDeleteKeepsMonotonicFenceWhenCriticalLeaveFails(t *testing.T) {
 	ctx := context.Background()
 	transport := &failingLeaveTransport{err: errors.New("leave failed")}
-	service := NewServiceWithTransport(Config{ServerName: "example.com", NativeAgentRunner: &externalDeprovisionRunner{}}, transport)
+	service := NewServiceWithTransport(Config{ServerName: "example.com"}, transport)
 	deprovisioner := &recordingAccountDeprovisioner{}
 	releaseController := &recordingReleaseController{}
 	service.releaseController = releaseController
@@ -168,7 +168,7 @@ func TestAccountDeleteNeverReopensAfterAnyDestructiveStageFails(t *testing.T) {
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
 			controller := &recordingReleaseController{}
-			service := NewServiceWithTransport(Config{ServerName: "example.com", NativeAgentRunner: &externalDeprovisionRunner{}, ReleaseController: controller}, testCase.transport)
+			service := NewServiceWithTransport(Config{ServerName: "example.com", ReleaseController: controller}, testCase.transport)
 			service.SetAccountDeactivator(&recordingAccountDeactivator{})
 			service.SetAccountDeprovisioner(&recordingAccountDeprovisioner{})
 			bootstrapService(t, service)
@@ -189,7 +189,6 @@ func TestAccountDeleteExplicitStandaloneModeAllowsMissingUpdater(t *testing.T) {
 	controller := &recordingReleaseController{desiredErr: errors.New("updater unavailable")}
 	service := NewServiceWithTransport(Config{
 		ServerName:                       "example.com",
-		NativeAgentRunner:                &externalDeprovisionRunner{},
 		ReleaseController:                controller,
 		AllowAccountDeleteWithoutUpdater: true,
 	}, &recordingTransport{})
@@ -213,7 +212,7 @@ func TestAccountDeleteExplicitStandaloneModeAllowsMissingUpdater(t *testing.T) {
 func TestAccountDeleteStopsBeforeDestructiveWorkWhenDesiredStateFails(t *testing.T) {
 	transport := &recordingTransport{}
 	controller := &recordingReleaseController{desiredErr: errors.New("updater unavailable with secret-token")}
-	service := NewServiceWithTransport(Config{ServerName: "example.com", NativeAgentRunner: &externalDeprovisionRunner{}, ReleaseController: controller}, transport)
+	service := NewServiceWithTransport(Config{ServerName: "example.com", ReleaseController: controller}, transport)
 	deactivator := &recordingAccountDeactivator{}
 	deprovisioner := &recordingAccountDeprovisioner{}
 	service.SetAccountDeactivator(deactivator)
