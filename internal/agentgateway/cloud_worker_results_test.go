@@ -139,6 +139,45 @@ func TestCloudWorkerPlanAcceptsNoCumulativeTokenBudget(t *testing.T) {
 	}
 }
 
+func TestCloudWorkerPlanRuntimeEstimateIsOrderedAndLegacyCompatible(t *testing.T) {
+	fixture := loadCloudWorkerPublicFixture(t)
+	authority := cloudWorkerFixtureAuthority(t, fixture)
+	validate := func(limits map[string]any) error {
+		plan := cloneParams(fixture.Plan)
+		plan["limits"] = limits
+		_, err := adaptActionResultForRequestWithAuthority(
+			"agent.execution.v2.plans.get",
+			cloudWorkerRequest("plan_id", plan["plan_id"]),
+			map[string]any{"plan": plan},
+			authority,
+		)
+		return err
+	}
+
+	legacy := cloneParams(fixture.Plan["limits"].(map[string]any))
+	delete(legacy, "minimum_runtime_seconds")
+	delete(legacy, "expected_runtime_seconds")
+	if err := validate(legacy); err != nil {
+		t.Fatalf("legacy runtime limits rejected: %v", err)
+	}
+
+	for name, mutate := range map[string]func(map[string]any){
+		"minimum without expected": func(value map[string]any) { delete(value, "expected_runtime_seconds") },
+		"expected before minimum":  func(value map[string]any) { value["expected_runtime_seconds"] = float64(599) },
+		"maximum before expected":  func(value map[string]any) { value["max_runtime_seconds"] = float64(1199) },
+		"maximum above policy":     func(value map[string]any) { value["max_runtime_seconds"] = float64(24*60*60 + 1) },
+		"non numeric minimum":      func(value map[string]any) { value["minimum_runtime_seconds"] = "600" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			limits := cloneParams(fixture.Plan["limits"].(map[string]any))
+			mutate(limits)
+			if err := validate(limits); !errors.Is(err, ErrInvalidActionResult) {
+				t.Fatalf("invalid runtime estimate accepted: %v", err)
+			}
+		})
+	}
+}
+
 func TestCloudWorkerRunEventsPinBoundedSecretFreeProgressAndCursor(t *testing.T) {
 	fixture := loadCloudWorkerPublicFixture(t)
 	authority := cloudWorkerFixtureAuthority(t, fixture)

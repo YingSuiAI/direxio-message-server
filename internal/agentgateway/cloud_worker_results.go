@@ -526,13 +526,28 @@ func validateCloudCompute(value any) error {
 
 func validateCloudLimits(value any) error {
 	object, ok := value.(map[string]any)
-	if !ok || cloudExact(object, []string{"max_runtime_seconds", "max_output_bytes"}, []string{"max_tokens"}, "limits") != nil {
+	if !ok || cloudExact(
+		object,
+		[]string{"max_runtime_seconds", "max_output_bytes"},
+		[]string{"minimum_runtime_seconds", "expected_runtime_seconds", "max_tokens"},
+		"limits",
+	) != nil {
 		return cloudWorkerResultError("limits are invalid")
 	}
 	for _, key := range []string{"max_runtime_seconds", "max_output_bytes"} {
 		if number, ok := cloudInteger(object[key]); !ok || number <= 0 {
 			return cloudWorkerResultError("limit %s is invalid", key)
 		}
+	}
+	minimumValue, hasMinimum := object["minimum_runtime_seconds"]
+	expectedValue, hasExpected := object["expected_runtime_seconds"]
+	minimum, minimumOK := cloudInteger(minimumValue)
+	expected, expectedOK := cloudInteger(expectedValue)
+	maximum, _ := cloudInteger(object["max_runtime_seconds"])
+	if hasMinimum != hasExpected ||
+		maximum > 24*60*60 ||
+		(hasMinimum && (!minimumOK || !expectedOK || minimum < 60 || minimum > expected || expected > maximum)) {
+		return cloudWorkerResultError("runtime estimate is invalid")
 	}
 	// New Plans have no cumulative model-token allowance. A positive value is
 	// accepted only so signed historical Plans remain readable.

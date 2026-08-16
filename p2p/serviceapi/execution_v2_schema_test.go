@@ -158,6 +158,13 @@ func TestExecutionV2CloudWorkerConditionalResponseSchemasPinStrictPublicProjecti
 	planGet, _ := ActionSpecFor(executionV2Name("plans.get"))
 	assertCloudConditionalProperties(t, "plans.get.plan", planGet.Schema.Response["plan"].Properties, planFields)
 	limits := planGet.Schema.Response["plan"].Properties["limits"].Properties
+	for _, field := range []string{"minimum_runtime_seconds", "expected_runtime_seconds"} {
+		value := limits[field]
+		if value.Required || value.Type != "integer" || value.Presence == nil ||
+			value.Presence.Omitted != "legacy_plan_uses_max_runtime_only" || value.Presence.Present == "" {
+			t.Fatalf("plans.get limits.%s = %#v", field, value)
+		}
+	}
 	if legacy := limits["max_tokens"]; legacy.Required || legacy.Presence == nil ||
 		legacy.Presence.Omitted != "current_plan_has_no_cumulative_model_token_budget" ||
 		legacy.Presence.Present != "positive_integer_for_legacy_plan_only" {

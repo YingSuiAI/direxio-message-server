@@ -96,6 +96,20 @@ func cloudWorkerPlanProperties() map[string]ActionFieldSchema {
 			"host_network_policy_sha256": cloudWorkerNested("string", "lowercase_sha256"),
 		}),
 		"limits": cloudWorkerObject("strict_hard_limits", map[string]ActionFieldSchema{
+			"minimum_runtime_seconds": {
+				Type: "integer",
+				Presence: &ActionPresenceSchema{
+					Omitted: "legacy_plan_uses_max_runtime_only",
+					Present: "positive_integer_not_greater_than_expected_runtime_seconds",
+				},
+			},
+			"expected_runtime_seconds": {
+				Type: "integer",
+				Presence: &ActionPresenceSchema{
+					Omitted: "legacy_plan_uses_max_runtime_only",
+					Present: "positive_integer_between_minimum_and_maximum_runtime",
+				},
+			},
 			"max_runtime_seconds": cloudWorkerNested("integer", "positive_integer"),
 			"max_tokens": {
 				Type: "integer",
