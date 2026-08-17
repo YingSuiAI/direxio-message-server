@@ -94,7 +94,7 @@ func TestAgentSessionCreateRequiresOwnerAccessToken(t *testing.T) {
 	if err := json.Unmarshal(ownerResponse.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if got["ticket"] == "" || got["base_path"] != "/agent/v1" || got["session_id"] == "" {
+	if got["ticket"] == "" || got["base_path"] != "/agent/v1" || got["session_id"] == "" || got["server_time"] == "" {
 		t.Fatalf("unexpected ticket response: %#v", got)
 	}
 }

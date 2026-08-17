@@ -36,6 +36,7 @@ response fields are:
 
 - `ticket`: compact Ed25519 JWS/JWT;
 - `expires_at`: UTC RFC3339 expiry;
+- `server_time`: UTC RFC3339 ticket issuance time;
 - `base_path`: `/agent/v1`;
 - `session_id`: canonical UUID;
 - `scopes`: the explicit current owner-client Agent scope set.
@@ -50,6 +51,11 @@ is mounted into Agent.
 Agent rejects expired tickets with `401 AGENT_TICKET_EXPIRED`. Missing scope,
 foreign owner, or stale account generation is `403`. The client cannot choose
 or widen scopes. Tickets and Authorization headers must not be logged.
+
+The versioned cross-consumer fixture
+[`agent_data_plane_contract_v1.json`](../p2p/internal/agent/testdata/agent_data_plane_contract_v1.json)
+freezes the session response fields, ticket lifetime, Agent ticket error codes,
+and SSE cursor-conflict code consumed by Agent and Flutter.
 
 ## HTTP and SSE semantics
 

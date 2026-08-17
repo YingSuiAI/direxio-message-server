@@ -239,7 +239,7 @@ func (m *Module) createAgentSession(_ context.Context, params map[string]any) (a
 		return nil, actionbase.InternalError(err)
 	}
 	return map[string]any{
-		"ticket": ticket, "expires_at": expiresAt.Format(time.RFC3339),
+		"ticket": ticket, "expires_at": expiresAt.Format(time.RFC3339), "server_time": now.Format(time.RFC3339),
 		"base_path": agentSessionBasePath, "session_id": sessionID, "scopes": scopes,
 	}, nil
 }

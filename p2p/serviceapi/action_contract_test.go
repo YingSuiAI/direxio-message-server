@@ -80,3 +80,14 @@ func TestActionSpecCopiesDeepCloneNestedSchemas(t *testing.T) {
 		t.Fatal("mutating a generated action contract schema contaminated later contracts")
 	}
 }
+
+func TestAgentSessionCreatePublishesRequiredServerTime(t *testing.T) {
+	spec, ok := ActionSpecFor("agent.session.create")
+	if !ok || spec.Schema == nil {
+		t.Fatal("agent.session.create must publish a schema")
+	}
+	serverTime, ok := spec.Schema.Response["server_time"]
+	if !ok || serverTime.Type != "string" || !serverTime.Required || serverTime.Presence == nil || serverTime.Presence.Present != "rfc3339_utc" {
+		t.Fatalf("agent.session.create server_time schema drifted: %#v", serverTime)
+	}
+}

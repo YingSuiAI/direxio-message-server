@@ -265,6 +265,13 @@
               "type": "string"
             }
           },
+          "server_time": {
+            "type": "string",
+            "required": true,
+            "presence": {
+              "present": "rfc3339_utc"
+            }
+          },
           "session_id": {
             "type": "string",
             "required": true,
