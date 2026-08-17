@@ -34,7 +34,7 @@ Native Agent:
 - Default config path in Docker: `/etc/dirextalk-message-server/message-server.yaml`
 - Default data path in Docker: `/var/dirextalk-message-server`
 - Go module: `github.com/YingSuiAI/dirextalk-message-server`
-- Go version: `1.26.5`
+- Go version: `1.26.6`
 - Server database: PostgreSQL only; SQLite and file DSNs are unsupported.
 - Docker development database: PostgreSQL 18
 

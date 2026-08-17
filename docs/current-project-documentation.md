@@ -339,7 +339,7 @@ Multi-node：
 
 当前工具链：
 
-- Go 1.26.5。
+- Go 1.26.6。
 - 命令从仓库根目录执行。
 - Windows 使用 PowerShell；Linux、macOS 或 WSL 使用 Bash/Zsh。文档命令应按当前环境给出，不应强制限定为 WSL。
 

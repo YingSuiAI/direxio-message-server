@@ -32,7 +32,7 @@ Matrix 兼容 homeserver、ProductCore action、产品策略、projection、外�
 - Docker 默认配置路径：`/etc/dirextalk-message-server/message-server.yaml`
 - Docker 默认数据路径：`/var/dirextalk-message-server`
 - Go module：`github.com/YingSuiAI/dirextalk-message-server`
-- Go 版本：`1.26.5`
+- Go 版本：`1.26.6`
 - 服务端数据库：仅支持 PostgreSQL；不支持 SQLite 或 file DSN。
 - Docker 开发数据库：PostgreSQL 18
 

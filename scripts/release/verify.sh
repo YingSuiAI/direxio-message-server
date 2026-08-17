@@ -10,7 +10,7 @@ release_require_context "$RELEASE_VERSION"
 release_require_tools go docker
 cd "$RELEASE_REPO_ROOT"
 
-go test ./internal/releasecontrol ./internal/httputil ./setup ./p2p ./internal/productpolicy -count=1
+go test ./internal/releasecontrol ./internal/httputil ./setup ./p2p ./p2p/internal/agent ./p2p/serviceapi ./internal/productpolicy -count=1
 go test -tags=dendrite_upgrade_tests ./cmd/dendrite-upgrade-tests -count=1
 go build ./cmd/dirextalk-message-server
 
