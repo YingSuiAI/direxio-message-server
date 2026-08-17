@@ -185,7 +185,7 @@ container; it never compares a Flutter or other client version. An unmet
 minimum, a non-newer Agent target, or a non-production stack is an expected
 negative result (exit `3`) before pull or mutation. Exit `1` is an identity,
 Docker, migration, health, or control-commit infrastructure failure. A successful
-update pulls `docker.io/dirextalk/agent:latest`, verifies its expected version,
+update pulls the exact `docker.io/dirextalk/agent:vX.Y.Z` target and verifies its version,
 revision, and three binary versions, migrates Agent storage, recreates both
 runners and Agent from that pulled image, and updates the expected release and
 receipt-bound container IDs. The wrapper verifies the same binary versions in
@@ -208,8 +208,8 @@ The target is canonical stable `vX.Y.Z`; repository, image, Compose files,
 project, and service are code-owned and are never argv inputs. Status `0`
 means only message-server was recreated healthy, `3` is an expected
 non-production or non-newer result, and `1` is an identity, Docker, health, or
-control infrastructure failure. The adapter pulls
-`docker.io/dirextalk/message-server:latest`, verifies its expected version,
+control infrastructure failure. The adapter pulls the exact
+`docker.io/dirextalk/message-server:vX.Y.Z` target, verifies its expected version,
 revision, and binary version, recreates message-server, then repeats the binary
 probe against the healthy container and updates its receipt-bound container ID.
 Agent and database
@@ -369,11 +369,11 @@ step:
 
 The same consumer wrapper is the production Docker Hub path. Set
 `DIREXTALK_FIRST_FRESH_COMPOSE_MODE=production`, provide the two application
-release channels with their expected versions and revisions, and the public server name.
+version-tagged releases with their expected versions and revisions, and the public server name.
 Production provisioning records that mode in both `.env` and `.manifest`.
 `start-local.sh` then renders `compose.yaml` with
 `compose.production.yaml`, verifies protected TLS, pulls the application
-`latest` channels and digest-pinned infrastructure images, checks all real
+version tags and digest-pinned infrastructure images, checks all real
 binary versions, and starts with `--no-build --pull never`. The production override
 binds only the host updater socket directory and control-token file into
 message-server; local mode does not consume those host paths.
@@ -384,10 +384,10 @@ host:
     DIREXTALK_FIRST_FRESH_COMPOSE_MODE=production \
     DIREXTALK_CORE_EXTENSION_ENABLED=true \
     DIREXTALK_CORE_WORKLOAD_ENABLED=true \
-    DIREXTALK_MESSAGE_SERVER_IMAGE=docker.io/dirextalk/message-server:latest \
+    DIREXTALK_MESSAGE_SERVER_IMAGE=docker.io/dirextalk/message-server:v1.1.33 \
     DIREXTALK_MESSAGE_SERVER_VERSION=v1.1.33 \
     DIREXTALK_MESSAGE_SOURCE_REVISION=<full-commit> \
-    DIREXTALK_AGENT_IMAGE=docker.io/dirextalk/agent:latest \
+    DIREXTALK_AGENT_IMAGE=docker.io/dirextalk/agent:v1.0.69 \
     DIREXTALK_AGENT_VERSION=v1.0.69 \
     DIREXTALK_AGENT_SOURCE_REVISION=<full-commit> \
     DIREXTALK_MESSAGE_TLS_MODE=edge-terminated \
@@ -430,9 +430,8 @@ system/user/global slice.
 Only the local override builds sibling Agent sources, directly through the
 Agent repository's Dockerfiles. Both consumer module graphs use the public
 capability-api v1.0.3 release with no replace. The production compose file has
-no build section. Application services consume only the two canonical
-Docker Hub `latest` channels; PostgreSQL, utility, coturn, and Caddy remain
-digest-pinned.
+no build section. Application services consume only prepared Docker Hub
+`vX.Y.Z` release tags; PostgreSQL, utility, coturn, and Caddy remain digest-pinned.
 
 For a fresh baseline stack, use the guarded startup sequence after the
 API/runtime acceptance gate is green:
@@ -545,8 +544,8 @@ must require `github.com/YingSuiAI/dirextalk-capability-api v1.0.3`.
 Use `compose.yaml` together with `compose.production.yaml` and a reviewed
 `.env` containing:
 
-- `docker.io/dirextalk/message-server:latest` and
-  `docker.io/dirextalk/agent:latest`, with expected versions and full source
+- `docker.io/dirextalk/message-server:vX.Y.Z` and
+  `docker.io/dirextalk/agent:vX.Y.Z`, matching their expected versions and full source
   revisions; all Agent runtime containers resolve the same pulled image ID;
 - a single-execution extension-runner whose outer container is capped at two
   CPUs, 1 GiB memory, and 256 processes in addition to each workload cgroup;

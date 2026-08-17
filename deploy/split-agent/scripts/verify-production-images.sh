@@ -56,11 +56,11 @@ message_version=$(read_env_value DIREXTALK_MESSAGE_SERVER_VERSION)
 message_revision=$(read_env_value DIREXTALK_MESSAGE_SOURCE_REVISION)
 agent_version=$(read_env_value DIREXTALK_AGENT_VERSION)
 agent_revision=$(read_env_value DIREXTALK_AGENT_SOURCE_REVISION)
-[ "$message_image" = docker.io/dirextalk/message-server:latest ] || die "message-server must use docker.io/dirextalk/message-server:latest"
-[ "$agent_image" = docker.io/dirextalk/agent:latest ] || die "Agent must use docker.io/dirextalk/agent:latest"
 for version in "$message_version" "$agent_version"; do
   printf '%s\n' "$version" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' || die "expected application version is invalid"
 done
+[ "$message_image" = "docker.io/dirextalk/message-server:$message_version" ] || die "message-server image must match its prepared version tag"
+[ "$agent_image" = "docker.io/dirextalk/agent:$agent_version" ] || die "Agent image must match its prepared version tag"
 for revision in "$message_revision" "$agent_revision"; do
   printf '%s\n' "$revision" | grep -Eq '^[0-9a-f]{40}$' || die "expected application revision is invalid"
 done

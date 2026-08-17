@@ -36,16 +36,16 @@ DIREXTALK_MESSAGE_TLS_MODE=edge-terminated \
 DIREXTALK_MESSAGE_SERVER_NAME=message.example.com \
 DIREXTALK_MESSAGE_CLIENT_BASE_URL=https://message.example.com \
 DIREXTALK_RELEASE_CATALOG_ORIGIN=https://imadmin.dirextalk.ai \
-DIREXTALK_MESSAGE_SERVER_IMAGE=docker.io/dirextalk/message-server:latest \
-DIREXTALK_AGENT_IMAGE=docker.io/dirextalk/agent:latest \
+DIREXTALK_MESSAGE_SERVER_IMAGE=docker.io/dirextalk/message-server:v1.1.33 \
+DIREXTALK_AGENT_IMAGE=docker.io/dirextalk/agent:v1.0.69 \
   docker compose --env-file "$env_file" -f compose.yaml -f compose.production.yaml config --quiet
 DIREXTALK_SPLIT_COMPOSE_MODE=production \
 DIREXTALK_MESSAGE_TLS_MODE=edge-terminated \
 DIREXTALK_MESSAGE_SERVER_NAME=message.example.com \
 DIREXTALK_MESSAGE_CLIENT_BASE_URL=https://message.example.com \
 DIREXTALK_RELEASE_CATALOG_ORIGIN=https://imadmin.dirextalk.ai \
-DIREXTALK_MESSAGE_SERVER_IMAGE=docker.io/dirextalk/message-server:latest \
-DIREXTALK_AGENT_IMAGE=docker.io/dirextalk/agent:latest \
+DIREXTALK_MESSAGE_SERVER_IMAGE=docker.io/dirextalk/message-server:v1.1.33 \
+DIREXTALK_AGENT_IMAGE=docker.io/dirextalk/agent:v1.0.69 \
   docker compose --env-file "$env_file" -f compose.yaml -f compose.production.yaml config --format json >"$production_rendered"
 
 agent_instance=$(sed -n 's/^DIREXTALK_AGENT_INSTANCE_ID=//p' "$env_file")
@@ -234,10 +234,10 @@ if grep -Eq '^capability_(enabled|grpc_listen|token_file|peer_)' "$run_dir/provi
 fi
 
 jq -e '
-  (.services["message-server"].image == "docker.io/dirextalk/message-server:latest") and
-  (.services.agent.image == "docker.io/dirextalk/agent:latest") and
-  (.services["extension-runner"].image == "docker.io/dirextalk/agent:latest") and
-  (.services["core-runner"].image == "docker.io/dirextalk/agent:latest") and
+  (.services["message-server"].image == "docker.io/dirextalk/message-server:v1.1.33") and
+  (.services.agent.image == "docker.io/dirextalk/agent:v1.0.69") and
+  (.services["extension-runner"].image == "docker.io/dirextalk/agent:v1.0.69") and
+  (.services["core-runner"].image == "docker.io/dirextalk/agent:v1.0.69") and
   ([.services | to_entries[] | .value.build // null] | all(. == null)) and
   (.services.agent.image == .services["extension-runner"].image) and
   (.services.agent.image == .services["core-runner"].image)

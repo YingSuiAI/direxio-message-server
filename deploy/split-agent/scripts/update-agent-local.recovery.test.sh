@@ -34,8 +34,9 @@ cat >"$fake_bin/docker" <<'DOCKER'
 set -euo pipefail
 log() { printf '%s\n' "$*" >>"$DOCKER_FIXTURE_LOG"; }
 container_json() {
-  local id=$1 service=$2 image_id=$3 health=$4 project=test-stack config_image=docker.io/dirextalk/agent:latest status=running
-  [ "$service" != message-server ] || config_image=docker.io/dirextalk/message-server:latest
+  local id=$1 service=$2 image_id=$3 health=$4 project=test-stack config_image=docker.io/dirextalk/agent:v1.0.91 status=running
+  [ "$service" != message-server ] || config_image=docker.io/dirextalk/message-server:v1.1.39
+  case "$id" in "$NEW_AGENT_ID"|"$NEW_EXTENSION_ID"|"$NEW_CORE_ID") config_image=docker.io/dirextalk/agent:v1.0.92 ;; esac
   if [ "$service" = agent ]; then
     case "$DOCKER_FIXTURE_SCENARIO" in
       agent_restarting) status=restarting ;;
@@ -48,7 +49,7 @@ container_json() {
   fi
   [ "$DOCKER_FIXTURE_SCENARIO" != bad_project ] || [ "$service" != agent ] || project=other-stack
   [ "$DOCKER_FIXTURE_SCENARIO" != bad_service ] || [ "$service" != extension-runner ] || service=agent
-  [ "$DOCKER_FIXTURE_SCENARIO" != bad_config_image ] || [ "$id" != "$LIVE_CORE_ID" ] || config_image=docker.io/dirextalk/agent:v1.0.91
+  [ "$DOCKER_FIXTURE_SCENARIO" != bad_config_image ] || [ "$id" != "$LIVE_CORE_ID" ] || config_image=docker.io/dirextalk/agent:v1.0.90
   printf '[{"Id":"%s","Image":"%s","Config":{"Image":"%s","Labels":{"com.docker.compose.project":"%s","com.docker.compose.service":"%s"}},"State":{"Status":"%s","Health":{"Status":"%s"}}}]\n' \
     "$id" "$image_id" "$config_image" "$project" "$service" "$status" "$health"
 }
@@ -151,6 +152,7 @@ case "${1:-}" in
         service=${@: -1}
         [ "$service" = agent-migrate ]
         grep -Fqx 'DIREXTALK_AGENT_VERSION=v1.0.91' "$DOCKER_FIXTURE_OUT/.env"
+        grep -Fqx 'DIREXTALK_AGENT_IMAGE=docker.io/dirextalk/agent:v1.0.91' "$DOCKER_FIXTURE_OUT/.env"
         grep -Fqx "DIREXTALK_AGENT_SOURCE_REVISION=$REVISION_91" "$DOCKER_FIXTURE_OUT/.env"
         grep -Fqx "container.0.id=$EXPECTED_RECOVERED_MESSAGE_ID" "$DOCKER_FIXTURE_OUT/.cleanup-receipt"
         grep -Fqx "container.1.id=$LIVE_AGENT_ID" "$DOCKER_FIXTURE_OUT/.cleanup-receipt"
@@ -183,8 +185,8 @@ make_fixture() {
   mkdir -p "$out"
   chmod 700 "$out"
   cat >"$out/.env" <<EOF
-DIREXTALK_AGENT_IMAGE=docker.io/dirextalk/agent:latest
-DIREXTALK_MESSAGE_SERVER_IMAGE=docker.io/dirextalk/message-server:latest
+DIREXTALK_AGENT_IMAGE=docker.io/dirextalk/agent:v1.0.90
+DIREXTALK_MESSAGE_SERVER_IMAGE=docker.io/dirextalk/message-server:v1.1.39
 DIREXTALK_AGENT_VERSION=v1.0.90
 DIREXTALK_AGENT_SOURCE_REVISION=$revision_90
 DIREXTALK_AGENT_CONFIG_FILE=$out/agent-config.yaml
@@ -273,6 +275,7 @@ cp "$success_root/out/agent-config.yaml" "$success_root/original.agent-config.ya
 run_wrapper "$success_root" success >"$success_root/stdout" 2>"$success_root/stderr"
 grep -Fqx 'migration saw recovered v1.0.91 baseline' "$success_root/docker.log"
 grep -Fqx 'DIREXTALK_AGENT_VERSION=v1.0.92' "$success_root/out/.env"
+grep -Fqx 'DIREXTALK_AGENT_IMAGE=docker.io/dirextalk/agent:v1.0.92' "$success_root/out/.env"
 grep -Fqx "DIREXTALK_AGENT_SOURCE_REVISION=$revision_92" "$success_root/out/.env"
 grep -Fqx 'UNRELATED_ENV=preserve-me' "$success_root/out/.env"
 grep -Fqx "container.0.id=$new_message_id" "$success_root/out/.cleanup-receipt"
@@ -284,8 +287,8 @@ env_identity=$(stat -c '%d:%i:%u' "$success_root/out/.env")
 env_sha=$(sha256sum "$success_root/out/.env" | awk '{print $1}')
 grep -Fqx "control.env_identity=$env_identity" "$success_root/out/.cleanup-receipt"
 grep -Fqx "control.env_sha256=$env_sha" "$success_root/out/.cleanup-receipt"
-sed -E '/^DIREXTALK_AGENT_(VERSION|SOURCE_REVISION)=/d' "$success_root/original.env" >"$success_root/original.env.stable"
-sed -E '/^DIREXTALK_AGENT_(VERSION|SOURCE_REVISION)=/d' "$success_root/out/.env" >"$success_root/final.env.stable"
+sed -E '/^DIREXTALK_AGENT_(IMAGE|VERSION|SOURCE_REVISION)=/d' "$success_root/original.env" >"$success_root/original.env.stable"
+sed -E '/^DIREXTALK_AGENT_(IMAGE|VERSION|SOURCE_REVISION)=/d' "$success_root/out/.env" >"$success_root/final.env.stable"
 cmp "$success_root/original.env.stable" "$success_root/final.env.stable"
 sed -E '/^control\.env_(identity|sha256)=|^container\.[0123]\.id=/d' "$success_root/original.receipt" >"$success_root/original.receipt.stable"
 sed -E '/^control\.env_(identity|sha256)=|^container\.[0123]\.id=/d' "$success_root/out/.cleanup-receipt" >"$success_root/final.receipt.stable"

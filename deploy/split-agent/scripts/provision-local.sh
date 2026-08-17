@@ -230,8 +230,9 @@ validate_digest_image() {
 }
 
 validate_application_image() {
-  local name=$1 value=$2 expected=$3
-  [ "$value" = "$expected" ] || die "$name must be $expected"
+  local name=$1 value=$2 repository=$3 version=$4 expected
+  expected="$repository:$version"
+  [ "$value" = "$expected" ] || die "$name must be the prepared version tag $expected"
 }
 
 require_fresh_docker_namespace() {
@@ -900,8 +901,6 @@ for image_pair in \
   validate_digest_image "$image_name" "$image_value"
 done
 if [ "$compose_mode" = production ]; then
-  validate_application_image DIREXTALK_MESSAGE_SERVER_IMAGE "$message_image" docker.io/dirextalk/message-server:latest
-  validate_application_image DIREXTALK_AGENT_IMAGE "$agent_image" docker.io/dirextalk/agent:latest
   for version_pair in \
     DIREXTALK_MESSAGE_SERVER_VERSION:$message_version \
     DIREXTALK_AGENT_VERSION:$agent_version; do
@@ -910,6 +909,8 @@ if [ "$compose_mode" = production ]; then
     printf '%s\n' "$image_value" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' || \
       die "$image_name must be a canonical release version"
   done
+  validate_application_image DIREXTALK_MESSAGE_SERVER_IMAGE "$message_image" docker.io/dirextalk/message-server "$message_version"
+  validate_application_image DIREXTALK_AGENT_IMAGE "$agent_image" docker.io/dirextalk/agent "$agent_version"
   for revision_pair in \
     DIREXTALK_MESSAGE_SOURCE_REVISION:$message_revision \
     DIREXTALK_AGENT_SOURCE_REVISION:$agent_revision; do
