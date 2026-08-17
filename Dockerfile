@@ -5,7 +5,7 @@
 # NOTE:
 # If you update this Dockerfile, ensure to sync your changes to the other
 # Dockerfiles in this repo (search *Dockerfile).
-ARG GO_BUILD_BASE=docker.io/library/golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2
+ARG GO_BUILD_BASE=docker.io/library/golang:1.26.6-alpine@sha256:3889b425f035be855a72fb4755265311293b6d414521f0a519d819df32222d83
 ARG RUNTIME_BASE=docker.io/library/alpine:latest@sha256:55ae5d250caebc548793f321534bc6a8ef1d116f334f18f4ada1b2daad3251b2
 FROM --platform=${BUILDPLATFORM} ${GO_BUILD_BASE} AS base
 RUN apk --update --no-cache add bash build-base git
