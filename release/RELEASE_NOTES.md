@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v1.1.63
+
+1. Return the RFC3339 UTC `server_time` in owner Agent session tickets so clients can derive ticket lifetime from a monotonic clock without trusting the device wall clock.
+2. Build the Message Server with Go 1.26.6.
+
 ## v1.1.62
 
 1. Remove the retired ProductCore-to-Agent MCP gateway test surface and require current direct Agent HTTP settings during Agent updates instead of migrating legacy gateway configuration.
