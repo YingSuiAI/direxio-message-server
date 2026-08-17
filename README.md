@@ -164,7 +164,9 @@ Current maintained docs are intentionally small. Historical Dendrite site docs, 
 - [Release notes](release/RELEASE_NOTES.md)
 - [Docker image notes](docs/dirextalk-message-server.md)
 - [Push gateway contract](docs/dirextalk-push-gateway.md)
-- [Split Agent deployment](deploy/split-agent/README.md)
+- Production server deployment, image updates, recovery, and split runtime
+  topology are owned by `dirextalk-deployer`; this repository owns only the
+  Message Server image build and formal version-tag release.
 
 ## License
 

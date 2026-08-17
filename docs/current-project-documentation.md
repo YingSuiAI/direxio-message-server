@@ -101,7 +101,7 @@ Native Agent 当前边界：
 - Product Capability 仍是 Agent 异步回调 Matrix/ProductCore 的独立 mTLS 方向；
   handler 不得同步回调 Agent。Execution completion 只写最小 receipt/invalidation，
   结果、Worker 与制品继续由 Agent 权威持有。
-- `deploy/split-agent/compose.yaml` 使用同一 Agent 镜像启动 Core 与 runner；
+- `dirextalk-deployer` 的 split runtime 使用同一 Agent 正式镜像启动 Core 与 runner；
   Message Server 与 Agent 可共用 PostgreSQL 集群，但使用互不可读的角色和
   database/schema。Agent 先启动并健康，Message Server 后启动。
 

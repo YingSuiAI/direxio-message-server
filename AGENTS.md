@@ -17,6 +17,11 @@ boundary for the separately deployed Native Agent runtime.
 
 Read only the references needed by the touched behavior. Current code, generated contracts, and tests override stale narrative notes.
 
+This repository owns only the Message Server image build and formal version-tag
+publication. Production server deployment, Compose topology, host lifecycle,
+image update, rollback, recovery, and their operational tests belong to
+`dirextalk-deployer`.
+
 ## Architecture
 
 - `cmd/dirextalk-message-server` is the production entry point; `setup/monolith.go` wires Matrix and Dirextalk routes.
