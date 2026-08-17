@@ -100,7 +100,7 @@ func (p servicePortalModulePort) snapshotLocked() portalmodule.Snapshot {
 		State: p.service.portalStateLocked(),
 		Session: portalmodule.Session{
 			AccessToken: p.service.accessToken, DeviceID: cleanMatrixDeviceID(p.service.matrixDeviceID),
-			AgentToken: p.service.agentToken, UserID: p.service.ownerMXID,
+			UserID:     p.service.ownerMXID,
 			Homeserver: p.service.homeserver, AgentRoomID: p.service.agentRoomID,
 			SystemRoomID: p.service.systemRoomID, Password: p.service.password,
 			Initialized: p.service.initialized,

@@ -59,7 +59,7 @@ Dirextalk 产品 API 以 body-action surface 为主；标准 MCP 客户端使用
 }
 ```
 
-Protected action 通过 HTTP route 调用时需要 `Authorization: Bearer <access_token>`。客户端 product 查询和写入统一使用 `POST /_p2p/query` 或 `POST /_p2p/command`，产品投影事件通过 owner-authenticated `GET /_p2p/events` SSE 接收。`agent_token` 只允许调用 `agent.matrix_session.create` 和标准 `POST /mcp`；其他 protected action 只认 owner access token。
+Protected action 通过 HTTP route 调用时需要 `Authorization: Bearer <access_token>`。客户端 product 查询和写入统一使用 `POST /_p2p/query` 或 `POST /_p2p/command`，产品投影事件通过 owner-authenticated `GET /_p2p/events` SSE 接收。`agent_token` 只允许调用 `agent.matrix_session.create` 和标准 `POST /mcp`，仅保留在主机受保护凭据文件中，不通过 App 登录响应下发；其他 protected action 只认 owner access token。
 
 - `portal.bootstrap`
 - `portal.auth`

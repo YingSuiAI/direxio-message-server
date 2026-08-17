@@ -43,7 +43,6 @@ func assertSingleInitializedFlag(t *testing.T, payload map[string]any, initializ
 	allowed := map[string]bool{
 		"access_token":       true,
 		"device_id":          true,
-		"agent_token":        true,
 		"user_id":            true,
 		"homeserver":         true,
 		"agent_room_id":      true,

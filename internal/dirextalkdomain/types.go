@@ -73,14 +73,13 @@ type ContactRecord struct {
 }
 
 type AgentConfig struct {
-	NativeAgentIdentity AgentIdentityConfig `json:"native_agent_identity"`
 	OnlineAgentIdentity AgentIdentityConfig `json:"online_agent_identity"`
 	Enabled             bool                `json:"enabled"`
 	MCPBlockedRoomIDs   []string            `json:"mcp_blocked_room_ids"`
 }
 
-// AgentIdentityConfig keeps the product-visible Matrix Online Agent identity
-// separate from the Native Agent identity shown by the external runtime.
+// AgentIdentityConfig is the product-visible Matrix Online Agent identity.
+// Native Agent runtime identity and configuration belong to dirextalk-agent.
 type AgentIdentityConfig struct {
 	DisplayName string `json:"display_name"`
 	AvatarURL   string `json:"avatar_url"`

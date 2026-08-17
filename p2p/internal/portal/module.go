@@ -21,7 +21,6 @@ const (
 type Session struct {
 	AccessToken  string
 	DeviceID     string
-	AgentToken   string
 	UserID       string
 	Homeserver   string
 	AgentRoomID  string
@@ -33,7 +32,7 @@ type Session struct {
 func (s Session) Response() map[string]any {
 	return map[string]any{
 		"access_token": s.AccessToken, "device_id": s.DeviceID,
-		"agent_token": s.AgentToken, "user_id": s.UserID,
+		"user_id":    s.UserID,
 		"homeserver": s.Homeserver, "agent_room_id": s.AgentRoomID,
 		"system_room_id": s.SystemRoomID, "password": s.Password,
 		"initialized": s.Initialized,

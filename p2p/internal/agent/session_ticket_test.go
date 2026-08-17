@@ -40,6 +40,19 @@ func TestCreateAgentSessionSignsOwnerGenerationScopeAndExpiry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var claimFields map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &claimFields); err != nil {
+		t.Fatal(err)
+	}
+	wantClaimFields := []string{"account_generation", "aud", "exp", "iat", "iss", "nonce", "scope", "session_id", "sub"}
+	if len(claimFields) != len(wantClaimFields) {
+		t.Fatalf("ticket claim set drifted: %v", claimFields)
+	}
+	for _, field := range wantClaimFields {
+		if _, ok := claimFields[field]; !ok {
+			t.Fatalf("ticket is missing claim %q: %v", field, claimFields)
+		}
+	}
 	var claims agentSessionClaims
 	if err := json.Unmarshal(payload, &claims); err != nil {
 		t.Fatal(err)

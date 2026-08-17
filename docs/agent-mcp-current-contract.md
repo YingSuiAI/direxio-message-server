@@ -76,7 +76,8 @@ Agent.
   Message Server-owned Online Matrix identity, enablement, and MCP blocked-room
   policy; it is not a Native Agent runtime proxy.
 - Agent bearer token remains valid only for `agent.matrix_session.create` and
-  standard `POST /mcp`; it cannot mint an owner Agent data-plane ticket.
+  standard `POST /mcp`; it cannot mint an owner Agent data-plane ticket and is
+  not returned in Flutter portal login responses.
 - Native Agent tickets are short-lived, owner/account-generation/scope bound,
   and never persisted or logged by Message Server.
 - No removed ProductCore Agent action, gRPC owner proxy, schema pin table,

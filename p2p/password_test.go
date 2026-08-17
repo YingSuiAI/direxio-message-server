@@ -107,6 +107,9 @@ func TestPortalAuthUsesRequestedMatrixDeviceID(t *testing.T) {
 	if session["device_id"] != "DEVICE_B" || session["access_token"] != "matrix-token-for-DEVICE_B" {
 		t.Fatalf("expected session to use requested device id and token, got %#v", session)
 	}
+	if _, ok := session["agent_token"]; ok {
+		t.Fatalf("portal auth must not expose the long-lived Agent token: %#v", session)
+	}
 }
 
 func TestAgentMatrixSessionCreateUsesAgentIdentity(t *testing.T) {

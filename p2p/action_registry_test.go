@@ -1,6 +1,9 @@
 package p2p
 
 import (
+	"reflect"
+	"sort"
+	"strings"
 	"testing"
 
 	"github.com/YingSuiAI/dirextalk-message-server/internal/dirextalkmcp"
@@ -30,6 +33,26 @@ func TestNativeAgentBusinessActionsAreNotProductActions(t *testing.T) {
 		if _, ok := serviceapi.ActionSpecFor(action); ok {
 			t.Errorf("direct Agent data-plane action %q remains in ProductCore", action)
 		}
+	}
+}
+
+func TestProductCoreAgentSurfaceContainsOnlyAccountControls(t *testing.T) {
+	var got []string
+	for _, spec := range serviceapi.ActionSpecs() {
+		if strings.HasPrefix(spec.Name, "agent.") {
+			got = append(got, spec.Name)
+		}
+	}
+	sort.Strings(got)
+	want := []string{
+		"agent.config.get",
+		"agent.config.update",
+		"agent.matrix_session.create",
+		"agent.password",
+		"agent.session.create",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ProductCore Agent surface = %v, want only account controls %v", got, want)
 	}
 }
 

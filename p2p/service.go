@@ -446,10 +446,6 @@ func (s *Service) agentDisplayNameLocked() string {
 	return s.onlineAgentIdentityLocked().DisplayName
 }
 
-func (s *Service) nativeAgentIdentityLocked() dirextalkdomain.AgentIdentityConfig {
-	return agentmodule.NativeAgentIdentity(s.agentConfig)
-}
-
 func (s *Service) onlineAgentIdentityLocked() dirextalkdomain.AgentIdentityConfig {
 	return agentmodule.OnlineAgentIdentity(s.agentConfig)
 }

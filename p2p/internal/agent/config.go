@@ -1,5 +1,5 @@
-// Package agent owns the narrow account projection shared by the external
-// Native Agent gateway and the Matrix-backed Online Agent.
+// Package agent owns Message Server account controls for the Matrix-backed
+// Online Agent.
 package agent
 
 import (
@@ -9,21 +9,16 @@ import (
 	actionbase "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/action"
 )
 
-const (
-	DefaultNativeAgentDisplayName = "Agent"
-	DefaultOnlineAgentDisplayName = "Your Agent"
-)
+const DefaultOnlineAgentDisplayName = "Your Agent"
 
 const (
 	configKeyDisplayName         = "display_name"
 	configKeyAvatarURL           = "avatar_url"
-	configKeyNativeAgentIdentity = "native_agent_identity"
 	configKeyOnlineAgentIdentity = "online_agent_identity"
 )
 
 // ApplyOnlineConfigUpdate mutates only the Matrix-backed Online Agent
-// identity. Native Agent fields are committed by the external gateway and are
-// never copied into message-server's portal projection.
+// identity and Message Server-owned account policy.
 func ApplyOnlineConfigUpdate(current dirextalkdomain.AgentConfig, params map[string]any) dirextalkdomain.AgentConfig {
 	next := NormalizeConfig(current)
 	values := actionbase.Params(params)
@@ -31,9 +26,7 @@ func ApplyOnlineConfigUpdate(current dirextalkdomain.AgentConfig, params map[str
 		next.OnlineAgentIdentity = mergeIdentity(next.OnlineAgentIdentity, identity)
 	}
 	if _, ok := params["mcp_blocked_room_ids"]; ok {
-		// MCP room policy is a message-server-owned projection shared by the
-		// Native and Online Agent surfaces; the runtime receives the same field
-		// through the external config update above.
+		// MCP room policy belongs to Message Server's product-tool boundary.
 		next.MCPBlockedRoomIDs = values.Strings("mcp_blocked_room_ids")
 	}
 	if _, ok := params["enabled"]; ok {
@@ -43,35 +36,27 @@ func ApplyOnlineConfigUpdate(current dirextalkdomain.AgentConfig, params map[str
 }
 
 // OnlineIdentityUpdateRequested reports whether config update changes the
-// Matrix-backed Online Agent identity. Native-only updates stay remote.
+// Matrix-backed Online Agent identity.
 func OnlineIdentityUpdateRequested(params map[string]any) bool {
 	return hasKey(params, configKeyOnlineAgentIdentity) && identityUpdateRequested(params[configKeyOnlineAgentIdentity])
 }
 
-// NormalizeConfig preserves the dual identity projection used by portal
-// bootstrap and Matrix session/room repair. Native runtime fields remain
-// opaque to this package and are populated by the external gateway response.
+// NormalizeConfig applies defaults for the Message Server-owned Online Agent
+// account projection used by portal bootstrap and Matrix room repair.
 func NormalizeConfig(cfg dirextalkdomain.AgentConfig) dirextalkdomain.AgentConfig {
-	empty := identityEmpty(cfg.NativeAgentIdentity) &&
-		identityEmpty(cfg.OnlineAgentIdentity) &&
+	empty := identityEmpty(cfg.OnlineAgentIdentity) &&
 		!cfg.Enabled &&
 		len(cfg.MCPBlockedRoomIDs) == 0
 	if empty {
-		cfg.NativeAgentIdentity = dirextalkdomain.AgentIdentityConfig{DisplayName: DefaultNativeAgentDisplayName}
 		cfg.OnlineAgentIdentity = dirextalkdomain.AgentIdentityConfig{DisplayName: DefaultOnlineAgentDisplayName}
 		cfg.Enabled = true
 		return cfg
 	}
-	cfg.NativeAgentIdentity = normalizeIdentity(cfg.NativeAgentIdentity, dirextalkdomain.AgentIdentityConfig{DisplayName: DefaultNativeAgentDisplayName})
 	cfg.OnlineAgentIdentity = normalizeIdentity(cfg.OnlineAgentIdentity, dirextalkdomain.AgentIdentityConfig{
 		DisplayName: DefaultOnlineAgentDisplayName,
 	})
 	cfg.MCPBlockedRoomIDs = actionbase.Strings(cfg.MCPBlockedRoomIDs)
 	return cfg
-}
-
-func NativeAgentIdentity(cfg dirextalkdomain.AgentConfig) dirextalkdomain.AgentIdentityConfig {
-	return NormalizeConfig(cfg).NativeAgentIdentity
 }
 
 func OnlineAgentIdentity(cfg dirextalkdomain.AgentConfig) dirextalkdomain.AgentIdentityConfig {
@@ -103,7 +88,7 @@ func normalizeIdentity(identity, fallback dirextalkdomain.AgentIdentityConfig) d
 		identity = fallback
 	}
 	if identity.DisplayName == "" {
-		identity.DisplayName = fallbackString(fallback.DisplayName, DefaultNativeAgentDisplayName)
+		identity.DisplayName = fallbackString(fallback.DisplayName, DefaultOnlineAgentDisplayName)
 	}
 	return identity
 }

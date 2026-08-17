@@ -100,10 +100,6 @@ func TestServiceUsesTransportForRooms(t *testing.T) {
 func TestEnsureAgentRoomCreatesRealRoomWithOnlineIdentityForLegacyID(t *testing.T) {
 	transport := &recordingTransport{roomID: "!agents-real:example.com"}
 	service := NewServiceWithTransport(Config{ServerName: "example.com"}, transport)
-	service.agentConfig.NativeAgentIdentity = dirextalkdomain.AgentIdentityConfig{
-		DisplayName: "Ying Native",
-		AvatarURL:   "mxc://example.com/ying",
-	}
 	service.agentConfig.OnlineAgentIdentity = dirextalkdomain.AgentIdentityConfig{
 		DisplayName: "Your Online",
 		AvatarURL:   "mxc://example.com/online",
@@ -184,10 +180,6 @@ func TestEnsureAgentRoomJoinsAgentAndOwnerForExistingRealRoom(t *testing.T) {
 	transport := &recordingTransport{}
 	service := NewServiceWithTransport(Config{ServerName: "example.com"}, transport)
 	service.agentRoomID = "!agents-real:example.com"
-	service.agentConfig.NativeAgentIdentity = dirextalkdomain.AgentIdentityConfig{
-		DisplayName: "Ying Native",
-		AvatarURL:   "mxc://example.com/ying",
-	}
 	service.agentConfig.OnlineAgentIdentity = dirextalkdomain.AgentIdentityConfig{
 		DisplayName: "Codex Online",
 		AvatarURL:   "mxc://example.com/online",

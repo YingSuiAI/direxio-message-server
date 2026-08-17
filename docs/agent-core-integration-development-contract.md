@@ -19,7 +19,9 @@ the same public origin.
   Compose edge network and is never host-published or sent to the client.
 - Flutter uses the public Message Server domain for both control and data
   planes. It never receives an Agent internal address, long-lived Agent service
-  token, client certificate, or database credential.
+  token, the portal-owned external MCP `agent_token`, client certificate, or
+  database credential. Portal login responses contain only the owner session;
+  the host credentials file retains `agent_token` for trusted operator tools.
 - Message Server contains no Agent business-action proxy, schema projection,
   synchronous Watch, conversation store, Worker adapter, or catalog digest
   table. Superseded ProductCore `agent.*` business actions are not aliases for

@@ -50,12 +50,8 @@ func TestMemberRecordJSONIncludesCompatibilityFields(t *testing.T) {
 	}
 }
 
-func TestAgentConfigJSONPreservesNativeFields(t *testing.T) {
+func TestAgentConfigJSONContainsOnlyMessageServerOwnedFields(t *testing.T) {
 	raw, err := json.Marshal(AgentConfig{
-		NativeAgentIdentity: AgentIdentityConfig{
-			DisplayName: "Ying",
-			AvatarURL:   "mxc://ying",
-		},
 		OnlineAgentIdentity: AgentIdentityConfig{
 			DisplayName: "Your Agent",
 			AvatarURL:   "mxc://online",
@@ -77,20 +73,19 @@ func TestAgentConfigJSONPreservesNativeFields(t *testing.T) {
 	if _, ok := encoded["avatar_url"]; ok {
 		t.Fatalf("flat avatar_url must not be serialized: %#v", encoded)
 	}
-	nativeIdentity := encoded["native_agent_identity"].(map[string]any)
+	if _, ok := encoded["native_agent_identity"]; ok {
+		t.Fatalf("Native Agent identity must not be stored by Message Server: %#v", encoded)
+	}
 	onlineIdentity := encoded["online_agent_identity"].(map[string]any)
-	if nativeIdentity["display_name"] != "Ying" || nativeIdentity["avatar_url"] != "mxc://ying" ||
-		onlineIdentity["display_name"] != "Your Agent" || onlineIdentity["avatar_url"] != "mxc://online" {
-		t.Fatalf("agent identities should round-trip as known fields, got %#v", encoded)
+	if onlineIdentity["display_name"] != "Your Agent" || onlineIdentity["avatar_url"] != "mxc://online" {
+		t.Fatalf("Online Agent identity should round-trip as a known field, got %#v", encoded)
 	}
 
 	var decoded AgentConfig
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		t.Fatalf("Unmarshal failed: %v", err)
 	}
-	if !decoded.Enabled ||
-		decoded.NativeAgentIdentity.DisplayName != "Ying" ||
-		decoded.OnlineAgentIdentity.DisplayName != "Your Agent" {
+	if !decoded.Enabled || decoded.OnlineAgentIdentity.DisplayName != "Your Agent" {
 		t.Fatalf("expected known fields to round-trip, got %#v", decoded)
 	}
 }
@@ -103,8 +98,7 @@ func TestAgentConfigJSONIgnoresFlatIdentityFields(t *testing.T) {
 	}`), &decoded); err != nil {
 		t.Fatalf("Unmarshal legacy config failed: %v", err)
 	}
-	if decoded.NativeAgentIdentity != (AgentIdentityConfig{}) ||
-		decoded.OnlineAgentIdentity != (AgentIdentityConfig{}) {
+	if decoded.OnlineAgentIdentity != (AgentIdentityConfig{}) {
 		t.Fatalf("flat identity fields must not populate current identities: %#v", decoded)
 	}
 }

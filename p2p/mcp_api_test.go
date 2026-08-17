@@ -1006,7 +1006,6 @@ func TestMCPMessagesListUsesAgentRoomNameAndDisplayName(t *testing.T) {
 	}})
 	service.agentRoomID = "!agents:example.com"
 	service.agentConfig = normalizeAgentConfig(agentConfig{
-		NativeAgentIdentity: dirextalkdomain.AgentIdentityConfig{DisplayName: "Codex Native"},
 		OnlineAgentIdentity: dirextalkdomain.AgentIdentityConfig{DisplayName: "Codex Online"},
 	})
 	service.SetMatrixMessageReader(&fakeMCPMessageReader{messages: []mcpMessageSummary{

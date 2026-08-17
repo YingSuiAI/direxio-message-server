@@ -685,7 +685,7 @@ func TestDatabaseStoreClientBuildUpdateUsesDeviceCASAndPreservesPortalFields(t *
 		OwnerMXID:      "@owner:example.com",
 		Profile:        dirextalkdomain.OwnerProfile{UserID: "@owner:example.com", DisplayName: "Initial"},
 		AgentConfig: dirextalkdomain.AgentConfig{
-			NativeAgentIdentity: dirextalkdomain.AgentIdentityConfig{DisplayName: "Agent"},
+			OnlineAgentIdentity: dirextalkdomain.AgentIdentityConfig{DisplayName: "Agent"},
 			MCPBlockedRoomIDs:   []string{"!initial:example.com"},
 		},
 	}
