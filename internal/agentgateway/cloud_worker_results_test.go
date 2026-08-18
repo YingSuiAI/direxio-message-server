@@ -155,18 +155,17 @@ func TestCloudWorkerPlanRuntimeEstimateIsOrderedAndLegacyCompatible(t *testing.T
 	}
 
 	legacy := cloneParams(fixture.Plan["limits"].(map[string]any))
-	delete(legacy, "minimum_runtime_seconds")
 	delete(legacy, "expected_runtime_seconds")
+	legacy["max_runtime_seconds"] = float64(1800)
 	if err := validate(legacy); err != nil {
 		t.Fatalf("legacy runtime limits rejected: %v", err)
 	}
 
 	for name, mutate := range map[string]func(map[string]any){
-		"minimum without expected": func(value map[string]any) { delete(value, "expected_runtime_seconds") },
-		"expected before minimum":  func(value map[string]any) { value["expected_runtime_seconds"] = float64(599) },
-		"maximum before expected":  func(value map[string]any) { value["max_runtime_seconds"] = float64(1199) },
-		"maximum above policy":     func(value map[string]any) { value["max_runtime_seconds"] = float64(24*60*60 + 1) },
-		"non numeric minimum":      func(value map[string]any) { value["minimum_runtime_seconds"] = "600" },
+		"expected below minimum":  func(value map[string]any) { value["expected_runtime_seconds"] = float64(59) },
+		"expected above policy":   func(value map[string]any) { value["expected_runtime_seconds"] = float64(24*60*60 + 1) },
+		"current with legacy max": func(value map[string]any) { value["max_runtime_seconds"] = float64(1800) },
+		"current with legacy min": func(value map[string]any) { value["minimum_runtime_seconds"] = float64(600) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			limits := cloneParams(fixture.Plan["limits"].(map[string]any))

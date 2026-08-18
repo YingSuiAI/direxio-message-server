@@ -103,7 +103,7 @@ func TestValidateCatalogPinsKnowledgeStatusQuotaSchema(t *testing.T) {
 
 func TestArtifactDownloadCatalogPinsExactAgentSchemas(t *testing.T) {
 	requirement := NewCatalogRequirement("agent.execution.v2.artifacts.download")
-	if got, want := hex.EncodeToString(requirement.InputSchemaDigest), "1f89699ab07b14d135619ee5f6b2ffd0d8d0821fb8f1ba236662814c0586706c"; got != want {
+	if got, want := hex.EncodeToString(requirement.InputSchemaDigest), "f086e0c778fd7f08411a280aad3deddfdc07378749379b324bc215aa1b939a51"; got != want {
 		t.Fatalf("artifact download input schema digest = %s, want %s", got, want)
 	}
 	if got, want := hex.EncodeToString(requirement.ResultSchemaDigest), "6ea5feead715aa50feeff464e6da618564f9b6e422025c94743faf173478689d"; got != want {

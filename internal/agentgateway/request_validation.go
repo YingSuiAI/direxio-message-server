@@ -45,7 +45,7 @@ const (
 	maxChatExtensionToolNameBytes    = 256
 	maxChatAttachmentNameBytes       = 255
 	maxChatAttachments               = 4
-	maxCloudWorkerArtifactBytes      = int64(8 << 20)
+	maxCloudWorkerArtifactBytes      = int64(64 << 20)
 	maxCloudWorkerArtifactChunkBytes = int64(512 << 10)
 	maxTextToolNameBytes             = 64
 	maxTextToolPromptBytes           = 16 << 10
@@ -771,7 +771,7 @@ func validateCloudWorkerArtifactDownloadRequest(action string, params map[string
 		return invalidActionRequest(action, "artifact_id", "must be a canonical UUID")
 	}
 	if !actionIntegerInRange(params["offset_bytes"], 0, maxCloudWorkerArtifactBytes-1) {
-		return invalidActionRequest(action, "offset_bytes", "must be an integer from 0 to 8388607")
+		return invalidActionRequest(action, "offset_bytes", "must be an integer from 0 to 67108863")
 	}
 	if !actionIntegerInRange(params["max_chunk_bytes"], 1, maxCloudWorkerArtifactChunkBytes) {
 		return invalidActionRequest(action, "max_chunk_bytes", "must be an integer from 1 to 524288")

@@ -99,18 +99,24 @@ func cloudWorkerPlanProperties() map[string]ActionFieldSchema {
 			"minimum_runtime_seconds": {
 				Type: "integer",
 				Presence: &ActionPresenceSchema{
-					Omitted: "legacy_plan_uses_max_runtime_only",
-					Present: "positive_integer_not_greater_than_expected_runtime_seconds",
+					Omitted: "current_plan_or_legacy_plan_without_minimum",
+					Present: "positive_integer_for_legacy_plan_only",
 				},
 			},
 			"expected_runtime_seconds": {
 				Type: "integer",
 				Presence: &ActionPresenceSchema{
 					Omitted: "legacy_plan_uses_max_runtime_only",
-					Present: "positive_integer_between_minimum_and_maximum_runtime",
+					Present: "positive_integer_user_facing_completion_estimate",
 				},
 			},
-			"max_runtime_seconds": cloudWorkerNested("integer", "positive_integer"),
+			"max_runtime_seconds": {
+				Type: "integer",
+				Presence: &ActionPresenceSchema{
+					Omitted: "current_plan_uses_expected_runtime_only",
+					Present: "positive_integer_for_legacy_plan_only",
+				},
+			},
 			"max_tokens": {
 				Type: "integer",
 				Presence: &ActionPresenceSchema{
@@ -195,11 +201,11 @@ func cloudWorkerArtifactDownloadProperties() map[string]ActionFieldSchema {
 		"account_generation": cloudWorkerNested("integer", "positive_integer_equal_to_prepared_permission_generation"),
 		"artifact_id":        cloudWorkerNested("string", "canonical_uuid_equal_to_requested_artifact"),
 		"execution_id":       cloudWorkerNested("string", "canonical_uuid"),
-		"offset_bytes":       cloudWorkerNested("integer", "integer_0_to_8388607_equal_to_requested_offset"),
+		"offset_bytes":       cloudWorkerNested("integer", "integer_0_to_67108863_equal_to_requested_offset"),
 		"data_base64":        cloudWorkerNested("string", "canonical_standard_base64_for_1_to_524288_bytes"),
 		"chunk_sha256":       cloudWorkerNested("string", "lowercase_sha256_of_decoded_chunk"),
 		"artifact_sha256":    cloudWorkerNested("string", "lowercase_sha256_of_complete_artifact"),
-		"size_bytes":         cloudWorkerNested("integer", "integer_1_to_8388608"),
+		"size_bytes":         cloudWorkerNested("integer", "integer_1_to_67108864"),
 		"next_offset_bytes":  cloudWorkerNested("integer", "offset_plus_decoded_chunk_length_strictly_advancing_not_above_size"),
 		"eof":                cloudWorkerNested("boolean", "true_exactly_when_next_offset_equals_size"),
 	}
@@ -483,7 +489,7 @@ func executionV2Schema(name string) *ActionSchema {
 		request := map[string]ActionFieldSchema{
 			"record_kind":     {Type: "string", Required: true, Presence: &ActionPresenceSchema{Present: "exact:cloud_worker"}},
 			"artifact_id":     {Type: "string", Required: true, Presence: &ActionPresenceSchema{Present: "canonical_uuid"}},
-			"offset_bytes":    {Type: "integer", Required: true, Presence: &ActionPresenceSchema{Present: "integer_0_to_8388607"}},
+			"offset_bytes":    {Type: "integer", Required: true, Presence: &ActionPresenceSchema{Present: "integer_0_to_67108863"}},
 			"max_chunk_bytes": {Type: "integer", Required: true, Presence: &ActionPresenceSchema{Present: "integer_1_to_524288"}},
 		}
 		return &ActionSchema{Request: request, Response: cloudWorkerArtifactDownloadProperties()}

@@ -293,6 +293,12 @@ func TestValidateCloudWorkerArtifactDownloadRequest(t *testing.T) {
 	if err := ValidateActionRequest("agent.execution.v2.artifacts.download", valid); err != nil {
 		t.Fatalf("canonical artifact download request rejected: %v", err)
 	}
+	lastChunk := cloneParams(valid)
+	lastChunk["offset_bytes"] = maxCloudWorkerArtifactBytes - 1
+	lastChunk["max_chunk_bytes"] = int64(1)
+	if err := ValidateActionRequest("agent.execution.v2.artifacts.download", lastChunk); err != nil {
+		t.Fatalf("64 MiB artifact boundary rejected: %v", err)
+	}
 
 	for name, mutation := range map[string]map[string]any{
 		"missing record kind": {"record_kind": nil},

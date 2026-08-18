@@ -584,7 +584,7 @@ var expectedCatalogSchemaDigests = map[string]catalogSchemaDigest{
 		resultHex: "ac79d5f21b24bc32782380d222adfb19224f8c68945623ee78496c56c56d870e",
 	},
 	"agent.execution.v2.artifacts.download": {
-		inputHex:  "1f89699ab07b14d135619ee5f6b2ffd0d8d0821fb8f1ba236662814c0586706c",
+		inputHex:  "f086e0c778fd7f08411a280aad3deddfdc07378749379b324bc215aa1b939a51",
 		resultHex: "6ea5feead715aa50feeff464e6da618564f9b6e422025c94743faf173478689d",
 	},
 	"agent.execution.v2.service_bindings.list": {

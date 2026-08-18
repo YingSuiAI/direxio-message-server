@@ -54,8 +54,11 @@ func TestExecutionV2ActionsAreOwnerHTTPAndWSWithStrictMutations(t *testing.T) {
 	if rule := download.Schema.Request["max_chunk_bytes"].Presence; rule == nil || rule.Present != "integer_1_to_524288" {
 		t.Fatalf("artifact download chunk bound = %#v", download.Schema.Request["max_chunk_bytes"])
 	}
-	if rule := download.Schema.Request["offset_bytes"].Presence; rule == nil || rule.Present != "integer_0_to_8388607" {
+	if rule := download.Schema.Request["offset_bytes"].Presence; rule == nil || rule.Present != "integer_0_to_67108863" {
 		t.Fatalf("artifact download offset bound = %#v", download.Schema.Request["offset_bytes"])
+	}
+	if rule := download.Schema.Response["size_bytes"].Presence; rule == nil || rule.Present != "integer_1_to_67108864" {
+		t.Fatalf("artifact download size bound = %#v", download.Schema.Response["size_bytes"])
 	}
 	for _, field := range []string{"owner_id", "account_generation", "artifact_id", "execution_id", "offset_bytes", "data_base64", "chunk_sha256", "artifact_sha256", "size_bytes", "next_offset_bytes", "eof"} {
 		value, ok := download.Schema.Response[field]
@@ -158,12 +161,13 @@ func TestExecutionV2CloudWorkerConditionalResponseSchemasPinStrictPublicProjecti
 	planGet, _ := ActionSpecFor(executionV2Name("plans.get"))
 	assertCloudConditionalProperties(t, "plans.get.plan", planGet.Schema.Response["plan"].Properties, planFields)
 	limits := planGet.Schema.Response["plan"].Properties["limits"].Properties
-	for _, field := range []string{"minimum_runtime_seconds", "expected_runtime_seconds"} {
-		value := limits[field]
-		if value.Required || value.Type != "integer" || value.Presence == nil ||
-			value.Presence.Omitted != "legacy_plan_uses_max_runtime_only" || value.Presence.Present == "" {
-			t.Fatalf("plans.get limits.%s = %#v", field, value)
-		}
+	if value := limits["expected_runtime_seconds"]; value.Required || value.Type != "integer" || value.Presence == nil ||
+		value.Presence.Omitted != "legacy_plan_uses_max_runtime_only" || value.Presence.Present != "positive_integer_user_facing_completion_estimate" {
+		t.Fatalf("plans.get limits.expected_runtime_seconds = %#v", value)
+	}
+	if value := limits["max_runtime_seconds"]; value.Required || value.Type != "integer" || value.Presence == nil ||
+		value.Presence.Omitted != "current_plan_uses_expected_runtime_only" || value.Presence.Present != "positive_integer_for_legacy_plan_only" {
+		t.Fatalf("plans.get limits.max_runtime_seconds = %#v", value)
 	}
 	if legacy := limits["max_tokens"]; legacy.Required || legacy.Presence == nil ||
 		legacy.Presence.Omitted != "current_plan_has_no_cumulative_model_token_budget" ||

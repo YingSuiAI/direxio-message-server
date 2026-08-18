@@ -11800,6 +11800,13 @@
               "limits": {
                 "type": "object",
                 "properties": {
+                  "expected_runtime_seconds": {
+                    "type": "integer",
+                    "presence": {
+                      "omitted": "legacy_plan_uses_max_runtime_only",
+                      "present": "positive_integer_user_facing_completion_estimate"
+                    }
+                  },
                   "max_output_bytes": {
                     "type": "integer",
                     "required": true,
@@ -11809,15 +11816,22 @@
                   },
                   "max_runtime_seconds": {
                     "type": "integer",
-                    "required": true,
                     "presence": {
-                      "present": "positive_integer"
+                      "omitted": "current_plan_uses_expected_runtime_only",
+                      "present": "positive_integer_for_legacy_plan_only"
                     }
                   },
                   "max_tokens": {
                     "type": "integer",
                     "presence": {
                       "omitted": "current_plan_has_no_cumulative_model_token_budget",
+                      "present": "positive_integer_for_legacy_plan_only"
+                    }
+                  },
+                  "minimum_runtime_seconds": {
+                    "type": "integer",
+                    "presence": {
+                      "omitted": "current_plan_or_legacy_plan_without_minimum",
                       "present": "positive_integer_for_legacy_plan_only"
                     }
                   }
@@ -12284,6 +12298,13 @@
                 "limits": {
                   "type": "object",
                   "properties": {
+                    "expected_runtime_seconds": {
+                      "type": "integer",
+                      "presence": {
+                        "omitted": "legacy_plan_uses_max_runtime_only",
+                        "present": "positive_integer_user_facing_completion_estimate"
+                      }
+                    },
                     "max_output_bytes": {
                       "type": "integer",
                       "required": true,
@@ -12293,15 +12314,22 @@
                     },
                     "max_runtime_seconds": {
                       "type": "integer",
-                      "required": true,
                       "presence": {
-                        "present": "positive_integer"
+                        "omitted": "current_plan_uses_expected_runtime_only",
+                        "present": "positive_integer_for_legacy_plan_only"
                       }
                     },
                     "max_tokens": {
                       "type": "integer",
                       "presence": {
                         "omitted": "current_plan_has_no_cumulative_model_token_budget",
+                        "present": "positive_integer_for_legacy_plan_only"
+                      }
+                    },
+                    "minimum_runtime_seconds": {
+                      "type": "integer",
+                      "presence": {
+                        "omitted": "current_plan_or_legacy_plan_without_minimum",
                         "present": "positive_integer_for_legacy_plan_only"
                       }
                     }
@@ -13781,7 +13809,7 @@
             "type": "integer",
             "required": true,
             "presence": {
-              "present": "integer_0_to_8388607"
+              "present": "integer_0_to_67108863"
             }
           },
           "record_kind": {
@@ -13853,7 +13881,7 @@
             "type": "integer",
             "required": true,
             "presence": {
-              "present": "integer_0_to_8388607_equal_to_requested_offset"
+              "present": "integer_0_to_67108863_equal_to_requested_offset"
             }
           },
           "owner_id": {
@@ -13867,7 +13895,7 @@
             "type": "integer",
             "required": true,
             "presence": {
-              "present": "integer_1_to_8388608"
+              "present": "integer_1_to_67108864"
             }
           }
         }
