@@ -255,7 +255,6 @@ func (oq *destinationQueue) getPendingFromDatabase() {
 	// in memory then we'll no longer consider this queue to be overflowed.
 	if !overflowed {
 		oq.overflowed.Store(false)
-	} else {
 	}
 	// If we've retrieved some events then notify the destination queue goroutine.
 	if retrieved {

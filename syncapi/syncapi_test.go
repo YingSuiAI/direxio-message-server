@@ -1189,7 +1189,7 @@ func testContext(t *testing.T, dbType test.DBType) {
 	room.CreateAndInsert(t, user, "m.room.message", map[string]interface{}{"body": "hello world 1!"})
 	room.CreateAndInsert(t, user, "m.room.message", map[string]interface{}{"body": "hello world 2!"})
 	thirdMsg := room.CreateAndInsert(t, user, "m.room.message", map[string]interface{}{"body": "hello world3!"})
-	room.CreateAndInsert(t, user, "m.room.message", map[string]interface{}{"body": "hello world4!"})
+	fourthMsg := room.CreateAndInsert(t, user, "m.room.message", map[string]interface{}{"body": "hello world4!"})
 
 	if err := api.SendEvents(context.Background(), rsAPI, api.KindNew, room.Events(), "test", "test", "test", nil, false); err != nil {
 		t.Fatalf("failed to send events: %v", err)
@@ -1199,8 +1199,10 @@ func testContext(t *testing.T, dbType test.DBType) {
 	defer jetstream.DeleteAllStreams(jsctx, &cfg.Global.JetStream)
 
 	syncUntil(t, routers, alice.AccessToken, false, func(syncBody string) bool {
-		// wait for the last sent eventID to come down sync
-		path := fmt.Sprintf(`rooms.join.%s.timeline.events.#(event_id=="%s")`, room.ID, thirdMsg.EventID())
+		// Context around the third event expects the fourth event in events_after,
+		// so wait for the actual last event rather than observing an intermediate
+		// consumer position.
+		path := fmt.Sprintf(`rooms.join.%s.timeline.events.#(event_id=="%s")`, room.ID, fourthMsg.EventID())
 		return gjson.Get(syncBody, path).Exists()
 	})
 

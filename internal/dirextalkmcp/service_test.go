@@ -73,9 +73,36 @@ func TestToolsAreGeneratedFromSameRegistryAsActions(t *testing.T) {
 		if tool.Name == "" || tool.Description == "" || tool.InputSchema["type"] != "object" {
 			t.Fatalf("tool must expose MCP schema metadata, got %#v", tool)
 		}
+		if tool.Effect != ToolEffectRead && tool.Effect != ToolEffectNonIdempotentWrite {
+			t.Fatalf("tool must declare a known effect, got %#v", tool)
+		}
 		toolActions = append(toolActions, tool.Action)
 	}
 	if !reflect.DeepEqual(actions, toolActions) {
 		t.Fatalf("native tool registry must preserve MCP action order, actions=%#v toolActions=%#v", actions, toolActions)
+	}
+}
+
+func TestToolEffectsProduceSafeStandardAnnotations(t *testing.T) {
+	writeActions := map[string]bool{
+		ActionMessagesSend:          true,
+		ActionChannelCommentsCreate: true,
+	}
+	for _, tool := range Tools() {
+		annotations := tool.Annotations()
+		if writeActions[tool.Action] {
+			if tool.Effect != ToolEffectNonIdempotentWrite || annotations.ReadOnlyHint || annotations.DestructiveHint || annotations.IdempotentHint || !annotations.OpenWorldHint {
+				t.Errorf("write tool %q effect/annotations = %q/%#v", tool.Action, tool.Effect, annotations)
+			}
+			continue
+		}
+		if tool.Effect != ToolEffectRead || !annotations.ReadOnlyHint || annotations.DestructiveHint || !annotations.IdempotentHint || !annotations.OpenWorldHint {
+			t.Errorf("read tool %q effect/annotations = %q/%#v", tool.Action, tool.Effect, annotations)
+		}
+	}
+
+	unknown := (Tool{}).Annotations()
+	if unknown.ReadOnlyHint || !unknown.DestructiveHint || unknown.IdempotentHint || !unknown.OpenWorldHint {
+		t.Fatalf("unknown effect must fail closed, got %#v", unknown)
 	}
 }

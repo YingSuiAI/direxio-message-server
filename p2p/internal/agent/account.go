@@ -7,10 +7,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
+	agentdatav2 "github.com/YingSuiAI/dirextalk-capability-api/gen/go/dirextalk/agent/data/v2"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/dirextalkdomain"
 	actionbase "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/action"
 	"github.com/google/uuid"
@@ -26,55 +27,55 @@ const (
 
 const (
 	agentSessionAudience = "dirextalk-agent-data"
-	agentSessionBasePath = "/agent/v1"
 	agentSessionTTL      = 15 * time.Minute
 )
 
 // This is the explicit owner-client capability set advertised by the current
-// Agent data plane. It is intentionally not derived from client input.
-var agentSessionScopes = []string{
-	"agent.execution.v2",
-	"agent:account:deprovision",
-	"agent:aws:credentials:read",
-	"agent:aws:credentials:write",
-	"agent:chat:read",
-	"agent:chat:write",
-	"agent:config:read",
-	"agent:config:write",
-	"agent:confirmations:read",
-	"agent:confirmations:write",
-	"agent:image_tools:execute",
-	"agent:image_tools:upload",
-	"agent:info:read",
-	"agent:knowledge:read",
-	"agent:knowledge:write",
-	"agent:mcp:execute",
-	"agent:mcp:read",
-	"agent:mcp:write",
-	"agent:memory:read",
-	"agent:memory:write",
-	"agent:models:read",
-	"agent:models:write",
-	"agent:product:execute",
-	"agent:runtime:read",
-	"agent:runtime:write",
-	"agent:schedules:read",
-	"agent:schedules:write",
-	"agent:skills:execute",
-	"agent:skills:read",
-	"agent:skills:write",
-	"agent:static_sites:read",
-	"agent:static_sites:write",
-	"agent:tasks:read",
-	"agent:tasks:write",
-	"agent:text_tools:execute",
-	"agent:text_tools:read",
-	"agent:text_tools:write",
-	"agent:voice:write",
-	"agent:web_search:read",
-	"agent:web_search:write",
-	"agent:worker:destroy",
-	"agent:worker:read",
+// Agent data plane. The values are generated from the shared OpenAPI contract
+// and are intentionally not derived from client input.
+var agentSessionScopes = []agentdatav2.AgentDataScope{
+	agentdatav2.AgentDataScopeAgentExecutionV2,
+	agentdatav2.AgentDataScopeAgentAccountDeprovision,
+	agentdatav2.AgentDataScopeAgentAwsCredentialsRead,
+	agentdatav2.AgentDataScopeAgentAwsCredentialsWrite,
+	agentdatav2.AgentDataScopeAgentChatRead,
+	agentdatav2.AgentDataScopeAgentChatWrite,
+	agentdatav2.AgentDataScopeAgentConfigRead,
+	agentdatav2.AgentDataScopeAgentConfigWrite,
+	agentdatav2.AgentDataScopeAgentConfirmationsRead,
+	agentdatav2.AgentDataScopeAgentConfirmationsWrite,
+	agentdatav2.AgentDataScopeAgentImageToolsExecute,
+	agentdatav2.AgentDataScopeAgentImageToolsUpload,
+	agentdatav2.AgentDataScopeAgentInfoRead,
+	agentdatav2.AgentDataScopeAgentKnowledgeRead,
+	agentdatav2.AgentDataScopeAgentKnowledgeWrite,
+	agentdatav2.AgentDataScopeAgentMcpExecute,
+	agentdatav2.AgentDataScopeAgentMcpRead,
+	agentdatav2.AgentDataScopeAgentMcpWrite,
+	agentdatav2.AgentDataScopeAgentMemoryRead,
+	agentdatav2.AgentDataScopeAgentMemoryWrite,
+	agentdatav2.AgentDataScopeAgentModelsRead,
+	agentdatav2.AgentDataScopeAgentModelsWrite,
+	agentdatav2.AgentDataScopeAgentProductExecute,
+	agentdatav2.AgentDataScopeAgentRuntimeRead,
+	agentdatav2.AgentDataScopeAgentRuntimeWrite,
+	agentdatav2.AgentDataScopeAgentSchedulesRead,
+	agentdatav2.AgentDataScopeAgentSchedulesWrite,
+	agentdatav2.AgentDataScopeAgentSkillsExecute,
+	agentdatav2.AgentDataScopeAgentSkillsRead,
+	agentdatav2.AgentDataScopeAgentSkillsWrite,
+	agentdatav2.AgentDataScopeAgentStaticSitesRead,
+	agentdatav2.AgentDataScopeAgentStaticSitesWrite,
+	agentdatav2.AgentDataScopeAgentTasksRead,
+	agentdatav2.AgentDataScopeAgentTasksWrite,
+	agentdatav2.AgentDataScopeAgentTextToolsExecute,
+	agentdatav2.AgentDataScopeAgentTextToolsRead,
+	agentdatav2.AgentDataScopeAgentTextToolsWrite,
+	agentdatav2.AgentDataScopeAgentVoiceWrite,
+	agentdatav2.AgentDataScopeAgentWebSearchRead,
+	agentdatav2.AgentDataScopeAgentWebSearchWrite,
+	agentdatav2.AgentDataScopeAgentWorkerDestroy,
+	agentdatav2.AgentDataScopeAgentWorkerRead,
 }
 
 type agentSessionClaims struct {
@@ -206,7 +207,7 @@ func (m *Module) createAgentSession(_ context.Context, params map[string]any) (a
 	if len(params) > 1 {
 		return nil, actionbase.BadRequest("agent.session.create accepts only session_id")
 	}
-	sessionID := ""
+	var sessionID uuid.UUID
 	if raw, ok := params["session_id"]; ok {
 		value, ok := raw.(string)
 		if !ok || value != strings.TrimSpace(value) {
@@ -216,9 +217,9 @@ func (m *Module) createAgentSession(_ context.Context, params map[string]any) (a
 		if err != nil || parsed == uuid.Nil || parsed.String() != value {
 			return nil, actionbase.BadRequest("session_id must be a canonical UUID")
 		}
-		sessionID = value
+		sessionID = parsed
 	} else {
-		sessionID = uuid.NewString()
+		sessionID = uuid.New()
 	}
 	ownerID := m.currentOwnerID()
 	if ownerID == "" || ownerID == "owner" {
@@ -226,21 +227,26 @@ func (m *Module) createAgentSession(_ context.Context, params map[string]any) (a
 	}
 	now := m.now().UTC().Truncate(time.Second)
 	expiresAt := now.Add(agentSessionTTL)
-	scopes := append([]string(nil), agentSessionScopes...)
-	sort.Strings(scopes)
+	scopes := append([]agentdatav2.AgentDataScope(nil), agentSessionScopes...)
+	slices.Sort(scopes)
+	claimScopes := make([]string, len(scopes))
+	for index, scope := range scopes {
+		claimScopes[index] = string(scope)
+	}
 	claims := agentSessionClaims{
 		Issuer: "dirextalk-message-server", Audience: agentSessionAudience,
 		Subject: ownerID, AccountGeneration: m.accountGeneration,
-		SessionID: sessionID, Nonce: uuid.NewString(), Scopes: scopes,
+		SessionID: sessionID.String(), Nonce: uuid.NewString(), Scopes: claimScopes,
 		IssuedAt: now.Unix(), ExpiresAt: expiresAt.Unix(),
 	}
 	ticket, err := signAgentSessionTicket(claims, m.ticketPrivateKey)
 	if err != nil {
 		return nil, actionbase.InternalError(err)
 	}
-	return map[string]any{
-		"ticket": ticket, "expires_at": expiresAt.Format(time.RFC3339), "server_time": now.Format(time.RFC3339),
-		"base_path": agentSessionBasePath, "session_id": sessionID, "scopes": scopes,
+	return agentdatav2.AgentSessionResponse{
+		Ticket: ticket, ExpiresAt: expiresAt, ServerTime: now,
+		BasePath:  agentdatav2.AgentSessionResponseBasePathAgentv1,
+		SessionId: sessionID, Scopes: scopes,
 	}, nil
 }
 

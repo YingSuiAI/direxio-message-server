@@ -8,6 +8,10 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+type contextKey string
+
+const scopeContextKey contextKey = "scope"
+
 type ProcessContext struct {
 	mu                         sync.RWMutex
 	wg                         sync.WaitGroup      // used to wait for components to shutdown
@@ -30,7 +34,7 @@ func NewProcessContext() *ProcessContext {
 }
 
 func (b *ProcessContext) Context() context.Context {
-	return context.WithValue(b.ctx, "scope", "process") // nolint:staticcheck
+	return context.WithValue(b.ctx, scopeContextKey, "process")
 }
 
 func (b *ProcessContext) ComponentStarted() {

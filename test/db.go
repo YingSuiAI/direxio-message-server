@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"strconv"
 	"testing"
 
 	"github.com/lib/pq"
@@ -96,20 +97,21 @@ func PrepareDBConnectionString(t *testing.T, dbType DBType) (connStr string, clo
 		postgresDB = "postgres"
 	}
 	adminConnStr := connStr + fmt.Sprintf(" dbname=%s", postgresDB)
-	// Use a unique database per test so parallel package tests cannot drop or
-	// reset each other's state while still cleaning up after themselves.
+	// Use a unique database per test process so parallel package tests and
+	// overlapping full-suite invocations cannot drop or reset each other's state
+	// while still cleaning up after themselves. Calls from the same test process
+	// retain the documented shared-database behavior.
 	wd, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("cannot get working directory: %s", err)
 	}
-	hash := sha256.Sum256([]byte(wd + "/" + t.Name()))
-	dbName := fmt.Sprintf("dendrite_test_%s", hex.EncodeToString(hash[:16]))
+	dbName := testDatabaseName(wd, t.Name(), os.Getpid())
 	createRemoteDB(t, dbName, user, connStr, postgresDB)
 	connStr += fmt.Sprintf(" dbname=%s", dbName)
 
 	return connStr, func() {
-		// Tests create one database per package. Drop it after the package test
-		// finishes so local PostgreSQL instances do not accumulate stale DBs.
+		// Drop the isolated database after the test finishes so local PostgreSQL
+		// instances do not accumulate stale DBs.
 		db, err := sql.Open("postgres", adminConnStr)
 		if err != nil {
 			t.Fatalf("failed to connect to postgres admin db '%s': %s", adminConnStr, err)
@@ -127,6 +129,11 @@ func PrepareDBConnectionString(t *testing.T, dbType DBType) (connStr string, clo
 			t.Fatalf("failed to drop postgres db '%s': %s", dbName, err)
 		}
 	}
+}
+
+func testDatabaseName(workingDirectory, testName string, processID int) string {
+	hash := sha256.Sum256([]byte(workingDirectory + "/" + testName + "/" + strconv.Itoa(processID)))
+	return fmt.Sprintf("dendrite_test_%s", hex.EncodeToString(hash[:16]))
 }
 
 // Creates subtests with each known DBType

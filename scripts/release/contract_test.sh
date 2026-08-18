@@ -37,10 +37,10 @@ if grep -Ein 'attestat|sbom|provenance|imagetools inspect|index digest|latest.*m
   fail 'active release scripts still contain retired publication gates'
 fi
 required_test_command='go test ./internal/releasecontrol ./internal/httputil ./setup ./p2p ./p2p/internal/agent ./p2p/serviceapi ./internal/productpolicy -count=1'
-for test_entrypoint in "$repo_root/.github/workflows/ci.yml" "$verify"; do
-  grep -F "$required_test_command" "$test_entrypoint" >/dev/null || \
-    fail "${test_entrypoint#"$repo_root"/} does not run Agent implementation and service API contract tests"
-done
+grep -F 'go test -p 2 ./... -count=1' "$repo_root/.github/workflows/ci.yml" >/dev/null || \
+  fail '.github/workflows/ci.yml does not run the concurrency-bounded full test suite'
+grep -F "$required_test_command" "$verify" >/dev/null || \
+  fail 'scripts/release/verify.sh does not run Agent implementation and service API contract tests'
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT

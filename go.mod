@@ -5,7 +5,7 @@ require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/MFAshby/stdemuxerhook v1.0.0
 	github.com/Masterminds/semver/v3 v3.3.1
-	github.com/YingSuiAI/dirextalk-capability-api v1.0.3
+	github.com/YingSuiAI/dirextalk-capability-api v1.1.0
 	github.com/blevesearch/bleve/v2 v2.5.2
 	github.com/codeclysm/extract v2.2.0+incompatible
 	github.com/coder/websocket v1.8.13
@@ -37,11 +37,11 @@ require (
 	github.com/uber/jaeger-lib v2.4.1+incompatible
 	golang.org/x/crypto v0.52.0
 	golang.org/x/exp v0.0.0-20250218142911-aa4b98e5adaa
-	golang.org/x/image v0.43.0
-	golang.org/x/sync v0.21.0
+	golang.org/x/image v0.45.0
+	golang.org/x/sync v0.22.0
 	golang.org/x/term v0.43.0
-	golang.org/x/text v0.38.0
-	google.golang.org/grpc v1.82.0
+	golang.org/x/text v0.41.0
+	google.golang.org/grpc v1.82.1
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v2 v2.4.0
 	gotest.tools/v3 v3.5.2
@@ -100,6 +100,7 @@ require (
 	github.com/nats-io/jwt/v2 v2.8.1 // indirect
 	github.com/nats-io/nkeys v0.4.15 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
+	github.com/oapi-codegen/runtime v1.1.1 // indirect
 	github.com/oleiade/lane/v2 v2.0.0 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.0.3-0.20211202183452-c5a74bcca799 // indirect
@@ -119,7 +120,7 @@ require (
 	go.opentelemetry.io/otel/trace v1.44.0 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	golang.org/x/net v0.55.0 // indirect
-	golang.org/x/sys v0.45.0 // indirect
+	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	gopkg.in/macaroon.v2 v2.1.0 // indirect

@@ -168,6 +168,7 @@ func mcpToolsListResult(port MCPPort) map[string]any {
 			"name":        tool.Name,
 			"description": tool.Description,
 			"inputSchema": tool.InputSchema,
+			"annotations": tool.Annotations(),
 		})
 	}
 	return map[string]any{"tools": tools}

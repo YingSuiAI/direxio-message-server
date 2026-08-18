@@ -7,11 +7,14 @@ import (
 	"testing"
 )
 
-func TestCurrentBuildInfoUsesCanonicalReleaseVersion(t *testing.T) {
+func TestCurrentBuildInfoUsesVersionSource(t *testing.T) {
 	got := CurrentBuildInfo()
 
-	if got.Version != "v1.1.57" {
-		t.Fatalf("Version = %q, want v1.1.57", got.Version)
+	if got.Version != strings.TrimSpace(version) {
+		t.Fatalf("Version = %q, want canonical version source %q", got.Version, version)
+	}
+	if got.Version == "" {
+		t.Fatal("Version must not be empty")
 	}
 	if got.SchemaVersion != 2 {
 		t.Fatalf("SchemaVersion = %d, want 2", got.SchemaVersion)
