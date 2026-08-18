@@ -308,18 +308,12 @@ func (s *Server) executeOperation(ctx context.Context, record *operationRecord, 
 // capabilityInvokeErrorMessage preserves the established cross-service error
 // text while internal Go errors follow the standard lowercase convention.
 func capabilityInvokeErrorMessage(err error) string {
-	message := err.Error()
-	for internal, public := range map[string]string{
-		"matrix event acceptance is unknown":          "Matrix event acceptance is unknown",
-		"matrix event was rejected":                   "Matrix event was rejected",
-		"matrix transport returned an empty event id": "Matrix transport returned an empty event id",
-		"matrix transport returned event ":            "Matrix transport returned event ",
-	} {
-		if strings.HasPrefix(message, internal) {
-			return public + strings.TrimPrefix(message, internal)
-		}
-	}
-	return message
+	return strings.NewReplacer(
+		"matrix event acceptance is unknown", "Matrix event acceptance is unknown",
+		"matrix event was rejected", "Matrix event was rejected",
+		"matrix transport returned an empty event id", "Matrix transport returned an empty event id",
+		"matrix transport returned event ", "Matrix transport returned event ",
+	).Replace(err.Error())
 }
 
 func (s *Server) GetOperation(ctx context.Context, req *capv1.GetOperationRequest) (*capv1.GetOperationResponse, error) {
