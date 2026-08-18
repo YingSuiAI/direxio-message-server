@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"testing"
 )
@@ -65,5 +66,21 @@ func Test_getPassword(t *testing.T) {
 				t.Errorf("getPassword() = '%v', want '%v'", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestPublicPasswordErrorMessagePreservesCLIContract(t *testing.T) {
+	for _, test := range []struct {
+		internal string
+		public   string
+	}{
+		{"unable to read password from file: denied", "Unable to read password from file: denied"},
+		{"unable to read password from stdin: closed", "Unable to read password from stdin: closed"},
+		{"unable to read password: unavailable", "Unable to read password: unavailable"},
+		{"entered passwords don't match", "Entered passwords don't match"},
+	} {
+		if got := publicPasswordErrorMessage(errors.New(test.internal)); got != test.public {
+			t.Errorf("publicPasswordErrorMessage(%q)=%q, want %q", test.internal, got, test.public)
+		}
 	}
 }

@@ -294,14 +294,32 @@ func (s *Server) executeOperation(ctx context.Context, record *operationRecord, 
 	}
 	result, invokeErr := provider.Handler(ctx, wrapped)
 	if invokeErr != nil {
+		publicMessage := capabilityInvokeErrorMessage(invokeErr)
 		if errors.Is(invokeErr, dirextalktransport.ErrMatrixEventUnknown) {
-			_ = s.operations.markUncertain(context.Background(), operationID, capabilityError(capv1.ErrorCode_ERROR_CODE_UPSTREAM_FAILED, invokeErr.Error()))
+			_ = s.operations.markUncertain(context.Background(), operationID, capabilityError(capv1.ErrorCode_ERROR_CODE_UPSTREAM_FAILED, publicMessage))
 			return
 		}
-		_ = s.operations.finish(ctx, operationID, nil, capabilityError(capv1.ErrorCode_ERROR_CODE_UPSTREAM_FAILED, invokeErr.Error()))
+		_ = s.operations.finish(ctx, operationID, nil, capabilityError(capv1.ErrorCode_ERROR_CODE_UPSTREAM_FAILED, publicMessage))
 		return
 	}
 	_ = s.operations.finish(ctx, operationID, result, nil)
+}
+
+// capabilityInvokeErrorMessage preserves the established cross-service error
+// text while internal Go errors follow the standard lowercase convention.
+func capabilityInvokeErrorMessage(err error) string {
+	message := err.Error()
+	for internal, public := range map[string]string{
+		"matrix event acceptance is unknown":          "Matrix event acceptance is unknown",
+		"matrix event was rejected":                   "Matrix event was rejected",
+		"matrix transport returned an empty event id": "Matrix transport returned an empty event id",
+		"matrix transport returned event ":            "Matrix transport returned event ",
+	} {
+		if strings.HasPrefix(message, internal) {
+			return public + strings.TrimPrefix(message, internal)
+		}
+	}
+	return message
 }
 
 func (s *Server) GetOperation(ctx context.Context, req *capv1.GetOperationRequest) (*capv1.GetOperationResponse, error) {

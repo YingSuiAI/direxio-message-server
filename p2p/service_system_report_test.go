@@ -21,7 +21,7 @@ func TestReportSubmitWithoutMatrixTransportFailsClosed(t *testing.T) {
 	_, apiErr := service.Handle(context.Background(), "reports.submit", map[string]any{
 		"target_type": "group", "room_id": group.RoomID,
 	})
-	if apiErr == nil || apiErr.Status != http.StatusInternalServerError {
+	if apiErr == nil || apiErr.Status != http.StatusInternalServerError || apiErr.Error != "internal error: Matrix transport is not configured" {
 		t.Fatalf("reports.submit without Matrix transport = %#v", apiErr)
 	}
 }

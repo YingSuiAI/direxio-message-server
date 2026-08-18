@@ -74,3 +74,9 @@ func TestExtractContentValue(t *testing.T) {
 		})
 	}
 }
+
+func TestOptimisationNotSupportedErrorCompatibility(t *testing.T) {
+	if OptimisationNotSupportedError != ErrOptimisationNotSupported {
+		t.Fatal("legacy optimisation error must remain the canonical sentinel")
+	}
+}

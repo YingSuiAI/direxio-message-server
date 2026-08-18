@@ -16,6 +16,10 @@ import (
 
 var ErrOptimisationNotSupported = errors.New("optimisation not supported")
 
+// OptimisationNotSupportedError preserves the established package API.
+// Deprecated: use ErrOptimisationNotSupported.
+var OptimisationNotSupportedError = ErrOptimisationNotSupported
+
 type EventJSONPair struct {
 	EventNID  types.EventNID
 	EventJSON []byte

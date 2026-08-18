@@ -3,6 +3,7 @@ package productcapability
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"regexp"
 	"testing"
 	"time"
@@ -173,12 +174,15 @@ func TestExecuteOperationKeepsPreparedPDUOnUnknownMatrixOutcome(t *testing.T) {
 	}
 	server := &Server{operations: store}
 	provider := &Provider{Handler: func(context.Context, []byte) ([]byte, error) {
-		return nil, dirextalktransport.ErrMatrixEventUnknown
+		return nil, fmt.Errorf("%w: $prepared", dirextalktransport.ErrMatrixEventUnknown)
 	}}
 	server.executeOperation(context.Background(), record, provider, record.Operation, []byte(`{}`))
 	current, err := store.get(context.Background(), record.ID)
 	if err != nil || current.State != capv1.OperationState_OPERATION_STATE_UNCERTAIN {
 		t.Fatalf("unknown Matrix outcome state=%v err=%v", current.State, err)
+	}
+	if got, want := current.Err.GetMessage(), "Matrix event acceptance is unknown: $prepared"; got != want {
+		t.Fatalf("unknown Matrix outcome error=%q, want %q", got, want)
 	}
 	if !prepared.present || prepared.event == nil {
 		t.Fatal("unknown Matrix outcome deleted prepared PDU")

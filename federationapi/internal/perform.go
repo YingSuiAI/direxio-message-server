@@ -126,7 +126,7 @@ func (r *FederationInternalAPI) PerformJoin(
 			Message:      "Unknown HTTP error",
 		}
 		if lastErr != nil {
-			response.LastError.Message = lastErr.Error()
+			response.LastError.Message = publicFederationErrorMessage(lastErr)
 		}
 	}
 
@@ -306,7 +306,7 @@ func (r *FederationInternalAPI) PerformOutboundPeek(
 		response.LastError = &gomatrix.HTTPError{
 			Code:         0,
 			WrappedError: nil,
-			Message:      lastErr.Error(),
+			Message:      publicFederationErrorMessage(lastErr),
 		}
 	}
 
@@ -316,6 +316,19 @@ func (r *FederationInternalAPI) PerformOutboundPeek(
 	)
 
 	return lastErr
+}
+
+func publicFederationErrorMessage(err error) string {
+	switch err.Error() {
+	case "relay servers have no meaningful response for join":
+		return "relay servers have no meaningful response for join."
+	case "received nil response from gomatrixserverlib.PerformJoin":
+		return "Received nil response from gomatrixserverlib.PerformJoin"
+	case "relay servers have no meaningful response for outbound peek":
+		return "relay servers have no meaningful response for outbound peek."
+	default:
+		return err.Error()
+	}
 }
 
 func (r *FederationInternalAPI) performOutboundPeekUsingServer(

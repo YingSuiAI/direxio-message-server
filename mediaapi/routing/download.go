@@ -179,10 +179,7 @@ func Download(
 			return
 		}
 		// TODO: Handle the fact we might have started writing the response
-		dReq.jsonErrorResponse(w, util.JSONResponse{
-			Code: http.StatusNotFound,
-			JSON: spec.NotFound("Failed to download: " + err.Error()),
-		})
+		dReq.jsonErrorResponse(w, downloadFailureResponse(err))
 		return
 	}
 
@@ -194,6 +191,19 @@ func Download(
 		return
 	}
 
+}
+
+func downloadFailureResponse(err error) util.JSONResponse {
+	message := err.Error()
+	if strings.HasPrefix(message, "file with media ID ") && strings.Contains(message, " does not exist on ") {
+		message = "File" + strings.TrimPrefix(message, "file")
+	} else if message == "location header is not yet supported" {
+		message = "Location header is not yet supported"
+	}
+	return util.JSONResponse{
+		Code: http.StatusNotFound,
+		JSON: spec.NotFound("Failed to download: " + message),
+	}
 }
 
 func (r *downloadRequest) jsonErrorResponse(w http.ResponseWriter, res util.JSONResponse) {

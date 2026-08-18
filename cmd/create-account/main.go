@@ -93,7 +93,7 @@ func main() {
 
 	pass, err := getPassword(*password, *pwdFile, *pwdStdin, os.Stdin)
 	if err != nil {
-		logrus.Fatalln(err)
+		logrus.Fatalln(publicPasswordErrorMessage(err))
 	}
 
 	if err = internal.ValidatePassword(pass); err != nil {
@@ -109,6 +109,21 @@ func main() {
 	}
 
 	logrus.Infof("Created account: %s (AccessToken: %s)", *username, accessToken)
+}
+
+func publicPasswordErrorMessage(err error) string {
+	message := err.Error()
+	for _, prefix := range []string{
+		"unable to read password from file",
+		"unable to read password from stdin",
+		"unable to read password",
+		"entered passwords don't match",
+	} {
+		if strings.HasPrefix(message, prefix) {
+			return strings.ToUpper(prefix[:1]) + prefix[1:] + strings.TrimPrefix(message, prefix)
+		}
+	}
+	return message
 }
 
 type sharedSecretRegistrationRequest struct {

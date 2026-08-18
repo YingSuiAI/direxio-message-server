@@ -113,7 +113,7 @@ func PutFilter(
 	if err = filter.Validate(); err != nil {
 		return util.JSONResponse{
 			Code: http.StatusBadRequest,
-			JSON: spec.BadJSON("Invalid filter: " + err.Error()),
+			JSON: spec.BadJSON("Invalid filter: " + publicFilterValidationMessage(err)),
 		}
 	}
 
@@ -130,4 +130,11 @@ func PutFilter(
 		Code: http.StatusOK,
 		JSON: filterResponse{FilterID: filterID},
 	}
+}
+
+func publicFilterValidationMessage(err error) string {
+	if err.Error() == "bad event_format value: must be one of [\"client\", \"federation\"]" {
+		return "Bad event_format value. Must be one of [\"client\", \"federation\"]"
+	}
+	return err.Error()
 }
