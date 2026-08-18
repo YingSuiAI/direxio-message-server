@@ -78,7 +78,7 @@ const (
 // Validate checks if the filter contains valid property values
 func (filter *Filter) Validate() error {
 	if filter.EventFormat != "" && filter.EventFormat != EventFormatClient && filter.EventFormat != EventFormatFederation {
-		return errors.New("Bad event_format value. Must be one of [\"client\", \"federation\"]")
+		return errors.New("bad event_format value: must be one of [\"client\", \"federation\"]")
 	}
 	return nil
 }

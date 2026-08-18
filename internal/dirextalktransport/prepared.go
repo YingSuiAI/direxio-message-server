@@ -11,8 +11,8 @@ var (
 	// ErrMatrixEventUnknown means Matrix could not prove whether the staged
 	// event was accepted. Callers must preserve the prepared row and leave the
 	// operation uncertain; retrying with a second PDU would risk a duplicate.
-	ErrMatrixEventUnknown  = errors.New("Matrix event acceptance is unknown")
-	ErrMatrixEventRejected = errors.New("Matrix event was rejected")
+	ErrMatrixEventUnknown  = errors.New("matrix event acceptance is unknown")
+	ErrMatrixEventRejected = errors.New("matrix event was rejected")
 )
 
 // ExecutePreparedMatrixMutation is the common crash-safe write algorithm for
@@ -147,10 +147,10 @@ func validatePreparedMessage(message PreparedMessage) error {
 
 func validatePreparedReceipt(prepared PreparedMessage, result SendMessageResult) (SendMessageResult, error) {
 	if result.EventID == "" {
-		return SendMessageResult{}, errors.New("Matrix transport returned an empty event id")
+		return SendMessageResult{}, errors.New("matrix transport returned an empty event id")
 	}
 	if result.EventID != prepared.EventID {
-		return SendMessageResult{}, fmt.Errorf("Matrix transport returned event %s for prepared event %s", result.EventID, prepared.EventID)
+		return SendMessageResult{}, fmt.Errorf("matrix transport returned event %s for prepared event %s", result.EventID, prepared.EventID)
 	}
 	if result.OriginServerTS == 0 {
 		result.OriginServerTS = prepared.OriginServerTS

@@ -398,61 +398,6 @@ func UsernameMatchesExclusiveNamespaces(
 	return cfg.Derived.ExclusiveApplicationServicesUsernameRegexp.MatchString(userID)
 }
 
-// validateApplicationService checks if a provided application service token
-// corresponds to one that is registered. If so, then it checks if the desired
-// username is within that application service's namespace. As long as these
-// two requirements are met, no error will be returned.
-func validateApplicationService(
-	cfg *config.ClientAPI,
-	username string,
-	accessToken string,
-) (string, *util.JSONResponse) {
-	// Check if the token if the application service is valid with one we have
-	// registered in the config.
-	var matchedApplicationService *config.ApplicationService
-	for _, appservice := range cfg.Derived.ApplicationServices {
-		if appservice.ASToken == accessToken {
-			matchedApplicationService = &appservice
-			break
-		}
-	}
-	if matchedApplicationService == nil {
-		return "", &util.JSONResponse{
-			Code: http.StatusUnauthorized,
-			JSON: spec.UnknownToken("Supplied access_token does not match any known application service"),
-		}
-	}
-
-	userID := userutil.MakeUserID(username, cfg.Matrix.ServerName)
-
-	// Ensure the desired username is within at least one of the application service's namespaces.
-	if !UserIDIsWithinApplicationServiceNamespace(cfg, userID, matchedApplicationService) {
-		// If we didn't find any matches, return M_EXCLUSIVE
-		return "", &util.JSONResponse{
-			Code: http.StatusBadRequest,
-			JSON: spec.ASExclusive(fmt.Sprintf(
-				"Supplied username %s did not match any namespaces for application service ID: %s", username, matchedApplicationService.ID)),
-		}
-	}
-
-	// Check this user does not fit multiple application service namespaces
-	if UsernameMatchesMultipleExclusiveNamespaces(cfg, userID) {
-		return "", &util.JSONResponse{
-			Code: http.StatusBadRequest,
-			JSON: spec.ASExclusive(fmt.Sprintf(
-				"Supplied username %s matches multiple exclusive application service namespaces. Only 1 match allowed", username)),
-		}
-	}
-
-	// Check username application service is trying to register is valid
-	if err := internal.ValidateApplicationServiceUsername(username, cfg.Matrix.ServerName); err != nil {
-		return "", internal.UsernameResponse(err)
-	}
-
-	// No errors, registration valid
-	return matchedApplicationService.ID, nil
-}
-
 // Register processes a /register request.
 // https://spec.matrix.org/v1.7/client-server-api/#post_matrixclientv3register
 func Register(
@@ -695,8 +640,8 @@ func handleRegistrationFlow(
 
 	// Make sure normal user isn't registering under an exclusive application
 	// service namespace. Skip this check if no app services are registered.
-	// If an access token is provided, ignore this check this is an appservice
-	// request and we will validate in validateApplicationService
+	// Application-service requests are validated and returned by
+	// handleApplicationServiceRegistration above.
 	if len(cfg.Derived.ApplicationServices) != 0 &&
 		localpartMatchesExclusiveNamespaces(cfg, r.Username) {
 		return util.JSONResponse{

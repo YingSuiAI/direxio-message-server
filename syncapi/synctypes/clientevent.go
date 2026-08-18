@@ -103,15 +103,15 @@ func FromClientStateKey(roomID spec.RoomID, stateKey string, senderIDQuery spec.
 		parsedStateKey, err := spec.NewUserID(stateKey, true)
 		if err != nil {
 			// If invalid user ID, then there is no associated state event.
-			return nil, fmt.Errorf("Provided state key begins with @ but is not a valid user ID: %w", err)
+			return nil, fmt.Errorf("provided state key begins with @ but is not a valid user ID: %w", err)
 		}
 		senderID, err := senderIDQuery(roomID, *parsedStateKey)
 		if err != nil {
-			return nil, fmt.Errorf("Failed to query sender ID: %w", err)
+			return nil, fmt.Errorf("failed to query sender ID: %w", err)
 		}
 		if senderID == nil {
 			// If no sender ID, then there is no associated state event.
-			return nil, fmt.Errorf("No associated sender ID found.")
+			return nil, fmt.Errorf("no associated sender ID found")
 		}
 		newStateKey := string(*senderID)
 		return &newStateKey, nil
@@ -187,7 +187,7 @@ func updatePseudoIDs(ce *ClientEvent, se gomatrixserverlib.PDU, userIDForSender 
 		}
 		ce.Unsigned, err = json.Marshal(prev)
 		if err != nil {
-			err = fmt.Errorf("Failed to marshal unsigned content for ClientEvent: %w", err)
+			err = fmt.Errorf("failed to marshal unsigned content for ClientEvent: %w", err)
 			return err
 		}
 	}
@@ -196,14 +196,14 @@ func updatePseudoIDs(ce *ClientEvent, se gomatrixserverlib.PDU, userIDForSender 
 	case spec.MRoomCreate:
 		updatedContent, err := updateCreateEvent(se.Content(), userIDForSender, se.RoomID())
 		if err != nil {
-			err = fmt.Errorf("Failed to update m.room.create event for ClientEvent: %w", err)
+			err = fmt.Errorf("failed to update m.room.create event for ClientEvent: %w", err)
 			return err
 		}
 		ce.Content = updatedContent
 	case spec.MRoomMember:
 		updatedEvent, err := updateInviteEvent(userIDForSender, se, format)
 		if err != nil {
-			err = fmt.Errorf("Failed to update m.room.member event for ClientEvent: %w", err)
+			err = fmt.Errorf("failed to update m.room.member event for ClientEvent: %w", err)
 			return err
 		}
 		if updatedEvent != nil {
@@ -212,7 +212,7 @@ func updatePseudoIDs(ce *ClientEvent, se gomatrixserverlib.PDU, userIDForSender 
 	case spec.MRoomPowerLevels:
 		updatedEvent, err := updatePowerLevelEvent(userIDForSender, se, format)
 		if err != nil {
-			err = fmt.Errorf("Failed update m.room.power_levels event for ClientEvent: %w", err)
+			err = fmt.Errorf("failed update m.room.power_levels event for ClientEvent: %w", err)
 			return err
 		}
 		if updatedEvent != nil {
@@ -229,7 +229,7 @@ func updateCreateEvent(content spec.RawJSON, userIDForSender spec.UserIDForSende
 		oldCreator := creator.Str
 		userID, err := userIDForSender(roomID, spec.SenderID(oldCreator))
 		if err != nil {
-			err = fmt.Errorf("Failed to find userID for creator in ClientEvent: %w", err)
+			err = fmt.Errorf("failed to find userID for creator in ClientEvent: %w", err)
 			return nil, err
 		}
 
@@ -237,13 +237,13 @@ func updateCreateEvent(content spec.RawJSON, userIDForSender spec.UserIDForSende
 			var newCreatorBytes, newContent []byte
 			newCreatorBytes, err = json.Marshal(userID.String())
 			if err != nil {
-				err = fmt.Errorf("Failed to marshal new creator for ClientEvent: %w", err)
+				err = fmt.Errorf("failed to marshal new creator for ClientEvent: %w", err)
 				return nil, err
 			}
 
 			newContent, err = sjson.SetRawBytes([]byte(content), "creator", newCreatorBytes)
 			if err != nil {
-				err = fmt.Errorf("Failed to set new creator for ClientEvent: %w", err)
+				err = fmt.Errorf("failed to set new creator for ClientEvent: %w", err)
 				return nil, err
 			}
 
@@ -319,7 +319,7 @@ func GetUpdatedInviteRoomState(userIDForSender spec.UserIDForSender, inviteRoomS
 
 			updatedContent, updateErr := updateCreateEvent(ev.Content, userIDForSender, roomID)
 			if updateErr != nil {
-				updateErr = fmt.Errorf("Failed to update m.room.create event for ClientEvent: %w", userIDErr)
+				updateErr = fmt.Errorf("failed to update m.room.create event for ClientEvent: %w", userIDErr)
 				return nil, updateErr
 			}
 			inviteStateEvents[i].Content = updatedContent

@@ -217,9 +217,8 @@ func preparedMatrixEventEqual(a, b *PreparedMatrixEvent) bool {
 }
 
 func sha256Digest(value []byte) []byte {
-	var digest [32]byte
 	// Keep the helper local to the transport store so callers cannot mutate a
 	// shared hash buffer after validation.
-	digest = sha256.Sum256(value)
+	digest := sha256.Sum256(value)
 	return append([]byte(nil), digest[:]...)
 }

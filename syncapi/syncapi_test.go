@@ -30,7 +30,6 @@ import (
 	"github.com/YingSuiAI/dirextalk-message-server/clientapi/producers"
 	"github.com/YingSuiAI/dirextalk-message-server/roomserver"
 	"github.com/YingSuiAI/dirextalk-message-server/roomserver/api"
-	rsapi "github.com/YingSuiAI/dirextalk-message-server/roomserver/api"
 	"github.com/YingSuiAI/dirextalk-message-server/setup/jetstream"
 	"github.com/YingSuiAI/dirextalk-message-server/syncapi/types"
 	"github.com/YingSuiAI/dirextalk-message-server/test"
@@ -39,7 +38,7 @@ import (
 )
 
 type syncRoomserverAPI struct {
-	rsapi.SyncRoomserverAPI
+	api.SyncRoomserverAPI
 	rooms []*test.Room
 }
 
@@ -52,7 +51,7 @@ func (s *syncRoomserverAPI) QuerySenderIDForUser(ctx context.Context, roomID spe
 	return &senderID, nil
 }
 
-func (s *syncRoomserverAPI) QueryLatestEventsAndState(ctx context.Context, req *rsapi.QueryLatestEventsAndStateRequest, res *rsapi.QueryLatestEventsAndStateResponse) error {
+func (s *syncRoomserverAPI) QueryLatestEventsAndState(ctx context.Context, req *api.QueryLatestEventsAndStateRequest, res *api.QueryLatestEventsAndStateResponse) error {
 	var room *test.Room
 	for _, r := range s.rooms {
 		if r.ID == req.RoomID {
@@ -68,15 +67,15 @@ func (s *syncRoomserverAPI) QueryLatestEventsAndState(ctx context.Context, req *
 	return nil // TODO: return state
 }
 
-func (s *syncRoomserverAPI) QuerySharedUsers(ctx context.Context, req *rsapi.QuerySharedUsersRequest, res *rsapi.QuerySharedUsersResponse) error {
+func (s *syncRoomserverAPI) QuerySharedUsers(ctx context.Context, req *api.QuerySharedUsersRequest, res *api.QuerySharedUsersResponse) error {
 	res.UserIDsToCount = make(map[string]int)
 	return nil
 }
-func (s *syncRoomserverAPI) QueryBulkStateContent(ctx context.Context, req *rsapi.QueryBulkStateContentRequest, res *rsapi.QueryBulkStateContentResponse) error {
+func (s *syncRoomserverAPI) QueryBulkStateContent(ctx context.Context, req *api.QueryBulkStateContentRequest, res *api.QueryBulkStateContentResponse) error {
 	return nil
 }
 
-func (s *syncRoomserverAPI) QueryMembershipForUser(ctx context.Context, req *rsapi.QueryMembershipForUserRequest, res *rsapi.QueryMembershipForUserResponse) error {
+func (s *syncRoomserverAPI) QueryMembershipForUser(ctx context.Context, req *api.QueryMembershipForUserRequest, res *api.QueryMembershipForUserResponse) error {
 	res.IsRoomForgotten = false
 	res.RoomExists = true
 	return nil
@@ -1474,8 +1473,8 @@ func toNATSMsgs(t *testing.T, cfg *config.Dendrite, input ...*rstypes.HeaderedEv
 			addsStateIDs = append(addsStateIDs, ev.EventID())
 		}
 		result[i] = testrig.NewOutputEventMsg(t, cfg, ev.RoomID().String(), api.OutputEvent{
-			Type: rsapi.OutputTypeNewRoomEvent,
-			NewRoomEvent: &rsapi.OutputNewRoomEvent{
+			Type: api.OutputTypeNewRoomEvent,
+			NewRoomEvent: &api.OutputNewRoomEvent{
 				Event:             ev,
 				AddsStateEventIDs: addsStateIDs,
 				HistoryVisibility: ev.Visibility,

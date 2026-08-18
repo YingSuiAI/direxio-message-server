@@ -139,12 +139,12 @@ func (d *Database) GetTransaction(
 
 	transaction := &gomatrixserverlib.Transaction{}
 	if _, ok := txns[firstNID]; !ok {
-		return nil, nil, fmt.Errorf("Failed retrieving json blob for transaction: %d", firstNID)
+		return nil, nil, fmt.Errorf("failed retrieving json blob for transaction: %d", firstNID)
 	}
 
 	err = json.Unmarshal(txns[firstNID], transaction)
 	if err != nil {
-		return nil, nil, fmt.Errorf("Unmarshal transaction: %w", err)
+		return nil, nil, fmt.Errorf("unmarshal transaction: %w", err)
 	}
 
 	newReceipt := receipt.NewReceipt(firstNID)

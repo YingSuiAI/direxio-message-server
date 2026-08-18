@@ -92,7 +92,7 @@ type serviceReportMatrixPort struct{ service *Service }
 
 func (p serviceReportMatrixPort) SendMessage(ctx context.Context, req dirextalktransport.SendMessageRequest) (dirextalktransport.SendMessageResult, error) {
 	if p.service == nil || p.service.transport == nil {
-		return dirextalktransport.SendMessageResult{}, errors.New("Matrix transport is not configured")
+		return dirextalktransport.SendMessageResult{}, errors.New("matrix transport is not configured")
 	}
 	return p.service.transport.SendMessage(ctx, req)
 }

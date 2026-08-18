@@ -20,7 +20,6 @@ import (
 	"github.com/YingSuiAI/dirextalk-message-server/clientapi/threepid"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/eventutil"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/productpolicy"
-	"github.com/YingSuiAI/dirextalk-message-server/roomserver/api"
 	roomserverAPI "github.com/YingSuiAI/dirextalk-message-server/roomserver/api"
 	"github.com/YingSuiAI/dirextalk-message-server/roomserver/types"
 	"github.com/YingSuiAI/dirextalk-message-server/setup/config"
@@ -130,7 +129,7 @@ func sendMembership(ctx context.Context, profileAPI userapi.ClientUserAPI, devic
 		false,
 	); err != nil {
 		util.GetLogger(ctx).WithError(err).Error("SendEvents failed")
-		if err.Error() == api.InputWasRejected {
+		if err.Error() == roomserverAPI.InputWasRejected {
 			return util.JSONResponse{
 				Code: http.StatusForbidden,
 				JSON: spec.Forbidden("the event was rejected"),
@@ -385,7 +384,7 @@ func sendInvite(
 			JSON: spec.InternalServerError{},
 		}, err
 	}
-	err = rsAPI.PerformInvite(ctx, &api.PerformInviteRequest{
+	err = rsAPI.PerformInvite(ctx, &roomserverAPI.PerformInviteRequest{
 		InviteInput: roomserverAPI.InviteInput{
 			RoomID:     *validRoomID,
 			Inviter:    *inviter,

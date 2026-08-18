@@ -16,7 +16,6 @@ import (
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/nats-io/nats.go"
 	"github.com/sirupsen/logrus"
-	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 
 	"github.com/YingSuiAI/dirextalk-message-server/internal/eventutil"
@@ -154,12 +153,12 @@ func (s *OutputClientDataConsumer) onMessage(ctx context.Context, msgs []*nats.M
 	var output eventutil.AccountData
 	if err := json.Unmarshal(msg.Data, &output); err != nil {
 		// If the message was invalid, log it and move on to the next message in the stream
-		log.WithError(err).Errorf("client API server output log: message parse failure")
+		logrus.WithError(err).Errorf("client API server output log: message parse failure")
 		sentry.CaptureException(err)
 		return true
 	}
 
-	log.WithFields(log.Fields{
+	logrus.WithFields(logrus.Fields{
 		"type":    output.Type,
 		"room_id": output.RoomID,
 	}).Debug("Received data from client API server")
@@ -169,17 +168,17 @@ func (s *OutputClientDataConsumer) onMessage(ctx context.Context, msgs []*nats.M
 	)
 	if err != nil {
 		sentry.CaptureException(err)
-		log.WithFields(log.Fields{
-			"type":       output.Type,
-			"room_id":    output.RoomID,
-			log.ErrorKey: err,
+		logrus.WithFields(logrus.Fields{
+			"type":          output.Type,
+			"room_id":       output.RoomID,
+			logrus.ErrorKey: err,
 		}).Errorf("could not save account data")
 		return false
 	}
 
 	if output.IgnoredUsers != nil {
 		if err := s.db.UpdateIgnoresForUser(ctx, userID, output.IgnoredUsers); err != nil {
-			log.WithError(err).WithFields(logrus.Fields{
+			logrus.WithError(err).WithFields(logrus.Fields{
 				"user_id": userID,
 			}).Errorf("Failed to update ignored users")
 			sentry.CaptureException(err)

@@ -61,7 +61,7 @@ func (m *Module) RoomReactivate(ctx context.Context, raw map[string]any) (any, *
 	}
 	if rebuildGeneration != "" {
 		if m.config.MatrixJoined == nil {
-			return nil, actionbase.InternalError(errors.New("Matrix member lookup is not configured"))
+			return nil, actionbase.InternalError(errors.New("matrix member lookup is not configured"))
 		}
 		joined, joinedErr := m.config.MatrixJoined(ctx, roomID, userID)
 		if joinedErr != nil {

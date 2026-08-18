@@ -196,7 +196,7 @@ func getPassword(password, pwdFile string, pwdStdin bool, r io.Reader) (string, 
 	if pwdFile != "" {
 		pw, err := os.ReadFile(pwdFile)
 		if err != nil {
-			return "", fmt.Errorf("Unable to read password from file: %v", err)
+			return "", fmt.Errorf("unable to read password from file: %v", err)
 		}
 		return strings.TrimSpace(string(pw)), nil
 	}
@@ -205,7 +205,7 @@ func getPassword(password, pwdFile string, pwdStdin bool, r io.Reader) (string, 
 	if pwdStdin {
 		data, err := io.ReadAll(r)
 		if err != nil {
-			return "", fmt.Errorf("Unable to read password from stdin: %v", err)
+			return "", fmt.Errorf("unable to read password from stdin: %v", err)
 		}
 		return strings.TrimSpace(string(data)), nil
 	}
@@ -215,17 +215,17 @@ func getPassword(password, pwdFile string, pwdStdin bool, r io.Reader) (string, 
 		fmt.Print("Enter Password: ")
 		bytePassword, err := term.ReadPassword(int(os.Stdin.Fd()))
 		if err != nil {
-			return "", fmt.Errorf("Unable to read password: %v", err)
+			return "", fmt.Errorf("unable to read password: %v", err)
 		}
 		fmt.Println()
 		fmt.Print("Confirm Password: ")
 		bytePassword2, err := term.ReadPassword(int(os.Stdin.Fd()))
 		if err != nil {
-			return "", fmt.Errorf("Unable to read password: %v", err)
+			return "", fmt.Errorf("unable to read password: %v", err)
 		}
 		fmt.Println()
 		if strings.TrimSpace(string(bytePassword)) != strings.TrimSpace(string(bytePassword2)) {
-			return "", fmt.Errorf("Entered passwords don't match")
+			return "", fmt.Errorf("entered passwords don't match")
 		}
 		return strings.TrimSpace(string(bytePassword)), nil
 	}

@@ -14,7 +14,7 @@ import (
 	"github.com/YingSuiAI/dirextalk-message-server/roomserver/types"
 )
 
-var OptimisationNotSupportedError = errors.New("optimisation not supported")
+var ErrOptimisationNotSupported = errors.New("optimisation not supported")
 
 type EventJSONPair struct {
 	EventNID  types.EventNID
@@ -92,7 +92,7 @@ type StateSnapshot interface {
 	BulkSelectStateBlockNIDs(ctx context.Context, txn *sql.Tx, stateNIDs []types.StateSnapshotNID) ([]types.StateBlockNIDList, error)
 	// BulkSelectStateForHistoryVisibility is a PostgreSQL optimisation for finding
 	// which users are in a room faster than having to load the entire room state.
-	// Implementations without this optimisation return tables.OptimisationNotSupportedError.
+	// Implementations without this optimisation return tables.ErrOptimisationNotSupported.
 	BulkSelectStateForHistoryVisibility(ctx context.Context, txn *sql.Tx, stateSnapshotNID types.StateSnapshotNID, domain string) ([]types.EventNID, error)
 
 	BulkSelectMembershipForHistoryVisibility(

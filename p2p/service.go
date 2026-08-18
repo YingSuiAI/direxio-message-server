@@ -212,7 +212,6 @@ type blockRecord = dirextalkdomain.BlockRecord
 type groupRecord = groupsmodule.View
 type callRecord = dirextalkdomain.CallRecord
 type favoriteRecord = dirextalkdomain.FavoriteRecord
-type followRecord = dirextalkdomain.FollowRecord
 type reactionRecord = dirextalkdomain.ReactionRecord
 type memberRecord = dirextalkdomain.MemberRecord
 type clientBuild = dirextalkdomain.ClientBuild

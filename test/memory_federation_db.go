@@ -77,7 +77,7 @@ func (d *InMemoryFederationDatabase) StoreJSON(
 		return &newReceipt, nil
 	}
 
-	return nil, errors.New("Failed to determine type of json to store")
+	return nil, errors.New("failed to determine type of json to store")
 }
 
 func (d *InMemoryFederationDatabase) GetPendingPDUs(

@@ -332,7 +332,7 @@ func (r *Queryer) QueryMembershipAtEvent(
 	switch err {
 	case nil:
 		return eventIDMembershipMap, nil
-	case tables.OptimisationNotSupportedError: // fallthrough, slow way of getting the membership events for each event
+	case tables.ErrOptimisationNotSupported: // fallthrough, slow way of getting the membership events for each event
 	default:
 		return eventIDMembershipMap, err
 	}

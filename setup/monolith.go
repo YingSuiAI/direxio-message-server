@@ -207,7 +207,7 @@ func startProductCapabilityServer(processCtx *process.ProcessContext, service *p
 	listenAddr := strings.TrimSpace(firstNonEmptyEnv("P2P_PRODUCT_CAPABILITY_LISTEN_ADDR", "DIREXTALK_PRODUCT_CAPABILITY_LISTEN_ADDR"))
 	if listenAddr == "" {
 		if boolEnv("P2P_REQUIRE_PRODUCT_CAPABILITY") {
-			return errors.New("Product Capability listen address is required")
+			return errors.New("product capability listen address is required")
 		}
 		return nil
 	}
@@ -267,11 +267,11 @@ func productCapabilityConfigFromEnv(listenAddr string, grantPublicKey, grantPriv
 	}
 	for name, value := range map[string]string{"CA": config.CACertFile, "server cert": config.ServerCertFile, "server key": config.ServerKeyFile, "token": config.TokenFile, "instance id": config.InstanceID, "peer instance id": config.PeerInstanceID} {
 		if strings.TrimSpace(value) == "" {
-			return nil, fmt.Errorf("Product Capability %s is required", name)
+			return nil, fmt.Errorf("product capability %s is required", name)
 		}
 	}
 	if len(config.GrantPrivateKey) != ed25519.PrivateKeySize {
-		return nil, errors.New("Product Capability grant private key is required")
+		return nil, errors.New("product capability grant private key is required")
 	}
 	return config, nil
 }
