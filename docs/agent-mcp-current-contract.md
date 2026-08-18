@@ -10,6 +10,10 @@ service topology is defined in
   available.
 - Requests are MCP JSON-RPC and support `initialize`, `tools/list`, and
   `tools/call`.
+- The endpoint is stateless request/response HTTP. It neither issues nor
+  consumes `Mcp-Session-Id`, so restarting or replacing Message Server does not
+  invalidate an MCP session. Generic stateful MCP session recovery remains
+  outside this service's current contract.
 - Authentication is `Authorization: Bearer <agent_token>`. Owner access tokens
   and query-string bearer tokens are rejected. The inbound token is never
   forwarded in arguments or downstream requests.
@@ -21,6 +25,10 @@ service topology is defined in
   and invocation logic. Matrix membership must be exactly `join`; pending,
   joining, left, unknown, and blocked rooms are rejected before Matrix reads or
   writes.
+- `tools/list` explicitly emits the standard MCP `readOnlyHint`,
+  `destructiveHint`, `idempotentHint`, and `openWorldHint` annotations. List and
+  search tools are idempotent reads. Message send and comment create are
+  non-idempotent writes and must never be retried after an unknown outcome.
 
 ## Matrix Agent room
 

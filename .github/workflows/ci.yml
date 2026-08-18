@@ -36,11 +36,23 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: Unit and release contract tests
+      - name: Full test suite
+        # PostgreSQL fixtures use a database isolated by process, package, and test name.
+        # Bound package concurrency to keep database creation and cleanup stable
+        # on both hosted and local runners.
+        run: go test -p 2 ./... -count=1
+      - name: Upgrade and release contract tests
         run: |
-          go test ./internal/releasecontrol ./internal/httputil ./setup ./p2p ./p2p/internal/agent ./p2p/serviceapi ./internal/productpolicy -count=1
           go test -tags=dendrite_upgrade_tests ./cmd/dendrite-upgrade-tests -count=1
           bash scripts/release/contract_test.sh
+      - name: Vet
+        run: go vet ./...
+      - name: Static analysis
+        run: go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 -checks=SA* ./...
+      - name: Vulnerability scan
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
+      - name: Focused race tests
+        run: go test -race ./internal/dirextalkmcp ./p2p/internal/httpapi ./p2p/internal/agent ./internal/productpolicy -count=1
       - name: Production build
         run: go build ./cmd/dirextalk-message-server
       - name: Compose contract

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"sort"
 	"strings"
 	"testing"
@@ -187,11 +188,11 @@ func TestMSC2836(t *testing.T) {
 	router := injectEvents(t, nopUserAPI, nopRsAPI, []*types.HeaderedEvent{
 		eventA, eventB, eventC, eventD, eventE, eventF, eventG, eventH,
 	})
-	cancel := runServer(t, router)
-	defer cancel()
+	server := httptest.NewServer(router)
+	t.Cleanup(server.Close)
 
 	t.Run("returns 403 on invalid event IDs", func(t *testing.T) {
-		_ = postRelationships(t, 403, "alice", newReq(t, map[string]interface{}{
+		_ = postRelationships(t, server.URL, 403, "alice", newReq(t, map[string]interface{}{
 			"event_id": "$invalid",
 		}))
 	})
@@ -201,14 +202,14 @@ func TestMSC2836(t *testing.T) {
 			DisplayName: "Frank Not In Room",
 			UserID:      "@frank:localhost",
 		}
-		_ = postRelationships(t, 403, "frank", newReq(t, map[string]interface{}{
+		_ = postRelationships(t, server.URL, 403, "frank", newReq(t, map[string]interface{}{
 			"event_id":       eventB.EventID(),
 			"limit":          1,
 			"include_parent": true,
 		}))
 	})
 	t.Run("returns the parent if include_parent is true", func(t *testing.T) {
-		body := postRelationships(t, 200, "alice", newReq(t, map[string]interface{}{
+		body := postRelationships(t, server.URL, 200, "alice", newReq(t, map[string]interface{}{
 			"event_id":       eventB.EventID(),
 			"include_parent": true,
 			"limit":          2,
@@ -216,14 +217,14 @@ func TestMSC2836(t *testing.T) {
 		assertContains(t, body, []string{eventB.EventID(), eventA.EventID()})
 	})
 	t.Run("returns the children in the right order if include_children is true", func(t *testing.T) {
-		body := postRelationships(t, 200, "alice", newReq(t, map[string]interface{}{
+		body := postRelationships(t, server.URL, 200, "alice", newReq(t, map[string]interface{}{
 			"event_id":         eventD.EventID(),
 			"include_children": true,
 			"recent_first":     true,
 			"limit":            4,
 		}))
 		assertContains(t, body, []string{eventD.EventID(), eventG.EventID(), eventF.EventID(), eventE.EventID()})
-		body = postRelationships(t, 200, "alice", newReq(t, map[string]interface{}{
+		body = postRelationships(t, server.URL, 200, "alice", newReq(t, map[string]interface{}{
 			"event_id":         eventD.EventID(),
 			"include_children": true,
 			"recent_first":     false,
@@ -232,7 +233,7 @@ func TestMSC2836(t *testing.T) {
 		assertContains(t, body, []string{eventD.EventID(), eventE.EventID(), eventF.EventID(), eventG.EventID()})
 	})
 	t.Run("walks the graph depth first", func(t *testing.T) {
-		body := postRelationships(t, 200, "alice", newReq(t, map[string]interface{}{
+		body := postRelationships(t, server.URL, 200, "alice", newReq(t, map[string]interface{}{
 			"event_id":     eventB.EventID(),
 			"recent_first": false,
 			"depth_first":  true,
@@ -249,7 +250,7 @@ func TestMSC2836(t *testing.T) {
 		//   |
 		//  5H
 		assertContains(t, body, []string{eventB.EventID(), eventC.EventID(), eventD.EventID(), eventE.EventID(), eventH.EventID(), eventF.EventID()})
-		body = postRelationships(t, 200, "alice", newReq(t, map[string]interface{}{
+		body = postRelationships(t, server.URL, 200, "alice", newReq(t, map[string]interface{}{
 			"event_id":     eventB.EventID(),
 			"recent_first": true,
 			"depth_first":  true,
@@ -268,7 +269,7 @@ func TestMSC2836(t *testing.T) {
 		assertContains(t, body, []string{eventB.EventID(), eventD.EventID(), eventG.EventID(), eventF.EventID(), eventE.EventID(), eventH.EventID()})
 	})
 	t.Run("walks the graph breadth first", func(t *testing.T) {
-		body := postRelationships(t, 200, "alice", newReq(t, map[string]interface{}{
+		body := postRelationships(t, server.URL, 200, "alice", newReq(t, map[string]interface{}{
 			"event_id":     eventB.EventID(),
 			"recent_first": false,
 			"depth_first":  false,
@@ -285,7 +286,7 @@ func TestMSC2836(t *testing.T) {
 		//   |
 		//   H
 		assertContains(t, body, []string{eventB.EventID(), eventC.EventID(), eventD.EventID(), eventE.EventID(), eventF.EventID(), eventG.EventID()})
-		body = postRelationships(t, 200, "alice", newReq(t, map[string]interface{}{
+		body = postRelationships(t, server.URL, 200, "alice", newReq(t, map[string]interface{}{
 			"event_id":     eventB.EventID(),
 			"recent_first": true,
 			"depth_first":  false,
@@ -304,7 +305,7 @@ func TestMSC2836(t *testing.T) {
 		assertContains(t, body, []string{eventB.EventID(), eventD.EventID(), eventC.EventID(), eventG.EventID(), eventF.EventID(), eventE.EventID()})
 	})
 	t.Run("caps via max_breadth", func(t *testing.T) {
-		body := postRelationships(t, 200, "alice", newReq(t, map[string]interface{}{
+		body := postRelationships(t, server.URL, 200, "alice", newReq(t, map[string]interface{}{
 			"event_id":     eventB.EventID(),
 			"recent_first": false,
 			"depth_first":  false,
@@ -315,7 +316,7 @@ func TestMSC2836(t *testing.T) {
 		assertContains(t, body, []string{eventB.EventID(), eventC.EventID(), eventD.EventID(), eventE.EventID(), eventF.EventID(), eventH.EventID()})
 	})
 	t.Run("caps via max_depth", func(t *testing.T) {
-		body := postRelationships(t, 200, "alice", newReq(t, map[string]interface{}{
+		body := postRelationships(t, server.URL, 200, "alice", newReq(t, map[string]interface{}{
 			"event_id":     eventB.EventID(),
 			"recent_first": false,
 			"depth_first":  false,
@@ -326,7 +327,7 @@ func TestMSC2836(t *testing.T) {
 		assertContains(t, body, []string{eventB.EventID(), eventC.EventID(), eventD.EventID(), eventE.EventID(), eventF.EventID(), eventG.EventID()})
 	})
 	t.Run("terminates when reaching the limit", func(t *testing.T) {
-		body := postRelationships(t, 200, "alice", newReq(t, map[string]interface{}{
+		body := postRelationships(t, server.URL, 200, "alice", newReq(t, map[string]interface{}{
 			"event_id":     eventB.EventID(),
 			"recent_first": false,
 			"depth_first":  false,
@@ -335,7 +336,7 @@ func TestMSC2836(t *testing.T) {
 		assertContains(t, body, []string{eventB.EventID(), eventC.EventID(), eventD.EventID(), eventE.EventID()})
 	})
 	t.Run("returns all events with a high enough limit", func(t *testing.T) {
-		body := postRelationships(t, 200, "alice", newReq(t, map[string]interface{}{
+		body := postRelationships(t, server.URL, 200, "alice", newReq(t, map[string]interface{}{
 			"event_id":     eventB.EventID(),
 			"recent_first": false,
 			"depth_first":  false,
@@ -353,7 +354,7 @@ func TestMSC2836(t *testing.T) {
 		//   E F1 G
 		//   |
 		//   H
-		body := postRelationships(t, 200, "alice", newReq(t, map[string]interface{}{
+		body := postRelationships(t, server.URL, 200, "alice", newReq(t, map[string]interface{}{
 			"event_id":     eventF.EventID(),
 			"recent_first": false,
 			"depth_first":  true,
@@ -362,7 +363,7 @@ func TestMSC2836(t *testing.T) {
 		assertContains(t, body, []string{eventF.EventID(), eventD.EventID(), eventB.EventID(), eventA.EventID()})
 	})
 	t.Run("includes children and children_hash in unsigned", func(t *testing.T) {
-		body := postRelationships(t, 200, "alice", newReq(t, map[string]interface{}{
+		body := postRelationships(t, server.URL, 200, "alice", newReq(t, map[string]interface{}{
 			"event_id":     eventB.EventID(),
 			"recent_first": false,
 			"depth_first":  false,
@@ -395,24 +396,7 @@ func newReq(t *testing.T, jsonBody map[string]interface{}) *msc2836.EventRelatio
 	return r
 }
 
-func runServer(t *testing.T, router *mux.Router) func() {
-	t.Helper()
-	externalServ := &http.Server{
-		Addr:         string("127.0.0.1:8009"),
-		WriteTimeout: 60 * time.Second,
-		Handler:      router,
-	}
-	go func() {
-		externalServ.ListenAndServe()
-	}()
-	// wait to listen on the port
-	time.Sleep(500 * time.Millisecond)
-	return func() {
-		externalServ.Shutdown(context.TODO())
-	}
-}
-
-func postRelationships(t *testing.T, expectCode int, accessToken string, req *msc2836.EventRelationshipRequest) *msc2836.EventRelationshipResponse {
+func postRelationships(t *testing.T, serverURL string, expectCode int, accessToken string, req *msc2836.EventRelationshipRequest) *msc2836.EventRelationshipResponse {
 	t.Helper()
 	var r msc2836.EventRelationshipRequest
 	r.Defaults()
@@ -421,7 +405,7 @@ func postRelationships(t *testing.T, expectCode int, accessToken string, req *ms
 		t.Fatalf("failed to marshal request: %s", err)
 	}
 	httpReq, err := http.NewRequest(
-		"POST", "http://localhost:8009/_matrix/client/unstable/event_relationships",
+		"POST", serverURL+"/_matrix/client/unstable/event_relationships",
 		bytes.NewBuffer(data),
 	)
 	httpReq.Header.Set("Authorization", "Bearer "+accessToken)

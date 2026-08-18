@@ -31,12 +31,59 @@ type Config struct {
 	RoomAuthorizer RoomAuthorizer
 }
 
+// ToolEffect classifies the externally observable side effect of an MCP tool.
+// Keep this classification independent from tool names so consumers can make
+// retry decisions from the advertised contract rather than naming conventions.
+type ToolEffect string
+
+const (
+	ToolEffectRead               ToolEffect = "read"
+	ToolEffectNonIdempotentWrite ToolEffect = "non_idempotent_write"
+)
+
+// ToolAnnotations is the standard MCP tool-annotation contract derived from a
+// ToolEffect. All hints are emitted explicitly so clients never need to apply
+// the MCP defaults when deciding whether an invocation is safe to retry.
+type ToolAnnotations struct {
+	ReadOnlyHint    bool `json:"readOnlyHint"`
+	DestructiveHint bool `json:"destructiveHint"`
+	IdempotentHint  bool `json:"idempotentHint"`
+	OpenWorldHint   bool `json:"openWorldHint"`
+}
+
 type Tool struct {
 	Action      string
 	Name        string
 	Description string
 	InputSchema map[string]any
-	Write       bool
+	Effect      ToolEffect
+}
+
+func (t Tool) Annotations() ToolAnnotations {
+	switch t.Effect {
+	case ToolEffectRead:
+		return ToolAnnotations{
+			ReadOnlyHint:    true,
+			DestructiveHint: false,
+			IdempotentHint:  true,
+			OpenWorldHint:   true,
+		}
+	case ToolEffectNonIdempotentWrite:
+		return ToolAnnotations{
+			ReadOnlyHint:    false,
+			DestructiveHint: false,
+			IdempotentHint:  false,
+			OpenWorldHint:   true,
+		}
+	default:
+		// Unknown classifications fail closed as unsafe mutations.
+		return ToolAnnotations{
+			ReadOnlyHint:    false,
+			DestructiveHint: true,
+			IdempotentHint:  false,
+			OpenWorldHint:   true,
+		}
+	}
 }
 
 type Service struct {
@@ -120,56 +167,63 @@ var capabilityTools = []Tool{
 		Name:        "dirextalk_contacts_list",
 		Description: "List Dirextalk contacts.",
 		InputSchema: objectSchema(map[string]any{"query": stringSchema(), "limit": numberSchema()}),
+		Effect:      ToolEffectRead,
 	},
 	{
 		Action:      ActionContactsSearch,
 		Name:        "dirextalk_contacts_search",
 		Description: "Search Dirextalk contacts.",
 		InputSchema: objectSchema(map[string]any{"query": stringSchema(), "limit": numberSchema()}),
+		Effect:      ToolEffectRead,
 	},
 	{
 		Action:      ActionRoomsSearch,
 		Name:        "dirextalk_rooms_search",
 		Description: "Search Dirextalk rooms, groups, channels, or contacts.",
 		InputSchema: objectSchema(map[string]any{"query": stringSchema(), "type": stringSchema(), "limit": numberSchema()}),
+		Effect:      ToolEffectRead,
 	},
 	{
 		Action:      ActionMessagesList,
 		Name:        "dirextalk_messages_list",
 		Description: "List ordinary messages in an allowed room with optional RFC3339 UTC time range and cursor pagination.",
 		InputSchema: objectSchema(map[string]any{"room_id": stringSchema(), "from_time": stringSchema(), "to_time": stringSchema(), "cursor": stringSchema(), "limit": numberSchema()}, "room_id"),
+		Effect:      ToolEffectRead,
 	},
 	{
 		Action:      ActionMessagesSend,
 		Name:        "dirextalk_messages_send",
 		Description: "Send a Matrix message through Dirextalk transport.",
 		InputSchema: objectSchema(map[string]any{"room_id": stringSchema(), "msg": stringSchema(), "agent_gateway": boolSchema()}, "room_id", "msg"),
-		Write:       true,
+		Effect:      ToolEffectNonIdempotentWrite,
 	},
 	{
 		Action:      ActionRoomMembersList,
 		Name:        "dirextalk_room_members_list",
 		Description: "List room members.",
 		InputSchema: objectSchema(map[string]any{"room_id": stringSchema(), "channel_id": stringSchema(), "status": stringSchema(), "role": stringSchema(), "limit": numberSchema()}),
+		Effect:      ToolEffectRead,
 	},
 	{
 		Action:      ActionChannelPostsList,
 		Name:        "dirextalk_channel_posts_list",
 		Description: "List channel posts with optional RFC3339 UTC time range and cursor pagination.",
 		InputSchema: objectSchema(map[string]any{"room_id": stringSchema(), "from_time": stringSchema(), "to_time": stringSchema(), "cursor": stringSchema(), "limit": numberSchema()}, "room_id"),
+		Effect:      ToolEffectRead,
 	},
 	{
 		Action:      ActionChannelCommentsList,
 		Name:        "dirextalk_channel_comments_list",
 		Description: "List channel comments for a post with optional RFC3339 UTC time range and cursor pagination.",
 		InputSchema: objectSchema(map[string]any{"post_id": stringSchema(), "from_time": stringSchema(), "to_time": stringSchema(), "cursor": stringSchema(), "limit": numberSchema()}, "post_id"),
+		Effect:      ToolEffectRead,
 	},
 	{
 		Action:      ActionChannelCommentsCreate,
 		Name:        "dirextalk_channel_comments_create",
 		Description: "Create a channel comment through Dirextalk transport.",
 		InputSchema: objectSchema(map[string]any{"post_id": stringSchema(), "msg": stringSchema()}, "post_id", "msg"),
-		Write:       true,
+		Effect:      ToolEffectNonIdempotentWrite,
 	},
 }
 

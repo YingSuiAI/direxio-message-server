@@ -179,7 +179,9 @@ func NewRegistryWithInvokerAndOptionsChecked(invoker ProductInvoker, options Reg
 		scope := "product:mcp:read"
 		operationType := capv1.OperationType_OPERATION_TYPE_READ
 		risk := capv1.RiskLevel_RISK_LEVEL_SAFE
-		if tool.Write {
+		// Only the explicit read effect receives read scope; unknown effects stay
+		// fail-closed as mutations in the private capability catalog.
+		if tool.Effect != dirextalkmcp.ToolEffectRead {
 			scope = "product:mcp:write"
 			operationType = capv1.OperationType_OPERATION_TYPE_MUTATION
 			risk = capv1.RiskLevel_RISK_LEVEL_LOW

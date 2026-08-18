@@ -34,13 +34,22 @@ func (p *mcpPortStub) Invoke(_ context.Context, action string, params map[string
 func TestMCPHandlerInitializeAndToolsList(t *testing.T) {
 	port := &mcpPortStub{
 		allowedToken: "agent-token",
-		tools: []dirextalkmcp.Tool{{
-			Action:      dirextalkmcp.ActionMessagesList,
-			Name:        "dirextalk_messages_list",
-			Description: "List messages.",
-			InputSchema: map[string]any{"type": "object"},
-			Write:       true,
-		}},
+		tools: []dirextalkmcp.Tool{
+			{
+				Action:      dirextalkmcp.ActionMessagesList,
+				Name:        "dirextalk_messages_list",
+				Description: "List messages.",
+				InputSchema: map[string]any{"type": "object"},
+				Effect:      dirextalkmcp.ToolEffectRead,
+			},
+			{
+				Action:      dirextalkmcp.ActionMessagesSend,
+				Name:        "dirextalk_messages_send",
+				Description: "Send a message.",
+				InputSchema: map[string]any{"type": "object"},
+				Effect:      dirextalkmcp.ToolEffectNonIdempotentWrite,
+			},
+		},
 	}
 	handler := MCPHandler(MCPConfig{
 		Port: port,
@@ -53,6 +62,9 @@ func TestMCPHandlerInitializeAndToolsList(t *testing.T) {
 	result := requireJSONRPCResult(t, initialize)
 	if initialize.Code != http.StatusOK || result["protocolVersion"] != MCPProtocolVersion {
 		t.Fatalf("initialize changed: status=%d result=%#v", initialize.Code, result)
+	}
+	if sessionID := initialize.Header().Get("Mcp-Session-Id"); sessionID != "" {
+		t.Fatalf("stateless MCP endpoint issued session ID %q", sessionID)
 	}
 	serverInfo := result["serverInfo"].(map[string]any)
 	if serverInfo["name"] != "dirextalk-message-server" || serverInfo["version"] != "v-test" {
@@ -67,6 +79,23 @@ func TestMCPHandlerInitializeAndToolsList(t *testing.T) {
 	}
 	if _, leaked := tool["action"]; leaked {
 		t.Fatalf("internal tool action leaked: %#v", tool)
+	}
+	annotations := tool["annotations"].(map[string]any)
+	for key, want := range map[string]bool{
+		"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": true,
+	} {
+		if annotations[key] != want {
+			t.Fatalf("annotation %s = %#v, want %t; tool=%#v", key, annotations[key], want, tool)
+		}
+	}
+	writeTool := tools[1].(map[string]any)
+	writeAnnotations := writeTool["annotations"].(map[string]any)
+	for key, want := range map[string]bool{
+		"readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": true,
+	} {
+		if writeAnnotations[key] != want {
+			t.Fatalf("write annotation %s = %#v, want %t; tool=%#v", key, writeAnnotations[key], want, writeTool)
+		}
 	}
 }
 
