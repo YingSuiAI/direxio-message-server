@@ -3,6 +3,7 @@ package productcapability
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"regexp"
 	"testing"
@@ -261,6 +262,19 @@ func TestExecuteOperationPreservesPreparedReceiptBoundaryErrors(t *testing.T) {
 				t.Fatal("invalid receipt deleted prepared PDU")
 			}
 		})
+	}
+}
+
+func TestCapabilityInvokeErrorMessagePreservesUnknownProviderContent(t *testing.T) {
+	message := "provider failure: matrix transport returned an empty event id"
+	if got := capabilityInvokeErrorMessage(errors.New(message)); got != message {
+		t.Fatalf("unknown provider error=%q, want byte-identical %q", got, message)
+	}
+
+	wrapped := fmt.Errorf("%w: invalid Matrix receipt for $prepared: provider failure: matrix transport returned an empty event id", dirextalktransport.ErrMatrixEventUnknown)
+	want := "Matrix event acceptance is unknown: invalid Matrix receipt for $prepared: provider failure: matrix transport returned an empty event id"
+	if got := capabilityInvokeErrorMessage(wrapped); got != want {
+		t.Fatalf("unknown nested receipt error=%q, want %q", got, want)
 	}
 }
 
