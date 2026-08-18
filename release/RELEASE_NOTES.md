@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v1.1.64
+
+1. Advertise explicit standard MCP tool annotations so clients can distinguish idempotent reads from non-idempotent message and comment writes without relying on tool names or protocol defaults.
+2. Adopt `dirextalk-capability-api` v1.1.0 generated Agent data-plane v2 types and shared conformance vectors as the cross-service session response contract.
+3. Preserve established Matrix and ProductCore public error messages while tightening internal error handling and full-repository static analysis.
+
 ## v1.1.63
 
 1. Return the RFC3339 UTC `server_time` in owner Agent session tickets so clients can derive ticket lifetime from a monotonic clock without trusting the device wall clock.
