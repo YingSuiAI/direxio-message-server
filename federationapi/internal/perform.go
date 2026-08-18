@@ -30,7 +30,7 @@ func (r *FederationInternalAPI) PerformDirectoryLookup(
 	response *api.PerformDirectoryLookupResponse,
 ) (err error) {
 	if !r.shouldAttemptDirectFederation(request.ServerName) {
-		return fmt.Errorf("relay servers have no meaningful response for directory lookup.")
+		return fmt.Errorf("relay servers have no meaningful response for directory lookup")
 	}
 
 	dir, err := r.federation.LookupRoomAlias(
@@ -126,7 +126,7 @@ func (r *FederationInternalAPI) PerformJoin(
 			Message:      "Unknown HTTP error",
 		}
 		if lastErr != nil {
-			response.LastError.Message = lastErr.Error()
+			response.LastError.Message = publicFederationErrorMessage(lastErr)
 		}
 	}
 
@@ -144,7 +144,7 @@ func (r *FederationInternalAPI) performJoinUsingServer(
 	unsigned map[string]interface{},
 ) error {
 	if !r.shouldAttemptDirectFederation(serverName) {
-		return fmt.Errorf("relay servers have no meaningful response for join.")
+		return fmt.Errorf("relay servers have no meaningful response for join")
 	}
 
 	user, err := spec.NewUserID(userID, true)
@@ -203,7 +203,7 @@ func (r *FederationInternalAPI) performJoinUsingServer(
 	}
 	r.statistics.ForServer(serverName).Success(statistics.SendDirect)
 	if response == nil {
-		return fmt.Errorf("Received nil response from gomatrixserverlib.PerformJoin")
+		return fmt.Errorf("received nil response from gomatrixserverlib.PerformJoin")
 	}
 
 	// We need to immediately update our list of joined hosts for this room now as we are technically
@@ -306,7 +306,7 @@ func (r *FederationInternalAPI) PerformOutboundPeek(
 		response.LastError = &gomatrix.HTTPError{
 			Code:         0,
 			WrappedError: nil,
-			Message:      lastErr.Error(),
+			Message:      publicFederationErrorMessage(lastErr),
 		}
 	}
 
@@ -318,6 +318,19 @@ func (r *FederationInternalAPI) PerformOutboundPeek(
 	return lastErr
 }
 
+func publicFederationErrorMessage(err error) string {
+	switch err.Error() {
+	case "relay servers have no meaningful response for join":
+		return "relay servers have no meaningful response for join."
+	case "received nil response from gomatrixserverlib.PerformJoin":
+		return "Received nil response from gomatrixserverlib.PerformJoin"
+	case "relay servers have no meaningful response for outbound peek":
+		return "relay servers have no meaningful response for outbound peek."
+	default:
+		return err.Error()
+	}
+}
+
 func (r *FederationInternalAPI) performOutboundPeekUsingServer(
 	ctx context.Context,
 	roomID string,
@@ -325,7 +338,7 @@ func (r *FederationInternalAPI) performOutboundPeekUsingServer(
 	supportedVersions []gomatrixserverlib.RoomVersion,
 ) error {
 	if !r.shouldAttemptDirectFederation(serverName) {
-		return fmt.Errorf("relay servers have no meaningful response for outbound peek.")
+		return fmt.Errorf("relay servers have no meaningful response for outbound peek")
 	}
 
 	// create a unique ID for this peek.
@@ -565,7 +578,7 @@ func (r *FederationInternalAPI) SendInvite(
 	// TODO (devon): This should be allowed via a relay. Currently only transactions
 	// can be sent to relays. Would need to extend relays to handle invites.
 	if !r.shouldAttemptDirectFederation(destination) {
-		return nil, fmt.Errorf("relay servers have no meaningful response for invite.")
+		return nil, fmt.Errorf("relay servers have no meaningful response for invite")
 	}
 
 	logrus.WithFields(logrus.Fields{
@@ -622,7 +635,7 @@ func (r *FederationInternalAPI) SendInviteV3(
 	// TODO (devon): This should be allowed via a relay. Currently only transactions
 	// can be sent to relays. Would need to extend relays to handle invites.
 	if !r.shouldAttemptDirectFederation(invitee.Domain()) {
-		return nil, fmt.Errorf("relay servers have no meaningful response for invite.")
+		return nil, fmt.Errorf("relay servers have no meaningful response for invite")
 	}
 
 	logrus.WithFields(logrus.Fields{

@@ -9,7 +9,7 @@ import (
 
 func (m *Module) sendMatrixMutation(ctx context.Context, request dirextalktransport.SendMessageRequest, capability, operation string) (dirextalktransport.SendMessageResult, error) {
 	if m == nil || m.matrix == nil {
-		return dirextalktransport.SendMessageResult{}, errors.New("Matrix transport is unavailable")
+		return dirextalktransport.SendMessageResult{}, errors.New("matrix transport is unavailable")
 	}
 	operationContext, hasOperation := dirextalktransport.CapabilityOperationContextFrom(ctx)
 	if !hasOperation {

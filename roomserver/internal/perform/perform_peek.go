@@ -160,7 +160,7 @@ func (r *Peeker) performPeekRoomByID(
 	}
 
 	if ev, _ := r.DB.GetStateEvent(ctx, roomID, "m.room.encryption", ""); ev != nil {
-		return "", api.ErrNotAllowed{Err: fmt.Errorf("Cannot peek into an encrypted room")}
+		return "", api.ErrNotAllowed{Err: fmt.Errorf("cannot peek into an encrypted room")}
 	}
 
 	// TODO: handle federated peeks

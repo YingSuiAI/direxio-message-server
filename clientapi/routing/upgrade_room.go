@@ -76,7 +76,7 @@ func UpgradeRoom(
 	case roomserverAPI.ErrNotAllowed:
 		return util.JSONResponse{
 			Code: http.StatusForbidden,
-			JSON: spec.Forbidden(e.Error()),
+			JSON: spec.Forbidden(publicRoomserverErrorMessage(e)),
 		}
 	default:
 		if errors.Is(err, eventutil.ErrRoomNoExists{}) {
@@ -96,5 +96,16 @@ func UpgradeRoom(
 		JSON: upgradeRoomResponse{
 			ReplacementRoom: newRoomID,
 		},
+	}
+}
+
+func publicRoomserverErrorMessage(err error) string {
+	switch err.Error() {
+	case "cannot peek into an encrypted room":
+		return "Cannot peek into an encrypted room"
+	case "you don't have permission to upgrade the room, power level too low":
+		return "You don't have permission to upgrade the room, power level too low."
+	default:
+		return err.Error()
 	}
 }

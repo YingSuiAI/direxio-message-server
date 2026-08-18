@@ -250,15 +250,6 @@ func TestPluginActionAllowlistIncludesOpsActions(t *testing.T) {
 	}
 }
 
-func catalogHasPlugin(entries []pluginCatalogEntry, pluginID string) bool {
-	for _, entry := range entries {
-		if entry.ID == pluginID && pluginsmodule.OfficialImage(entry.Image) {
-			return true
-		}
-	}
-	return false
-}
-
 func catalogHasPluginID(entries []pluginCatalogEntry, pluginID string) bool {
 	for _, entry := range entries {
 		if entry.ID == pluginID {

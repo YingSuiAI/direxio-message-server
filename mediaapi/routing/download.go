@@ -179,10 +179,7 @@ func Download(
 			return
 		}
 		// TODO: Handle the fact we might have started writing the response
-		dReq.jsonErrorResponse(w, util.JSONResponse{
-			Code: http.StatusNotFound,
-			JSON: spec.NotFound("Failed to download: " + err.Error()),
-		})
+		dReq.jsonErrorResponse(w, downloadFailureResponse(err))
 		return
 	}
 
@@ -194,6 +191,19 @@ func Download(
 		return
 	}
 
+}
+
+func downloadFailureResponse(err error) util.JSONResponse {
+	message := err.Error()
+	if strings.HasPrefix(message, "file with media ID ") && strings.Contains(message, " does not exist on ") {
+		message = "File" + strings.TrimPrefix(message, "file")
+	} else if message == "location header is not yet supported" {
+		message = "Location header is not yet supported"
+	}
+	return util.JSONResponse{
+		Code: http.StatusNotFound,
+		JSON: spec.NotFound("Failed to download: " + message),
+	}
 }
 
 func (r *downloadRequest) jsonErrorResponse(w http.ResponseWriter, res util.JSONResponse) {
@@ -828,7 +838,7 @@ func (r *downloadRequest) fetchRemoteFile(
 		resp, err = client.CreateMediaDownloadRequest(ctx, r.MediaMetadata.Origin, string(r.MediaMetadata.MediaID))
 		if err != nil || (resp != nil && resp.StatusCode != http.StatusOK) {
 			if resp != nil && resp.StatusCode == http.StatusNotFound {
-				return "", false, fmt.Errorf("File with media ID %q does not exist on %s", r.MediaMetadata.MediaID, r.MediaMetadata.Origin)
+				return "", false, fmt.Errorf("file with media ID %q does not exist on %s", r.MediaMetadata.MediaID, r.MediaMetadata.Origin)
 			}
 			return "", false, fmt.Errorf("file with media ID %q could not be downloaded from %s: %w", r.MediaMetadata.MediaID, r.MediaMetadata.Origin, err)
 		}
@@ -948,7 +958,7 @@ func parseMultipartResponse(r *downloadRequest, resp *http.Response, maxFileSize
 
 	redirect := p.Header.Get("Location")
 	if redirect != "" {
-		return 0, nil, fmt.Errorf("Location header is not yet supported")
+		return 0, nil, fmt.Errorf("location header is not yet supported")
 	}
 
 	contentLength, reader, err := r.GetContentLengthAndReader(p.Header.Get("Content-Length"), p, maxFileSizeBytes)

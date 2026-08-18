@@ -56,7 +56,7 @@ func PeekRoomByIDOrAlias(
 	case roomserverAPI.ErrNotAllowed:
 		return util.JSONResponse{
 			Code: http.StatusForbidden,
-			JSON: spec.Forbidden(e.Error()),
+			JSON: spec.Forbidden(publicRoomserverErrorMessage(e)),
 		}
 	case *gomatrix.HTTPError:
 		return util.JSONResponse{

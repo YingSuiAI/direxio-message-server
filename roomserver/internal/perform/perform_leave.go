@@ -22,7 +22,6 @@ import (
 
 	fsAPI "github.com/YingSuiAI/dirextalk-message-server/federationapi/api"
 	"github.com/YingSuiAI/dirextalk-message-server/roomserver/api"
-	rsAPI "github.com/YingSuiAI/dirextalk-message-server/roomserver/api"
 	"github.com/YingSuiAI/dirextalk-message-server/roomserver/internal/helpers"
 	"github.com/YingSuiAI/dirextalk-message-server/roomserver/internal/input"
 	"github.com/YingSuiAI/dirextalk-message-server/roomserver/storage"
@@ -34,7 +33,7 @@ type Leaver struct {
 	Cfg     *config.RoomServer
 	DB      storage.Database
 	FSAPI   fsAPI.RoomserverFederationAPI
-	RSAPI   rsAPI.RoomserverInternalAPI
+	RSAPI   api.RoomserverInternalAPI
 	UserAPI userapi.RoomserverUserAPI
 	Inputer *input.Inputer
 }
@@ -185,7 +184,7 @@ func (r *Leaver) performLeaveRoomByID(
 		return nil, err
 	}
 
-	var buildRes rsAPI.QueryLatestEventsAndStateResponse
+	var buildRes api.QueryLatestEventsAndStateResponse
 	identity, err := r.RSAPI.SigningIdentityFor(ctx, *validRoomID, req.Leaver)
 	if err != nil {
 		return nil, fmt.Errorf("SigningIdentityFor: %w", err)

@@ -294,14 +294,71 @@ func (s *Server) executeOperation(ctx context.Context, record *operationRecord, 
 	}
 	result, invokeErr := provider.Handler(ctx, wrapped)
 	if invokeErr != nil {
+		publicMessage := capabilityInvokeErrorMessage(invokeErr)
 		if errors.Is(invokeErr, dirextalktransport.ErrMatrixEventUnknown) {
-			_ = s.operations.markUncertain(context.Background(), operationID, capabilityError(capv1.ErrorCode_ERROR_CODE_UPSTREAM_FAILED, invokeErr.Error()))
+			_ = s.operations.markUncertain(context.Background(), operationID, capabilityError(capv1.ErrorCode_ERROR_CODE_UPSTREAM_FAILED, publicMessage))
 			return
 		}
-		_ = s.operations.finish(ctx, operationID, nil, capabilityError(capv1.ErrorCode_ERROR_CODE_UPSTREAM_FAILED, invokeErr.Error()))
+		_ = s.operations.finish(ctx, operationID, nil, capabilityError(capv1.ErrorCode_ERROR_CODE_UPSTREAM_FAILED, publicMessage))
 		return
 	}
 	_ = s.operations.finish(ctx, operationID, result, nil)
+}
+
+// capabilityInvokeErrorMessage preserves the established cross-service error
+// text while internal Go errors follow the standard lowercase convention.
+func capabilityInvokeErrorMessage(err error) string {
+	message := err.Error()
+	if errors.Is(err, dirextalktransport.ErrMatrixEventUnknown) {
+		const internal = "matrix event acceptance is unknown"
+		if strings.HasPrefix(message, internal) {
+			return "Matrix event acceptance is unknown" + capabilityUnknownMatrixErrorSuffix(strings.TrimPrefix(message, internal))
+		}
+	}
+	if errors.Is(err, dirextalktransport.ErrMatrixEventRejected) {
+		const internal = "matrix event was rejected"
+		if strings.HasPrefix(message, internal) {
+			return "Matrix event was rejected" + strings.TrimPrefix(message, internal)
+		}
+	}
+	if public, ok := publicMatrixReceiptError(message); ok {
+		return public
+	}
+	return message
+}
+
+func capabilityUnknownMatrixErrorSuffix(suffix string) string {
+	const receiptPrefix = ": invalid Matrix receipt for "
+	if !strings.HasPrefix(suffix, receiptPrefix) {
+		return suffix
+	}
+	receipt := strings.TrimPrefix(suffix, receiptPrefix)
+	preparedEventID, internal, ok := strings.Cut(receipt, ": ")
+	if !ok || preparedEventID == "" {
+		return suffix
+	}
+	public, ok := publicMatrixReceiptError(internal)
+	if !ok {
+		return suffix
+	}
+	return receiptPrefix + preparedEventID + ": " + public
+}
+
+func publicMatrixReceiptError(message string) (string, bool) {
+	const emptyEventID = "matrix transport returned an empty event id"
+	if message == emptyEventID {
+		return "Matrix transport returned an empty event id", true
+	}
+	const mismatchPrefix = "matrix transport returned event "
+	if !strings.HasPrefix(message, mismatchPrefix) {
+		return "", false
+	}
+	receiptIDs := strings.TrimPrefix(message, mismatchPrefix)
+	returnedEventID, preparedEventID, ok := strings.Cut(receiptIDs, " for prepared event ")
+	if !ok || returnedEventID == "" || preparedEventID == "" {
+		return "", false
+	}
+	return "Matrix transport returned event " + receiptIDs, true
 }
 
 func (s *Server) GetOperation(ctx context.Context, req *capv1.GetOperationRequest) (*capv1.GetOperationResponse, error) {

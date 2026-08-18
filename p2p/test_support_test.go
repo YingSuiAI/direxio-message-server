@@ -17,7 +17,6 @@ import (
 
 type channelReactionHistory = channelsmodule.ReactionHistory
 type pluginCatalogEntry = dirextalkplugin.CatalogEntry
-type pluginInstance = dirextalkplugin.Instance
 type portalCredentialsFile = portalmodule.Credentials
 type reportRecord = dirextalkdomain.ReportRecord
 
@@ -84,13 +83,6 @@ func mustUpsertReaction(t *testing.T, service *Service, reaction reactionRecord)
 	t.Helper()
 	if err := service.store.UpsertReaction(context.Background(), reaction); err != nil {
 		t.Fatalf("upsert reaction for %q: %v", reaction.TargetID, err)
-	}
-}
-
-func mustUpsertFavorite(t *testing.T, service *Service, favorite favoriteRecord) {
-	t.Helper()
-	if err := service.store.UpsertFavorite(context.Background(), favorite); err != nil {
-		t.Fatalf("upsert favorite %d: %v", favorite.ID, err)
 	}
 }
 

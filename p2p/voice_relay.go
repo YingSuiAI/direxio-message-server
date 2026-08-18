@@ -59,30 +59,30 @@ func newVoiceCallbackRelay(cfg voiceCallbackRelayConfig) (*voiceCallbackRelay, e
 	}
 	parsed, err := url.Parse(rawURL)
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return nil, errors.New("Agent voice callback URL must be an HTTPS origin without credentials or query")
+		return nil, errors.New("agent voice callback URL must be an HTTPS origin without credentials or query")
 	}
 	if strings.TrimSpace(cfg.AuthToken) == "" {
-		return nil, errors.New("Agent voice callback relay token is required")
+		return nil, errors.New("agent voice callback relay token is required")
 	}
 	if len(cfg.AuthToken) > 4096 {
-		return nil, errors.New("Agent voice callback relay token is too long")
+		return nil, errors.New("agent voice callback relay token is too long")
 	}
 	if cfg.AccountGeneration <= 0 {
-		return nil, errors.New("Agent voice callback account generation must be positive")
+		return nil, errors.New("agent voice callback account generation must be positive")
 	}
 	maxBody := cfg.MaxBodyBytes
 	if maxBody <= 0 {
 		maxBody = defaultVoiceCallbackMaxBodyBytes
 	}
 	if maxBody > maxVoiceCallbackBodyBytes {
-		return nil, errors.New("Agent voice callback body limit is too large")
+		return nil, errors.New("agent voice callback body limit is too large")
 	}
 	timeout := cfg.Timeout
 	if timeout <= 0 {
 		timeout = defaultVoiceCallbackTimeout
 	}
 	if timeout > maxVoiceCallbackTimeout {
-		return nil, errors.New("Agent voice callback timeout is too large")
+		return nil, errors.New("agent voice callback timeout is too large")
 	}
 	client := cfg.HTTPClient
 	if client == nil {
@@ -112,7 +112,7 @@ func newVoiceCallbackHTTPClient(cfg voiceCallbackRelayConfig) (*http.Client, err
 		return &http.Client{}, nil
 	}
 	if strings.TrimSpace(cfg.CAFile) == "" || strings.TrimSpace(cfg.ClientCertFile) == "" || strings.TrimSpace(cfg.ClientKeyFile) == "" {
-		return nil, errors.New("Agent voice callback TLS CA, client certificate, and key are required together")
+		return nil, errors.New("agent voice callback TLS CA, client certificate, and key are required together")
 	}
 	caBytes, err := os.ReadFile(cfg.CAFile)
 	if err != nil {

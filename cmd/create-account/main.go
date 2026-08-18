@@ -93,7 +93,7 @@ func main() {
 
 	pass, err := getPassword(*password, *pwdFile, *pwdStdin, os.Stdin)
 	if err != nil {
-		logrus.Fatalln(err)
+		logrus.Fatalln(publicPasswordErrorMessage(err))
 	}
 
 	if err = internal.ValidatePassword(pass); err != nil {
@@ -109,6 +109,21 @@ func main() {
 	}
 
 	logrus.Infof("Created account: %s (AccessToken: %s)", *username, accessToken)
+}
+
+func publicPasswordErrorMessage(err error) string {
+	message := err.Error()
+	for _, prefix := range []string{
+		"unable to read password from file",
+		"unable to read password from stdin",
+		"unable to read password",
+		"entered passwords don't match",
+	} {
+		if strings.HasPrefix(message, prefix) {
+			return strings.ToUpper(prefix[:1]) + prefix[1:] + strings.TrimPrefix(message, prefix)
+		}
+	}
+	return message
 }
 
 type sharedSecretRegistrationRequest struct {
@@ -196,7 +211,7 @@ func getPassword(password, pwdFile string, pwdStdin bool, r io.Reader) (string, 
 	if pwdFile != "" {
 		pw, err := os.ReadFile(pwdFile)
 		if err != nil {
-			return "", fmt.Errorf("Unable to read password from file: %v", err)
+			return "", fmt.Errorf("unable to read password from file: %v", err)
 		}
 		return strings.TrimSpace(string(pw)), nil
 	}
@@ -205,7 +220,7 @@ func getPassword(password, pwdFile string, pwdStdin bool, r io.Reader) (string, 
 	if pwdStdin {
 		data, err := io.ReadAll(r)
 		if err != nil {
-			return "", fmt.Errorf("Unable to read password from stdin: %v", err)
+			return "", fmt.Errorf("unable to read password from stdin: %v", err)
 		}
 		return strings.TrimSpace(string(data)), nil
 	}
@@ -215,17 +230,17 @@ func getPassword(password, pwdFile string, pwdStdin bool, r io.Reader) (string, 
 		fmt.Print("Enter Password: ")
 		bytePassword, err := term.ReadPassword(int(os.Stdin.Fd()))
 		if err != nil {
-			return "", fmt.Errorf("Unable to read password: %v", err)
+			return "", fmt.Errorf("unable to read password: %v", err)
 		}
 		fmt.Println()
 		fmt.Print("Confirm Password: ")
 		bytePassword2, err := term.ReadPassword(int(os.Stdin.Fd()))
 		if err != nil {
-			return "", fmt.Errorf("Unable to read password: %v", err)
+			return "", fmt.Errorf("unable to read password: %v", err)
 		}
 		fmt.Println()
 		if strings.TrimSpace(string(bytePassword)) != strings.TrimSpace(string(bytePassword2)) {
-			return "", fmt.Errorf("Entered passwords don't match")
+			return "", fmt.Errorf("entered passwords don't match")
 		}
 		return strings.TrimSpace(string(bytePassword)), nil
 	}

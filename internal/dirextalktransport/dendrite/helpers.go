@@ -57,14 +57,6 @@ func domainFromMatrixID(id, sigil string) string {
 	return ""
 }
 
-func displayNameFromMXID(mxid string) string {
-	localpart := strings.TrimPrefix(mxid, "@")
-	if idx := strings.Index(localpart, ":"); idx >= 0 {
-		localpart = localpart[:idx]
-	}
-	return fallbackString(localpart, mxid)
-}
-
 func isDirectRoomJoinRequiresInvite(err error) bool {
 	var policyErr *productpolicy.PolicyError
 	return errors.As(err, &policyErr) &&

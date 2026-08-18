@@ -9,6 +9,7 @@ package internal
 import (
 	"context"
 	"crypto/ed25519"
+	"errors"
 	"testing"
 
 	"github.com/YingSuiAI/dirextalk-message-server/federationapi/api"
@@ -21,6 +22,21 @@ import (
 	"github.com/matrix-org/gomatrixserverlib/spec"
 	"github.com/stretchr/testify/assert"
 )
+
+func TestPublicFederationErrorMessagePreservesMatrixContract(t *testing.T) {
+	for _, test := range []struct {
+		internal string
+		public   string
+	}{
+		{"relay servers have no meaningful response for join", "relay servers have no meaningful response for join."},
+		{"received nil response from gomatrixserverlib.PerformJoin", "Received nil response from gomatrixserverlib.PerformJoin"},
+		{"relay servers have no meaningful response for outbound peek", "relay servers have no meaningful response for outbound peek."},
+	} {
+		if got := publicFederationErrorMessage(errors.New(test.internal)); got != test.public {
+			t.Errorf("publicFederationErrorMessage(%q)=%q, want %q", test.internal, got, test.public)
+		}
+	}
+}
 
 type testFedClient struct {
 	fclient.FederationClient

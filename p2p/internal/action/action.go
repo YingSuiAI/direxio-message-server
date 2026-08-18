@@ -69,5 +69,12 @@ func CodedError(status int, code, message string) *Error {
 
 // InternalError preserves the existing ProductCore internal-error envelope.
 func InternalError(err error) *Error {
-	return StatusError(http.StatusInternalServerError, fmt.Sprintf("internal error: %s", err.Error()))
+	message := err.Error()
+	switch message {
+	case "matrix member lookup is not configured":
+		message = "Matrix member lookup is not configured"
+	case "matrix transport is not configured":
+		message = "Matrix transport is not configured"
+	}
+	return StatusError(http.StatusInternalServerError, fmt.Sprintf("internal error: %s", message))
 }

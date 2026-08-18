@@ -270,7 +270,7 @@ func CheckServerAllowedToSeeEvent(
 	switch err {
 	case nil:
 		// No error, so continue normally
-	case tables.OptimisationNotSupportedError:
+	case tables.ErrOptimisationNotSupported:
 		// The database engine didn't support this optimisation, so fall back to using
 		// the old and slow method
 		stateAtEvent, err = slowGetHistoryVisibilityState(ctx, db, info, roomID, eventID, serverName, querier)
