@@ -7,24 +7,19 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
 	"testing"
 	"time"
+
+	agentdatav2 "github.com/YingSuiAI/dirextalk-capability-api/gen/go/dirextalk/agent/data/v2"
+	"gopkg.in/yaml.v2"
 )
 
-type agentDataPlaneContractFixture struct {
-	Version         int `json:"version"`
-	SessionResponse struct {
-		RequiredFields   []string `json:"required_fields"`
-		BasePath         string   `json:"base_path"`
-		TimestampFormat  string   `json:"timestamp_format"`
-		TicketTTLSeconds int      `json:"ticket_ttl_seconds"`
-	} `json:"session_response"`
-	Errors map[string]string `json:"errors"`
-	SSE    map[string]string `json:"sse"`
-}
+const capabilityAPIModule = "github.com/YingSuiAI/dirextalk-capability-api"
 
 func TestCreateAgentSessionSignsOwnerGenerationScopeAndExpiry(t *testing.T) {
 	publicKey, privateKey, err := ed25519.GenerateKey(nil)
@@ -42,28 +37,24 @@ func TestCreateAgentSessionSignsOwnerGenerationScopeAndExpiry(t *testing.T) {
 	if actionErr != nil {
 		t.Fatalf("issue ticket: %v", actionErr)
 	}
-	response := result.(map[string]any)
-	if response["expires_at"] != "2026-08-16T02:18:04Z" || response["server_time"] != "2026-08-16T02:03:04Z" || response["base_path"] != "/agent/v1" || response["session_id"] != sessionID {
+	response, ok := result.(agentdatav2.AgentSessionResponse)
+	if !ok {
+		t.Fatalf("ticket response type = %T, want generated AgentSessionResponse", result)
+	}
+	if !response.ExpiresAt.Equal(time.Date(2026, 8, 16, 2, 18, 4, 0, time.UTC)) || !response.ServerTime.Equal(issuedAt) || response.BasePath != agentdatav2.AgentSessionResponseBasePathAgentv1 || response.SessionId.String() != sessionID {
 		t.Fatalf("unexpected ticket response: %#v", response)
 	}
-	serverTime, err := time.Parse(time.RFC3339, response["server_time"].(string))
-	if err != nil || serverTime.Location() != time.UTC || !serverTime.Equal(issuedAt) {
-		t.Fatalf("server_time must be the RFC3339 UTC ticket issuance time: value=%#v parsed=%v err=%v", response["server_time"], serverTime, err)
+	if response.ServerTime.Location() != time.UTC {
+		t.Fatalf("server_time must be UTC: %#v", response.ServerTime)
 	}
-	contract := loadAgentDataPlaneContractV1(t)
-	gotFields := make([]string, 0, len(response))
-	for field := range response {
-		gotFields = append(gotFields, field)
-	}
-	sort.Strings(gotFields)
-	wantFields := append([]string(nil), contract.SessionResponse.RequiredFields...)
-	sort.Strings(wantFields)
+	gotFields := jsonFieldNames(t, response)
+	wantFields := jsonFieldNames(t, loadSharedAgentSessionVector(t))
 	if !reflect.DeepEqual(gotFields, wantFields) {
 		t.Fatalf("ticket response fields drifted: got=%v want=%v", gotFields, wantFields)
 	}
-	parts := strings.Split(response["ticket"].(string), ".")
+	parts := strings.Split(response.Ticket, ".")
 	if len(parts) != 3 {
-		t.Fatalf("ticket is not compact JWS: %q", response["ticket"])
+		t.Fatalf("ticket is not compact JWS: %q", response.Ticket)
 	}
 	signature, err := base64.RawURLEncoding.DecodeString(parts[2])
 	if err != nil || !ed25519.Verify(publicKey, []byte(parts[0]+"."+parts[1]), signature) {
@@ -93,52 +84,104 @@ func TestCreateAgentSessionSignsOwnerGenerationScopeAndExpiry(t *testing.T) {
 	if claims.Issuer != "dirextalk-message-server" || claims.Audience != agentSessionAudience || claims.Subject != "@owner:example.com" || claims.AccountGeneration != 9 {
 		t.Fatalf("ticket authority claims drifted: %#v", claims)
 	}
-	if claims.SessionID != sessionID || claims.Nonce == "" || claims.IssuedAt != serverTime.Unix() || claims.ExpiresAt != serverTime.Add(agentSessionTTL).Unix() {
+	if claims.SessionID != sessionID || claims.Nonce == "" || claims.IssuedAt != response.ServerTime.Unix() || claims.ExpiresAt != response.ServerTime.Add(agentSessionTTL).Unix() {
 		t.Fatalf("ticket lifetime/session claims drifted: %#v", claims)
 	}
-	wantScopes := strings.Join(agentSessionScopes, ",")
-	if strings.Join(claims.Scopes, ",") != wantScopes || strings.Join(response["scopes"].([]string), ",") != wantScopes {
-		t.Fatalf("ticket scopes drifted: claims=%v response=%v", claims.Scopes, response["scopes"])
+	wantScopes := strings.Join(agentDataScopeStrings(agentSessionScopes), ",")
+	if strings.Join(claims.Scopes, ",") != wantScopes || strings.Join(agentDataScopeStrings(response.Scopes), ",") != wantScopes {
+		t.Fatalf("ticket scopes drifted: claims=%v response=%v", claims.Scopes, response.Scopes)
 	}
 }
 
-func TestAgentDataPlaneContractV1Fixture(t *testing.T) {
-	got := loadAgentDataPlaneContractV1(t)
-	want := agentDataPlaneContractFixture{
-		Version: 1,
-		Errors: map[string]string{
-			"expired":         "AGENT_TICKET_EXPIRED",
-			"stale":           "AGENT_TICKET_STALE",
-			"invalid":         "AGENT_TICKET_INVALID",
-			"scope_forbidden": "AGENT_TICKET_SCOPE_FORBIDDEN",
-		},
-		SSE: map[string]string{"cursor_conflict": "AGENT_CURSOR_CONFLICT"},
-	}
-	want.SessionResponse.RequiredFields = []string{"ticket", "expires_at", "server_time", "base_path", "session_id", "scopes"}
-	want.SessionResponse.BasePath = agentSessionBasePath
-	want.SessionResponse.TimestampFormat = "rfc3339_utc"
-	want.SessionResponse.TicketTTLSeconds = int(agentSessionTTL / time.Second)
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("v1 Agent data-plane contract fixture drifted: got=%#v want=%#v", got, want)
+func TestSharedAgentDataPlaneV2SessionVector(t *testing.T) {
+	response := loadSharedAgentSessionVector(t)
+	if response.BasePath != agentdatav2.AgentSessionResponseBasePathAgentv1 || response.SessionId.String() == "" || len(response.Scopes) == 0 || response.Ticket == "" {
+		t.Fatalf("shared session response vector is incomplete: %#v", response)
 	}
 }
 
-func loadAgentDataPlaneContractV1(t *testing.T) agentDataPlaneContractFixture {
-	t.Helper()
-	data, err := os.ReadFile("testdata/agent_data_plane_contract_v1.json")
+func TestIssuedAgentSessionScopesMatchSharedV2Contract(t *testing.T) {
+	path := filepath.Join(sharedCapabilityModuleDir(t), "api", "openapi", "agent-data-plane-v2.yaml")
+	data, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("read v1 Agent data-plane contract fixture: %v", err)
+		t.Fatalf("read shared v2 Agent data-plane contract: %v", err)
 	}
-	var fixture agentDataPlaneContractFixture
+	var contract struct {
+		Components struct {
+			Schemas map[string]struct {
+				Enum []string `yaml:"enum"`
+			} `yaml:"schemas"`
+		} `yaml:"components"`
+	}
+	if err := yaml.Unmarshal(data, &contract); err != nil {
+		t.Fatalf("decode shared v2 Agent data-plane contract: %v", err)
+	}
+	want := append([]string(nil), contract.Components.Schemas["AgentDataScope"].Enum...)
+	got := agentDataScopeStrings(agentSessionScopes)
+	sort.Strings(want)
+	sort.Strings(got)
+	if len(want) == 0 || !reflect.DeepEqual(got, want) {
+		t.Fatalf("issued Agent session scopes differ from shared v2 contract: got=%v want=%v", got, want)
+	}
+}
+
+func sharedCapabilityModuleDir(t *testing.T) string {
+	t.Helper()
+	command := exec.Command("go", "list", "-m", "-f={{.Version}}\n{{.Dir}}", capabilityAPIModule)
+	output, err := command.Output()
+	if err != nil {
+		t.Fatalf("locate shared capability contract module: %v", err)
+	}
+	parts := strings.SplitN(strings.TrimSpace(string(output)), "\n", 2)
+	if len(parts) != 2 || parts[0] != "v1.1.0" || strings.TrimSpace(parts[1]) == "" {
+		t.Fatalf("shared capability contract pin = %q, want v1.1.0 and module directory", output)
+	}
+	return strings.TrimSpace(parts[1])
+}
+
+func loadSharedAgentSessionVector(t *testing.T) agentdatav2.AgentSessionResponse {
+	t.Helper()
+	path := filepath.Join(sharedCapabilityModuleDir(t), "conformance", "agent-data-plane", "v2", "valid", "session_response.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read shared v2 Agent session vector: %v", err)
+	}
+	var response agentdatav2.AgentSessionResponse
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&fixture); err != nil {
-		t.Fatalf("decode v1 Agent data-plane contract fixture: %v", err)
+	if err := decoder.Decode(&response); err != nil {
+		t.Fatalf("decode shared v2 Agent session vector with generated DTO: %v", err)
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		t.Fatalf("v1 Agent data-plane contract fixture has trailing JSON: %v", err)
+		t.Fatalf("shared v2 Agent session vector has trailing JSON: %v", err)
 	}
-	return fixture
+	return response
+}
+
+func jsonFieldNames(t *testing.T, value any) []string {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal JSON field source: %v", err)
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(data, &object); err != nil {
+		t.Fatalf("decode JSON field source: %v", err)
+	}
+	fields := make([]string, 0, len(object))
+	for field := range object {
+		fields = append(fields, field)
+	}
+	sort.Strings(fields)
+	return fields
+}
+
+func agentDataScopeStrings(scopes []agentdatav2.AgentDataScope) []string {
+	values := make([]string, len(scopes))
+	for index, scope := range scopes {
+		values[index] = string(scope)
+	}
+	return values
 }
 
 func TestCreateAgentSessionRejectsInvalidRefreshOrMissingAuthority(t *testing.T) {

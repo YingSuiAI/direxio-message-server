@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	agentdatav2 "github.com/YingSuiAI/dirextalk-capability-api/gen/go/dirextalk/agent/data/v2"
 	rootinternal "github.com/YingSuiAI/dirextalk-message-server/internal"
 	"github.com/YingSuiAI/dirextalk-message-server/internal/httputil"
 	"github.com/gorilla/mux"
@@ -90,11 +91,11 @@ func TestAgentSessionCreateRequiresOwnerAccessToken(t *testing.T) {
 	if ownerResponse.Code != http.StatusOK {
 		t.Fatalf("owner ticket issuance failed: %d body=%s", ownerResponse.Code, ownerResponse.Body.String())
 	}
-	var got map[string]any
+	var got agentdatav2.AgentSessionResponse
 	if err := json.Unmarshal(ownerResponse.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if got["ticket"] == "" || got["base_path"] != "/agent/v1" || got["session_id"] == "" || got["server_time"] == "" {
+	if got.Ticket == "" || got.BasePath != agentdatav2.AgentSessionResponseBasePathAgentv1 || got.SessionId.String() == "" || got.ServerTime.IsZero() {
 		t.Fatalf("unexpected ticket response: %#v", got)
 	}
 }

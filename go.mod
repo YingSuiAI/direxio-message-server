@@ -5,7 +5,7 @@ require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/MFAshby/stdemuxerhook v1.0.0
 	github.com/Masterminds/semver/v3 v3.3.1
-	github.com/YingSuiAI/dirextalk-capability-api v1.0.3
+	github.com/YingSuiAI/dirextalk-capability-api v1.1.0
 	github.com/blevesearch/bleve/v2 v2.5.2
 	github.com/codeclysm/extract v2.2.0+incompatible
 	github.com/coder/websocket v1.8.13
@@ -100,6 +100,7 @@ require (
 	github.com/nats-io/jwt/v2 v2.8.1 // indirect
 	github.com/nats-io/nkeys v0.4.15 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
+	github.com/oapi-codegen/runtime v1.1.1 // indirect
 	github.com/oleiade/lane/v2 v2.0.0 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.0.3-0.20211202183452-c5a74bcca799 // indirect
