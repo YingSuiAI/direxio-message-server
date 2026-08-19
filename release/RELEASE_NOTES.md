@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v1.1.65
+
+1. Enable background notification sound actions for ordinary and encrypted group messages.
+2. Idempotently reconcile existing accounts that still use the exact legacy default push rules while preserving disabled or customized rules.
+3. Document the Push Gateway contract for configurable message and incoming-call sounds, vibration, and do-not-disturb preferences.
+
 ## v1.1.64
 
 1. Advertise explicit standard MCP tool annotations so clients can distinguish idempotent reads from non-idempotent message and comment writes without relying on tool names or protocol defaults.
