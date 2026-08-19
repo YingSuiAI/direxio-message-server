@@ -99,6 +99,10 @@ func (m *Monolith) AddAllPublicRoutes(
 	if releaseCatalogErr != nil {
 		logrus.WithError(releaseCatalogErr).Fatal("invalid release catalog configuration")
 	}
+	agentVersionSource, agentVersionErr := agentVersionSourceFromEnv()
+	if agentVersionErr != nil {
+		logrus.WithError(agentVersionErr).Fatal("invalid Agent version source configuration")
+	}
 	p2pConfig := p2p.Config{
 		ServerName:                             string(cfg.Global.ServerName),
 		Homeserver:                             cfg.Global.WellKnownClientName,
@@ -111,6 +115,7 @@ func (m *Monolith) AddAllPublicRoutes(
 		ReleaseController:                      releasecontrol.NewUnixController(releasecontrol.UnixControllerConfig{}),
 		CentralVersionSource:                   centralVersionSource,
 		CentralAgentVersionSource:              centralAgentVersionSource,
+		AgentVersionSource:                     agentVersionSource,
 		AllowAccountDeleteWithoutUpdater:       boolEnv("P2P_ALLOW_ACCOUNT_DELETE_WITHOUT_UPDATER"),
 		NativeAgentVoiceCallbackURL:            firstNonEmptyEnv("P2P_AGENT_VOICE_CALLBACK_URL", "DIREXTALK_AGENT_VOICE_CALLBACK_URL"),
 		NativeAgentVoiceCallbackAuthToken:      readOptionalSecretEnv("P2P_AGENT_VOICE_CALLBACK_AUTH_TOKEN_FILE", "DIREXTALK_AGENT_VOICE_CALLBACK_AUTH_TOKEN_FILE"),
@@ -188,6 +193,18 @@ func (m *Monolith) AddAllPublicRoutes(
 	if m.RelayAPI != nil {
 		relayapi.AddPublicRoutes(routers, cfg, m.KeyRing, m.RelayAPI)
 	}
+}
+
+func agentVersionSourceFromEnv() (releasecontrol.AgentVersionSource, error) {
+	endpoint := strings.TrimSpace(os.Getenv("P2P_AGENT_VERSION_URL"))
+	if endpoint == "" {
+		return nil, nil
+	}
+	source, err := releasecontrol.NewHTTPAgentVersionSource(releasecontrol.HTTPAgentVersionSourceConfig{URL: endpoint})
+	if err != nil {
+		return nil, fmt.Errorf("P2P_AGENT_VERSION_URL: %w", err)
+	}
+	return source, nil
 }
 
 func releaseCatalogSourcesFromEnv() (releasecontrol.CentralVersionSource, releasecontrol.CentralAgentVersionSource, error) {

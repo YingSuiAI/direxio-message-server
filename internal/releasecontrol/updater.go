@@ -49,14 +49,6 @@ const (
 	ReleaseComponentAgent  ReleaseComponent = "agent"
 )
 
-// AgentStatus is the receipt-bound Agent runtime fact reported by the host
-// updater. Central release discovery remains owned by message-server.
-type AgentStatus struct {
-	Available      bool     `json:"available"`
-	CurrentVersion string   `json:"current_version,omitempty"`
-	Reasons        []string `json:"reasons,omitempty"`
-}
-
 type WatchdogStatus struct {
 	Status         string `json:"status"`
 	Degraded       bool   `json:"degraded"`
@@ -77,17 +69,15 @@ type ActiveJob struct {
 	ServiceAvailable bool   `json:"service_available"`
 }
 
-// Status is the small release.v2 updater control response. It intentionally
-// excludes release discovery, plans, and operations; central version lookup is
-// performed by the message server at apply time instead.
+// Status is the small release.v2 updater control response. It contains only
+// mutation availability/readiness and host lifecycle progress; release
+// discovery and running component versions are observed elsewhere.
 type Status struct {
-	Available      bool           `json:"available"`
-	UpdaterReady   bool           `json:"updater_ready"`
-	CurrentVersion string         `json:"current_version"`
-	DesiredState   string         `json:"desired_state"`
-	ActiveJob      *ActiveJob     `json:"active_job,omitempty"`
-	Watchdog       WatchdogStatus `json:"watchdog"`
-	Agent          AgentStatus    `json:"agent"`
+	Available    bool           `json:"available"`
+	UpdaterReady bool           `json:"updater_ready"`
+	DesiredState string         `json:"desired_state"`
+	ActiveJob    *ActiveJob     `json:"active_job,omitempty"`
+	Watchdog     WatchdogStatus `json:"watchdog"`
 }
 
 type ApplyRequest struct {

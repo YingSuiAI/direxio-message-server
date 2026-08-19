@@ -6,8 +6,16 @@
 
 package main
 
-import "github.com/YingSuiAI/dirextalk-message-server/internal/servercmd"
+import (
+	"os"
+
+	"github.com/YingSuiAI/dirextalk-message-server/internal/servercmd"
+)
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "--release-health-probe" {
+		servercmd.RunReleaseHealthProbe()
+		return
+	}
 	servercmd.Run()
 }

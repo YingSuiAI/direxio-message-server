@@ -123,6 +123,17 @@ case "${1:-} ${2:-}" in
     : >"$RELEASE_TEST_DOCKER_STATE.latest-moved"
     ;;
   'pull --platform') printf '%s\n' "${4:-}" >"$RELEASE_TEST_DOCKER_STATE/last-pulled" ;;
+  exec\ *)
+    ref=$(cat "$RELEASE_TEST_DOCKER_STATE/health-ref")
+    output=$RELEASE_VERSION
+    if [[ "$ref" == 'dirextalk/message-server:latest' ]]; then
+      output=${FAKE_LATEST_HEALTH_VERSION:-$output}
+    else
+      output=${FAKE_VERSION_HEALTH_VERSION:-$output}
+    fi
+    printf '{"status":"ok","version":"%s"}\n' "$output"
+    ;;
+  stop\ *) rm -f "$RELEASE_TEST_DOCKER_STATE/health-ref" ;;
   *)
     if [[ "${1:-}" == build ]]; then
       :
@@ -131,6 +142,11 @@ case "${1:-} ${2:-}" in
       for argument in "$@"; do
         [[ "$argument" != dirextalk/message-server:* ]] || ref=$argument
       done
+      if [[ "$*" == *--release-health-probe* ]]; then
+        printf '%s\n' "$ref" >"$RELEASE_TEST_DOCKER_STATE/health-ref"
+        printf '%s\n' cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+        exit 0
+      fi
       output=$RELEASE_VERSION
       if [[ "$ref" == 'dirextalk/message-server:latest' ]]; then
         output=${FAKE_LATEST_PULL_VERSION:-$output}
@@ -238,6 +254,8 @@ grep -F 'docker buildx imagetools create --tag dirextalk/message-server:latest d
   fail 'latest was not updated from the version tag'
 grep -F 'docker pull --platform linux/amd64 dirextalk/message-server:latest' "$fixture/commands.log" >/dev/null || \
   fail 'latest was not pulled back'
+grep -F 'docker exec cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc wget -q -O - http://127.0.0.1:18008/_p2p/health' "$fixture/commands.log" >/dev/null || \
+  fail 'release did not probe the running image health version'
 
 version_pull=$(grep -nF 'docker pull --platform linux/amd64 dirextalk/message-server:v1.0.0' "$fixture/commands.log" | cut -d: -f1)
 release_create=$(grep -nF 'gh release create v1.0.0' "$fixture/commands.log" | cut -d: -f1)
@@ -266,6 +284,18 @@ if run_stage "$fixture" publish.sh FAKE_GH_CREATE_FAIL=1; then
 fi
 if grep -F 'docker buildx imagetools create --tag dirextalk/message-server:latest' "$fixture/commands.log" >/dev/null; then
   fail 'latest moved before GitHub Release creation succeeded'
+fi
+
+fixture=$(make_fixture health-version-probe)
+run_stage "$fixture" prepare.sh
+run_stage "$fixture" verify.sh
+if run_stage "$fixture" publish.sh FAKE_VERSION_HEALTH_VERSION=v9.9.9; then
+  fail 'publish accepted a pulled version image with a mismatched health version'
+fi
+[[ ! -f "$fixture/gh-state.release" ]] || \
+  fail 'release or latest moved after the health version probe failed'
+if grep -F 'docker buildx imagetools create --tag dirextalk/message-server:latest' "$fixture/commands.log" >/dev/null; then
+  fail 'latest moved after the health version probe failed'
 fi
 
 fixture=$(make_fixture latest-probe)

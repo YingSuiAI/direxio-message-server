@@ -63,11 +63,11 @@ func TestUnixControllerUsesUnifiedReleaseV2Contract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !status.Available || !status.UpdaterReady || status.CurrentVersion != "v1.0.3" || status.Agent.CurrentVersion != "v1.0.2" || status.ActiveJob == nil || status.ActiveJob.Component != "agent" {
+	if !status.Available || !status.UpdaterReady || status.ActiveJob == nil || status.ActiveJob.Component != "agent" {
 		t.Fatalf("unexpected status: %#v", status)
 	}
 	raw, _ := json.Marshal(status)
-	if strings.Contains(string(raw), "discard") || strings.Contains(string(raw), `"image"`) || strings.Contains(string(raw), `"secret"`) {
+	if strings.Contains(string(raw), "discard") || strings.Contains(string(raw), `"image"`) || strings.Contains(string(raw), `"secret"`) || strings.Contains(string(raw), `"current_version":"v1.0.3"`) || strings.Contains(string(raw), `"agent":{`) {
 		t.Fatalf("unsafe updater fields entered DTO: %s", raw)
 	}
 

@@ -7,8 +7,8 @@
 
 `release.v2.apply.component=server` 的 `target_version` 接受 canonical 稳定版
 `vX.Y.Z` 和测试版 `devX.Y.Z`；`component=agent` 只接受稳定版 `vX.Y.Z`。
-中台 server `version`、updater status/current version 以及 server active-job
-版本使用相同 server 格式，Agent receipt/active-job 版本只使用稳定格式。
+中台 server `version`、Message Server 内部 build info 以及 server active-job
+版本使用相同 server 格式，Agent health `release_version`/active-job 版本只使用稳定格式。
 服务端升级通道严格隔离：`v` 运行版本只能
 升级到更高的 `v` 版本，`dev` 运行版本只能升级到更高的 `dev` 版本，禁止
 跨通道升级。客户端版本与中台 server `preVersion` 仍只接受稳定版
@@ -76,7 +76,11 @@ Protected action 通过 HTTP route 调用时需要 `Authorization: Bearer <acces
 
 Action auth and transport metadata is generated from `p2p/serviceapi.ActionSpecs` into `docs/product-action-contract.json`; contract-critical docs and clients should treat that generated file as the checkable action list.
 
-`portal.bootstrap`、`portal.auth`、`portal.password` 响应只暴露一个初始化状态：`initialized`。它只表示用户是否已通过 `portal.password` 修改过初始密码；profile 是否填写不影响该状态。`client.version.report` 绑定发起 HTTP 请求时认证的 portal device/session；设备或会话切换后的旧请求会以 `client_session_stale` 拒绝。报告通过只更新 client build 字段的 device-CAS 写入，其他 portal 字段不会被旧快照覆盖；新 portal device 会原子清掉旧设备报告。同 device 的 `portal.password` token/generation 轮换和 portal 持久化与 report 复核/CAS 共用 session mutex，完成后释放锁再刷新 Matrix session，旧 report 不会越过轮换落库。`release.v2.status` 的 Agent 当前版本来自 host updater 的 receipt-bound runtime，中台 agents `version` 仅是比较目标：只有它严格高于当前版本时才返回 `update_available=true`；中台版本低于或等于当前版本时，`latest_version` 返回当前版本，避免把落后的中台记录标成最新版本。`minimum_server_version` 来自本次固定中台 agents 记录；兼容性只在存在更高 Agent 目标时比较实际 Message Server 版本与 agents `preVersion`。中台或 updater 任一侧失败都保留另一侧可验证事实，不使用缓存或旧 action fallback。`portal.account.delete` 要求 `params.confirm="delete_account"`，先持久化 updater desired state `deprovisioned`，失败时不执行后续破坏操作；成功后向 accepted direct contacts 发布带 `account_deleted` 的 `io.dirextalk.room.profile` 解散状态，让对端隐藏已注销联系人，随后退出直聊、解散 owner 创建的群聊和频道、退出 owner 只是成员的群聊/频道、停用本地 owner/agent Matrix 账号并写入非密钥 deprovision 标记。设置 `deprovisioned` 后任一阶段失败都会 best-effort 恢复 `running`；恢复失败返回安全结构化错误 `account_delete_watchdog_restore_failed`。该动作只清理本机数据库并关闭 message-server 进程，不销毁 AWS/云服务器实例。
+`portal.bootstrap`、`portal.auth`、`portal.password` 响应只暴露一个初始化状态：`initialized`。它只表示用户是否已通过 `portal.password` 修改过初始密码；profile 是否填写不影响该状态。`client.version.report` 绑定发起 HTTP 请求时认证的 portal device/session；设备或会话切换后的旧请求会以 `client_session_stale` 拒绝。报告通过只更新 client build 字段的 device-CAS 写入，其他 portal 字段不会被旧快照覆盖；新 portal device 会原子清掉旧设备报告。同 device 的 `portal.password` token/generation 轮换和 portal 持久化与 report 复核/CAS 共用 session mutex，完成后释放锁再刷新 Matrix session，旧 report 不会越过轮换落库。
+
+`release.v2.status.current_version` 始终来自 Message Server 内部 build info；`available` 表示该读接口已正常返回，不表示 updater 可执行变更。Agent 当前版本由显式配置的 `P2P_AGENT_VERSION_URL` 直接 GET Agent 无鉴权 health metadata（部署值为 `http://agent:8082/agent/v1/health`）并读取 `release_version`，不再依赖 updater receipt、runner health 或 Docker 访问。未配置或请求失败时失败关闭并返回 `agent_version_unavailable`，响应非法时返回 `agent_version_invalid`，不使用缓存或 fallback。中台 agents 记录只提供 `latest_version` 和 `minimum_server_version`；只有中台目标严格高于直接观察版本且当前 Message Server 满足最低版本时，才返回 `update_available=true`。updater status 只提供 `updater_available`、`updater_ready`、desired state、active job 和 watchdog；它缺失或非法不会抹掉 Agent 版本。`release.v2.apply` 仍要求 updater mutation ready，并以直接观察的 Agent 版本校验目标必须更高。
+
+`portal.account.delete` 要求 `params.confirm="delete_account"`，先持久化 updater desired state `deprovisioned`，失败时不执行后续破坏操作；成功后向 accepted direct contacts 发布带 `account_deleted` 的 `io.dirextalk.room.profile` 解散状态，让对端隐藏已注销联系人，随后退出直聊、解散 owner 创建的群聊和频道、退出 owner 只是成员的群聊/频道、停用本地 owner/agent Matrix 账号并写入非密钥 deprovision 标记。设置 `deprovisioned` 后任一阶段失败都会 best-effort 恢复 `running`；恢复失败返回安全结构化错误 `account_delete_watchdog_restore_failed`。该动作只清理本机数据库并关闭 message-server 进程，不销毁 AWS/云服务器实例。
 
 `rooms.reactivate` 与 `channels.public.join_result` 是 HTTP-only 节点间回调，不是 HTTP action 或客户端常规入口。`rooms.reactivate` 只用于在群/私有频道成员节点重建后恢复对方节点上的邀请/待加入提示，不能让对方静默加入；最终加入仍由对方客户端调用 `groups.join` 或 `channels.join`。
 

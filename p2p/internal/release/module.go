@@ -61,6 +61,7 @@ type Config struct {
 	Now                       func() time.Time
 	CentralVersionSource      releasecontrol.CentralVersionSource
 	CentralAgentVersionSource releasecontrol.CentralAgentVersionSource
+	AgentVersionSource        releasecontrol.AgentVersionSource
 }
 
 type Module struct {
@@ -68,6 +69,7 @@ type Module struct {
 	cfg                Config
 	centralSource      releasecontrol.CentralVersionSource
 	centralAgentSource releasecontrol.CentralAgentVersionSource
+	agentVersionSource releasecontrol.AgentVersionSource
 }
 
 func New(state StatePort, cfg Config) *Module {
@@ -79,7 +81,7 @@ func New(state StatePort, cfg Config) *Module {
 	if centralAgentSource == nil {
 		centralAgentSource = releasecontrol.NewCentralAgentVersionSource(releasecontrol.CentralVersionSourceConfig{})
 	}
-	return &Module{state: state, cfg: cfg, centralSource: centralSource, centralAgentSource: centralAgentSource}
+	return &Module{state: state, cfg: cfg, centralSource: centralSource, centralAgentSource: centralAgentSource, agentVersionSource: cfg.AgentVersionSource}
 }
 
 func (m *Module) Handlers() map[string]actionbase.Handler {
@@ -149,8 +151,13 @@ func (m *Module) status(ctx context.Context, params map[string]any) (any, *actio
 		version releasecontrol.CentralAgentVersion
 		err     error
 	}
+	type agentResult struct {
+		version string
+		err     error
+	}
 	updaterCh := make(chan updaterResult, 1)
 	centralCh := make(chan centralResult, 1)
+	agentCh := make(chan agentResult, 1)
 	go func() {
 		if snapshot.Controller == nil {
 			updaterCh <- updaterResult{err: context.Canceled}
@@ -163,13 +170,22 @@ func (m *Module) status(ctx context.Context, params map[string]any) (any, *actio
 		version, err := m.centralAgentSource.CurrentAgentVersion(ctx)
 		centralCh <- centralResult{version: version, err: err}
 	}()
+	go func() {
+		if m.agentVersionSource == nil {
+			agentCh <- agentResult{err: &releasecontrol.AgentVersionError{Code: releasecontrol.AgentVersionUnavailableCode}}
+			return
+		}
+		version, err := m.agentVersionSource.CurrentAgentVersion(ctx)
+		agentCh <- agentResult{version: version, err: err}
+	}()
 	updater := <-updaterCh
 	central := <-centralCh
+	agent := <-agentCh
 	centralReason := ""
 	if central.err != nil || validateCentralAgentVersion(central.version) != nil {
 		centralReason = centralVersionReason(central.err)
 	}
-	return releaseStatusMap(updater.status, updater.err, central.version, centralReason, buildInfo.Version, snapshot.Client.Version), nil
+	return releaseStatusMap(updater.status, updater.err, agent.version, agent.err, central.version, centralReason, buildInfo.Version, snapshot.Client.Version), nil
 }
 
 func (m *Module) apply(ctx context.Context, params map[string]any) (any, *actionbase.Error) {
@@ -184,7 +200,7 @@ func (m *Module) apply(ctx context.Context, params map[string]any) (any, *action
 	}
 	buildInfo := internal.CurrentBuildInfo()
 	updaterStatus, err := controller.Status(ctx)
-	if err != nil || !validUpdaterStatus(updaterStatus, buildInfo.Version) || !updaterStatus.UpdaterReady {
+	if err != nil || !validUpdaterStatus(updaterStatus) || !updaterStatus.Available || !updaterStatus.UpdaterReady {
 		return nil, unavailableError()
 	}
 	switch request.Component {
@@ -193,7 +209,7 @@ func (m *Module) apply(ctx context.Context, params map[string]any) (any, *action
 			return nil, apiErr
 		}
 	case releasecontrol.ReleaseComponentAgent:
-		if apiErr := m.gateAgentUpdate(ctx, updaterStatus, buildInfo.Version, &request); apiErr != nil {
+		if apiErr := m.gateAgentUpdate(ctx, buildInfo.Version, &request); apiErr != nil {
 			return nil, apiErr
 		}
 	default:
@@ -233,7 +249,7 @@ func (m *Module) gateServerUpdate(ctx context.Context, snapshot Snapshot, runnin
 	return nil
 }
 
-func (m *Module) gateAgentUpdate(ctx context.Context, status releasecontrol.Status, runningVersion string, request *releasecontrol.ApplyRequest) *actionbase.Error {
+func (m *Module) gateAgentUpdate(ctx context.Context, runningVersion string, request *releasecontrol.ApplyRequest) *actionbase.Error {
 	central, err := m.centralAgentSource.CurrentAgentVersion(ctx)
 	if err != nil || validateCentralAgentVersion(central) != nil {
 		return centralVersionError(err)
@@ -245,10 +261,14 @@ func (m *Module) gateAgentUpdate(ctx context.Context, status releasecontrol.Stat
 	if err != nil || serverComparison < 0 {
 		return actionbase.CodedError(http.StatusConflict, serverVersionIncompatible, "running server version is not compatible with the Agent update")
 	}
-	if !status.Agent.Available {
+	if m.agentVersionSource == nil {
 		return actionbase.CodedError(http.StatusConflict, agentVersionUnavailable, "current Agent version is unavailable")
 	}
-	current, err := releasecontrol.CanonicalStableVersion("agent.current_version", status.Agent.CurrentVersion)
+	observed, err := m.agentVersionSource.CurrentAgentVersion(ctx)
+	if err != nil {
+		return actionbase.CodedError(http.StatusConflict, agentVersionUnavailable, "current Agent version is unavailable")
+	}
+	current, err := releasecontrol.CanonicalStableVersion("agent.current_version", observed)
 	if err != nil {
 		return actionbase.CodedError(http.StatusConflict, agentVersionUnavailable, "current Agent version is unavailable")
 	}
@@ -388,8 +408,8 @@ func centralVersionReason(err error) string {
 	return releasecontrol.CentralVersionInvalidCode
 }
 
-func releaseStatusMap(status releasecontrol.Status, statusErr error, central releasecontrol.CentralAgentVersion, centralReason, currentVersion, clientVersion string) map[string]any {
-	valid := statusErr == nil && validUpdaterStatus(status, currentVersion)
+func releaseStatusMap(status releasecontrol.Status, statusErr error, agentVersion string, agentErr error, central releasecontrol.CentralAgentVersion, centralReason, currentVersion, clientVersion string) map[string]any {
+	valid := statusErr == nil && validUpdaterStatus(status)
 	updaterAvailable := valid && status.Available
 	updaterReady := updaterAvailable && status.UpdaterReady
 	desiredState := "unknown"
@@ -401,7 +421,7 @@ func releaseStatusMap(status releasecontrol.Status, statusErr error, central rel
 		watchdog = watchdogMap(status.Watchdog)
 	}
 	return map[string]any{
-		"available":         updaterReady,
+		"available":         true,
 		"current_version":   currentVersion,
 		"client_version":    clientVersion,
 		"updater_available": updaterAvailable,
@@ -409,23 +429,19 @@ func releaseStatusMap(status releasecontrol.Status, statusErr error, central rel
 		"desired_state":     desiredState,
 		"active_job":        activeJob,
 		"watchdog":          watchdog,
-		"agent":             agentStatusMap(status.Agent, central, centralReason, currentVersion, valid),
+		"agent":             agentStatusMap(agentVersion, agentErr, central, centralReason, currentVersion),
 	}
 }
 
-func validUpdaterStatus(status releasecontrol.Status, currentVersion string) bool {
-	if !status.Available {
-		return false
-	}
-	updaterVersion, err := releasecontrol.CanonicalServerVersion("current_version", status.CurrentVersion)
-	if err != nil || updaterVersion != currentVersion {
+func validUpdaterStatus(status releasecontrol.Status) bool {
+	if status.UpdaterReady && !status.Available {
 		return false
 	}
 	desiredState := normalizedDesiredState(status.DesiredState)
 	jobValid := validActiveJob(status.ActiveJob)
 	switch desiredState {
 	case "running":
-		return status.ActiveJob == nil && status.UpdaterReady
+		return status.ActiveJob == nil
 	case "upgrading":
 		return status.ActiveJob != nil && jobValid && !status.UpdaterReady
 	case "maintenance", "deprovisioned":
@@ -479,7 +495,7 @@ func validActiveJob(job *releasecontrol.ActiveJob) bool {
 	}
 }
 
-func agentStatusMap(status releasecontrol.AgentStatus, central releasecontrol.CentralAgentVersion, centralReason, currentServerVersion string, updaterValid bool) map[string]any {
+func agentStatusMap(observedVersion string, observationErr error, central releasecontrol.CentralAgentVersion, centralReason, currentServerVersion string) map[string]any {
 	reasons := []string{}
 	result := map[string]any{
 		"available": false, "current_version": "", "latest_version": "",
@@ -490,18 +506,13 @@ func agentStatusMap(status releasecontrol.AgentStatus, central releasecontrol.Ce
 		result["latest_version"] = central.Version
 		result["minimum_server_version"] = central.PreVersion
 	}
-	if !updaterValid {
-		result["reasons"] = []string{UpdaterUnavailableCode}
+	if observationErr != nil {
+		result["reasons"] = []string{releasecontrol.AgentVersionReason(observationErr)}
 		return result
 	}
-	reasons = normalizedAgentReleaseReasons(status.Reasons)
-	if !status.Available {
-		result["reasons"] = appendReason(reasons, "agent_release_unavailable")
-		return result
-	}
-	current, err := releasecontrol.CanonicalStableVersion("agent.current_version", status.CurrentVersion)
+	current, err := releasecontrol.CanonicalStableVersion("agent.current_version", observedVersion)
 	if err != nil {
-		result["reasons"] = appendReason(reasons, "agent_release_invalid")
+		result["reasons"] = []string{releasecontrol.AgentVersionInvalidCode}
 		return result
 	}
 	result["available"] = true
@@ -520,11 +531,6 @@ func agentStatusMap(status releasecontrol.AgentStatus, central releasecontrol.Ce
 	if err != nil {
 		return result
 	}
-	if agentComparison <= 0 {
-		// The central record is a comparison target, not the runtime fact. Do
-		// not label an older/equal central target as the latest Agent version.
-		latest = current
-	}
 	compatibility := "compatible"
 	if agentComparison <= 0 {
 		reasons = appendReason(reasons, "agent_up_to_date")
@@ -540,17 +546,6 @@ func agentStatusMap(status releasecontrol.AgentStatus, central releasecontrol.Ce
 		"update_available":       agentComparison > 0 && serverComparison >= 0,
 		"compatibility":          compatibility, "reasons": reasons,
 	}
-}
-
-func normalizedAgentReleaseReasons(values []string) []string {
-	result := make([]string, 0, len(values))
-	for _, value := range values {
-		switch value {
-		case "agent_release_unavailable", "agent_receipt_unavailable", "agent_receipt_invalid":
-			result = appendReason(result, value)
-		}
-	}
-	return result
 }
 
 func appendReason(values []string, value string) []string {

@@ -347,6 +347,18 @@ func TestHealthReportsAdditiveBuildInfo(t *testing.T) {
 	}
 }
 
+func TestReleaseHealthProbeHandlerUsesProductionHealthPath(t *testing.T) {
+	rec := httptest.NewRecorder()
+	ReleaseHealthProbeHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/_p2p/health", nil))
+	var got map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusOK || got["version"] != rootinternal.VersionString() {
+		t.Fatalf("release health probe did not report the running build: status=%d body=%#v", rec.Code, got)
+	}
+}
+
 func TestHealthDoesNotConflateNativeAgentReadiness(t *testing.T) {
 	service := NewService(Config{ServerName: "example.com"})
 	rec := httptest.NewRecorder()

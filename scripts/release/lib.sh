@@ -39,6 +39,34 @@ release_require_tools() {
   done
 }
 
+release_probe_image_health() {
+  [[ $# -eq 1 ]] || release_die 'internal error: image health probe requires an image reference'
+  local ref=$1 container response attempt
+  container="$(docker run --rm -d \
+    --entrypoint /usr/bin/dirextalk-message-server \
+    "$ref" --release-health-probe)"
+  [[ "$container" =~ ^[0-9a-f]{12,64}$ ]] || release_die 'image health probe did not return a container identity'
+  response=
+  for attempt in 1 2 3 4 5; do
+    if response="$(docker exec "$container" wget -q -O - http://127.0.0.1:18008/_p2p/health)"; then
+      break
+    fi
+    sleep 1
+  done
+  docker stop "$container" >/dev/null 2>&1 || true
+  [[ -n "$response" ]] || release_die 'image health endpoint is unavailable'
+  python3 - "$RELEASE_VERSION" "$response" <<'PY' || release_die 'image health endpoint reports a different version'
+import json, sys
+expected, raw = sys.argv[1:]
+try:
+    value = json.loads(raw)
+except Exception:
+    raise SystemExit(1)
+if not isinstance(value, dict) or value.get("version") != expected:
+    raise SystemExit(1)
+PY
+}
+
 release_validate_config() {
   [[ $# -eq 2 ]] || release_die 'internal error: release config validation requires source schema versions'
   [[ -f "$RELEASE_CONFIG" ]] || release_die "missing release config release/$RELEASE_VERSION.json"

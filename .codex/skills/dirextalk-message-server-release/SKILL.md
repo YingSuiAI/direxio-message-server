@@ -53,6 +53,6 @@ before retrying the release.
 `latest` must move only after the version image and formal GitHub Release are
 published successfully.
 
-After publication, pull `latest` and verify its version/revision labels and
-embedded binary version. Record non-secret results and any retryable partial
-state.
+After publication, pull `latest` and verify its version/revision labels,
+embedded binary version, and running `/_p2p/health.version`. Record non-secret
+results and any retryable partial state.

@@ -39,6 +39,12 @@ type recordingCentralAgentVersionSource struct {
 	calls   int
 }
 
+type recordingAgentVersionSource struct {
+	version string
+	err     error
+	calls   int
+}
+
 type blockingClientBuildStore struct {
 	Store
 	mu             sync.Mutex
@@ -107,24 +113,32 @@ func (s *recordingCentralAgentVersionSource) CurrentAgentVersion(context.Context
 	return s.version, s.err
 }
 
+func (s *recordingAgentVersionSource) CurrentAgentVersion(context.Context) (string, error) {
+	s.calls++
+	return s.version, s.err
+}
+
 func validCentralAgentSource() *recordingCentralAgentVersionSource {
 	return &recordingCentralAgentVersionSource{version: releasecontrol.CentralAgentVersion{
 		AppID: "1", ChannelID: "agents", Version: "v1.1.2", PreVersion: "v1.1.0",
 	}}
 }
 
+func validAgentVersionSource() *recordingAgentVersionSource {
+	return &recordingAgentVersionSource{version: "v1.0.0"}
+}
+
 func readyReleaseController() *recordingReleaseController {
 	return &recordingReleaseController{
 		status: releasecontrol.Status{
-			Available: true, UpdaterReady: true, CurrentVersion: serverinfo.VersionString(), DesiredState: "running",
-			Agent:    releasecontrol.AgentStatus{Available: true, CurrentVersion: "v1.0.0"},
+			Available: true, UpdaterReady: true, DesiredState: "running",
 			Watchdog: releasecontrol.WatchdogStatus{Status: "healthy"},
 		},
 		ticket: releasecontrol.JobTicket{JobID: "job_direct", JobToken: "job-secret", StatusURL: "/_dirextalk/updater/v1/jobs/job_direct", Status: "queued"},
 	}
 }
 
-func TestReleaseV2StatusIsOwnerHTTPOnlyAndCombinesReceiptWithCentralAgent(t *testing.T) {
+func TestReleaseV2StatusIsOwnerHTTPOnlyAndCombinesObservedWithCentralAgent(t *testing.T) {
 	controller := readyReleaseController()
 	controller.status.UpdaterReady = false
 	controller.status.DesiredState = "upgrading"
@@ -132,12 +146,12 @@ func TestReleaseV2StatusIsOwnerHTTPOnlyAndCombinesReceiptWithCentralAgent(t *tes
 		JobID: "job_active", Component: "agent", Status: "pulling", CurrentVersion: "v1.0.0", TargetVersion: "v1.1.2", ServiceAvailable: true,
 	}
 	central := validCentralAgentSource()
-	service := NewService(Config{ServerName: "example.com", ReleaseController: controller, CentralAgentVersionSource: central})
+	service := NewService(Config{ServerName: "example.com", ReleaseController: controller, CentralAgentVersionSource: central, AgentVersionSource: validAgentVersionSource()})
 	router := newP2PTestRouter(service)
 	releaseRoute(t, router, service.AccessToken(), "client.version.report", map[string]any{"client_version": "v1.0.2"})
 
 	status := releaseRoute(t, router, service.AccessToken(), "release.v2.status", nil)
-	if status["current_version"] != serverinfo.VersionString() || status["client_version"] != "v1.0.2" || status["available"] != false || status["updater_available"] != true || status["updater_ready"] != false || status["desired_state"] != "upgrading" {
+	if status["current_version"] != serverinfo.VersionString() || status["client_version"] != "v1.0.2" || status["available"] != true || status["updater_available"] != true || status["updater_ready"] != false || status["desired_state"] != "upgrading" {
 		t.Fatalf("unexpected status: %#v", status)
 	}
 	agent := status["agent"].(map[string]any)
@@ -163,10 +177,10 @@ func TestReleaseV2StatusIsOwnerHTTPOnlyAndCombinesReceiptWithCentralAgent(t *tes
 }
 
 func TestReleaseV2StatusKeepsUpdaterAndCentralFailuresIndependent(t *testing.T) {
-	t.Run("central unavailable keeps receipt-bound current Agent", func(t *testing.T) {
+	t.Run("central unavailable keeps directly observed current Agent", func(t *testing.T) {
 		controller := readyReleaseController()
 		central := &recordingCentralAgentVersionSource{err: &releasecontrol.CentralVersionError{Code: releasecontrol.CentralVersionUnavailableCode}}
-		service := NewService(Config{ServerName: "example.com", ReleaseController: controller, CentralAgentVersionSource: central})
+		service := NewService(Config{ServerName: "example.com", ReleaseController: controller, CentralAgentVersionSource: central, AgentVersionSource: validAgentVersionSource()})
 		status := mustHandle[map[string]any](t, service, "release.v2.status", nil)
 		agent := status["agent"].(map[string]any)
 		if agent["available"] != true || agent["current_version"] != "v1.0.0" || agent["latest_version"] != "" || agent["update_available"] != false {
@@ -180,11 +194,25 @@ func TestReleaseV2StatusKeepsUpdaterAndCentralFailuresIndependent(t *testing.T) 
 	t.Run("updater unavailable keeps validated central target", func(t *testing.T) {
 		controller := readyReleaseController()
 		controller.statusErr = errors.New("socket unavailable: secret")
-		service := NewService(Config{ServerName: "example.com", ReleaseController: controller, CentralAgentVersionSource: validCentralAgentSource()})
+		service := NewService(Config{ServerName: "example.com", ReleaseController: controller, CentralAgentVersionSource: validCentralAgentSource(), AgentVersionSource: validAgentVersionSource()})
 		status := mustHandle[map[string]any](t, service, "release.v2.status", nil)
 		agent := status["agent"].(map[string]any)
-		if agent["available"] != false || agent["latest_version"] != "v1.1.2" || agent["minimum_server_version"] != "v1.1.0" {
-			t.Fatalf("updater failure erased central fact: %#v", agent)
+		if agent["available"] != true || agent["current_version"] != "v1.0.0" || agent["latest_version"] != "v1.1.2" || agent["minimum_server_version"] != "v1.1.0" {
+			t.Fatalf("updater failure changed direct Agent observation: %#v", agent)
+		}
+	})
+	t.Run("Agent observation unavailable keeps updater and central facts", func(t *testing.T) {
+		controller := readyReleaseController()
+		agentVersion := &recordingAgentVersionSource{err: &releasecontrol.AgentVersionError{Code: releasecontrol.AgentVersionUnavailableCode}}
+		service := NewService(Config{ServerName: "example.com", ReleaseController: controller, CentralAgentVersionSource: validCentralAgentSource(), AgentVersionSource: agentVersion})
+		status := mustHandle[map[string]any](t, service, "release.v2.status", nil)
+		agent := status["agent"].(map[string]any)
+		if status["available"] != true || status["updater_available"] != true || status["updater_ready"] != true || agent["available"] != false || agent["current_version"] != "" || agent["latest_version"] != "v1.1.2" {
+			t.Fatalf("Agent observation failure changed independent facts: %#v", status)
+		}
+		reasons := agent["reasons"].([]string)
+		if len(reasons) != 1 || reasons[0] != releasecontrol.AgentVersionUnavailableCode {
+			t.Fatalf("unexpected Agent observation reason: %#v", reasons)
 		}
 	})
 }
@@ -194,14 +222,15 @@ func TestReleaseV2StatusFailureIsParseableAndRedacted(t *testing.T) {
 	service := NewService(Config{
 		ServerName: "example.com", ReleaseController: controller,
 		CentralAgentVersionSource: validCentralAgentSource(),
+		AgentVersionSource:        validAgentVersionSource(),
 	})
 	status := mustHandle[map[string]any](t, service, "release.v2.status", nil)
-	if status["available"] != false || status["updater_available"] != false || status["updater_ready"] != false || status["desired_state"] != "unknown" || status["active_job"] != nil {
+	if status["available"] != true || status["updater_available"] != false || status["updater_ready"] != false || status["desired_state"] != "unknown" || status["active_job"] != nil {
 		t.Fatalf("unexpected unavailable status: %#v", status)
 	}
 	agent := status["agent"].(map[string]any)
-	if agent["available"] != false || agent["current_version"] != "" || agent["latest_version"] != "v1.1.2" || agent["minimum_server_version"] != "v1.1.0" || agent["update_available"] != false {
-		t.Fatalf("updater failure erased or invented Agent facts: %#v", agent)
+	if agent["available"] != true || agent["current_version"] != "v1.0.0" || agent["latest_version"] != "v1.1.2" || agent["minimum_server_version"] != "v1.1.0" || agent["update_available"] != true {
+		t.Fatalf("updater failure changed Agent facts: %#v", agent)
 	}
 	raw, err := json.Marshal(status)
 	if err != nil {
@@ -214,10 +243,11 @@ func TestReleaseV2StatusFailureIsParseableAndRedacted(t *testing.T) {
 
 func TestReleaseV2StatusRejectsNoncanonicalAgentCurrentVersion(t *testing.T) {
 	controller := readyReleaseController()
-	controller.status.Agent.CurrentVersion = "1.0.0"
+	agentVersion := &recordingAgentVersionSource{version: "1.0.0"}
 	service := NewService(Config{
 		ServerName: "example.com", ReleaseController: controller,
 		CentralAgentVersionSource: validCentralAgentSource(),
+		AgentVersionSource:        agentVersion,
 	})
 	status := mustHandle[map[string]any](t, service, "release.v2.status", nil)
 	agent := status["agent"].(map[string]any)
@@ -225,42 +255,43 @@ func TestReleaseV2StatusRejectsNoncanonicalAgentCurrentVersion(t *testing.T) {
 		t.Fatalf("noncanonical Agent version was exposed: %#v", agent)
 	}
 	reasons := agent["reasons"].([]string)
-	if len(reasons) != 1 || reasons[0] != "agent_release_invalid" {
+	if len(reasons) != 1 || reasons[0] != releasecontrol.AgentVersionInvalidCode {
 		t.Fatalf("unexpected Agent reasons: %#v", reasons)
 	}
 }
 
 func TestReleaseV2StatusKeepsLocalVersionsAuthoritative(t *testing.T) {
 	controller := readyReleaseController()
-	controller.status.CurrentVersion = "v999.0.0"
 	service := NewService(Config{
 		ServerName: "example.com", ReleaseController: controller,
 		CentralAgentVersionSource: validCentralAgentSource(),
+		AgentVersionSource:        validAgentVersionSource(),
 	})
 	mustReportClientVersion(t, service, map[string]any{"client_version": "v2.3.4"})
 	status := mustHandle[map[string]any](t, service, "release.v2.status", nil)
-	if status["current_version"] != serverinfo.VersionString() || status["client_version"] != "v2.3.4" || status["available"] != false || status["updater_available"] != false || status["updater_ready"] != false {
-		t.Fatalf("updater receipt replaced local versions or remained trusted: %#v", status)
+	if status["current_version"] != serverinfo.VersionString() || status["client_version"] != "v2.3.4" || status["available"] != true || status["updater_available"] != true || status["updater_ready"] != true {
+		t.Fatalf("local versions were not authoritative: %#v", status)
 	}
 	agent := status["agent"].(map[string]any)
-	if agent["available"] != false || agent["latest_version"] != "v1.1.2" || agent["minimum_server_version"] != "v1.1.0" {
-		t.Fatalf("invalid updater receipt erased central Agent facts: %#v", agent)
+	if agent["available"] != true || agent["current_version"] != "v1.0.0" || agent["latest_version"] != "v1.1.2" || agent["minimum_server_version"] != "v1.1.0" {
+		t.Fatalf("direct Agent observation was not authoritative: %#v", agent)
 	}
 }
 
-func TestReleaseV2StatusKeepsReceiptCurrentWhenCentralTargetIsOlder(t *testing.T) {
+func TestReleaseV2StatusKeepsObservedCurrentWhenCentralTargetIsOlder(t *testing.T) {
 	controller := readyReleaseController()
-	controller.status.Agent.CurrentVersion = "v1.0.72"
+	agentVersion := &recordingAgentVersionSource{version: "v1.0.72"}
 	central := &recordingCentralAgentVersionSource{version: releasecontrol.CentralAgentVersion{
 		AppID: "1", ChannelID: "agents", Version: "v1.0.7", PreVersion: "v999.0.0",
 	}}
 	service := NewService(Config{
 		ServerName: "example.com", ReleaseController: controller,
 		CentralAgentVersionSource: central,
+		AgentVersionSource:        agentVersion,
 	})
 	status := mustHandle[map[string]any](t, service, "release.v2.status", nil)
 	agent := status["agent"].(map[string]any)
-	if agent["available"] != true || agent["current_version"] != "v1.0.72" || agent["latest_version"] != "v1.0.72" || agent["update_available"] != false || agent["compatibility"] != "compatible" {
+	if agent["available"] != true || agent["current_version"] != "v1.0.72" || agent["latest_version"] != "v1.0.7" || agent["update_available"] != false || agent["compatibility"] != "compatible" {
 		t.Fatalf("older central target was presented as the current/latest Agent: %#v", agent)
 	}
 	reasons := agent["reasons"].([]string)
@@ -303,6 +334,7 @@ func TestReleaseV2ApplyIsOwnerHTTPOnly(t *testing.T) {
 	service := NewService(Config{
 		ServerName: "example.com", ReleaseController: controller,
 		CentralAgentVersionSource: validCentralAgentSource(),
+		AgentVersionSource:        validAgentVersionSource(),
 	})
 	router := newP2PTestRouter(service)
 	params := map[string]any{
@@ -318,10 +350,11 @@ func TestReleaseV2ApplyIsOwnerHTTPOnly(t *testing.T) {
 	}
 }
 
-func TestReleaseV2ApplyAgentUsesServerCompatibilityAndReceiptCurrent(t *testing.T) {
+func TestReleaseV2ApplyAgentUsesServerCompatibilityAndObservedCurrent(t *testing.T) {
 	controller := readyReleaseController()
 	central := validCentralAgentSource()
-	service := NewService(Config{ServerName: "example.com", ReleaseController: controller, CentralAgentVersionSource: central})
+	agentVersion := validAgentVersionSource()
+	service := NewService(Config{ServerName: "example.com", ReleaseController: controller, CentralAgentVersionSource: central, AgentVersionSource: agentVersion})
 	router := newP2PTestRouter(service)
 	response := releaseRoute(t, router, service.AccessToken(), "release.v2.apply", map[string]any{
 		"component": "agent", "target_version": "v1.1.2", "idempotency_key": "41a20813-c5d9-4f6d-b4f0-cdf8cfc75c6e", "confirm": releasecontrol.ApplyConfirmation,
@@ -335,7 +368,7 @@ func TestReleaseV2ApplyAgentUsesServerCompatibilityAndReceiptCurrent(t *testing.
 	}
 
 	controller.applyRequest = releasecontrol.ApplyRequest{}
-	controller.status.Agent.CurrentVersion = "v1.1.2"
+	agentVersion.version = "v1.1.2"
 	responseRaw := releaseRouteRaw(t, router, service.AccessToken(), "release.v2.apply", map[string]any{
 		"component": "agent", "target_version": "v1.1.2", "idempotency_key": "51a20813-c5d9-4f6d-b4f0-cdf8cfc75c6e", "confirm": releasecontrol.ApplyConfirmation,
 	})

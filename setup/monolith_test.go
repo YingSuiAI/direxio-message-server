@@ -93,3 +93,23 @@ func TestReleaseCatalogSourcesFromEnvBuildBothChannelsFromOneOrigin(t *testing.T
 		t.Fatalf("valid release catalog origin rejected: server=%T agent=%T err=%v", server, agent, err)
 	}
 }
+
+func TestAgentVersionSourceFromEnvIsExplicitAndValidated(t *testing.T) {
+	t.Setenv("P2P_AGENT_VERSION_URL", "")
+	source, err := agentVersionSourceFromEnv()
+	if err != nil || source != nil {
+		t.Fatalf("empty Agent version URL must stay disabled: source=%T err=%v", source, err)
+	}
+
+	t.Setenv("P2P_AGENT_VERSION_URL", "http://agent:8082/agent/v1/health")
+	source, err = agentVersionSourceFromEnv()
+	if err != nil || source == nil {
+		t.Fatalf("valid Agent version URL rejected: source=%T err=%v", source, err)
+	}
+
+	t.Setenv("P2P_AGENT_VERSION_URL", "http://agent:8082/wrong")
+	source, err = agentVersionSourceFromEnv()
+	if err == nil || source != nil {
+		t.Fatalf("invalid Agent version URL did not fail closed: source=%T err=%v", source, err)
+	}
+}

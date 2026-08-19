@@ -27,6 +27,7 @@ identity="$(docker image inspect "$RELEASE_IMAGE" --format '{{index .Config.Labe
 [[ "$identity" == "$RELEASE_VERSION|$RELEASE_COMMIT|$RELEASE_BUILD_TIME" ]] || release_die 'local image metadata does not match the verified release'
 probe="$(docker run --rm --entrypoint /usr/bin/dirextalk-message-server "$RELEASE_IMAGE" --version)"
 [[ "$probe" == "$RELEASE_VERSION" ]] || release_die "image version probe returned $probe"
+release_probe_image_health "$RELEASE_IMAGE"
 docker compose -f docker-compose.p2p.yml config >/dev/null
 release_write_verified
 printf 'release verify passed for %s\n' "$RELEASE_VERSION"

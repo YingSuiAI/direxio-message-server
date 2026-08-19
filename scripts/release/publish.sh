@@ -21,6 +21,7 @@ verify_image() {
   [[ "$identity" == "$RELEASE_VERSION|$RELEASE_COMMIT" ]] || release_die 'published image identity is incorrect'
   probe=$(docker run --rm --entrypoint /usr/bin/dirextalk-message-server "$ref" --version)
   [[ "$probe" == "$RELEASE_VERSION" ]] || release_die 'published binary reports a different version'
+  release_probe_image_health "$ref"
 }
 
 docker buildx build \

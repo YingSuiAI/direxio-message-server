@@ -12,6 +12,14 @@ import (
 
 const PathPrefix = "/_p2p/"
 
+// ReleaseHealthProbeHandler exposes the same build metadata handler at its
+// production path without initializing ProductCore dependencies.
+func ReleaseHealthProbeHandler() http.Handler {
+	router := mux.NewRouter()
+	router.Handle("/_p2p/health", httpapi.HealthHandler(nil)).Methods(http.MethodGet)
+	return router
+}
+
 // envelope remains the shared product HTTP request shape used by outbound
 // inter-node adapters and package integration tests.
 type envelope struct {
