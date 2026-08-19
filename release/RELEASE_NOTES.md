@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v1.1.68
+
+1. Constrain the room-search MCP type schema to the exact `contact`, `group`, `channel`, and `all` values accepted by execution, with omitted type continuing to default to `all`.
+
 ## v1.1.67
 
 1. Report the running Message Server version from immutable build information and observe the running Agent version directly from its internal health endpoint, independently of updater mutation readiness.
