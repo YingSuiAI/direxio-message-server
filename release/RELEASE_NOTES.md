@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v1.1.66
+
+1. Persist and return channel post titles independently from post bodies across Matrix events, projections, and PostgreSQL storage.
+2. Accept posts containing only a title, body, or image, while rejecting posts with all three fields empty.
+
 ## v1.1.65
 
 1. Enable background notification sound actions for ordinary and encrypted group messages.
