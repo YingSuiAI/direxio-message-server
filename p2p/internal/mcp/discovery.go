@@ -14,9 +14,9 @@ func (m *Module) roomsSearch(ctx context.Context, params map[string]any) (any, *
 	query := strings.ToLower(dirextalkmcp.TrimString(params["query"]))
 	kind := strings.ToLower(dirextalkmcp.TrimString(params["type"]))
 	if kind == "" {
-		kind = "all"
+		kind = dirextalkmcp.RoomsSearchTypeAll
 	}
-	if kind != "all" && kind != "contact" && kind != "group" && kind != "channel" {
+	if !dirextalkmcp.ValidRoomsSearchType(kind) {
 		return nil, dirextalkmcp.BadRequest("type must be contact, group, channel, or all")
 	}
 	records, err := m.conversations.ListRecords(ctx)
@@ -40,7 +40,7 @@ func (m *Module) roomsSearch(ctx context.Context, params map[string]any) (any, *
 		if !m.Service().RoomAllowed(summary.RoomID) {
 			continue
 		}
-		if kind != "all" && summary.Type != kind {
+		if kind != dirextalkmcp.RoomsSearchTypeAll && summary.Type != kind {
 			continue
 		}
 		if query != "" && !roomMatches(summary, query) {

@@ -83,6 +83,42 @@ func TestToolsAreGeneratedFromSameRegistryAsActions(t *testing.T) {
 	}
 }
 
+func TestRoomsSearchSchemaUsesValidatorTypeSet(t *testing.T) {
+	var roomsSearch Tool
+	found := false
+	for _, tool := range Tools() {
+		if tool.Action == ActionRoomsSearch {
+			roomsSearch = tool
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("rooms search tool is missing")
+	}
+
+	properties, ok := roomsSearch.InputSchema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("rooms search properties = %#v", roomsSearch.InputSchema["properties"])
+	}
+	typeSchema, ok := properties["type"].(map[string]any)
+	if !ok {
+		t.Fatalf("rooms search type schema = %#v", properties["type"])
+	}
+	values := RoomsSearchTypeValues()
+	if typeSchema["type"] != "string" || !reflect.DeepEqual(typeSchema["enum"], values) {
+		t.Fatalf("rooms search type schema = %#v, want enum %#v", typeSchema, values)
+	}
+	for _, value := range values {
+		if !ValidRoomsSearchType(value) {
+			t.Fatalf("schema value %q is rejected by validator", value)
+		}
+	}
+	if ValidRoomsSearchType("room") || ValidRoomsSearchType("") {
+		t.Fatal("validator accepted a value outside the published enum")
+	}
+}
+
 func TestToolEffectsProduceSafeStandardAnnotations(t *testing.T) {
 	writeActions := map[string]bool{
 		ActionMessagesSend:          true,

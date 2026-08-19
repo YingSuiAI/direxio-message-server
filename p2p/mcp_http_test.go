@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -82,6 +83,19 @@ func TestMCPHTTPInitializeAndToolsListRequireAgentToken(t *testing.T) {
 	if !mcpToolsContain(tools, "dirextalk_messages_list") {
 		t.Fatalf("expected dirextalk_messages_list in tools/list, got %#v", tools)
 	}
+	for _, rawTool := range tools {
+		tool, ok := rawTool.(map[string]any)
+		if !ok || tool["name"] != "dirextalk_rooms_search" {
+			continue
+		}
+		typeSchema := tool["inputSchema"].(map[string]any)["properties"].(map[string]any)["type"].(map[string]any)
+		want := []any{"contact", "group", "channel", "all"}
+		if typeSchema["type"] != "string" || !reflect.DeepEqual(typeSchema["enum"], want) {
+			t.Fatalf("rooms search type schema = %#v, want enum %#v", typeSchema, want)
+		}
+		return
+	}
+	t.Fatal("expected dirextalk_rooms_search in tools/list")
 }
 
 func TestMCPHTTPToolsCallInvokesUnifiedService(t *testing.T) {

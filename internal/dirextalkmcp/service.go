@@ -16,7 +16,32 @@ const (
 	ActionChannelPostsList      = "mcp.channel_posts.list"
 	ActionChannelCommentsList   = "mcp.channel_comments.list"
 	ActionChannelCommentsCreate = "mcp.channel_comments.create"
+
+	RoomsSearchTypeContact = "contact"
+	RoomsSearchTypeGroup   = "group"
+	RoomsSearchTypeChannel = "channel"
+	RoomsSearchTypeAll     = "all"
 )
+
+var roomsSearchTypeValues = []string{
+	RoomsSearchTypeContact,
+	RoomsSearchTypeGroup,
+	RoomsSearchTypeChannel,
+	RoomsSearchTypeAll,
+}
+
+func RoomsSearchTypeValues() []string {
+	return append([]string(nil), roomsSearchTypeValues...)
+}
+
+func ValidRoomsSearchType(value string) bool {
+	for _, candidate := range roomsSearchTypeValues {
+		if value == candidate {
+			return true
+		}
+	}
+	return false
+}
 
 type Invoker interface {
 	InvokeCapability(ctx context.Context, action string, params map[string]any) (any, *Error)
@@ -179,8 +204,8 @@ var capabilityTools = []Tool{
 	{
 		Action:      ActionRoomsSearch,
 		Name:        "dirextalk_rooms_search",
-		Description: "Search Dirextalk rooms, groups, channels, or contacts.",
-		InputSchema: objectSchema(map[string]any{"query": stringSchema(), "type": stringSchema(), "limit": numberSchema()}),
+		Description: "Search Dirextalk rooms, groups, channels, or contacts. The optional type is contact, group, channel, or all and defaults to all.",
+		InputSchema: objectSchema(map[string]any{"query": stringSchema(), "type": enumStringSchema(RoomsSearchTypeValues()), "limit": numberSchema()}),
 		Effect:      ToolEffectRead,
 	},
 	{
@@ -236,5 +261,8 @@ func objectSchema(properties map[string]any, required ...string) map[string]any 
 }
 
 func stringSchema() map[string]any { return map[string]any{"type": "string"} }
+func enumStringSchema(values []string) map[string]any {
+	return map[string]any{"type": "string", "enum": append([]string(nil), values...)}
+}
 func numberSchema() map[string]any { return map[string]any{"type": "number"} }
 func boolSchema() map[string]any   { return map[string]any{"type": "boolean"} }
