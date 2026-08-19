@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v1.1.67
+
+1. Report the running Message Server version from immutable build information and observe the running Agent version directly from its internal health endpoint, independently of updater mutation readiness.
+2. Require the published image's OCI identity, binary version, and running health endpoint version to match before a stable release or `latest` tag can succeed.
+
 ## v1.1.66
 
 1. Persist and return channel post titles independently from post bodies across Matrix events, projections, and PostgreSQL storage.
