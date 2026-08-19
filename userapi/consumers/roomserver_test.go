@@ -457,6 +457,7 @@ func Test_evaluatePushRules(t *testing.T) {
 		testCases := []struct {
 			name         string
 			eventContent string
+			roomSize     int
 			wantAction   pushrules.ActionKind
 			wantActions  []*pushrules.Action
 			wantNotify   bool
@@ -474,12 +475,58 @@ func Test_evaluatePushRules(t *testing.T) {
 				wantActions:  []*pushrules.Action{},
 			},
 			{
-				name:         "m.room.message notifies",
+				name:         "group plaintext message notifies with sound",
 				eventContent: `{"type":"m.room.message","room_id":"!room:example.com"}`,
+				roomSize:     10,
 				wantNotify:   true,
 				wantAction:   pushrules.NotifyAction,
 				wantActions: []*pushrules.Action{
 					{Kind: pushrules.NotifyAction},
+					{Kind: pushrules.SetTweakAction, Tweak: pushrules.SoundTweak, Value: "default"},
+				},
+			},
+			{
+				name:         "direct plaintext message keeps sound",
+				eventContent: `{"type":"m.room.message","room_id":"!room:example.com"}`,
+				roomSize:     2,
+				wantNotify:   true,
+				wantAction:   pushrules.NotifyAction,
+				wantActions: []*pushrules.Action{
+					{Kind: pushrules.NotifyAction},
+					{Kind: pushrules.SetTweakAction, Tweak: pushrules.SoundTweak, Value: "default"},
+				},
+			},
+			{
+				name:         "group encrypted message notifies with sound",
+				eventContent: `{"type":"m.room.encrypted","room_id":"!room:example.com"}`,
+				roomSize:     10,
+				wantNotify:   true,
+				wantAction:   pushrules.NotifyAction,
+				wantActions: []*pushrules.Action{
+					{Kind: pushrules.NotifyAction},
+					{Kind: pushrules.SetTweakAction, Tweak: pushrules.SoundTweak, Value: "default"},
+				},
+			},
+			{
+				name:         "direct encrypted message keeps sound",
+				eventContent: `{"type":"m.room.encrypted","room_id":"!room:example.com"}`,
+				roomSize:     2,
+				wantNotify:   true,
+				wantAction:   pushrules.NotifyAction,
+				wantActions: []*pushrules.Action{
+					{Kind: pushrules.NotifyAction},
+					{Kind: pushrules.SetTweakAction, Tweak: pushrules.SoundTweak, Value: "default"},
+				},
+			},
+			{
+				name:         "Matrix call invite keeps ring sound",
+				eventContent: `{"type":"m.call.invite","room_id":"!room:example.com","content":{"call_id":"call-1"}}`,
+				roomSize:     2,
+				wantNotify:   true,
+				wantAction:   pushrules.NotifyAction,
+				wantActions: []*pushrules.Action{
+					{Kind: pushrules.NotifyAction},
+					{Kind: pushrules.SetTweakAction, Tweak: pushrules.SoundTweak, Value: "ring"},
 				},
 			},
 			{
@@ -504,11 +551,15 @@ func Test_evaluatePushRules(t *testing.T) {
 
 		for _, tc := range testCases {
 			t.Run(tc.name, func(t *testing.T) {
+				roomSize := tc.roomSize
+				if roomSize == 0 {
+					roomSize = 10
+				}
 				actions, err := consumer.evaluatePushRules(ctx, mustCreateEvent(t, tc.eventContent), &localMembership{
 					UserID:    "@test:localhost",
 					Localpart: "test",
 					Domain:    "localhost",
-				}, 10)
+				}, roomSize)
 				if err != nil {
 					t.Fatalf("failed to evaluate push rules: %v", err)
 				}

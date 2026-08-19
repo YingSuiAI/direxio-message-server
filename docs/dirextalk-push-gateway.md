@@ -15,6 +15,24 @@ Matrix room event on the recipient homeserver
 
 The gateway should default to Matrix `event_id_only` behavior. Push payloads are wake-up hints, not a message storage or sync channel. Clients must fetch message and call details from their own homeserver after receiving a system push.
 
+Matrix push-rule sound tweaks are logical policy values, not platform asset
+filenames. The Message Server sends `devices[].tweaks.sound=default` for normal
+plaintext and encrypted messages and `devices[].tweaks.sound=ring` for Matrix
+`m.call.invite` events. The gateway owns the platform mapping: the current
+native background-message mapping is `default` to APNs `notice.wav` and the
+Android raw resource `notice`; Flutter uses `notice.m4a` only for foreground
+playback. The `ring` value selects the corresponding call sound. APNs payload
+fields, Android notification channel selection, and availability of those
+bundled app assets remain gateway/client responsibilities. The Message Server
+must not replace the logical tweak with a filename.
+
+Existing accounts store complete `m.push_rules` account data. When an old,
+enabled, otherwise unmodified generic plaintext or encrypted message rule is
+first read for evaluation or through the Client-Server push-rules API, the
+Message Server adds the logical `sound=default` tweak, persists the updated
+account data, and publishes its account-data update for `/sync`. Disabled rules
+and rules with customized actions or conditions are preserved.
+
 Dirextalk Message Server extends Matrix event pushes with optional display and routing metadata when the room has Dirextalk Matrix-native product state. A normal direct/group message notification sent to the gateway includes:
 
 ```json
@@ -96,6 +114,11 @@ If the background write is missed because the app is suspended, the previous for
 
 The configured agents room defaults to no system push. During startup or repair, the message server ensures the portal owner has a room-level Matrix push rule for the real `agent_room_id` with empty actions, while preserving any existing explicit rule for that room.
 
+Pusher `data` is schema-open Matrix data. Notification preferences registered
+by the client are persisted and forwarded to the gateway unchanged (except that
+the routing-only `data.url` is removed from `devices[].data`). No parallel
+Message Server preference table is required.
+
 ## Server Responsibilities
 
 - Ordinary chat messages remain Matrix-native. Do not add a second P2P message push path.
@@ -113,7 +136,9 @@ Rejected pushkeys are removed from the local user database for the rejected devi
 
 ## Push Gateway Project
 
-The standalone gateway should provide:
+The standalone gateway is owned by the sibling `push-geteway` source
+repository; it is not embedded in this Message Server repository. It should
+provide:
 
 - `POST /_matrix/push/v1/notify`
 - `GET /healthz`

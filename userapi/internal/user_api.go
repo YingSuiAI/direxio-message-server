@@ -926,7 +926,7 @@ func (a *UserInternalAPI) QueryPushRules(ctx context.Context, userID string) (*p
 	if err != nil {
 		return nil, fmt.Errorf("failed to split user ID %q for push rules", userID)
 	}
-	return a.DB.QueryPushRules(ctx, localpart, domain)
+	return userapiUtil.QueryAndReconcilePushRules(ctx, a.DB, a.SyncProducer, localpart, domain)
 }
 
 func (a *UserInternalAPI) SetAvatarURL(ctx context.Context, localpart string, serverName spec.ServerName, avatarURL string) (*authtypes.Profile, bool, error) {

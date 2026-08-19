@@ -896,7 +896,7 @@ func (s *OutputRoomEventConsumer) evaluatePushRules(ctx context.Context, event *
 			return nil, fmt.Errorf("user %s is ignored", sender.String())
 		}
 	}
-	ruleSets, err := s.db.QueryPushRules(ctx, mem.Localpart, mem.Domain)
+	ruleSets, err := util.QueryAndReconcilePushRules(ctx, s.db, s.syncProducer, mem.Localpart, mem.Domain)
 	if err != nil {
 		return nil, err
 	}

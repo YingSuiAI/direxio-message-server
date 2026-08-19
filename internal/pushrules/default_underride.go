@@ -98,6 +98,11 @@ var (
 		},
 		Actions: []*Action{
 			{Kind: NotifyAction},
+			{
+				Kind:  SetTweakAction,
+				Tweak: SoundTweak,
+				Value: "default",
+			},
 		},
 	}
 	mRuleEncryptedDefinition = Rule{
@@ -113,6 +118,11 @@ var (
 		},
 		Actions: []*Action{
 			{Kind: NotifyAction},
+			{
+				Kind:  SetTweakAction,
+				Tweak: SoundTweak,
+				Value: "default",
+			},
 		},
 	}
 )
