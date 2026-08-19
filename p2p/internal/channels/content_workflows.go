@@ -23,6 +23,7 @@ func (m *ContentModule) CreatePost(ctx context.Context, raw map[string]any) (any
 	if actionErr != nil {
 		return nil, actionErr
 	}
+	title := params.String("title")
 	body := fallback(params.String("body"), params.String("content"))
 	messageType := fallback(params.String("message_type"), "text")
 	if value, exists := raw["visibility"]; exists && value != nil {
@@ -38,12 +39,16 @@ func (m *ContentModule) CreatePost(ctx context.Context, raw map[string]any) (any
 	if err != nil {
 		return nil, actionbase.BadRequest("media_json is invalid")
 	}
+	if title == "" && body == "" && !hasImageMediaEntry(media) {
+		return nil, actionbase.BadRequest("title, body, or image media is required")
+	}
 	eventID := m.eventID(postID)
 	originServerTS := now.UnixMilli()
 	if matrix := m.matrixPort(); matrix != nil && roomID != "" {
 		content := channelMessageContent("channel_post", body, messageType, mediaJSON, media)
 		content["channel_id"] = channelID
 		content["post_id"] = postID
+		content["post_title"] = title
 		content["visibility"] = visibility
 		content["comments_enabled"] = true
 		result, err := matrix.SendMessage(ctx, dirextalktransport.SendMessageRequest{
@@ -58,7 +63,7 @@ func (m *ContentModule) CreatePost(ctx context.Context, raw map[string]any) (any
 	}
 	post := Post{
 		PostID: postID, ChannelID: channelID, RoomID: roomID, EventID: eventID,
-		AuthorMXID: owner.MXID, AuthorName: owner.DisplayName, Body: body,
+		AuthorMXID: owner.MXID, AuthorName: owner.DisplayName, Title: title, Body: body,
 		MessageType: messageType, MediaJSON: mediaJSON, Visibility: visibility, CommentsEnabled: true,
 		OriginServerTS: originServerTS,
 	}

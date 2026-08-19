@@ -62,6 +62,7 @@ func (s *DatabaseStore) migrate(ctx context.Context) error {
 					event_id TEXT NOT NULL,
 					author_mxid TEXT NOT NULL,
 					author_name TEXT NOT NULL,
+					title TEXT NOT NULL DEFAULT '',
 					body TEXT NOT NULL,
 					message_type TEXT NOT NULL,
 					media_json TEXT NOT NULL,
@@ -909,6 +910,13 @@ func (s *DatabaseStore) migrate(ctx context.Context) error {
 		Version: "p2p: drop retired completion result message v2",
 		Up: func(ctx context.Context, txn *sql.Tx) error {
 			_, err := txn.ExecContext(ctx, `ALTER TABLE p2p_agent_execution_completion_receipts DROP COLUMN IF EXISTS result_message_id`)
+			return err
+		},
+	})
+	forward.AddMigrations(sqlutil.Migration{
+		Version: "p2p: channel post title v3",
+		Up: func(ctx context.Context, txn *sql.Tx) error {
+			_, err := txn.ExecContext(ctx, `ALTER TABLE p2p_channel_posts ADD COLUMN IF NOT EXISTS title TEXT NOT NULL DEFAULT ''`)
 			return err
 		},
 	})

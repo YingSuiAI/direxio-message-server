@@ -187,11 +187,11 @@ func TestContentRecordConversionsExcludeResponseOnlyFields(t *testing.T) {
 	conversation := &dirextalkdomain.ConversationView{}
 
 	post := postFromRecord(postRecord(Post{
-		PostID: "post", ChannelID: "channel", Visibility: "public", CommentCount: 2,
+		PostID: "post", ChannelID: "channel", Title: "Post title", Visibility: "public", CommentCount: 2,
 		ReactionCount: 3, ReactedByMe: true,
 		Operation: map[string]any{"action": "test"}, Conversation: conversation,
 	}))
-	if post.PostID != "post" || post.ChannelID != "channel" || post.Visibility != "public" || post.CommentCount != 2 || post.ReactionCount != 0 || post.ReactedByMe || post.Operation != nil || post.Conversation != nil {
+	if post.PostID != "post" || post.ChannelID != "channel" || post.Title != "Post title" || post.Visibility != "public" || post.CommentCount != 2 || post.ReactionCount != 0 || post.ReactedByMe || post.Operation != nil || post.Conversation != nil {
 		t.Fatalf("post round trip = %#v", post)
 	}
 

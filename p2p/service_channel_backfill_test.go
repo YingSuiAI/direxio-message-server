@@ -39,10 +39,11 @@ func TestChannelContentBackfillProjectsReactionsAfterTargetsDespiteTimestamps(t 
 			Sender:         "@owner:example.com",
 			OriginServerTS: 1000,
 			Content: map[string]any{
-				"p2p_kind": "channel_post",
-				"post_id":  "post_one",
-				"body":     "historical post",
-				"msgtype":  "m.text",
+				"p2p_kind":   "channel_post",
+				"post_id":    "post_one",
+				"post_title": "Historical title",
+				"body":       "historical post",
+				"msgtype":    "m.text",
 			},
 		},
 	}})
@@ -53,7 +54,7 @@ func TestChannelContentBackfillProjectsReactionsAfterTargetsDespiteTimestamps(t 
 	posts := mustHandle[map[string]any](t, service, "channels.posts.list", map[string]any{
 		"channel_id": ch.ChannelID,
 	})["posts"].([]channelPostRecord)
-	if len(posts) != 1 || posts[0].PostID != "post_one" || posts[0].ReactionCount != 1 {
+	if len(posts) != 1 || posts[0].PostID != "post_one" || posts[0].Title != "Historical title" || posts[0].ReactionCount != 1 {
 		t.Fatalf("expected backfilled reaction to resolve after post projection, got %#v", posts)
 	}
 }

@@ -307,6 +307,7 @@ func TestProjectChannelStateAndPostKinds(t *testing.T) {
 
 	post := room.CreateAndInsert(t, user, "m.room.message", map[string]any{
 		"msgtype":    "m.text",
+		"post_title": "Projected title",
 		"body":       "projected post",
 		"p2p_kind":   "channel_post",
 		"channel_id": "ch_remote",
@@ -318,14 +319,14 @@ func TestProjectChannelStateAndPostKinds(t *testing.T) {
 	}
 	posts := mustHandle[map[string]any](t, service, "channels.posts.list", map[string]any{"channel_id": "ch_remote"})
 	gotPosts, ok := posts["posts"].([]channelPostRecord)
-	if !ok || len(gotPosts) != 1 || gotPosts[0].PostID != "post_remote" || gotPosts[0].EventID != post.EventID() || gotPosts[0].Visibility != "public" {
+	if !ok || len(gotPosts) != 1 || gotPosts[0].PostID != "post_remote" || gotPosts[0].Title != "Projected title" || gotPosts[0].EventID != post.EventID() || gotPosts[0].Visibility != "public" {
 		t.Fatalf("expected projected channel post, got %#v", posts)
 	}
 	publicPosts := mustHandle[map[string]any](t, service, "channels.public.posts.list", map[string]any{
 		"channel_id": "ch_remote",
 		"room_id":    room.ID,
 	})["posts"].([]channelPostRecord)
-	if len(publicPosts) != 1 || publicPosts[0].PostID != "post_remote" {
+	if len(publicPosts) != 1 || publicPosts[0].PostID != "post_remote" || publicPosts[0].Title != "Projected title" {
 		t.Fatalf("expected projected public post in filtered list, got %#v", publicPosts)
 	}
 	conversation, ok, err := service.getConversation(context.Background(), "", room.ID)

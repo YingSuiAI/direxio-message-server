@@ -57,7 +57,7 @@ func mustInsertChannelPost(t *testing.T, service *Service, post channelPostRecor
 	record := dirextalkdomain.ChannelPostRecord{
 		PostID: post.PostID, ChannelID: post.ChannelID, RoomID: post.RoomID,
 		EventID: post.EventID, AuthorMXID: post.AuthorMXID, AuthorName: post.AuthorName,
-		Body: post.Body, MessageType: post.MessageType, MediaJSON: post.MediaJSON,
+		Title: post.Title, Body: post.Body, MessageType: post.MessageType, MediaJSON: post.MediaJSON,
 		Visibility: post.Visibility, OriginServerTS: post.OriginServerTS, CommentCount: post.CommentCount,
 	}
 	if err := service.store.InsertChannelPost(context.Background(), record); err != nil {

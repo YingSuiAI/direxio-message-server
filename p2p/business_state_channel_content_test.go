@@ -209,6 +209,68 @@ func TestChannelPostAndCommentListsExposeCountsMediaAndReactionState(t *testing.
 	}
 }
 
+func TestChannelPostCreateRequiresTitleBodyOrImageAndPreservesIndependentFields(t *testing.T) {
+	service := NewService(Config{ServerName: "example.com"})
+	bootstrapService(t, service)
+
+	titleOnly := mustHandle[channelPostRecord](t, service, "channels.posts.create", map[string]any{
+		"channel_id": "ch_content",
+		"title":      "  Title only  ",
+	})
+	if titleOnly.Title != "Title only" || titleOnly.Body != "" {
+		t.Fatalf("title-only create = %#v", titleOnly)
+	}
+	bodyOnly := mustHandle[channelPostRecord](t, service, "channels.posts.create", map[string]any{
+		"channel_id": "ch_content",
+		"body":       "  Body only  ",
+	})
+	if bodyOnly.Title != "" || bodyOnly.Body != "Body only" {
+		t.Fatalf("body-only create = %#v", bodyOnly)
+	}
+	imageOnly := mustHandle[channelPostRecord](t, service, "channels.posts.create", map[string]any{
+		"channel_id": "ch_content",
+		"media_json": `{"url":"mxc://example.com/image"}`,
+	})
+	if imageOnly.Title != "" || imageOnly.Body != "" || !strings.Contains(imageOnly.MediaJSON, "mxc://example.com/image") {
+		t.Fatalf("image-only create = %#v", imageOnly)
+	}
+	imageListOnly := mustHandle[channelPostRecord](t, service, "channels.posts.create", map[string]any{
+		"channel_id": "ch_content",
+		"media_json": `{"images":[{"mxc":"mxc://example.com/list-image"}]}`,
+	})
+	if !strings.Contains(imageListOnly.MediaJSON, "mxc://example.com/list-image") {
+		t.Fatalf("image-list-only create = %#v", imageListOnly)
+	}
+
+	posts := mustHandle[map[string]any](t, service, "channels.posts.list", map[string]any{
+		"channel_id": "ch_content",
+	})["posts"].([]channelPostRecord)
+	seen := make(map[string]channelPostRecord, len(posts))
+	for _, post := range posts {
+		seen[post.PostID] = post
+	}
+	if seen[titleOnly.PostID].Title != "Title only" || seen[titleOnly.PostID].Body != "" ||
+		seen[bodyOnly.PostID].Title != "" || seen[bodyOnly.PostID].Body != "Body only" {
+		t.Fatalf("authenticated list did not preserve independent title/body: %#v", posts)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		params map[string]any
+	}{
+		{name: "missing", params: map[string]any{"channel_id": "ch_content"}},
+		{name: "whitespace", params: map[string]any{"channel_id": "ch_content", "title": "  ", "body": "\n"}},
+		{name: "empty media", params: map[string]any{"channel_id": "ch_content", "media_json": `{}`}},
+		{name: "metadata only", params: map[string]any{"channel_id": "ch_content", "media_json": `{"info":{"mimetype":"image/png"}}`}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, apiErr := service.Handle(context.Background(), "channels.posts.create", tc.params); apiErr == nil || apiErr.Status != http.StatusBadRequest {
+				t.Fatalf("empty create error = %#v, want 400", apiErr)
+			}
+		})
+	}
+}
+
 func TestChannelPostVisibilityDefaultsPrivateAndAuthenticatedListOptionallyPaginates(t *testing.T) {
 	service := NewService(Config{ServerName: "example.com"})
 	bootstrapService(t, service)
@@ -400,6 +462,7 @@ func TestPublicChannelPostsAreReadableButNonMembersCannotInteract(t *testing.T) 
 	})
 	publicPost := mustHandle[channelPostRecord](t, service, "channels.posts.create", map[string]any{
 		"channel_id": ch.ChannelID,
+		"title":      "Public title",
 		"body":       "visible",
 		"visibility": "public",
 	})
@@ -422,7 +485,7 @@ func TestPublicChannelPostsAreReadableButNonMembersCannotInteract(t *testing.T) 
 		"room_id": ch.RoomID,
 	})
 	posts := publicPage["posts"].([]channelPostRecord)
-	if len(posts) != 1 || posts[0].PostID != publicPost.PostID || posts[0].Visibility != "public" ||
+	if len(posts) != 1 || posts[0].PostID != publicPost.PostID || posts[0].Title != "Public title" || posts[0].Visibility != "public" ||
 		posts[0].CommentCount != 1 || publicPage["page_size"] != int64(5) {
 		t.Fatalf("unexpected public posts page %#v", publicPage)
 	}

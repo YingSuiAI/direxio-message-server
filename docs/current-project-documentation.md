@@ -296,6 +296,7 @@ Channel posts/comments/reactions：
 
 - 仍是产品内容 projection。
 - 使用 Matrix `m.room.message` 携带 `p2p_kind=channel_post` 或 `p2p_kind=channel_comment`。
+- `channels.posts.create` 独立接受可选 `title`、`body`（兼容 `content`）与图片 `media_json`；三者中至少一个必须包含有效内容，纯空白标题/正文、空对象或只有元数据而没有图片 URL 的媒体返回 `400`。标题以请求/响应字段 `title`、Matrix 内容字段 `post_title` 和 PostgreSQL `title` 列持久化；标题或正文缺失时分别返回空字符串。
 - `channels.posts.create` 的 `visibility` 只接受 `public`/`private`，缺省为 `private`；该字段随 Matrix 帖子事件传播并投影到 PostgreSQL，缺少字段的历史帖子按私有处理。
 - `channels.posts.update` 由帖子作者或频道主更新单个帖子的可变设置，接受 `post_id` 与可选的 `visibility`、`comments_enabled`，两项至少提供一项。完整设置先写入当前频道房间的 `io.dirextalk.channel.post.settings` Matrix state（`state_key=post_id`），再投影到各成员节点 PostgreSQL；state 写入失败不提前修改本地投影。关闭 `comments_enabled` 只拒绝该帖的新评论，不影响频道讨论区、频道聊天、该帖点赞/收藏或其他帖子；重新开启后恢复。评论发送端的 Matrix ProductPolicy 与接收端投影均校验该帖设置；独立 durable settings 记录保证 state 先于帖子历史到达时仍能合并，Matrix 原始帖子事件重放或历史回填不得覆盖。
 - `channels.posts.list` 保持原有 owner 鉴权且不接受 `visibility`；不传 `page/page_size` 时仍一次返回频道全部帖子，传任一分页字段时按最新优先分页，另一字段缺省为 `page=1`/`page_size=5`，每页最大 100 条。每条帖子都返回帖子级 `comments_enabled`；频道 DTO 原有的同名字段仍只表示频道级设置。

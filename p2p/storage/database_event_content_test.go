@@ -254,7 +254,7 @@ func TestDatabaseStorePersistsChannelPostSettingsAcrossReplayAndReopen(t *testin
 
 	original := channelPostRecord{
 		PostID: "post_settings", ChannelID: "ch_settings", RoomID: "!settings:example.com",
-		EventID: "$settings", AuthorMXID: "@owner:example.com", Visibility: "private",
+		EventID: "$settings", AuthorMXID: "@owner:example.com", Title: "Persisted title", Visibility: "private",
 		CommentsEnabled: true, CommentsEnabledSet: true, OriginServerTS: 1,
 	}
 	if err := store.InsertChannelPost(ctx, original); err != nil {
@@ -288,7 +288,7 @@ func TestDatabaseStorePersistsChannelPostSettingsAcrossReplayAndReopen(t *testin
 	if err != nil || !found {
 		t.Fatalf("reopen post = (%#v, %v, %v)", post, found, err)
 	}
-	if post.Visibility != "public" || post.CommentsEnabled {
+	if post.Title != "Persisted title" || post.Visibility != "public" || post.CommentsEnabled {
 		t.Fatalf("replay or reopen reset post settings: %#v", post)
 	}
 }

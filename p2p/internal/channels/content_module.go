@@ -37,6 +37,7 @@ type Post struct {
 	EventID         string                            `json:"event_id"`
 	AuthorMXID      string                            `json:"author_mxid"`
 	AuthorName      string                            `json:"author_name"`
+	Title           string                            `json:"title"`
 	Body            string                            `json:"body"`
 	MessageType     string                            `json:"message_type"`
 	MediaJSON       string                            `json:"media_json"`
@@ -249,7 +250,7 @@ func postFromRecord(record dirextalkdomain.ChannelPostRecord) Post {
 	return Post{
 		PostID: record.PostID, ChannelID: record.ChannelID, RoomID: record.RoomID,
 		EventID: record.EventID, AuthorMXID: record.AuthorMXID, AuthorName: record.AuthorName,
-		Body: record.Body, MessageType: record.MessageType, MediaJSON: record.MediaJSON,
+		Title: record.Title, Body: record.Body, MessageType: record.MessageType, MediaJSON: record.MediaJSON,
 		Visibility:      dirextalkdomain.NormalizeChannelPostVisibility(record.Visibility),
 		CommentsEnabled: record.CommentsEnabled,
 		OriginServerTS:  record.OriginServerTS, CommentCount: record.CommentCount,
@@ -265,7 +266,7 @@ func postRecord(post Post) dirextalkdomain.ChannelPostRecord {
 	return dirextalkdomain.ChannelPostRecord{
 		PostID: post.PostID, ChannelID: post.ChannelID, RoomID: post.RoomID,
 		EventID: post.EventID, AuthorMXID: post.AuthorMXID, AuthorName: post.AuthorName,
-		Body: post.Body, MessageType: post.MessageType, MediaJSON: post.MediaJSON,
+		Title: post.Title, Body: post.Body, MessageType: post.MessageType, MediaJSON: post.MediaJSON,
 		Visibility:      dirextalkdomain.NormalizeChannelPostVisibility(post.Visibility),
 		CommentsEnabled: post.CommentsEnabled, CommentsEnabledSet: true,
 		OriginServerTS: post.OriginServerTS, CommentCount: post.CommentCount,
@@ -333,6 +334,38 @@ func mediaPayload(value any) (string, map[string]any, error) {
 	}
 	normalized, err := json.Marshal(media)
 	return string(normalized), media, err
+}
+
+func hasImageMediaEntry(media map[string]any) bool {
+	if mediaImageURL(media) != "" {
+		return true
+	}
+	items, ok := media["images"].([]any)
+	if !ok {
+		return false
+	}
+	for _, item := range items {
+		switch value := item.(type) {
+		case string:
+			if strings.TrimSpace(value) != "" {
+				return true
+			}
+		case map[string]any:
+			if mediaImageURL(value) != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func mediaImageURL(media map[string]any) string {
+	for _, key := range []string{"url", "mxc", "mxc_url", "image_url", "media_url", "thumbnail_url"} {
+		if value, ok := media[key].(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func jsonArray(value any) (string, error) {

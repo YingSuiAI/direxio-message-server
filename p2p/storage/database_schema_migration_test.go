@@ -33,7 +33,7 @@ func TestFreshProductBaselineIsSingleVersionAndReopenIdempotent(t *testing.T) {
 	if err := store.Migrate(ctx); err != nil {
 		t.Fatalf("second baseline run: %v", err)
 	}
-	wantMigrations := []string{"p2p: drop retired completion result message v2", "p2p: fresh ProductCore baseline v1"}
+	wantMigrations := []string{"p2p: channel post title v3", "p2p: drop retired completion result message v2", "p2p: fresh ProductCore baseline v1"}
 	assertP2PMigrationSet(t, store.DB(), wantMigrations)
 
 	for _, table := range []string{
@@ -63,7 +63,7 @@ func TestFreshProductBaselineIsSingleVersionAndReopenIdempotent(t *testing.T) {
 	} {
 		assertRelationAbsent(t, store.DB(), forbidden)
 	}
-	for _, column := range []string{"visibility", "comments_enabled", "settings_updated"} {
+	for _, column := range []string{"title", "visibility", "comments_enabled", "settings_updated"} {
 		var present bool
 		if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='p2p_channel_posts' AND column_name=$1)`, column).Scan(&present); err != nil {
 			t.Fatal(err)
@@ -112,6 +112,41 @@ func TestCompletionResultMessageForwardMigrationDropsRetiredColumn(t *testing.T)
 	}
 	defer reopened.Close()
 	assertColumnAbsent(t, reopened.DB(), "p2p_agent_execution_completion_receipts", "result_message_id")
+}
+
+func TestChannelPostTitleForwardMigrationAddsColumnWithEmptyDefault(t *testing.T) {
+	ctx := context.Background()
+	connStr, closeDB := test.PrepareDBConnectionString(t, test.DBTypePostgres)
+	defer closeDB()
+	dbOpts := config.DatabaseOptions{ConnectionString: config.DataSource(connStr)}
+
+	store, err := NewDatabaseStore(ctx, sqlutil.NewConnectionManager(nil, dbOpts), &dbOpts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	post := channelPostRecord{PostID: "legacy_post", ChannelID: "ch", EventID: "$legacy", Body: "legacy body"}
+	if err := store.InsertChannelPost(ctx, post); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `ALTER TABLE p2p_channel_posts DROP COLUMN title`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `DELETE FROM db_migrations WHERE version='p2p: channel post title v3'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := NewDatabaseStore(ctx, sqlutil.NewConnectionManager(nil, dbOpts), &dbOpts)
+	if err != nil {
+		t.Fatalf("forward migration: %v", err)
+	}
+	defer reopened.Close()
+	got, found, err := reopened.GetChannelPostByID(ctx, post.PostID, post.ChannelID)
+	if err != nil || !found || got.Title != "" || got.Body != post.Body {
+		t.Fatalf("migrated legacy post = (%#v, %v, %v)", got, found, err)
+	}
 }
 
 func assertP2PMigrationSet(t *testing.T, db interface {

@@ -110,6 +110,7 @@ type ChannelPostRecord struct {
 	EventID            string `json:"event_id"`
 	AuthorMXID         string `json:"author_mxid"`
 	AuthorName         string `json:"author_name"`
+	Title              string `json:"title"`
 	Body               string `json:"body"`
 	MessageType        string `json:"message_type"`
 	MediaJSON          string `json:"media_json"`

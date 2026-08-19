@@ -256,14 +256,15 @@ func (s *DatabaseStore) InsertChannelPost(ctx context.Context, post channelPostR
 		if _, err := txn.ExecContext(ctx, `
 			INSERT INTO p2p_channel_posts (
 				post_id, channel_id, room_id, event_id, author_mxid, author_name,
-				body, message_type, media_json, visibility, comments_enabled, settings_updated, origin_server_ts, comment_count
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+				title, body, message_type, media_json, visibility, comments_enabled, settings_updated, origin_server_ts, comment_count
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 			ON CONFLICT(post_id) DO UPDATE SET
 				channel_id = EXCLUDED.channel_id,
 				room_id = EXCLUDED.room_id,
 				event_id = EXCLUDED.event_id,
 				author_mxid = EXCLUDED.author_mxid,
 				author_name = EXCLUDED.author_name,
+				title = EXCLUDED.title,
 				body = EXCLUDED.body,
 				message_type = EXCLUDED.message_type,
 				media_json = EXCLUDED.media_json,
@@ -273,7 +274,7 @@ func (s *DatabaseStore) InsertChannelPost(ctx context.Context, post channelPostR
 				origin_server_ts = EXCLUDED.origin_server_ts,
 				comment_count = EXCLUDED.comment_count
 		`, post.PostID, post.ChannelID, post.RoomID, post.EventID, post.AuthorMXID, post.AuthorName,
-			post.Body, post.MessageType, post.MediaJSON, post.Visibility, post.CommentsEnabled, post.SettingsUpdated, post.OriginServerTS, post.CommentCount); err != nil {
+			post.Title, post.Body, post.MessageType, post.MediaJSON, post.Visibility, post.CommentsEnabled, post.SettingsUpdated, post.OriginServerTS, post.CommentCount); err != nil {
 			return err
 		}
 		_, err := txn.ExecContext(ctx, `
@@ -458,12 +459,12 @@ func (s *DatabaseStore) ListChannelPostsByVisibilityPage(ctx context.Context, ch
 	return posts, hasMore, nil
 }
 
-const listPostsSelect = `SELECT post_id, channel_id, room_id, event_id, author_mxid, author_name, body, message_type, media_json, visibility, comments_enabled, settings_updated, origin_server_ts, comment_count FROM p2p_channel_posts`
+const listPostsSelect = `SELECT post_id, channel_id, room_id, event_id, author_mxid, author_name, title, body, message_type, media_json, visibility, comments_enabled, settings_updated, origin_server_ts, comment_count FROM p2p_channel_posts`
 
 func scanChannelPost(row channelScanner) (channelPostRecord, error) {
 	var post channelPostRecord
 	if err := row.Scan(&post.PostID, &post.ChannelID, &post.RoomID, &post.EventID, &post.AuthorMXID, &post.AuthorName,
-		&post.Body, &post.MessageType, &post.MediaJSON, &post.Visibility, &post.CommentsEnabled, &post.SettingsUpdated, &post.OriginServerTS, &post.CommentCount); err != nil {
+		&post.Title, &post.Body, &post.MessageType, &post.MediaJSON, &post.Visibility, &post.CommentsEnabled, &post.SettingsUpdated, &post.OriginServerTS, &post.CommentCount); err != nil {
 		return channelPostRecord{}, err
 	}
 	post.CommentsEnabledSet = true
