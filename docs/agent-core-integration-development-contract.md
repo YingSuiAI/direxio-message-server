@@ -52,11 +52,15 @@ Agent rejects expired tickets with `401 AGENT_TICKET_EXPIRED`. Missing scope,
 foreign owner, or stale account generation is `403`. The client cannot choose
 or widen scopes. Tickets and Authorization headers must not be logged.
 
-The immutable `dirextalk-capability-api` v1.1.0 tag is the shared contract
+The immutable `dirextalk-capability-api` v1.2.0 tag is the shared contract
 authority. Its generated `agentdatav2.AgentSessionResponse` and
 `conformance/agent-data-plane/v2` vectors freeze the session response and
 owner data-plane wire shapes consumed by Message Server, Agent, and Flutter.
 Ticket lifetime and signing behavior remain Message Server policy.
+The generated owner scope set includes `agent:servers:read`,
+`agent:servers:write`, and `agent:servers:destroy` for the Agent-owned server
+inventory lifecycle; Message Server issues those scopes but does not proxy or
+store server inventory.
 
 ## HTTP and SSE semantics
 
