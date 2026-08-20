@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v1.1.70
+
+1. Allow joined channel members to remove their existing like or favorite after the target post has been deleted, without permitting a deleted or unknown post to receive a new reaction.
+
 ## v1.1.69
 
 1. Grant owner Agent sessions the server inventory read, write, and destroy scopes defined by `dirextalk-capability-api` v1.2.0.
