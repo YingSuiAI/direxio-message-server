@@ -35,18 +35,49 @@ func (m *ContentModule) ToggleReaction(ctx context.Context, action string, raw m
 	if targetID == "" {
 		return nil, actionbase.BadRequest(targetType + "_id is required")
 	}
+	if m.store == nil {
+		return nil, actionbase.InternalError(errors.New("channel content store is not configured"))
+	}
+	userID := m.owner().MXID
+	existing, existingOK, err := m.store.GetReaction(ctx, targetType, targetID, reactionName, userID)
+	if err != nil {
+		return nil, actionbase.InternalError(err)
+	}
+	missingPost := false
 	if targetType == "post" {
 		post, ok, err := m.PostByID(ctx, targetID, channelID)
 		if err != nil {
 			return nil, actionbase.InternalError(err)
 		}
 		if !ok {
-			return nil, actionbase.StatusError(http.StatusNotFound, "post not found")
+			// A deleted post cannot be reactivated. Its owner-scoped reaction
+			// record authorizes only an idempotent local deactivation, after the
+			// stored channel identity has passed the normal membership check.
+			storedChannelID := strings.TrimSpace(existing.ChannelID)
+			if !existingOK || storedChannelID == "" ||
+				(channelID != "" && channelID != storedChannelID) {
+				return nil, actionbase.StatusError(http.StatusNotFound, "post not found")
+			}
+			if m.channels == nil {
+				return nil, actionbase.InternalError(errors.New("channel catalog is not configured"))
+			}
+			channel, found, lookupErr := m.channels.ByIDOrRoom(ctx, storedChannelID, "")
+			if lookupErr != nil {
+				return nil, actionbase.InternalError(lookupErr)
+			}
+			if !found {
+				return nil, actionbase.StatusError(http.StatusNotFound, "channel not found")
+			}
+			missingPost = true
+			roomID = channel.RoomID
+			channelID = storedChannelID
+			postID = fallback(existing.PostID, existing.TargetID)
+		} else {
+			eventID = post.EventID
+			roomID = fallback(roomID, post.RoomID)
+			channelID = fallback(channelID, post.ChannelID)
+			postID = post.PostID
 		}
-		eventID = post.EventID
-		roomID = fallback(roomID, post.RoomID)
-		channelID = fallback(channelID, post.ChannelID)
-		postID = post.PostID
 	} else {
 		comment, ok, err := m.CommentByID(ctx, targetID, postID)
 		if err != nil {
@@ -67,24 +98,20 @@ func (m *ContentModule) ToggleReaction(ctx context.Context, action string, raw m
 	if actionErr := m.requireJoined(ctx, roomID); actionErr != nil {
 		return nil, actionErr
 	}
-	if m.store == nil {
-		return nil, actionbase.InternalError(errors.New("channel content store is not configured"))
-	}
-	userID := m.owner().MXID
-	existing, ok, err := m.store.GetReaction(ctx, targetType, targetID, reactionName, userID)
-	if err != nil {
-		return nil, actionbase.InternalError(err)
-	}
 	record := dirextalkdomain.ReactionRecord{
 		TargetType: targetType, TargetID: targetID, ChannelID: channelID,
 		PostID: postID, CommentID: commentID, Reaction: reactionName,
 		UserID: userID, Active: true, CreatedAt: m.now().Format(time.RFC3339Nano),
 	}
-	if ok {
+	if existingOK {
 		record = existing
-		record.Active = !existing.Active
+		if missingPost {
+			record.Active = false
+		} else {
+			record.Active = !existing.Active
+		}
 	}
-	if matrix := m.matrixPort(); matrix != nil && roomID != "" && eventID != "" {
+	if matrix := m.matrixPort(); !missingPost && matrix != nil && roomID != "" && eventID != "" {
 		result, err := matrix.SendMessage(ctx, dirextalktransport.SendMessageRequest{
 			SenderMXID: userID, RoomID: roomID, EventType: "m.reaction",
 			MessageType: "m.reaction", Timestamp: m.now(),
@@ -101,7 +128,9 @@ func (m *ContentModule) ToggleReaction(ctx context.Context, action string, raw m
 		}
 		reactionEventID = result.EventID
 	}
-	record.EventID = reactionEventID
+	if !missingPost {
+		record.EventID = reactionEventID
+	}
 	if err := m.store.UpsertReaction(ctx, record); err != nil {
 		return nil, actionbase.InternalError(err)
 	}

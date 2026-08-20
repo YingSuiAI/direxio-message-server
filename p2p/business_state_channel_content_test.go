@@ -88,6 +88,89 @@ func TestReactionTogglePersistsAndListsActiveReaction(t *testing.T) {
 	}
 }
 
+func TestReactionToggleDeactivatesExistingReactionsAfterPostDeletion(t *testing.T) {
+	service := NewService(Config{ServerName: "example.com"})
+	bootstrapService(t, service)
+	ch := mustHandle[channel](t, service, "channels.create", map[string]any{
+		"channel_id": "ch_deleted_reactions",
+		"room_id":    "!deleted-reactions:example.com",
+		"name":       "Deleted reaction targets",
+	})
+
+	posts := make(map[string]channelPostRecord)
+	for _, reaction := range []string{"like", "favorite"} {
+		post := mustHandle[channelPostRecord](t, service, "channels.posts.create", map[string]any{
+			"channel_id": ch.ChannelID,
+			"body":       reaction + " target",
+		})
+		posts[reaction] = post
+		mustHandle[map[string]any](t, service, "channels.post_reaction.toggle", map[string]any{
+			"channel_id": ch.ChannelID,
+			"post_id":    post.PostID,
+			"reaction":   reaction,
+		})
+		mustHandle[map[string]any](t, service, "channels.posts.recall", map[string]any{
+			"channel_id": ch.ChannelID,
+			"post_id":    post.PostID,
+		})
+	}
+
+	reactions := mustHandle[map[string]any](t, service, "channels.my_reactions", nil)
+	if got := reactionHistoryPayloads(t, reactions); len(got) != 2 {
+		t.Fatalf("expected deleted posts to leave two removable reaction records, got %#v", reactions)
+	}
+	if err := service.memberStore().UpsertMember(context.Background(), memberRecord{
+		RoomID: ch.RoomID, ChannelID: ch.ChannelID, UserID: service.ownerMXID,
+		Membership: "leave", Role: "owner",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, apiErr := service.Handle(context.Background(), "channels.post_reaction.toggle", map[string]any{
+		"channel_id": ch.ChannelID,
+		"post_id":    posts["like"].PostID,
+		"reaction":   "like",
+	}); apiErr == nil || apiErr.Status != http.StatusForbidden {
+		t.Fatalf("stale reaction removal without joined membership error = %#v, want 403", apiErr)
+	}
+	if err := service.memberStore().UpsertMember(context.Background(), memberRecord{
+		RoomID: ch.RoomID, ChannelID: ch.ChannelID, UserID: service.ownerMXID,
+		Membership: "join", Role: "owner",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for reaction, post := range posts {
+		result := mustHandle[map[string]any](t, service, "channels.post_reaction.toggle", map[string]any{
+			"channel_id": ch.ChannelID,
+			"post_id":    post.PostID,
+			"reaction":   reaction,
+		})
+		if result["active"] != false || int64Param(result["reaction_count"]) != 0 {
+			t.Fatalf("expected stale %s reaction to deactivate, got %#v", reaction, result)
+		}
+		idempotent := mustHandle[map[string]any](t, service, "channels.post_reaction.toggle", map[string]any{
+			"channel_id": ch.ChannelID,
+			"post_id":    post.PostID,
+			"reaction":   reaction,
+		})
+		if idempotent["active"] != false || int64Param(idempotent["reaction_count"]) != 0 {
+			t.Fatalf("expected stale %s reaction deactivation to be idempotent, got %#v", reaction, idempotent)
+		}
+	}
+
+	reactions = mustHandle[map[string]any](t, service, "channels.my_reactions", nil)
+	if got := reactionHistoryPayloads(t, reactions); len(got) != 0 {
+		t.Fatalf("expected stale reactions removed from history, got %#v", reactions)
+	}
+	if _, apiErr := service.Handle(context.Background(), "channels.post_reaction.toggle", map[string]any{
+		"channel_id": ch.ChannelID,
+		"post_id":    "post_never_existed",
+		"reaction":   "like",
+	}); apiErr == nil || apiErr.Status != http.StatusNotFound {
+		t.Fatalf("unknown reaction target error = %#v, want 404", apiErr)
+	}
+}
+
 func TestCommentReactionTogglePersistsAndListsActiveReaction(t *testing.T) {
 	ctx := context.Background()
 	connStr, closeDB := test.PrepareDBConnectionString(t, test.DBTypePostgres)
