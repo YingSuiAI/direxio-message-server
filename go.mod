@@ -5,7 +5,7 @@ require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/MFAshby/stdemuxerhook v1.0.0
 	github.com/Masterminds/semver/v3 v3.3.1
-	github.com/YingSuiAI/dirextalk-capability-api v1.1.0
+	github.com/YingSuiAI/dirextalk-capability-api v1.2.0
 	github.com/blevesearch/bleve/v2 v2.5.2
 	github.com/codeclysm/extract v2.2.0+incompatible
 	github.com/coder/websocket v1.8.13

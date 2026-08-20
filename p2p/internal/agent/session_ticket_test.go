@@ -133,8 +133,8 @@ func sharedCapabilityModuleDir(t *testing.T) string {
 		t.Fatalf("locate shared capability contract module: %v", err)
 	}
 	parts := strings.SplitN(strings.TrimSpace(string(output)), "\n", 2)
-	if len(parts) != 2 || parts[0] != "v1.1.0" || strings.TrimSpace(parts[1]) == "" {
-		t.Fatalf("shared capability contract pin = %q, want v1.1.0 and module directory", output)
+	if len(parts) != 2 || parts[0] != "v1.2.0" || strings.TrimSpace(parts[1]) == "" {
+		t.Fatalf("shared capability contract pin = %q, want v1.2.0 and module directory", output)
 	}
 	return strings.TrimSpace(parts[1])
 }
