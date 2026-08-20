@@ -235,6 +235,7 @@ services:
     <<: *message-server-local
     restart: unless-stopped
     environment:
+      DIREXTALK_RELEASE_CATALOG_ORIGIN: https://imadmin.dirextalk.ai
       P2P_PORTAL_CREDENTIALS_FILE: /var/dirextalk-message-server/p2p/bootstrap.json
       P2P_REMOTE_NODE_INSECURE_SKIP_TLS_VERIFY: "true"
     command:
@@ -277,6 +278,7 @@ services:
     <<: *message-server-local
     restart: unless-stopped
     environment:
+      DIREXTALK_RELEASE_CATALOG_ORIGIN: https://imadmin.dirextalk.ai
       P2P_PORTAL_CREDENTIALS_FILE: /var/dirextalk-message-server/p2p/bootstrap.json
       P2P_REMOTE_NODE_INSECURE_SKIP_TLS_VERIFY: "true"
     command:
@@ -317,6 +319,7 @@ services:
     <<: *message-server-local
     restart: unless-stopped
     environment:
+      DIREXTALK_RELEASE_CATALOG_ORIGIN: https://imadmin.dirextalk.ai
       P2P_PORTAL_CREDENTIALS_FILE: /var/dirextalk-message-server/p2p/bootstrap.json
       P2P_REMOTE_NODE_INSECURE_SKIP_TLS_VERIFY: "true"
     command:
