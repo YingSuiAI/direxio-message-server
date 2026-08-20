@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v1.1.69
+
+1. Grant owner Agent sessions the server inventory read, write, and destroy scopes defined by `dirextalk-capability-api` v1.2.0.
+
 ## v1.1.68
 
 1. Constrain the room-search MCP type schema to the exact `contact`, `group`, `channel`, and `all` values accepted by execution, with omitted type continuing to default to `all`.
