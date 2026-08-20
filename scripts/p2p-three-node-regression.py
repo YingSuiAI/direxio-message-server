@@ -1,11 +1,6 @@
 #!/usr/bin/env python3
-import base64
-import hashlib
 import json
 import os
-import socket
-import ssl
-import struct
 import subprocess
 import sys
 import time
@@ -32,7 +27,6 @@ class Node:
     agent_token: str = ""
     name: str = ""
     avatar: str = ""
-    ws: Any = None
     request_seq: int = 0
 
 
@@ -41,115 +35,6 @@ class ApiError(Exception):
         super().__init__(message)
         self.status = status
         self.body = body
-
-
-class WebSocketJSON:
-    def __init__(self, url: str):
-        self.url = url
-        self.sock = self._connect(url)
-
-    def _connect(self, url: str):
-        parsed = urllib.parse.urlparse(url)
-        if parsed.scheme not in {"ws", "wss"}:
-            raise ValueError(f"unsupported websocket scheme {parsed.scheme!r}")
-        host = parsed.hostname or ""
-        port = parsed.port or (443 if parsed.scheme == "wss" else 80)
-        path = parsed.path or "/"
-        if parsed.query:
-            path += "?" + parsed.query
-        raw = socket.create_connection((host, port), timeout=10)
-        raw.settimeout(30)
-        sock = ssl.create_default_context().wrap_socket(raw, server_hostname=host) if parsed.scheme == "wss" else raw
-        key = base64.b64encode(os.urandom(16)).decode("ascii")
-        request = (
-            f"GET {path} HTTP/1.1\r\n"
-            f"Host: {parsed.netloc}\r\n"
-            "Upgrade: websocket\r\n"
-            "Connection: Upgrade\r\n"
-            f"Sec-WebSocket-Key: {key}\r\n"
-            "Sec-WebSocket-Version: 13\r\n"
-            "\r\n"
-        )
-        sock.sendall(request.encode("ascii"))
-        response = self._read_http_response(sock)
-        if not response.startswith("HTTP/1.1 101") and not response.startswith("HTTP/1.0 101"):
-            raise RuntimeError(f"websocket upgrade failed: {response.splitlines()[0] if response else 'empty response'}")
-        accept = base64.b64encode(hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode("ascii")).digest()).decode("ascii")
-        if f"sec-websocket-accept: {accept.lower()}" not in response.lower():
-            raise RuntimeError("websocket upgrade did not return expected accept key")
-        return sock
-
-    @staticmethod
-    def _read_http_response(sock) -> str:
-        data = b""
-        while b"\r\n\r\n" not in data:
-            chunk = sock.recv(4096)
-            if not chunk:
-                break
-            data += chunk
-        return data.decode("iso-8859-1", errors="replace")
-
-    def close(self) -> None:
-        try:
-            self._send_frame(0x8, b"")
-        except Exception:
-            pass
-        try:
-            self.sock.close()
-        except Exception:
-            pass
-
-    def send_json(self, payload: dict[str, Any]) -> None:
-        self._send_frame(0x1, json.dumps(payload, separators=(",", ":")).encode("utf-8"))
-
-    def recv_json(self) -> dict[str, Any]:
-        while True:
-            opcode, payload = self._recv_frame()
-            if opcode == 0x1:
-                return dict(json.loads(payload.decode("utf-8")))
-            if opcode == 0x8:
-                raise EOFError("websocket closed")
-            if opcode == 0x9:
-                self._send_frame(0xA, payload)
-
-    def _send_frame(self, opcode: int, payload: bytes) -> None:
-        header = bytearray([0x80 | opcode])
-        length = len(payload)
-        if length < 126:
-            header.append(0x80 | length)
-        elif length <= 0xFFFF:
-            header.append(0x80 | 126)
-            header.extend(struct.pack("!H", length))
-        else:
-            header.append(0x80 | 127)
-            header.extend(struct.pack("!Q", length))
-        mask = os.urandom(4)
-        masked = bytes(byte ^ mask[index % 4] for index, byte in enumerate(payload))
-        self.sock.sendall(bytes(header) + mask + masked)
-
-    def _recv_frame(self) -> tuple[int, bytes]:
-        first = self._recv_exact(2)
-        opcode = first[0] & 0x0F
-        masked = bool(first[1] & 0x80)
-        length = first[1] & 0x7F
-        if length == 126:
-            length = struct.unpack("!H", self._recv_exact(2))[0]
-        elif length == 127:
-            length = struct.unpack("!Q", self._recv_exact(8))[0]
-        mask = self._recv_exact(4) if masked else b""
-        payload = self._recv_exact(length)
-        if masked:
-            payload = bytes(byte ^ mask[index % 4] for index, byte in enumerate(payload))
-        return opcode, payload
-
-    def _recv_exact(self, size: int) -> bytes:
-        data = b""
-        while len(data) < size:
-            chunk = self.sock.recv(size - len(data))
-            if not chunk:
-                raise EOFError("websocket closed")
-            data += chunk
-        return data
 
 
 def run(args: list[str]) -> str:
@@ -193,18 +78,6 @@ def request_json(method: str, url: str, body: Any = None, token: str = "") -> An
 
 def p2p(node: Node, kind: str, action: str, params: Optional[dict[str, Any]] = None, *, token: Optional[str] = None) -> Any:
     bearer = node.token if token is None else token
-    if token is None and not action_requires_http(action):
-        try:
-            return p2p_ws(node, action, params or {})
-        except ApiError as exc:
-            if exc.status == 400 and isinstance(exc.body, dict) and exc.body.get("error") == "action requires http":
-                close_ws(node)
-            elif exc.status != 401:
-                raise
-            else:
-                close_ws(node)
-                login(node)
-                return p2p_ws(node, action, params or {})
     try:
         return request_json(
             "POST",
@@ -222,76 +95,6 @@ def p2p(node: Node, kind: str, action: str, params: Optional[dict[str, Any]] = N
             {"action": action, "params": params or {}},
             node.token,
         )
-
-
-def action_requires_http(action: str) -> bool:
-    return action in {
-        "portal.bootstrap",
-        "portal.auth",
-        "portal.status",
-        "portal.account.delete",
-        "realtime.ws_ticket.create",
-    }
-
-
-def close_ws(node: Node) -> None:
-    if node.ws is not None:
-        try:
-            node.ws.close()
-        finally:
-            node.ws = None
-
-
-def p2p_ws(node: Node, action: str, params: dict[str, Any]) -> Any:
-    last_error: Optional[Exception] = None
-    for attempt in range(2):
-        try:
-            ws = ensure_ws(node)
-            node.request_seq += 1
-            request_id = f"{node.label.lower()}-{node.request_seq}-{int(time.time() * 1000)}"
-            ws.send_json({"type": "client.request", "id": request_id, "action": action, "params": params})
-            while True:
-                frame = ws.recv_json()
-                if frame.get("type") != "server.response" or frame.get("id") != request_id:
-                    continue
-                if frame.get("ok") is True:
-                    return frame.get("result") or {}
-                status = int(frame.get("status") or 500)
-                raise ApiError(status, frame, f"WS {action} failed with {status}: {frame.get('error')}")
-        except ApiError:
-            raise
-        except Exception as exc:
-            last_error = exc
-            close_ws(node)
-            if attempt == 0:
-                continue
-    raise RuntimeError(f"WS {action} failed: {last_error}") from last_error
-
-
-def ensure_ws(node: Node) -> WebSocketJSON:
-    if node.ws is not None:
-        return node.ws
-    ticket_response = request_json(
-        "POST",
-        f"{node.base}/_p2p/query",
-        {"action": "realtime.ws_ticket.create", "params": {}},
-        node.token,
-    )
-    ticket = ticket_response.get("ticket") or ""
-    expect(bool(ticket), f"{node.label} realtime.ws_ticket.create did not return ticket")
-    parsed = urllib.parse.urlparse(node.base)
-    scheme = "wss" if parsed.scheme == "https" else "ws"
-    ws_url = urllib.parse.urlunparse((scheme, parsed.netloc, "/_p2p/ws", "", urllib.parse.urlencode({"ticket": ticket}), ""))
-    ws = WebSocketJSON(ws_url)
-    ws.send_json({"type": "client.hello"})
-    while True:
-        frame = ws.recv_json()
-        if frame.get("type") == "server.ready":
-            node.ws = ws
-            return ws
-        if frame.get("type") == "server.error":
-            ws.close()
-            raise RuntimeError(f"{node.label} websocket hello failed: {frame.get('error')}")
 
 
 def p2p_status(node: Node, kind: str, action: str, params: Optional[dict[str, Any]] = None, *, token: Optional[str] = None) -> tuple[int, Any]:
@@ -430,7 +233,6 @@ def assert_caps(
 
 
 def login(node: Node) -> None:
-    close_ws(node)
     auth = p2p(
         node,
         "query",
@@ -591,7 +393,6 @@ def verify_mutual_delete_readd(requester: Node, accepter: Node, room_id: str, su
 
 
 def rebuild_node_with_empty_state(node: Node, suffix: int) -> None:
-    close_ws(node)
     suffix_name = node.label.lower()
     run_checked(["docker", "compose", "-f", "docker-compose.p2p-dual.yml", "rm", "-f", "-s", "-v", f"dendrite-{suffix_name}", f"dendrite-{suffix_name}-init", f"postgres-{suffix_name}"])
     # The Matrix signing key is the server's durable identity. Reusing a
@@ -1000,7 +801,6 @@ def verify_account_delete_deprovision_propagates(deleter: Node, peer: Node, obse
     member_channel = create_channel(peer, f"{peer.label} Delete Member Channel {suffix}", "private", "invite")
     invite_channel_and_join(peer, deleter, member_channel)
 
-    close_ws(deleter)
     deleted = p2p(deleter, "command", "portal.account.delete", {"confirm": "delete_account"})
     expect(deleted.get("status") == "deprovisioned", f"{deleter.label} account delete failed: {deleted!r}")
     expect(int(deleted.get("contacts_left") or 0) >= 1, f"{deleter.label} account delete did not leave contacts: {deleted!r}")
