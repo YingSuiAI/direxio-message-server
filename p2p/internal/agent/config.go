@@ -9,7 +9,10 @@ import (
 	actionbase "github.com/YingSuiAI/dirextalk-message-server/p2p/internal/action"
 )
 
-const DefaultOnlineAgentDisplayName = "Your Agent"
+const (
+	DefaultOnlineAgentDisplayName = "External AI"
+	legacyOnlineAgentDisplayName  = "Your Agent"
+)
 
 const (
 	configKeyDisplayName         = "display_name"
@@ -52,7 +55,7 @@ func NormalizeConfig(cfg dirextalkdomain.AgentConfig) dirextalkdomain.AgentConfi
 		cfg.Enabled = true
 		return cfg
 	}
-	cfg.OnlineAgentIdentity = normalizeIdentity(cfg.OnlineAgentIdentity, dirextalkdomain.AgentIdentityConfig{
+	cfg.OnlineAgentIdentity = normalizeOnlineAgentIdentity(cfg.OnlineAgentIdentity, dirextalkdomain.AgentIdentityConfig{
 		DisplayName: DefaultOnlineAgentDisplayName,
 	})
 	cfg.MCPBlockedRoomIDs = actionbase.Strings(cfg.MCPBlockedRoomIDs)
@@ -91,6 +94,14 @@ func normalizeIdentity(identity, fallback dirextalkdomain.AgentIdentityConfig) d
 		identity.DisplayName = fallbackString(fallback.DisplayName, DefaultOnlineAgentDisplayName)
 	}
 	return identity
+}
+
+func normalizeOnlineAgentIdentity(identity, fallback dirextalkdomain.AgentIdentityConfig) dirextalkdomain.AgentIdentityConfig {
+	identity.DisplayName = strings.TrimSpace(identity.DisplayName)
+	if strings.EqualFold(identity.DisplayName, legacyOnlineAgentDisplayName) {
+		identity.DisplayName = ""
+	}
+	return normalizeIdentity(identity, fallback)
 }
 
 func identityUpdateRequested(value any) bool {

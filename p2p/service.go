@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -237,6 +238,10 @@ func NewServiceWithStoreAndTransport(ctx context.Context, cfg Config, store Stor
 	}
 	shouldPersist := !ok || !state.Initialized || strings.TrimSpace(state.Password) == ""
 	service := newService(cfg, store, transport, state, ok)
+	service.mu.Lock()
+	normalizedAgentConfig := service.agentConfig
+	service.mu.Unlock()
+	shouldPersist = shouldPersist || !reflect.DeepEqual(state.AgentConfig, normalizedAgentConfig)
 	if err := service.pluginsModule.CheckStore(ctx); err != nil {
 		return nil, err
 	}
