@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v1.1.71
+
+1. Allow Profile activity cleanup for a dissolved channel: users can delete their own retained comments and remove existing likes or favorites without reactivating or creating reactions.
+
 ## v1.1.70
 
 1. Allow joined channel members to remove their existing like or favorite after the target post has been deleted, without permitting a deleted or unknown post to receive a new reaction.
