@@ -95,8 +95,18 @@ func (m *ContentModule) ToggleReaction(ctx context.Context, action string, raw m
 			return nil, actionbase.InternalError(err)
 		}
 	}
-	if actionErr := m.requireJoined(ctx, roomID); actionErr != nil {
-		return nil, actionErr
+	orphanedChannelCleanup := false
+	if existingOK && existing.Active && !missingPost {
+		deleted, actionErr := m.channelDeleted(ctx, channelID, roomID)
+		if actionErr != nil {
+			return nil, actionErr
+		}
+		orphanedChannelCleanup = deleted
+	}
+	if !orphanedChannelCleanup {
+		if actionErr := m.requireJoined(ctx, roomID); actionErr != nil {
+			return nil, actionErr
+		}
 	}
 	record := dirextalkdomain.ReactionRecord{
 		TargetType: targetType, TargetID: targetID, ChannelID: channelID,
@@ -105,13 +115,13 @@ func (m *ContentModule) ToggleReaction(ctx context.Context, action string, raw m
 	}
 	if existingOK {
 		record = existing
-		if missingPost {
+		if missingPost || orphanedChannelCleanup {
 			record.Active = false
 		} else {
 			record.Active = !existing.Active
 		}
 	}
-	if matrix := m.matrixPort(); !missingPost && matrix != nil && roomID != "" && eventID != "" {
+	if matrix := m.matrixPort(); !missingPost && !orphanedChannelCleanup && matrix != nil && roomID != "" && eventID != "" {
 		result, err := matrix.SendMessage(ctx, dirextalktransport.SendMessageRequest{
 			SenderMXID: userID, RoomID: roomID, EventType: "m.reaction",
 			MessageType: "m.reaction", Timestamp: m.now(),

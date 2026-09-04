@@ -225,6 +225,23 @@ func (m *ContentModule) requireJoined(ctx context.Context, roomID string) *actio
 	return m.config.RequireJoined(ctx, roomID)
 }
 
+// channelDeleted reports whether the durable channel catalog no longer has the
+// content's channel identity. Content records retain their own identity after
+// a channel is dissolved, so callers can distinguish that terminal state from
+// an ordinary member leave without trusting a request-supplied channel ID.
+func (m *ContentModule) channelDeleted(ctx context.Context, channelID, roomID string) (bool, *actionbase.Error) {
+	channelID = strings.TrimSpace(channelID)
+	roomID = strings.TrimSpace(roomID)
+	if (channelID == "" && roomID == "") || m.channels == nil {
+		return false, nil
+	}
+	_, found, err := m.channels.ByIDOrRoom(ctx, channelID, roomID)
+	if err != nil {
+		return false, actionbase.InternalError(err)
+	}
+	return !found, nil
+}
+
 func (m *ContentModule) roomIDForChannel(ctx context.Context, channelID, fallbackRoomID string) (string, *actionbase.Error) {
 	if roomID := strings.TrimSpace(fallbackRoomID); roomID != "" {
 		return roomID, nil

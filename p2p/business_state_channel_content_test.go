@@ -2,6 +2,7 @@ package p2p
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -168,6 +169,83 @@ func TestReactionToggleDeactivatesExistingReactionsAfterPostDeletion(t *testing.
 		"reaction":   "like",
 	}); apiErr == nil || apiErr.Status != http.StatusNotFound {
 		t.Fatalf("unknown reaction target error = %#v, want 404", apiErr)
+	}
+}
+
+func TestProfileActivityCleanupSurvivesDissolvedChannel(t *testing.T) {
+	transport := &failingRedactTransport{err: errors.New("dissolved room is unavailable")}
+	service := NewServiceWithTransport(Config{ServerName: "example.com"}, transport)
+	bootstrapService(t, service)
+	ch := mustHandle[channel](t, service, "channels.create", map[string]any{
+		"channel_id": "ch_profile_cleanup",
+		"room_id":    "!profile-cleanup:example.com",
+		"name":       "Dissolved profile activity",
+	})
+	post := mustHandle[channelPostRecord](t, service, "channels.posts.create", map[string]any{
+		"channel_id": ch.ChannelID,
+		"body":       "profile activity target",
+	})
+	comment := mustHandle[channelCommentRecord](t, service, "channels.comments.create", map[string]any{
+		"channel_id": ch.ChannelID,
+		"post_id":    post.PostID,
+		"body":       "my profile comment",
+	})
+	for _, reaction := range []string{"like", "favorite"} {
+		mustHandle[map[string]any](t, service, "channels.post_reaction.toggle", map[string]any{
+			"channel_id": ch.ChannelID,
+			"post_id":    post.PostID,
+			"reaction":   reaction,
+		})
+	}
+
+	mustHandle[map[string]any](t, service, "channels.dissolve", map[string]any{
+		"channel_id": ch.ChannelID,
+	})
+	if err := service.memberStore().UpsertMember(context.Background(), memberRecord{
+		RoomID: ch.RoomID, ChannelID: ch.ChannelID, UserID: service.ownerMXID,
+		Membership: "leave", Role: "owner",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, apiErr := service.Handle(context.Background(), "channels.comments.recall", map[string]any{
+		"channel_id": ch.ChannelID,
+		"post_id":    post.PostID,
+		"comment_id": comment.CommentID,
+	}); apiErr != nil {
+		t.Fatalf("own comment cleanup after dissolve error = %#v", apiErr)
+	}
+	if len(transport.redactions) != 0 {
+		t.Fatalf("dissolved-channel comment cleanup attempted redaction: %#v", transport.redactions)
+	}
+
+	for _, reaction := range []string{"like", "favorite"} {
+		result := mustHandle[map[string]any](t, service, "channels.post_reaction.toggle", map[string]any{
+			"channel_id": ch.ChannelID,
+			"post_id":    post.PostID,
+			"reaction":   reaction,
+		})
+		if result["active"] != false || int64Param(result["reaction_count"]) != 0 {
+			t.Fatalf("dissolved-channel %s cleanup result = %#v", reaction, result)
+		}
+	}
+
+	if _, apiErr := service.Handle(context.Background(), "channels.post_reaction.toggle", map[string]any{
+		"channel_id": ch.ChannelID,
+		"post_id":    post.PostID,
+		"reaction":   "like",
+	}); apiErr == nil || apiErr.Status != http.StatusForbidden {
+		t.Fatalf("dissolved channel must not permit a new like, got %#v", apiErr)
+	}
+	comments := mustHandle[map[string]any](t, service, "channels.comments.list", map[string]any{
+		"post_id": post.PostID,
+	})
+	if got := comments["comments"].([]channelCommentRecord); len(got) != 0 {
+		t.Fatalf("expected own comment removed from durable history, got %#v", comments)
+	}
+	reactions := mustHandle[map[string]any](t, service, "channels.my_reactions", nil)
+	if got := reactionHistoryPayloads(t, reactions); len(got) != 0 {
+		t.Fatalf("expected cleared likes and favorites removed from history, got %#v", reactions)
 	}
 }
 

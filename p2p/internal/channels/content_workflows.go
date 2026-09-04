@@ -538,11 +538,21 @@ func (m *ContentModule) Recall(ctx context.Context, action string, raw map[strin
 	if err != nil {
 		return nil, actionbase.InternalError(err)
 	}
-	if actionErr := m.authorizeRecall(ctx, roomID, comment.AuthorMXID); actionErr != nil {
-		return nil, actionErr
+	orphanedOwnComment := false
+	if comment.AuthorMXID == m.owner().MXID {
+		deleted, actionErr := m.channelDeleted(ctx, comment.ChannelID, roomID)
+		if actionErr != nil {
+			return nil, actionErr
+		}
+		orphanedOwnComment = deleted
 	}
-	if err := m.redact(ctx, roomID, comment.EventID, params.String("reason")); err != nil {
-		return nil, m.transportError(err)
+	if !orphanedOwnComment {
+		if actionErr := m.authorizeRecall(ctx, roomID, comment.AuthorMXID); actionErr != nil {
+			return nil, actionErr
+		}
+		if err := m.redact(ctx, roomID, comment.EventID, params.String("reason")); err != nil {
+			return nil, m.transportError(err)
+		}
 	}
 	if m.store == nil {
 		return nil, actionbase.InternalError(errors.New("channel content store is not configured"))
